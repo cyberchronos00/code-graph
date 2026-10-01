@@ -108,9 +108,7 @@ def build(st: GraphStore, mode: str, specs: list[str], min_conf="heuristic", sin
             raise ValueError("path needs a source and a target (optionally waypoints in between: src, via…, dst)")
         p, cur = [], specs[0]
         for nxt in specs[1:]:  # shortest forward path per segment; a waypoint pins which route/method the path takes
-            seg = Q.path_between(st, cur, nxt, min_conf=min_conf)
-            if not seg and nxt.startswith("table:"):  # tables are mostly reached through their columns
-                seg = Q.path_between(st, cur, "column:" + nxt[6:] + ".*", min_conf=min_conf)
+            seg = Q.path_between(st, cur, nxt, min_conf=min_conf)  # a table target falls back to its columns
             if not seg:
                 p = []
                 break

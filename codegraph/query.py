@@ -464,8 +464,22 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
 
 
 def path_between(st: GraphStore, src_spec: str, dst_spec: str, min_conf="heuristic", max_depth=30) -> list[dict]:
-    """Shortest forward dependency path from any node of src_spec to any node of dst_spec."""
+    """Shortest forward dependency path from any node of src_spec to any node of dst_spec.
+    A table target with no direct path falls back to its columns (code mostly reaches a table through column
+    reads/writes), the same rule the visual view uses."""
     srcs, dsts = resolve_targets(st, src_spec), set(resolve_targets(st, dst_spec))
+    p = _bfs_path(st, srcs, dsts, min_conf, max_depth)
+    if not p:
+        cols = set()
+        for t in [d for d in dsts if d.startswith("table:")]:
+            pre = "column:" + t[6:] + "."
+            cols.update(r["id"] for r in st.q("SELECT id FROM nodes WHERE kind='column' AND substr(id, 1, ?) = ?", (len(pre), pre)))
+        if cols:
+            p = _bfs_path(st, srcs, cols, min_conf, max_depth)
+    return p
+
+
+def _bfs_path(st: GraphStore, srcs: list[str], dsts: set[str], min_conf: str, max_depth: int) -> list[dict]:
     kset, rank = set(PROPAGATING), CONFIDENCE_RANK[min_conf]
     prev, seen, frontier = {}, set(srcs), list(srcs)
     for _ in range(max_depth):

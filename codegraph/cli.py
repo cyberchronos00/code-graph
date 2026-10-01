@@ -140,6 +140,8 @@ def main(argv=None):
     elif a.cmd == "path":
         p = Q.path_between(st, a.src, a.dst, min_conf=a.min_confidence)
         print(Q.fmt_path(p) if p else "no path")
+        if not p:
+            raise SystemExit(1)  # scripts can tell "no path" apart from a path
     elif a.cmd == "downstream":
         res = Q.downstream(st, a.spec, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_downstream(res, show_paths=not a.no_paths))

@@ -115,3 +115,16 @@ def test_mcp_tools_on_combined_and_reindex_repo():
         assert out.startswith("re-indexed bookstore-web") and "3/5 call sites matched" in out
     finally:
         M.STATE.clear(); M.STATE.update(old)
+
+
+def test_path_to_table_follows_its_columns():
+    """A table reached only through column reads still has a path (same rule as the visual view)."""
+    st = GraphStore(build()["combined"])
+    src = Q.resolve_targets(st, "page:/reports/:id")
+    assert Q._bfs_path(st, src, {"table:orders"}, "heuristic", 30) == []  # no direct table edge on this path
+    p = Q.path_between(st, "page:/reports/:id", "table:orders")
+    assert p and p[0]["from"].startswith("page:") and p[-1]["kind"] == "READS_COLUMN"
+    assert p[-1]["to"] == "column:orders.placed_at"
+    assert "ROUTES_TO" in [s["kind"] for s in p]
+    # no column fallback for a different table whose name shares a prefix
+    assert all(not s["to"].startswith("column:orders_") for s in p)
