@@ -15,9 +15,18 @@ from .plugins.php.plugin import PhpPlugin
 from .plugins.stubs.plugins import SCIP_PLUGINS
 from .plugins.ts.plugin import TypeScriptPlugin
 from .plugins.nuxt.plugin import NuxtPlugin
+from .plugins.rust.plugin import RustPlugin
+from .plugins.cfamily.plugin import CFamilyPlugin
+from .plugins.python.plugin import PythonPlugin
+from .plugins.django.plugin import DjangoPlugin
+from .plugins.dart.plugin import DartPlugin
+from .plugins.flutter.plugin import FlutterPlugin
+from .plugins.nest.plugin import NestPlugin
+from .plugins.nextjs.plugin import NextPlugin
+from .plugins.express.plugin import ExpressPlugin
 
-LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), *SCIP_PLUGINS]
-FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin()]
+LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), *SCIP_PLUGINS]
+FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin()]
 
 
 def tag_entries(builder: GraphBuilder, skip_gate: str | None = None) -> list[tuple]:
@@ -60,11 +69,28 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
         if not lp.detect(project):
             continue
         fws = [f for f in frameworks if f.language == lp.name]
-        st = lp.index(project, builder, fws)
+        lp.program = None
+        # one missing indexer / toolchain never fails the whole index: that language is skipped with a note
+        missing = lp.prerequisite_problem(project) if hasattr(lp, "prerequisite_problem") else None
+        if missing:
+            stats["plugins"][lp.name] = {"status": "skipped", "reason": missing}
+            continue
+        n0, e0 = len(builder.nodes), len(builder.edges)
+        try:
+            st = lp.index(project, builder, fws)
+        except Exception as ex:  # noqa: BLE001
+            stats["plugins"][lp.name] = {"status": "skipped", "reason": f"{type(ex).__name__}: {str(ex)[:300]}",
+                                         "partial_nodes": len(builder.nodes) - n0, "partial_edges": len(builder.edges) - e0}
+            continue
         stats["plugins"][lp.name] = st
+        if isinstance(st, dict) and st.get("status") in ("skipped", "error", "stub"):
+            continue
         ctx = getattr(lp, "program", None)
         for fw in fws:
-            stats["plugins"][f"{lp.name}/{fw.name}"] = fw.contribute(project, builder, ctx)
+            try:
+                stats["plugins"][f"{lp.name}/{fw.name}"] = fw.contribute(project, builder, ctx)
+            except Exception as ex:  # noqa: BLE001
+                stats["plugins"][f"{lp.name}/{fw.name}"] = {"status": "skipped", "reason": f"{type(ex).__name__}: {str(ex)[:300]}"}
     for fw in frameworks:
         if f"{fw.language}/{fw.name}" not in stats["plugins"]:
             stats["plugins"][f"{fw.language}/{fw.name}"] = {"status": "detected; language plugin not active"}
@@ -92,6 +118,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     for lp in LANGUAGE_PLUGINS:
         store.db.executemany("INSERT OR REPLACE INTO gate_predicates VALUES (?,?,?,?)", getattr(lp, "gate_predicates", []) or [])
     store.db.commit()
+    from .coverage import compute
+    stats["coverage"] = compute(project.root, {k: v for k, v in stats["plugins"].items() if "/" not in k and not k.startswith("scip:")},
+                                scip_imported=bool(scip))
     stats["nodes"] = len(builder.nodes)
     stats["edges"] = len(builder.edges)
     stats["index_seconds"] = round(time.time() - t0, 2)

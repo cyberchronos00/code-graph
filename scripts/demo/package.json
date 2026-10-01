@@ -1,0 +1,7 @@
+{
+  "name": "codegraph-demo-recorder",
+  "private": true,
+  "description": "Records the visual-view demo video with Playwright (system Chrome; run `npx playwright install ffmpeg` once for video).",
+  "type": "module",
+  "dependencies": { "playwright-core": "1.63.0" }
+}

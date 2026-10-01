@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 MARKERS = {
@@ -12,7 +13,8 @@ MARKERS = {
     "go": ["go.mod"],
     "rust": ["Cargo.toml"],
     "c_cpp": ["CMakeLists.txt", "compile_commands.json", "meson.build", "Makefile"],
-    "python": ["pyproject.toml", "setup.py", "requirements.txt"],
+    "python": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "manage.py", "Pipfile"],
+    "dart": ["pubspec.yaml"],
     "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
 }
 
@@ -49,6 +51,22 @@ def detect(root: Path) -> dict:
         fw["nuxt"] = {"version": deps.get("nuxt")}
     if "vue" in deps:
         fw["vue"] = {"version": deps.get("vue")}
+    py_req = ""
+    for f in ("requirements.txt", "pyproject.toml", "setup.cfg", "Pipfile", "requirements/base.txt"):
+        if (root / f).exists():
+            py_req += (root / f).read_text(errors="replace").lower()
+    if "django" in py_req or (root / "manage.py").exists():
+        fw["django"] = {}
+        for extra in ("django-ninja", "djangorestframework", "channels", "celery"):
+            if extra in py_req:
+                fw[extra] = {}
+    if (root / "pubspec.yaml").exists():
+        ps = (root / "pubspec.yaml").read_text(errors="replace")
+        if "flutter:" in ps:
+            fw["flutter"] = {}
+        for extra in ("flutter_bloc", "dio", "go_router", "riverpod", "provider", "json_serializable", "freezed", "retrofit", "chopper"):
+            if re.search(rf"^\s+{extra}:", ps, re.M):
+                fw[extra] = {}
     if "typescript" in deps:
         langs.setdefault("typescript", ["package.json:typescript"])
     return {"languages": langs, "frameworks": fw}

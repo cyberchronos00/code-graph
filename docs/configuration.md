@@ -1,6 +1,6 @@
 # Configuration
 
-code-graph needs no config file to index a project. The optional inputs are listed here.
+code-graph indexes a project with zero configuration. The optional inputs are listed here.
 
 ## Gate scenarios (`--gates`)
 A gates file names scenarios and the settings that are true in each, e.g. `examples/bookstore.gates.json`:
@@ -39,6 +39,22 @@ Gates file format (see `examples/bookstore.gates.json`):
 
 Beta: one scenario per index (the first one).
 
+### Native gate keys (Rust, C, C++)
+
+A scenario can also switch Cargo features, `cfg` atoms and preprocessor macros. Rust items, statements and modules
+under a false `#[cfg]`, and C/C++ code in a false `#if` region, are reported as gated:
+
+```json
+{"scenarios": [{"name": "minimal_build",
+  "features_off": ["kv-core/fs"], "features_on": [], "cargo_features": "default",
+  "cfg_true": ["unix"], "cfg_false": ["windows"],
+  "defines_on": ["NDEBUG", "LEVEL=2"], "defines_off": ["RB_THREADSAFE"]}]}
+```
+
+`features_*` take `pkg/feature` or a bare feature name (any package). `cargo_features` (`"default"`, `"none"` or a
+list) fixes the exact enabled set, including what `default` and feature dependencies turn on. Atoms the scenario
+doesn't mention stay unknown, and unknown code is treated as live. Example: `examples/native.gates.json`.
+
 ## Viz presets (`serve --presets FILE`)
 
 The preset menu in the visual view. The built-in presets target the sample apps. For your own project, pass a JSON list:
@@ -70,5 +86,6 @@ repository root.
 
 | variable | effect |
 |---|---|
-| `CODEGRAPH_NO_CACHE=1` | disable the TS extractor facts cache |
+| `CODEGRAPH_NO_CACHE=1` | disable the TS extractor facts cache and the native SCIP cache |
 | `CODEGRAPH_CACHE=DIR` | cache location (default `~/.cache/codegraph`) |
+| `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0`, `CODEGRAPH_COMPDB`, `CODEGRAPH_CFAMILY`, ... | Rust / C / C++ options: see [native.md](native.md#environment-variables) |

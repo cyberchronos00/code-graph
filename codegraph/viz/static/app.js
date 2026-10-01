@@ -18,8 +18,10 @@
     covered: 'covered by plan', forbidden: 'forbidden target', context: 'context' }
   const PLAN_PRI = { forbidden: 4, added: 3, gap: 2, touches: 1 }
   const CONF_RANK = { heuristic: 1, resolved: 2, exact: 3 }
-  const ENTRY_LABEL = { http_route: 'HTTP route', artisan_command: 'artisan', scheduled: 'schedule', queue_job: 'queue job',
-    listener: 'listener', admin_panel: 'admin', observer: 'observer', ui_page: 'UI page', ui_layout: 'UI layout', ui_app: 'UI app' }
+  const ENTRY_LABEL = { http_route: 'HTTP route', websocket: 'websocket', artisan_command: 'artisan', management_command: 'manage.py', scheduled: 'schedule', queue_job: 'queue job',
+    listener: 'listener', admin_panel: 'admin', observer: 'observer', ui_page: 'UI page', ui_layout: 'UI layout', ui_app: 'UI app',
+    message_handler: 'message handler', cli_command: 'CLI command', main: 'main', ffi_export: 'FFI export', public_api: 'public API',
+    test: 'test', bench: 'bench', example: 'example', build_script: 'build script' }
   let data = null; let byId = {}; let collapsed = new Set(); let cy = null; let selected = null
 
   function shortName (n) {

@@ -2,7 +2,7 @@
 
 `codegraph.cli serve --db out/graph.db [--port 8177] [--host 127.0.0.1] [--plans-dir examples/plans] [--presets FILE]`:
 stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/viz/static/vendor` (MIT, versions in
-`VERSIONS.txt`; no CDN at runtime). Open `http://127.0.0.1:8177/`.
+`VERSIONS.txt`; everything is served locally, so it works offline). Open `http://127.0.0.1:8177/`.
 - Search box with suggestions; modes `reaches`, `impact`, `downstream` (sinks: tables via columns / routes / all),
   `path` (`source, [waypoints…,] target`) and `plan overlay`; min confidence; presets (built-in ones target the sample
   app; `--presets FILE` loads a JSON list of `{id, label, mode, specs[, sinks]}`). State is in the URL hash

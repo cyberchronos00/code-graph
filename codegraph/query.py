@@ -2,19 +2,23 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import defaultdict
 
-from .core.model import CONFIDENCE_RANK, OPERATOR_ENTRY_KINDS, PROPAGATING, RUNTIME_ENTRY_KINDS, UI_ENTRY_KINDS
+from .core.model import (CONFIDENCE_RANK, DEV_ENTRY_KINDS, LIBRARY_ENTRY_KINDS, OPERATOR_ENTRY_KINDS, PROPAGATING,
+                         RUNTIME_ENTRY_KINDS, UI_ENTRY_KINDS)
 from .core.store import GraphStore
 
 CALL_LIKE = ["CALLS", "IMPLEMENTED_BY", "OVERRIDDEN_BY", "BOUND_TO", "ROUTES_TO", "HANDLED_BY", "SCHEDULES",
              "DISPATCHES", "LISTENED_BY", "USES_MIDDLEWARE",
              # TypeScript / Vue / Nuxt + cross-repo link
-             "USES_COMPOSABLE", "USES_STORE", "RENDERS", "HTTP_CALLS", "MATCHES_ROUTE"]
+             "USES_COMPOSABLE", "USES_STORE", "RENDERS", "HTTP_CALLS", "MATCHES_ROUTE",
+             # native code: function pointers / callbacks / dispatch tables
+             "REFERENCES_FN"]
 TS_CODE_KINDS = ("composable", "store", "component", "module")
 CODE_KINDS = ("method", "function", "script") + TS_CODE_KINDS
-ENTRY_NODE_KINDS = ("route", "command", "schedule", "job", "listener", "admin", "observer", "page", "layout", "app")
+ENTRY_NODE_KINDS = ("route", "command", "schedule", "job", "listener", "admin", "observer", "page", "layout", "app", "message")
 
 
 def resolve_targets(st: GraphStore, spec: str) -> list[str]:
@@ -26,7 +30,7 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
         return [r["id"] for r in rows]
     if st.q("SELECT 1 FROM nodes WHERE id=? LIMIT 1", (spec,)):  # an exact node id (e.g. method:App\X::y)
         return [spec]
-    if re.search(r"\.(vue|ts|tsx|js|mjs)$", spec) and "::" not in spec:
+    if re.search(r"\.(vue|ts|tsx|js|mjs|py|dart)$", spec) and "::" not in spec:
         rows = st.q("SELECT id FROM nodes WHERE kind IN ('page','component','layout','app','module') AND (file=? OR file LIKE ?)",
                     (spec, "%/" + spec))
         if rows:
@@ -36,7 +40,15 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
         pat = f"{kind}:{key}".replace("*", "%")
         rows = st.q("SELECT id FROM nodes WHERE id LIKE ?", (pat,)) if "%" in pat else st.q("SELECT id FROM nodes WHERE id=?", (pat,))
         return [r["id"] for r in rows]
+    nat = _native_targets(st, spec)
+    if nat:
+        return nat
     if "::" not in spec and "." in spec and "\\" not in spec:
+        # python dotted path (pkg.mod.func / pkg.mod.Class.method) or Dart Class.method
+        rows = st.q("""SELECT id FROM nodes WHERE lang IN ('python','dart') AND kind IN ('function','method','class','module')
+                       AND (fqn=? OR fqn LIKE ?)""", (spec, "%#" + spec))
+        if rows:
+            return [r["id"] for r in rows]
         rows = st.q("SELECT id FROM nodes WHERE id=?", (f"column:{spec}",))
         if rows:
             return [rows[0]["id"]]
@@ -44,7 +56,8 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
         if rows:
             return [r["id"] for r in rows]
     if re.fullmatch(r"[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*", spec) and "\\" not in spec:
-        rows = st.q("""SELECT id FROM nodes WHERE lang='ts' AND kind IN ('function','composable','store','method','class','type')
+        rows = st.q("""SELECT id FROM nodes WHERE lang IN ('ts','python','dart')
+                       AND kind IN ('function','composable','store','method','class','type')
                        AND (name=? OR name LIKE ?)""", (spec, "%." + spec))
         if rows:
             return [r["id"] for r in rows]
@@ -58,6 +71,54 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
         out.append(r["id"])
         out += [x["id"] for x in st.q("SELECT id FROM nodes WHERE kind='method' AND fqn LIKE ?", (r["fqn"] + "::%",))]
     return out
+
+
+NATIVE_LANGS = ("rust", "c", "cpp")
+NATIVE_CODE = ("function", "method", "ffi", "macro")
+NATIVE_TYPES = ("struct", "enum", "union", "trait", "type_alias", "class", "typedef")
+NATIVE_FILE_RE = re.compile(r"\.(rs|c|h|cc|cpp|cxx|hh|hpp|hxx|ipp|inl|m|mm)$")
+
+
+def _native_targets(st: GraphStore, spec: str) -> list[str]:
+    """Rust / C / C++ specs: a source file (all items defined in it, plus its file node), a path
+    (crate::module::fn, Type::method, ns::Class::method; `Type::m` also matches `<Type as Trait>::m`), or a bare
+    function / type name. Returns [] when nothing native matches (other resolvers take over)."""
+    if not st.q("SELECT 1 FROM nodes WHERE lang IN ('rust','c','cpp') LIMIT 1"):
+        return []
+    langs = ",".join(f"'{x}'" for x in NATIVE_LANGS)
+    if NATIVE_FILE_RE.search(spec) and "::" not in spec:
+        rows = st.q(f"""SELECT id FROM nodes WHERE lang IN ({langs}) AND (file=? OR file LIKE ?)
+                        AND kind IN ('file','function','method','ffi','struct','enum','union','trait','class','typedef')
+                        ORDER BY kind='file' DESC, line""", (spec, "%/" + spec))
+        return [r["id"] for r in rows]
+    code = ",".join(f"'{k}'" for k in NATIVE_CODE)
+    types = ",".join(f"'{k}'" for k in NATIVE_TYPES)
+    if spec.startswith(("mod:", "crate:")) or st.q("SELECT 1 FROM nodes WHERE kind IN ('mod','crate') AND id IN (?, ?)",
+                                                    ("mod:" + spec, "crate:" + spec)):
+        # a Rust module / crate: every function and method defined in it (and its submodules)
+        m = spec.split(":", 1)[1] if spec.startswith(("mod:", "crate:")) else spec
+        rows = st.q(f"SELECT id FROM nodes WHERE lang='rust' AND kind IN ({code}) AND (module=? OR module LIKE ?) ORDER BY file, line",
+                    (m, m + "::%"))
+        return [r["id"] for r in rows]
+    if "::" in spec:
+        head, _, last = spec.rpartition("::")
+        rows = st.q(f"""SELECT id FROM nodes WHERE lang IN ({langs}) AND kind IN ({code},{types})
+                        AND (fqn=? OR fqn LIKE ? OR fqn LIKE ? OR fqn LIKE ?)""",
+                    (spec, "%::" + spec, f"%<{head} as %>::{last}", f"%<{head.rsplit('::', 1)[-1]} as %>::{last}"))
+        ids = [r["id"] for r in rows]
+        tys = [i for i in ids if i.split(":", 1)[0] in NATIVE_TYPES]
+        for t in tys:  # a type spec also selects its methods (like Class in PHP)
+            fq = t.split(":", 1)[1]
+            ids += [r["id"] for r in st.q("SELECT id FROM nodes WHERE kind='method' AND (fqn LIKE ? OR fqn LIKE ?)",
+                                          (fq + "::%", fq.rsplit("::", 1)[0] + f"::<{fq.rsplit('::', 1)[-1]} as %"))]
+        return list(dict.fromkeys(ids))
+    if re.fullmatch(r"[A-Za-z_]\w*", spec):
+        rows = st.q(f"SELECT id FROM nodes WHERE lang IN ({langs}) AND kind IN ({code}) AND name=?", (spec,))
+        if rows:
+            return [r["id"] for r in rows]
+        rows = st.q(f"SELECT id FROM nodes WHERE lang IN ({langs}) AND kind IN ({types}) AND name=?", (spec,))
+        return [r["id"] for r in rows]
+    return []
 
 
 def default_gate(st: GraphStore) -> str | None:
@@ -162,10 +223,14 @@ def nearest_gated_inbound(st: GraphStore, nid: str, gate: str, max_depth=6) -> d
 def classify(kinds: dict) -> str:
     if any(k in kinds for k in RUNTIME_ENTRY_KINDS):
         return "runtime"
+    if any(k in kinds for k in LIBRARY_ENTRY_KINDS):
+        return "library"
     if any(k in kinds for k in OPERATOR_ENTRY_KINDS):
         return "operator"
     if any(k in kinds for k in UI_ENTRY_KINDS):
         return "ui"
+    if any(k in kinds for k in DEV_ENTRY_KINDS):
+        return "dev"
     if kinds:
         return "other_entry"
     return "no_entry"
@@ -253,16 +318,18 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
         out.append(f"  {s} -> {len(t)} node(s): {', '.join(t[:6])}{' ...' if len(t) > 6 else ''}")
     items = [i for i in res["items"] if not i["is_target"]]
     code = [i for i in items if i["kind"] in CODE_KINDS]
-    entries = [i for i in items if i["kind"] in ENTRY_NODE_KINDS]
+    entries = [i for i in items if i["kind"] in ENTRY_NODE_KINDS or (i.get("entry_kind") and i["kind"] in CODE_KINDS)]
     other = [i for i in items if i["kind"] not in CODE_KINDS + ENTRY_NODE_KINDS]
     out.append(f"dependents: {len(items)} nodes  (code: {len(code)}, entry points: {len(entries)}, other: {len(other)}) min_confidence={res['min_confidence']}")
-    labels = {"runtime": "RUNTIME (reached from http_route / scheduled / queue_job / listener)",
-              "operator": "OPERATOR-ONLY (artisan_command / admin_panel; one-off import & provisioning)",
+    labels = {"runtime": f"RUNTIME (reached from {' / '.join(RUNTIME_ENTRY_KINDS)})",
+              "library": "LIBRARY API (reached only through the public API of a library: pub items / exported symbols)",
+              "dev": "DEV/BUILD-ONLY (reached only from tests, benches, examples or build scripts)",
+              "operator": f"OPERATOR-ONLY ({' / '.join(OPERATOR_ENTRY_KINDS)}; one-off import & provisioning)",
               "ui": "UI-ONLY (reached from frontend pages / layouts / app shell; no backend entry)",
               "other_entry": "OTHER ENTRY (observer only)", "no_entry": "NOT REACHED FROM ANY INDEXED ENTRY POINT"}
     gated = [i for i in code if i.get("gate_status", "live") != "live" and i["class"] != "no_entry"]
     code = [i for i in code if i not in gated]
-    for cls in ("runtime", "operator", "ui", "other_entry", "no_entry"):
+    for cls in ("runtime", "library", "operator", "ui", "dev", "other_entry", "no_entry"):
         group = [i for i in code if i["class"] == cls]
         if not group:
             continue
@@ -276,7 +343,8 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
             for i in bymod[mod]:
                 ek = ", ".join(f"{k}({v})" for k, v in sorted(i["entry_kinds"].items()))
                 out.append(f"    {i.get('fqn') or i['id']}  depth={i['depth']} conf={i['path_confidence']}  {ek}"
-                           + (f"  [{i['kind']} @ {i.get('file')}]" if i['kind'] in TS_CODE_KINDS or (i.get('file') or '').endswith(('.ts', '.vue')) else ""))
+                           + (f"  [{i['kind']} @ {i.get('file')}]" if i['kind'] in TS_CODE_KINDS or (i.get('file') or '').endswith(('.ts', '.vue')) else "")
+                           + (f"  @ {i.get('file')}:{i.get('line')}" if NATIVE_FILE_RE.search(i.get('file') or '') else ""))
                 if show_paths:
                     out.append(f"        path: {fmt_path(i['path'])}")
     if gated:
@@ -298,12 +366,13 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
         out.append(f"== ENTRY POINTS THAT REACH THE TARGET(S): {len(entries)} (live under gate: {len(live_e)})")
         byk = defaultdict(list)
         for i in entries:
-            byk[i["kind"]].append(i)
+            byk[i["kind"] if i["kind"] in ENTRY_NODE_KINDS else i["entry_kind"]].append(i)
         for k in sorted(byk):
             out.append(f"  {k}: {len(byk[k])}")
             for i in sorted(byk[k], key=lambda x: x["id"]):
                 g = "" if i.get("gate_status", "live") == "live" else f"  [{i['gate_status']}]"
-                out.append(f"    {i['name']}  ({i.get('file')}:{i.get('line')})  depth={i['depth']} conf={i['path_confidence']}{g}")
+                nm = (i.get("fqn") or i["name"]) if NATIVE_FILE_RE.search(i.get("file") or "") else i["name"]
+                out.append(f"    {nm}  ({i.get('file')}:{i.get('line')})  depth={i['depth']} conf={i['path_confidence']}{g}")
     return "\n".join(out)
 
 
@@ -383,7 +452,8 @@ def siblings(st: GraphStore, spec: str, limit=40) -> dict:
     return res
 
 
-DOWNSTREAM_SINKS = ("table", "column", "connection", "config", "env", "route", "http", "job", "command")
+DOWNSTREAM_SINKS = ("table", "column", "connection", "config", "env", "route", "http", "job", "command",
+                    "unsafe", "ffi", "feature", "cfg", "define")
 
 
 def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, kinds=None, sinks=DOWNSTREAM_SINKS,
@@ -504,7 +574,8 @@ def _bfs_path(st: GraphStore, srcs: list[str], dsts: set[str], min_conf: str, ma
     return []
 
 
-def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=("route", "table", "column", "connection", "config", "env", "job", "command", "http")) -> str:
+def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=("route", "table", "column", "connection", "config", "env", "job", "command", "http",
+                                                                               "unsafe", "ffi", "feature", "cfg", "define")) -> str:
     out = [f"targets: {', '.join(res['targets'][:6])}", f"reached nodes: {res['reached']}"]
     tt = res.get("tables_touched") or []
     if tt:
@@ -568,4 +639,224 @@ def render_api_calls(rows: list[dict], max_calls=4) -> str:
             out.append(f"   <- {c['caller']} @ {c['at']} [{c['confidence']}]{h}")
         if len(r["calls"]) > max_calls:
             out.append(f"   <- ... {len(r['calls']) - max_calls} more")
+    return "\n".join(out)
+
+
+# ----------------------------------------------------------------------------------------------- display helpers
+SHORT_CODE_PREFIXES = ("method:", "class:", "function:", "interface:", "trait:", "enum:", "struct:", "union:", "typedef:",
+                       "type_alias:", "macro:", "global:", "ffi:", "field:", "const:", "static:", "composable:", "store:")
+
+
+def short_id(x: str | None) -> str:
+    """Node id without the code-kind prefix and the root `App\\` namespace (routes, tables, pages keep their prefix)."""
+    if not x:
+        return "?"
+    if x.startswith(SHORT_CODE_PREFIXES):
+        x = x.split(":", 1)[1]
+        if "#" in x:
+            f, _, q = x.partition("#")
+            return f"{q} ({os.path.basename(f)})"
+    return x[4:] if x.startswith("App\\") else x
+
+
+# ----------------------------------------------------------------------------------------------- search
+GUARD_KEYS = ("middleware", "guards", "interceptors", "pipes", "auth", "access", "wrapped_by")
+
+
+def search(st: GraphStore, name: str, kind: str | None = None, limit: int = 20) -> dict:
+    """Nodes whose name / FQN / id contains `name` (case-insensitive), plus routes whose middleware, guards, auth or
+    access checks contain it (those are route attributes and USES_MIDDLEWARE edges, not nodes of their own)."""
+    q = "SELECT id, kind, file, line FROM nodes WHERE (name LIKE ? OR fqn LIKE ? OR id LIKE ?)"
+    p: list = [f"%{name}%"] * 3
+    if kind:
+        q += " AND kind=?"
+        p.append(kind)
+    q += " ORDER BY length(id) LIMIT ?"
+    p.append(limit)
+    nodes = [dict(r) for r in st.q(q, p)]
+    guards: dict[str, list[dict]] = defaultdict(list)
+    if kind in (None, "route", "middleware", "guard"):
+        low = name.lower()
+        for r in st.q("SELECT id, file, line, attrs FROM nodes WHERE kind='route' AND attrs LIKE ?", (f"%{name}%",)):
+            a = json.loads(r["attrs"] or "{}")
+            for k in GUARD_KEYS:
+                v = a.get(k)
+                vals = v if isinstance(v, list) else [v]
+                for x in vals:
+                    nm = x.get("name") if isinstance(x, dict) else x
+                    if nm and low in str(nm).lower():
+                        guards[str(nm)].append({"route": r["id"], "file": r["file"], "line": r["line"], "via": k})
+            for c in a.get("conditions") or []:
+                if isinstance(c, str) and c.startswith("wrapped:") and low in c.lower():
+                    guards[c[8:]].append({"route": r["id"], "file": r["file"], "line": r["line"], "via": "urlconf wrapper"})
+        for e in st.q("SELECT src, dst, file, line, attrs FROM edges WHERE kind='USES_MIDDLEWARE' AND src LIKE 'route:%' "
+                      "AND (attrs LIKE ? OR dst LIKE ?)", (f"%{name}%", f"%{name}%")):
+            nm = json.loads(e["attrs"] or "{}").get("name") or short_id(e["dst"])
+            if low in nm.lower() or low in e["dst"].lower():
+                if not any(g["route"] == e["src"] for g in guards.get(nm, [])):
+                    guards[nm].append({"route": e["src"], "file": e["file"], "line": e["line"], "via": "USES_MIDDLEWARE"})
+    return {"query": name, "kind": kind, "nodes": nodes, "guards": dict(sorted(guards.items()))}
+
+
+def render_search(res: dict, limit_routes: int = 8) -> str:
+    out = []
+    for r in res["nodes"]:
+        out.append(f"{r['kind']:10} {r['id']}  {os.path.basename(r['file'] or '?')}:{r['line']}")
+    if res["guards"]:
+        if out:
+            out.append("")
+        n = sum(len(v) for v in res["guards"].values())
+        out.append(f"middleware / guards / auth matching '{res['query']}' (route attributes): {len(res['guards'])} name(s) on {n} route(s)")
+        for nm, rs in res["guards"].items():
+            shown = ", ".join(x["route"].split(":", 1)[1] for x in rs[:limit_routes])
+            out.append(f"  {nm}  ({rs[0]['via']}) on {len(rs)} route(s): {shown}{' …' if len(rs) > limit_routes else ''}")
+    if not out:
+        out.append(f"no matches for {res['query']!r}" + (f" with kind={res['kind']}" if res.get("kind") else "") +
+                   " in node names, FQNs, ids or route middleware / guard / auth names. Try a shorter substring, drop the "
+                   "kind filter, or use `routes` to list every route with its guards.")
+    return "\n".join(out)
+
+
+# ----------------------------------------------------------------------------------------------- empty-result help
+def explain_siblings(st: GraphStore, spec: str, res: dict) -> str:
+    """Why siblings() found nothing for a resolved symbol, with the queries that answer the likely question."""
+    main = res["targets"][0]
+    n = dict(st.node(main) or {})
+    s = short_id(main)
+    why, tips = [], []
+    fq = (n.get("fqn") or "").split("::")[0]
+    if not st.q("SELECT 1 FROM edges e JOIN nodes c ON c.id=e.src WHERE c.fqn=? AND e.kind IN ('EXTENDS','IMPLEMENTS','USES_TRAIT') LIMIT 1", (fq,)):
+        why.append("its class has no parent class, interface or trait shared with other classes")
+    res_kinds = ("READS_COLUMN", "WRITES_COLUMN", "MENTIONS_COLUMN", "READS_TABLE", "WRITES_TABLE", "READS_CONFIG",
+                 "WRITES_CONFIG", "READS_ENV", "USES_CONNECTION", "REGISTERS_CONNECTION")
+    kq = ",".join("?" * len(res_kinds))
+    if not st.q(f"SELECT 1 FROM edges WHERE src=? AND kind IN ({kq}) LIMIT 1", (main, *res_kinds)):
+        why.append("it touches no table, column, config, env key or connection directly")
+    callees = [r["dst"] for r in st.q("SELECT DISTINCT dst FROM edges WHERE src=? AND kind='CALLS'", (main,))]
+    own = [c for c in callees if fq and c.startswith(f"method:{fq}::")]
+    if callees and len(own) == len(callees):
+        why.append(f"all {len(callees)} of its callees are in its own class, which co-caller matching skips")
+    elif not callees:
+        why.append("it calls no other indexed method")
+    data_callees = [c for c in callees if st.q(f"SELECT 1 FROM edges WHERE src=? AND kind IN ({kq}) LIMIT 1", (c, *res_kinds))]
+    for c in data_callees[:3]:
+        tips.append(f"siblings('{short_id(c)}') (a callee that touches data)")
+    tips.append(f"impact('{s}') for its callers and entry points")
+    tips.append(f"downstream('{s}') for the tables, config and connections it reaches")
+    return (f"no siblings found for {s}: " + ("; ".join(why) or "no shared parents, resources or callees") +
+            ".\ntry: " + "; ".join(tips))
+
+
+def explain_no_callers(st: GraphStore, spec: str, targets: list[str]) -> str:
+    if not targets:
+        return f"no method matches {spec!r}; try search() with part of the name."
+    t = targets[0]
+    n = dict(st.node(t) or {})
+    s = short_id(t)
+    if n.get("entry_kind"):
+        return f"{s} has no recorded callers; it is itself an entry point ({n['entry_kind']}). try: downstream('{s}') for what it reaches."
+    refs = st.q("SELECT kind, count(*) c FROM edges WHERE dst=? GROUP BY kind", (t,))
+    other = ", ".join(f"{r['kind']}×{r['c']}" for r in refs)
+    return (f"{s} has no recorded callers" + (f" (other incoming edges: {other})" if other else "") +
+            ". It may be called dynamically (string callables, container lookups, framework hooks) or be unused. "
+            f"try: reaches('{s}') for every dependent over all edge kinds; search('{n.get('name') or spec}') for similarly named code.")
+
+
+def explain_no_writers(st: GraphStore, table: str) -> str:
+    t = table.split(":", 1)[1] if table.startswith("table:") else table
+    if not st.q("SELECT 1 FROM nodes WHERE id=?", (f"table:{t}",)):
+        near = [r["id"][6:] for r in st.q("SELECT id FROM nodes WHERE kind='table' AND id LIKE ? ORDER BY id LIMIT 6", (f"%{t}%",))]
+        allt = [r["id"][6:] for r in st.q("SELECT id FROM nodes WHERE kind='table' ORDER BY id LIMIT 12")]
+        return (f"no table {t!r} in the graph. " + (f"similar: {', '.join(near)}" if near else f"tables: {', '.join(allt) or '(none)'}")
+                + ". Use the DB table name (Django: `<app>_<model>` or Meta.db_table).")
+    reads = st.q("SELECT count(*) c FROM edges WHERE kind IN ('READS_TABLE','READS_COLUMN','MENTIONS_COLUMN') AND (dst=? OR dst LIKE ?)",
+                 (f"table:{t}", f"column:{t}.%"))[0]["c"]
+    return (f"no writers recorded for table {t!r} ({reads} read/mention edges). Writes through raw SQL, bulk helpers or admin "
+            f"form saves may not be modelled. try: reaches(['table:{t}']) for every dependent; routes(writes='{t}') after "
+            "indexing the code that writes it.")
+
+
+def explain_no_path(st: GraphStore, src: str, dst: str, min_conf: str = "heuristic") -> str:
+    a, b = resolve_targets(st, src), resolve_targets(st, dst)
+    if not a:
+        return f"no path: source {src!r} matches no node; try search()."
+    if not b:
+        return f"no path: target {dst!r} matches no node; try search()."
+    rev = _bfs_path(st, b, set(a), min_conf, 30)
+    if rev:
+        return (f"no path from {src} to {dst}, but there is one in the other direction ({len(rev)} hops): "
+                f"try path('{dst}', '{src}').")
+    return (f"no forward path from {src} to {dst} over dependency edges (min_confidence={min_conf}). "
+            f"try: downstream('{src}') for everything it reaches; reaches(['{dst}']) for everything that depends on the target"
+            + ("; a lower min_confidence" if min_conf != "heuristic" else "") + ".")
+
+
+# ----------------------------------------------------------------------------------------------- client keys dropped by a helper
+def _known_keys(ha: dict) -> set[str] | None:
+    """Keys a client request can send (always + conditional), or None when the request params are not statically known."""
+    ks = [x for x in (ha.get("query_keys"), ha.get("body_keys")) if x]
+    if not ks or any(k.get("opaque") for k in ks):
+        return None
+    return {x for k in ks for x in (k.get("keys") or []) + (k.get("conditional") or [])}
+
+
+def forwarding_gaps(st: GraphStore, issuers: list[str] | None = None) -> list[dict]:
+    """Call sites that pass keys to a request-issuing function which never puts them on the request ("sent but not
+    forwarded"), e.g. a page passes {category_id, date_from} to fetchTop, whose params builder only sets category_id.
+    Uses the HTTP_CALLS query/body key facts and the call-site argument keys (CALLS attrs.arg_keys)."""
+    out = []
+    sql = "SELECT src, dst, file, line, attrs FROM edges WHERE kind='HTTP_CALLS'"
+    rows = st.q(sql) if issuers is None else [r for i in issuers for r in st.q(sql + " AND src=?", (i,))]
+    for h in rows:
+        ha = json.loads(h["attrs"] or "{}")
+        known = _known_keys(ha)
+        if known is None:
+            continue
+        fwd = next((x for x in (ha.get("query_keys"), ha.get("body_keys")) if x and x.get("forwarded_index") is not None), None)
+        fi = fwd.get("forwarded_index") if fwd else None
+        for c in st.q("SELECT src, file, line, attrs FROM edges WHERE kind='CALLS' AND dst=?", (h["src"],)):
+            ca = json.loads(c["attrs"] or "{}")
+            ak = ca.get("arg_keys")
+            if not ak:
+                continue
+            if isinstance(fi, int):
+                ak = [ak[fi]] if fi < len(ak) else []
+            elif len([x for x in ak if x]) != 1:
+                continue  # several object arguments and no recorded forwarded parameter: cannot tell which one is sent
+            passed = sorted({k for ks in ak for k in (ks or [])})
+            cond = sorted({k for ks in (ca.get("arg_keys_conditional") or []) for k in (ks or [])})
+            dropped = [k for k in passed + cond if k not in known]
+            if dropped:
+                out.append({"endpoint": h["dst"], "issuer": h["src"], "request_at": f"{h['file']}:{h['line']}",
+                            "caller": c["src"], "call_at": f"{c['file']}:{c['line']}", "passed": passed + cond,
+                            "request_keys": sorted(known), "dropped": sorted(set(dropped))})
+    return out
+
+
+def path_notes(st: GraphStore, path: list[dict]) -> list[str]:
+    """Notes for a path: keys a call site passes that the next hop's request never sends."""
+    notes = []
+    for a, b in zip(path, path[1:]):
+        if a["kind"] == "CALLS" and b["kind"] == "HTTP_CALLS" and a["to"] == b["from"]:
+            for g in forwarding_gaps(st, [b["from"]]):
+                if g["caller"] == a["from"] and g["endpoint"] == b["to"]:
+                    notes.append(f"sent but not forwarded: {', '.join(g['dropped'])} (passed @ {g['call_at']}; the request built "
+                                 f"@ {g['request_at']} sends only {', '.join(g['request_keys'])})")
+    return notes
+
+
+def render_siblings(st: GraphStore, spec: str, res: dict, limit: int = 15) -> str:
+    if not res["targets"]:
+        return f"no symbol matches {spec!r}; try `search` with part of the name"
+    out = [f"target: {short_id(res['targets'][0])}"]
+    if not any(res[k] for k in ("hierarchy", "same_method_in_siblings", "shared_resources", "co_callers")):
+        return "\n".join(out + [explain_siblings(st, spec, res)])
+    for h in res["hierarchy"][:limit]:
+        out.append(f"hierarchy   {h['kind']} {short_id(h['parent'])}: {short_id(h['sibling'])}")
+    for m in res["same_method_in_siblings"][:limit]:
+        out.append(f"same method {short_id(m['id'])}  @{m['file']}:{m['line']}")
+    for s in res["shared_resources"][:limit]:
+        out.append(f"shares      {short_id(s['node'])}: {', '.join(short_id(x) for x in s['shared'][:6])}{' …' if len(s['shared']) > 6 else ''}")
+    for s in res["co_callers"][:limit]:
+        out.append(f"co-caller   {short_id(s['node'])} J={s['jaccard']}: {', '.join(short_id(x) for x in s['shared_callees'][:5])}")
     return "\n".join(out)

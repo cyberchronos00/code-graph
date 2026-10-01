@@ -1,0 +1,7 @@
+build/
+compile_commands.json
+index.scip
+*.o
+*.a
+rbtool
+test_ringbuf

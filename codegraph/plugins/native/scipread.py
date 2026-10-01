@@ -1,0 +1,135 @@
+"""SCIP reading helpers shared by the native-language plugins (Rust, C/C++).
+
+Unlike the generic importer (plugins/scip/importer.py), the native plugins own their node ids: definitions are
+matched to syntactic items by (file, line, name) so the SCIP layer and the tree-sitter layer agree. This module only
+loads an index, merges duplicate documents (scip-clang emits one per translation unit that touches a header) and
+parses symbol descriptors.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scip"))
+import scip_pb2  # noqa: E402
+
+DEFINITION = scip_pb2.SymbolRole.Definition
+FORWARD_DEFINITION = getattr(scip_pb2.SymbolRole, "ForwardDefinition", 64)
+WRITE_ACCESS = scip_pb2.SymbolRole.WriteAccess
+
+
+@dataclass
+class Occ:
+    line: int          # 0-based
+    col: int
+    end_col: int
+    symbol: str
+    roles: int
+    enclosing: tuple   # (start_line, end_line) 0-based, or ()
+
+
+@dataclass
+class Doc:
+    path: str
+    occs: list[Occ] = field(default_factory=list)
+    symbols: dict = field(default_factory=dict)   # symbol -> SymbolInformation
+
+
+@dataclass
+class Index:
+    tool: str
+    version: str
+    docs: dict[str, Doc]
+    # symbol -> list of (path, Occ) definitions (scip-clang: also forward definitions/declarations)
+    defs: dict[str, list] = field(default_factory=dict)
+
+
+def _rng(r) -> tuple[int, int, int, int]:
+    r = list(r)
+    if len(r) == 3:
+        return r[0], r[1], r[0], r[2]
+    if len(r) == 4:
+        return r[0], r[1], r[2], r[3]
+    return (0, 0, 0, 0)
+
+
+def load(path: str | Path) -> Index:
+    idx = scip_pb2.Index()
+    idx.ParseFromString(Path(path).read_bytes())
+    docs: dict[str, Doc] = {}
+    seen: dict[str, set] = {}
+    for d in idx.documents:
+        doc = docs.get(d.relative_path)
+        if doc is None:
+            doc = docs[d.relative_path] = Doc(d.relative_path)
+            seen[d.relative_path] = set()
+        s = seen[d.relative_path]
+        for o in d.occurrences:
+            if o.symbol.startswith("local ") or not o.symbol:
+                continue
+            sl, sc, el, ec = _rng(o.range)
+            key = (sl, sc, ec, o.symbol, o.symbol_roles)
+            if key in s:
+                continue
+            s.add(key)
+            enc = ()
+            if len(o.enclosing_range):
+                a, _, b, _ = _rng(o.enclosing_range)
+                enc = (a, b)
+            doc.occs.append(Occ(sl, sc, ec, o.symbol, o.symbol_roles, enc))
+        for si in d.symbols:
+            if not si.symbol.startswith("local "):
+                doc.symbols.setdefault(si.symbol, si)
+    out = Index(idx.metadata.tool_info.name, idx.metadata.tool_info.version, docs)
+    for doc in docs.values():
+        doc.occs.sort(key=lambda o: (o.line, o.col))
+        for o in doc.occs:
+            if o.roles & DEFINITION:
+                out.defs.setdefault(o.symbol, []).append((doc.path, o))
+    return out
+
+
+_DESC = re.compile(r"(`(?:[^`]|``)*`|[^\s/#.()\[\]:!`]+)?(/|#|\.|:|!|\(([^)]*)\)\.|\[)")
+
+
+def descriptors(symbol: str) -> tuple[str, list[tuple[str, str]]] | None:
+    """'<scheme> <manager> <package> <version> <descriptors>' -> (package, [(name, suffix)]).
+    suffix: '/' namespace, '#' type, '.' term, '(' method, '!' macro, '[' type parameter / impl disambiguator."""
+    if symbol.startswith("local "):
+        return None
+    parts = symbol.split(" ", 4)
+    if len(parts) < 5:
+        return None
+    pkg, desc = parts[2], parts[4]
+    out = []
+    i = 0
+    while i < len(desc):
+        if desc[i] == "[":  # [name] type parameter (rust-analyzer uses it for impl#[Type][Trait])
+            j = i + 1
+            depth = 1
+            while j < len(desc) and depth:
+                if desc[j] == "`":
+                    k = desc.find("`", j + 1)
+                    j = (k if k > 0 else len(desc) - 1) + 1
+                    continue
+                depth += {"[": 1, "]": -1}.get(desc[j], 0)
+                j += 1
+            out.append((desc[i + 1:j - 1].strip("`"), "["))
+            i = j
+            continue
+        m = _DESC.match(desc, i)
+        if not m or m.end() == i:
+            break
+        name = (m.group(1) or "").strip("`").replace("``", "`")
+        suf = m.group(2)
+        if suf.startswith("("):
+            suf = "("
+        out.append((name, suf))
+        i = m.end()
+    return pkg, out
+
+
+def is_project_symbol(idx: Index, symbol: str) -> bool:
+    return symbol in idx.defs

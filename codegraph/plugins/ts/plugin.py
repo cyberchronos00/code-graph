@@ -86,7 +86,17 @@ class TypeScriptPlugin(LanguagePlugin):
         self.program: TsContext | None = None
 
     def detect(self, project: Project) -> bool:
-        return project.exists("tsconfig.json") or "typescript" in (project.detected.get("languages") or {})
+        if project.exists("tsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
+            return True
+        from ..tsweb.common import has_server_framework   # plain-JS server projects (Express, Koa, ...): allowJs
+        return project.exists("package.json") and has_server_framework(project)
+
+    def prerequisite_problem(self, project: Project) -> str | None:
+        if not shutil.which("node"):
+            return "node not installed (Node.js 20+ is needed for the TypeScript extractor)"
+        if not (EXTRACTOR_DIR / "node_modules" / "typescript").exists() and not shutil.which("npm"):
+            return "TypeScript extractor dependencies missing and npm not installed: run `(cd codegraph/plugins/ts/extractor && npm ci)`"
+        return None
 
     def ensure_extractor(self) -> None:
         if not (EXTRACTOR_DIR / "node_modules" / "typescript").exists():

@@ -1,0 +1,20 @@
+{
+  "name": "bookstore-nest",
+  "private": true,
+  "description": "Fictional NestJS bookstore API used by code-graph's tests (not meant to run).",
+  "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/typeorm": "^11.0.0",
+    "@nestjs/mongoose": "^11.0.0",
+    "@nestjs/schedule": "^6.0.0",
+    "@nestjs/bullmq": "^11.0.0",
+    "@nestjs/event-emitter": "^3.0.0",
+    "@nestjs/microservices": "^11.0.0",
+    "@nestjs/websockets": "^11.0.0",
+    "class-validator": "^0.14.0",
+    "nest-commander": "^3.0.0",
+    "typeorm": "^0.3.0"
+  }
+}

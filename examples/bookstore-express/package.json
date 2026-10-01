@@ -1,0 +1,7 @@
+{
+  "name": "bookstore-express",
+  "private": true,
+  "description": "Fictional warehouse API (plain CommonJS Express) used by code-graph's tests (not meant to run).",
+  "main": "src/app.js",
+  "dependencies": { "express": "^4.19.0", "knex": "^3.0.0", "pg": "^8.0.0" }
+}

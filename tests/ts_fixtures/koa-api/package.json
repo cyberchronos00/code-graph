@@ -1,0 +1,1 @@
+{ "name": "fixture-koa", "private": true, "dependencies": { "koa": "^2.15.0", "@koa/router": "^13.0.0" } }

@@ -1,0 +1,6 @@
+{
+  "name": "bookstore-next",
+  "private": true,
+  "description": "Fictional Next.js bookstore storefront used by code-graph's tests (not meant to run).",
+  "dependencies": { "next": "^15.0.0", "react": "^19.0.0", "swr": "^2.0.0", "ky": "^1.0.0", "@prisma/client": "^6.0.0" }
+}

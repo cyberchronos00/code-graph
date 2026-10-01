@@ -66,14 +66,39 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     "VALIDATED_BY": (True, "controller action is validated by a FormRequest (rules())"),
     "HAS_RESOLUTION": (True, "code resolves a value through a fallback chain (resolution node)"),
     "FALLS_BACK_TO": (True, "resolution chain step -> source node (setting, request key, column, config, env); attrs.order"),
+    # native code (Rust, C, C++)
+    "USES_TYPE": (True, "code/type refers to a type (struct, enum, union, trait, class, typedef)"),
+    "ACCESSES_FIELD": (True, "code reads/writes a struct/class field or enum variant"),
+    "USES_VALUE": (True, "code refers to a constant, static/global variable or object-like macro"),
+    "REFERENCES_FN": (True, "code/data takes a function as a value (callback, dispatch table, handler registration)"),
+    "USES_UNSAFE": (True, "code contains an unsafe block or is an unsafe fn (sink node unsafe:<crate>)"),
+    "GATED_BY": (True, "code compiled only under a condition: Cargo feature, cfg predicate or preprocessor macro"),
+    "INCLUDES": (True, "source/header file #includes a header"),
+    # Python / Django
+    "USES_SCHEMA": (False, "handler/view uses a wire schema (ninja/pydantic Schema, DRF serializer) for request/response; attrs.role"),
+    # Dart / Flutter
+    "EMITS_STATE": (False, "bloc/cubit code emits a state class"),
+    "HANDLES_STATE": (False, "UI code checks for a state class (is / switch pattern / BlocListener)"),
+    "NAVIGATES_TO": (False, "UI code navigates to a page/route (Navigator.push, context.go, named route)"),
+    "PARSES_JSON": (False, "code parses an HTTP response into a model (X.fromJson) or serialises a request body (toJson)"),
 }
 PROPAGATING = sorted(k for k, (p, _) in EDGE_KINDS.items() if p)
 
-ENTRY_KINDS = ("http_route", "artisan_command", "scheduled", "queue_job", "listener", "admin_panel", "observer",
-               "ui_page", "ui_global")
+ENTRY_KINDS = ("http_route", "websocket", "artisan_command", "management_command", "scheduled", "queue_job", "listener",
+               "admin_panel", "observer", "ui_page", "ui_global",
+               "main", "ffi_export", "public_api", "test", "bench", "example", "build_script")
 UI_ENTRY_KINDS = ("ui_page", "ui_global")
-RUNTIME_ENTRY_KINDS = ("http_route", "scheduled", "queue_job", "listener")
-OPERATOR_ENTRY_KINDS = ("artisan_command", "admin_panel")
+# websocket = Channels consumer routes; management_command = Django `manage.py <name>` (operator, like artisan)
+RUNTIME_ENTRY_KINDS = ("http_route", "websocket", "scheduled", "queue_job", "listener", "main", "ffi_export")
+OPERATOR_ENTRY_KINDS = ("artisan_command", "management_command", "admin_panel")
+# native code: library API surface (pub items of a lib crate, exported C/C++ API) and dev/build-time entries
+LIBRARY_ENTRY_KINDS = ("public_api",)
+DEV_ENTRY_KINDS = ("test", "bench", "example", "build_script")
+# TS server frameworks: microservice / WebSocket message handlers run at runtime; CLI commands (nest-commander) are
+# operator-only, like artisan commands.
+ENTRY_KINDS += ("message_handler", "cli_command")
+RUNTIME_ENTRY_KINDS += ("message_handler",)
+OPERATOR_ENTRY_KINDS += ("cli_command",)
 
 
 @dataclass

@@ -1,0 +1,22 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Book {
+  id        Int        @id @default(autoincrement())
+  title     String
+  priceCents Int       @map("price_cents")
+  cartItems CartItem[]
+
+  @@map("books")
+}
+
+model CartItem {
+  id       Int    @id @default(autoincrement())
+  bookId   Int    @map("book_id")
+  quantity Int
+  book     Book   @relation(fields: [bookId], references: [id])
+
+  @@map("cart_items")
+}

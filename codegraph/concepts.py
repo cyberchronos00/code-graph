@@ -10,7 +10,7 @@ client's own literal fallbacks (`report.value?.timezone ?? 'UTC'`).
 Matching is lexical and deterministic: a site belongs to the concept when the *head word* of its target
 (`$timezone`, `$customerTimezone`, `resolveTimezone()`, `report.value?.timezone`) is the concept (singular/plural),
 or when its chain starts with a request key / setting / column whose head word is the concept.
-No LLM is involved; an optional summary can only be layered on top of this output (not built in).
+The output is the deterministic facts themselves, ready for a reviewer or an agent to summarise.
 """
 from __future__ import annotations
 
@@ -173,7 +173,22 @@ def resolutions(st: GraphStore, concept: str, within: str | None = None, client:
            "client": [], "client_fallbacks": []}
     if client:
         res["client"], res["client_fallbacks"] = _client_side(st, req_sites, concept_keys, frontend, forms)
+        res["not_forwarded"] = _not_forwarded(st, res, forms)
     return res
+
+
+def _not_forwarded(st: GraphStore, res: dict, forms: set[str]) -> list[dict]:
+    """Keys a client call site passes that the request it calls never sends: for the requests listed under CLIENT,
+    and every gap whose dropped key is a form of the concept (e.g. date_from, which then has no backend site at all)."""
+    from .query import forwarding_gaps
+    issuers = {rq["issuer"] for it in res["client"] for rq in it["requests"]}
+    c = res["concept"].lower()
+    out = []
+    for g in forwarding_gaps(st):
+        concept_hit = [k for k in g["dropped"] if head_token(k) in forms or c in k.lower()]
+        if g["issuer"] in issuers or concept_hit:
+            out.append({**g, "concept_keys": concept_hit})
+    return out
 
 
 def _key_status(keys: dict | None, k: str) -> str:
@@ -334,4 +349,12 @@ def render_resolutions(res: dict, max_sites_per_chain=8, show_client=True, compa
                     L.append(f"       client fallback @{f['at']}: {f['expr']} ?? {f['literal']!r}")
                 for k, v in (rq.get("verdict") or {}).items():
                     L.append(f"       => '{k}': {v}")
+    if show_client and res.get("not_forwarded"):
+        L += ["", "== SENT BUT NOT FORWARDED (a call site passes the key; the request it calls never sends it)"]
+        for g in res["not_forwarded"]:
+            L.append(f"  {short(g['caller'])} @{g['call_at']} passes {', '.join(g['dropped'])} to {short(g['issuer'])}; "
+                     f"the request @{g['request_at']} ({g['endpoint'][5:]}) sends only {', '.join(g['request_keys'])}")
+    elif show_client and not res["backend_sites"] and not res["client"]:
+        L += ["", f"no resolution sites match {res['concept']!r}. try: a head word such as timezone, locale, currency or store; "
+                  "search() / `cg search` for the name"]
     return "\n".join(L)

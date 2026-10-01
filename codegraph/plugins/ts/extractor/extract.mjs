@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { parse as parseSFC } from '@vue/compiler-sfc'
+import { collectFrameworkFacts } from './fw.mjs'
 
 const t0 = Date.now()
 const cfg = JSON.parse(fs.readFileSync(process.argv[process.argv.indexOf('--config') + 1], 'utf8'))
@@ -20,6 +21,9 @@ const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', '
 const FETCH_FNS = new Set(['$fetch', 'useFetch', 'useLazyFetch', 'ofetch', 'fetch'])
 const I18N_FNS = new Set(['t', '$t', 'te', '$te', 'tm', 'rt'])
 const SKIP_FILE = /(\.test|\.spec)\.(ts|js|mts)$|\/node_modules\/|\/\.nuxt\//
+// framework plugins may exclude more (tests, build output) by a regex over the repo-relative path
+const SKIP_REL = cfg.skip_re ? new RegExp(cfg.skip_re) : null
+const SRC_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/
 
 // ---------- file kinds (from the framework plugin: [[prefix, kind], ...]) ----------
 function fileKind(r) {
@@ -41,21 +45,42 @@ if (cfg.components_dts && fs.existsSync(cfg.components_dts)) {
 const pascal = s => s.split('-').map(x => x ? x[0].toUpperCase() + x.slice(1) : '').join('')
 
 // ---------- tsconfig ----------
-const tsconfigPath = path.resolve(ROOT, cfg.tsconfig)
-const parsed = ts.parseJsonConfigFileContent(ts.readConfigFile(tsconfigPath, ts.sys.readFile).config, ts.sys, path.dirname(tsconfigPath))
+// tsconfig.json, else jsconfig.json; a solution-style config (`files: []` + references) uses its referenced
+// configs; with no config at all (plain JS projects) the source dirs are walked with allowJs defaults.
+function parseConfig(p) {
+  try { return ts.parseJsonConfigFileContent(ts.readConfigFile(p, ts.sys.readFile).config || {}, ts.sys, path.dirname(p), undefined, p) } catch { return null }
+}
+let tsconfigPath = path.resolve(ROOT, cfg.tsconfig || 'tsconfig.json')
+if (!fs.existsSync(tsconfigPath) && fs.existsSync(path.join(ROOT, 'jsconfig.json'))) tsconfigPath = path.join(ROOT, 'jsconfig.json')
+let parsed = fs.existsSync(tsconfigPath) ? parseConfig(tsconfigPath) : null
+if (parsed && !parsed.fileNames.length && parsed.projectReferences && parsed.projectReferences.length) {
+  for (const ref of parsed.projectReferences) {
+    let rp = ref.path
+    if (fs.existsSync(rp) && fs.statSync(rp).isDirectory()) rp = path.join(rp, 'tsconfig.json')
+    const sub = fs.existsSync(rp) ? parseConfig(rp) : null
+    if (sub && sub.fileNames.length) { parsed = { ...sub, fileNames: [...new Set([...parsed.fileNames, ...sub.fileNames])], options: { ...sub.options, ...parsed.options, paths: parsed.options.paths || sub.options.paths, baseUrl: parsed.options.baseUrl || sub.options.baseUrl, pathsBasePath: parsed.options.pathsBasePath || sub.options.pathsBasePath } } }
+  }
+}
+const noConfig = !parsed
+if (!parsed) parsed = { options: {}, fileNames: [] }
 const options = { ...parsed.options, noEmit: true, skipLibCheck: true }
+if (noConfig || cfg.allow_js) Object.assign(options, { allowJs: true, checkJs: false, maxNodeModuleJsDepth: 0 })
+if (noConfig) Object.assign(options, { jsx: ts.JsxEmit.Preserve, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
+  target: ts.ScriptTarget.ESNext, resolveJsonModule: true, esModuleInterop: true, allowSyntheticDefaultImports: true })
+if (options.moduleResolution === ts.ModuleResolutionKind.Classic) options.moduleResolution = ts.ModuleResolutionKind.Bundler
 const pathsBase = options.pathsBasePath || options.baseUrl || path.dirname(tsconfigPath)
 
 function walkDir(d, out) {
   for (const e of fs.readdirSync(d, { withFileTypes: true })) {
     if (e.name === 'node_modules' || e.name.startsWith('.')) continue
     const p = path.join(d, e.name)
+    if (SKIP_REL && SKIP_REL.test(rel(p))) continue
     if (e.isDirectory()) walkDir(p, out)
     else out.push(p)
   }
   return out
 }
-const srcDirs = (cfg.src_dirs || ['app']).map(d => path.join(ROOT, d)).filter(fs.existsSync)
+const srcDirs = (cfg.src_dirs || ['app']).map(d => path.resolve(ROOT, d)).filter(fs.existsSync)
 const allFiles = srcDirs.flatMap(d => walkDir(d, []))
 const vueFiles = allFiles.filter(f => f.endsWith('.vue'))
 const vueSet = new Set(vueFiles)
@@ -197,18 +222,27 @@ host.resolveModuleNameLiterals = (lits, containing, redirected, opts) => lits.ma
   return ts.resolveModuleName(spec, containingReal, opts, host)
 })
 
-const SKIP_ROOT = /(\.test|\.spec)\.(ts|js|mts)$/
-const rootNames = [...parsed.fileNames.filter(f => !SKIP_ROOT.test(f)), ...virtual.keys()]
+const SKIP_ROOT = /(\.test|\.spec)\.(ts|tsx|js|jsx|mts)$/
+let configFiles = parsed.fileNames
+// files outside the config's include list but inside the source dirs (JS projects, partial includes)
+if (noConfig || cfg.walk_src) configFiles = [...new Set([...configFiles, ...allFiles.filter(f => SRC_EXT.test(f) && !f.endsWith('.d.ts'))])]
+const extraFiles = (cfg.extra_files || []).map(f => path.resolve(ROOT, f)).filter(f => fs.existsSync(f))
+if (extraFiles.some(f => /\.(c|m)?jsx?$/.test(f))) options.allowJs = true
+const rootNames = [...new Set([...configFiles.filter(f => !SKIP_ROOT.test(f) && !(SKIP_REL && SKIP_REL.test(rel(f)))), ...extraFiles]), ...virtual.keys()]
 const program = ts.createProgram({ rootNames, options, host })
 const checker = program.getTypeChecker()
 const tProgram = Date.now()
 
 // ---------- helpers ----------
+const projectSfMemo = new Map()
 const projectSf = sf => {
   const fn = sf.fileName
-  if (fn.includes('/node_modules/') || fn.includes('/.nuxt/')) return false
+  let v = projectSfMemo.get(fn)
+  if (v !== undefined) return v
   const real = fn.endsWith('.vue.ts') ? fn.slice(0, -3) : fn
-  return srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts')
+  v = !fn.includes('/node_modules/') && !fn.includes('/.nuxt/') && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real)))
+  projectSfMemo.set(fn, v)
+  return v
 }
 const realFile = sf => sf.fileName.endsWith('.vue.ts') ? sf.fileName.slice(0, -3) : sf.fileName
 function lineOf(node, sf = node.getSourceFile()) {
@@ -236,6 +270,44 @@ function docOf(node) {
 }
 
 // ---------- pass 1: declarations -> nodes ----------
+// router registrations with inline handlers: router.get('/x', mw, (req, res) => {...}) / app.route('/x').post(fn)
+const ROUTE_VERBS = new Set(['get', 'post', 'put', 'patch', 'delete', 'del', 'head', 'options', 'all'])
+const isStrArg = a => a && (ts.isStringLiteralLike(a) || ts.isTemplateExpression(a) || ts.isRegularExpressionLiteral(a) || (ts.isArrayLiteralExpression(a) && a.elements.length && a.elements.every(x => ts.isStringLiteralLike(x))))
+function routeCallInfo(node) {
+  if (!ts.isCallExpression(node)) return null
+  const c = unwrap(node.expression)
+  if (!ts.isPropertyAccessExpression(c) || !ROUTE_VERBS.has(c.name.text)) return null
+  const a0 = unwrap(node.arguments[0])
+  let pathText = null
+  if (isStrArg(a0)) {
+    if (c.name.text === 'get' && node.arguments.length === 2 && ts.isStringLiteralLike(a0) && !/^\/|^\*$|^:/.test(a0.text)) return null
+    pathText = a0.getText().replace(/\s+/g, ' ').slice(0, 80)
+  } else {
+    const inner = unwrap(c.expression)
+    const ic = inner && ts.isCallExpression(inner) && unwrap(inner.expression)
+    if (!(ic && ts.isPropertyAccessExpression(ic) && (ic.name.text === 'route' || ROUTE_VERBS.has(ic.name.text)))) return null
+    pathText = ic.name.text === 'route' && inner.arguments[0] ? inner.arguments[0].getText().slice(0, 80) : ''
+  }
+  let base = unwrap(c.expression)
+  while (ts.isCallExpression(base) && ts.isPropertyAccessExpression(unwrap(base.expression))) base = unwrap(unwrap(base.expression).expression)
+  return { label: `${base.getText().replace(/\s+/g, ' ').slice(0, 40)}.${c.name.text}(${pathText})` }
+}
+// `wrap(async () => {...}, opts)` / `withA(withB(fn))`: the wrapped function literal (HOF wrappers: route handler
+// builders, asyncHandler, withAuth, ...)
+function wrappedFn(init, depth = 0) {
+  init = unwrap(init)
+  if (!init || depth > 3 || !ts.isCallExpression(init)) return null
+  const c = unwrap(init.expression)
+  if (ts.isIdentifier(c) && (c.text === 'require' || c.text === 'defineStore')) return null
+  for (const a of init.arguments) {
+    const u = unwrap(a)
+    if (isFn(u)) return u
+    const w = wrappedFn(u, depth + 1)
+    if (w) return w
+  }
+  return null
+}
+const isModuleExports = e => { e = unwrap(e); return !!e && ts.isPropertyAccessExpression(e) && e.getText() === 'module.exports' }
 const nodes = []                  // {id, kind, name, file, line, end_line, doc, parent, attrs}
 const declId = new Map()          // ts.Node (declaration) -> node id
 const fileNode = new Map()        // abs real path -> node id
@@ -246,23 +318,71 @@ const sourceFiles = program.getSourceFiles().filter(projectSf)
 for (const sf of sourceFiles) {
   const real = realFile(sf), r = rel(real), fk = fileKind(r)
   if (!real.endsWith('.vue')) stats.ts_files++
+  if (sf.parseDiagnostics && sf.parseDiagnostics.length) {   // the parser recovers; count files that needed recovery
+    stats.syntax_error_files = (stats.syntax_error_files || 0) + 1
+    if ((stats.syntax_error_samples ||= []).length < 5) stats.syntax_error_samples.push(r)
+  }
   const fid = real.endsWith('.vue') ? `${fk}:${r}` : `module:${r}`
   usedIds.add(fid)
   fileNode.set(real, fid)
   nodes.push({ id: fid, kind: real.endsWith('.vue') ? fk : 'module', name: r, file: r, line: 1, end_line: sf.getLineAndCharacterOfPosition(sf.end).line + 1, attrs: { file_kind: fk } })
   if (real.endsWith('.vue')) continue // SFC: references are attributed to the component node
-  const visit = (node, qual, parentId) => {
-    let name = null, kind = null, body = null
+  const visit = (node, qual, parentId, inObj) => {
+    let name = null, kind = null, body = null, wrapped = null
     if (ts.isFunctionDeclaration(node) && node.name) { name = node.name.text; kind = 'function'; body = node }
+    else if (ts.isFunctionDeclaration(node) && !node.name && !qual && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default)) { name = 'default'; kind = 'function'; body = node }
     else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       const init = unwrap(node.initializer)
       if (isFn(init)) { name = node.name.text; kind = 'function'; body = init }
       else if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'defineStore') {
         name = node.name.text; kind = 'store'; body = init
-      }
+      } else if (!qual && (wrapped = wrappedFn(init))) { name = node.name.text; kind = 'function'; body = wrapped }
+      else if (!qual && ts.isObjectLiteralExpression(init)) { ts.forEachChild(init, c => visit(c, node.name.text, parentId, true)); return }
+    } else if (ts.isPropertyAssignment(node) && inObj && node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) && ts.isObjectLiteralExpression(unwrap(node.initializer))) {
+      ts.forEachChild(node, c => visit(c, qual ? `${qual}.${node.name.text}` : node.name.text, parentId, true)); return
     } else if ((ts.isMethodDeclaration(node) || ts.isPropertyAssignment(node)) && node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
       const init = ts.isPropertyAssignment(node) ? unwrap(node.initializer) : node
       if (ts.isMethodDeclaration(node) || isFn(init)) { name = node.name.text; kind = ts.isMethodDeclaration(node) && ts.isClassLike(node.parent) ? 'method' : 'function'; body = init }
+    } else if (ts.isPropertyDeclaration(node) && node.name && ts.isIdentifier(node.name) && node.initializer && ts.isClassLike(node.parent)) {
+      const init = unwrap(node.initializer)
+      const f = isFn(init) ? init : wrappedFn(init)
+      if (f) { name = node.name.text; kind = 'method'; body = f }
+    } else if (ts.isExportAssignment(node) && !qual) {
+      const ex = unwrap(node.expression)
+      const f = isFn(ex) ? ex : wrappedFn(ex)
+      if (f) { name = 'default'; kind = 'function'; body = f }
+      else if (ts.isObjectLiteralExpression(ex)) { ts.forEachChild(ex, c => visit(c, '', parentId, true)); return }
+    } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && !qual && ts.isExpressionStatement(node.parent)) {
+      // CommonJS: module.exports = fn | {..}; exports.x = fn; module.exports.x = fn
+      const l = unwrap(node.left), rgt = unwrap(node.right)
+      const f = isFn(rgt) ? rgt : wrappedFn(rgt)
+      if (isModuleExports(l)) {
+        if (f) { name = f.name ? f.name.text : 'default'; kind = 'function'; body = f }
+        else if (ts.isObjectLiteralExpression(rgt)) { ts.forEachChild(rgt, c => visit(c, '', parentId, true)); return }
+      } else if (ts.isPropertyAccessExpression(l) && (unwrap(l.expression).getText() === 'exports' || isModuleExports(l.expression)) && f) {
+        name = l.name.text; kind = 'function'; body = f
+      }
+    } else if (ts.isCallExpression(node)) {
+      const rc = routeCallInfo(node)
+      if (rc) {
+        const handled = new Set()
+        for (const a of node.arguments) {
+          const u = unwrap(a)
+          const fns = isFn(u) ? [u] : ts.isArrayLiteralExpression(u) ? u.elements.map(unwrap).filter(isFn) : [wrappedFn(u)].filter(Boolean)
+          for (const f of fns) {
+            const q = qual ? `${qual}.${rc.label}` : rc.label
+            const id = mkId('function', `${r}#${q}`)
+            nodes.push({ id, kind: 'function', name: q, file: r, line: lineOf(f, sf), end_line: sf.getLineAndCharacterOfPosition(f.end).line + 1,
+              doc: null, parent: parentId, attrs: { inline_handler: true } })
+            declId.set(f, id)
+            ts.forEachChild(f, c => visit(c, q, id))
+            handled.add(f)
+          }
+        }
+        const v2 = c => { if (handled.has(c)) return; if (handled.has(unwrap(c))) return; visit(c, qual, parentId) }
+        ts.forEachChild(node, v2)
+        return
+      }
     } else if (ts.isClassDeclaration(node) && node.name) { name = node.name.text; kind = 'class'; body = node }
     else if ((ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node)) && node.name) {
       name = node.name.text; kind = 'type'
@@ -271,8 +391,13 @@ for (const sf of sourceFiles) {
       const q = qual ? `${qual}.${name}` : name
       if (kind === 'function' && !qual && fk === 'composable' && /^use[A-Z0-9]/.test(name)) kind = 'composable'
       const attrs = {}
+      if (wrapped || (body && body !== node && !isFn(unwrap(node.initializer || node)) && !ts.isFunctionDeclaration(node) && !ts.isMethodDeclaration(node) && kind !== 'store' && kind !== 'class')) {
+        const w = node.initializer || node.expression || node.right
+        if (w && ts.isCallExpression(unwrap(w))) attrs.wrapped_by = unwrap(unwrap(w).expression).getText().slice(0, 60)
+      }
       if (kind === 'store') { const a0 = body.arguments[0]; if (a0 && ts.isStringLiteralLike(a0)) attrs.store_id = a0.text }
-      const isExported = !qual && (ts.getCombinedModifierFlags(ts.isVariableDeclaration(node) ? node : node) & ts.ModifierFlags.Export) !== 0
+      let isExported = false
+      try { isExported = !qual && (name === 'default' || ts.isExportAssignment(node) || ts.isBinaryExpression(node) || (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Export) !== 0) } catch { }
       if (isExported) attrs.exported = true
       const id = mkId(kind, `${r}#${q}`)
       nodes.push({ id, kind, name: q, file: r, line: lineOf(node, sf), end_line: sf.getLineAndCharacterOfPosition(node.end).line + 1,
@@ -295,6 +420,8 @@ function declToNode(d) {
   if (!d) return null
   if (declId.has(d)) return declId.get(d)
   if ((ts.isArrowFunction(d) || ts.isFunctionExpression(d)) && declId.has(d.parent)) return declId.get(d.parent)
+  // CommonJS `exports.x = fn`: the symbol's declaration is the left-hand property access
+  if (ts.isPropertyAccessExpression(d) && d.parent && ts.isBinaryExpression(d.parent) && d.parent.left === d && declId.has(d.parent)) return declId.get(d.parent)
   if (ts.isSourceFile(d)) return fileNode.get(realFile(d)) || null
   return null
 }
@@ -515,6 +642,7 @@ function axiosCreateOf(expr, depth = 0) {
   if (ts.isCallExpression(expr)) {
     const c = unwrap(expr.expression)
     if (ts.isPropertyAccessExpression(c) && c.name.text === 'create' && isAxiosType(c.expression)) return { cfg: expr.arguments[0], via: ['axios.create'] }
+    if (ts.isPropertyAccessExpression(c) && c.name.text === 'create' && FW.importSource && FW.importSource(c.expression) === 'axios') return { cfg: expr.arguments[0], via: ['axios.create'] }
     // call returning an instance
     const fn = fnDeclOf(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(c) ? c.name : c))
     for (const r of returnExprs(fn)) { const o = axiosCreateOf(r, depth + 1); if (o) return o }
@@ -525,7 +653,7 @@ function axiosCreateOf(expr, depth = 0) {
     if (sym.flags & ts.SymbolFlags.Alias) { sym = checker.getAliasedSymbol(sym); continue }
     const d = (sym.declarations || []).find(projectDecl)
     if (!d) return null
-    if (ts.isVariableDeclaration(d) && d.initializer) { const o = axiosCreateOf(d.initializer, depth + 1); return o && { cfg: o.cfg, via: [...o.via, 'var'] } }
+    if ((ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d)) && d.initializer) { const o = axiosCreateOf(d.initializer, depth + 1); return o && { cfg: o.cfg, via: [...o.via, 'var'] } }
     if (ts.isShorthandPropertyAssignment(d)) { sym = checker.getShorthandAssignmentValueSymbol(d); continue }
     if (ts.isPropertyAssignment(d)) return axiosCreateOf(d.initializer, depth + 1)
     if (ts.isBindingElement(d) && ts.isObjectBindingPattern(d.parent)) {
@@ -540,8 +668,37 @@ function isAxiosType(expr) {
   try {
     const t = checker.getTypeAtLocation(expr)
     const s = checker.typeToString(t)
-    return /\bAxios(Instance|Static)\b/.test(s) || (t.symbol && /^Axios(Instance|Static)$/.test(t.symbol.name))
+    if (/\bAxios(Instance|Static)\b/.test(s) || (t.symbol && /^Axios(Instance|Static)$/.test(t.symbol.name))) return true
+    // axios types not installed: the receiver is the axios import itself
+    return (s === 'any' || /^typeof /.test(s) || s === 'error') && FW.importSource && FW.importSource(expr) === 'axios' && (ts.isIdentifier(unwrap(expr)))
   } catch { return false }
+}
+const FW = {}   // filled with fw.mjs helpers (importSource) once the program is built
+// instance created by <lib>.create/extend({...}) (ky, ofetch, $fetch): {lib, cfg}
+function clientCreateOf(expr, depth = 0) {
+  expr = unwrap(expr)
+  if (!expr || depth > 6) return null
+  if (ts.isCallExpression(expr)) {
+    const c = unwrap(expr.expression)
+    if (ts.isPropertyAccessExpression(c) && ['create', 'extend'].includes(c.name.text)) {
+      const lib = FW.importSource ? FW.importSource(c.expression) : null
+      const base = ts.isIdentifier(unwrap(c.expression)) ? unwrap(c.expression).text : ''
+      if (lib === 'ky' || lib === 'ofetch' || base === '$fetch' || base === 'ofetch') return { lib: lib || base, cfg: expr.arguments[0] }
+      const inner = clientCreateOf(c.expression, depth + 1)   // api.extend({...}) on an instance
+      if (inner) return { lib: inner.lib, cfg: expr.arguments[0] || inner.cfg, parent: inner }
+    }
+    return null
+  }
+  let sym = ts.isPropertyAccessExpression(expr) ? checker.getSymbolAtLocation(expr.name) : checker.getSymbolAtLocation(expr)
+  for (let i = 0; sym && i < 8; i++) {
+    if (sym.flags & ts.SymbolFlags.Alias) { try { sym = checker.getAliasedSymbol(sym) } catch { return null } continue }
+    const d = (sym.declarations || []).find(projectDecl)
+    if (!d) return null
+    if (ts.isVariableDeclaration(d) && d.initializer) return clientCreateOf(d.initializer, depth + 1)
+    if (ts.isPropertyDeclaration(d) && d.initializer) return clientCreateOf(d.initializer, depth + 1)
+    return null
+  }
+  return null
 }
 function objProp(obj, name) {
   obj = unwrap(obj)
@@ -614,6 +771,14 @@ function requestKeys(e, depth = 0) {
 }
 const keysOut = r => ({ keys: [...r.keys].sort(), conditional: [...r.conditional].filter(k => !r.keys.has(k)).sort(), opaque: r.opaque || undefined, forwarded: r.forwarded || undefined, forwarded_index: r.forwarded ? r.forwarded_index : undefined })
 
+// ---------- framework facts helpers (import sources etc.) ----------
+const FWX = { ts, checker, program, sourceFiles, rel, realFile, lineOf, declId, declToNode, resolveSymbol, evalStr, render, unwrap, projectSf, fileNode }
+let fwFacts = null
+const tFw0 = Date.now()
+fwFacts = collectFrameworkFacts(FWX)
+FW.importSource = FWX.importSource
+const tFw = Date.now() - tFw0
+
 // ---------- pass 2: references ----------
 const edges = []
 const apiCalls = []
@@ -685,7 +850,9 @@ for (const sf of sourceFiles) {
           const k = t.id.split(':')[0]
           if (['function', 'composable', 'method', 'store', 'component', 'page', 'layout'].includes(k)) {
             const tplTag = isVue && isTemplateLine(node, sf) && /^__tplc_/.test(enclosingFnName(node))
-            if (tplTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['template', ...t.via] })
+            const jsxTag = node.parent && (ts.isJsxOpeningElement(node.parent) || ts.isJsxSelfClosingElement(node.parent)) && node.parent.tagName === node
+            if (jsxTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['jsx', ...t.via] })
+            else if (tplTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['template', ...t.via] })
             else if (!['component', 'page', 'layout'].includes(k)) addEdge(cur, t.id, edgeKindFor(t.id), r, lineOf(node, sf), t.conf, { ref: true, via: t.via.length ? t.via : undefined, template: isVue && isTemplateLine(node, sf) || undefined })
           }
         }
@@ -728,9 +895,11 @@ function handleCall(node, cur, sf, r, encFn) {
   }
   // HTTP
   let http = null
-  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && (HTTP_METHODS.has(callee.name.text) || callee.name.text === 'request') && isAxiosType(callee.expression)) {
+  let axiosInst = null
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && (HTTP_METHODS.has(callee.name.text) || callee.name.text === 'request')
+      && (isAxiosType(callee.expression) || (FW.importSource && (axiosInst = axiosCreateOf(callee.expression))))) {
     const recvType = checker.typeToString(checker.getTypeAtLocation(callee.expression))
-    const isInstance = /AxiosInstance/.test(recvType)
+    const isInstance = /AxiosInstance/.test(recvType) || !!axiosInst
     let method = callee.name.text.toUpperCase(), urlExpr = node.arguments[0], cfgObj = null
     if (callee.name.text === 'request') { cfgObj = node.arguments[0]; urlExpr = objProp(cfgObj, 'url'); const m = objProp(cfgObj, 'method'); method = m && ts.isStringLiteralLike(unwrap(m)) ? unwrap(m).text.toUpperCase() : 'GET' }
     let base = null, baseConf = 'exact', baseVia = []
@@ -745,6 +914,18 @@ function handleCall(node, cur, sf, r, encFn) {
     const body = ['post', 'put', 'patch'].includes(lower) ? node.arguments[1] : null
     http = { client: isInstance ? 'axios-instance' : 'axios', method, urlExpr, base, baseConf, baseVia,
       query: qp ? keysOut(requestKeys(qp)) : undefined, body: body ? keysOut(requestKeys(body)) : undefined }
+  } else if (ts.isCallExpression(node) && (http = generatedClientCall(node, callee))) {
+    // OpenAPI-generated clients: this.request({ path, method }) / __request(OpenAPI, { method, url })
+  } else if (ts.isCallExpression(node) && (http = kyOrInstanceCall(node, callee))) {
+    // ky / ofetch.create / $fetch.create instances
+  } else if (ts.isCallExpression(node) && ts.isIdentifier(callee) && /^useSWR(Immutable|Infinite)?$|^useQuery$/.test(callee.text) && callee.text.startsWith('useSWR') && node.arguments[0]) {
+    // SWR: the key is the URL fetched by the (global or passed) fetcher; `cond ? url : null` keys keep the URL branch
+    let k = unwrap(node.arguments[0])
+    if (ts.isConditionalExpression(k)) k = [k.whenTrue, k.whenFalse].map(unwrap).find(x => x.kind !== ts.SyntaxKind.NullKeyword && !(ts.isIdentifier(x) && x.text === 'undefined')) || k
+    if (ts.isBinaryExpression(k) && k.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) k = unwrap(k.right)
+    if (ts.isArrayLiteralExpression(k)) k = unwrap(k.elements[0])
+    if (k && (ts.isStringLiteralLike(k) || ts.isTemplateExpression(k) || ts.isBinaryExpression(k) || ts.isIdentifier(k) || ts.isCallExpression(k)))
+      http = { client: 'swr', method: 'GET', urlExpr: k, base: null, baseConf: 'exact', baseVia: [] }
   } else if (ts.isCallExpression(node) && ts.isIdentifier(callee) && FETCH_FNS.has(callee.text)) {
     const o = node.arguments[1]; const m = objProp(o, 'method')
     const method = m && ts.isStringLiteralLike(unwrap(m)) ? unwrap(m).text.toUpperCase() : 'GET'
@@ -776,6 +957,47 @@ function handleCall(node, cur, sf, r, encFn) {
   if (kind === 'REFERENCES_TYPE') return
   addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined })
   callSites.push({ target: t.id, node, cur, r, line })
+}
+
+function generatedClientCall(node, callee) {
+  // swagger-typescript-api: this.request({ path: `/users/${id}`, method: 'GET', query, body })
+  // openapi-typescript-codegen: __request(OpenAPI, { method: 'GET', url: '/users/{id}', path: { id }, query, body })
+  let o = null
+  if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'request' && node.arguments.length === 1) o = unwrap(node.arguments[0])
+  else if (ts.isIdentifier(callee) && /^_*request$/.test(callee.text) && node.arguments.length === 2) o = unwrap(node.arguments[1])
+  if (!o || !ts.isObjectLiteralExpression(o)) return null
+  const m = objProp(o, 'method')
+  if (!m || !ts.isStringLiteralLike(unwrap(m))) return null
+  const pathProp = objProp(o, 'path'), urlProp = objProp(o, 'url')
+  const strish = e => !!e && (ts.isStringLiteralLike(e) || ts.isTemplateExpression(e) || ts.isBinaryExpression(e))
+  const urlExpr = pathProp && strish(unwrap(pathProp)) ? pathProp : urlProp && strish(unwrap(urlProp)) ? urlProp : null
+  if (!urlExpr) return null
+  const q = objProp(o, 'query'), b = objProp(o, 'body')
+  // the base URL is client configuration (new Api({ baseUrl }) / OpenAPI.BASE): origin unknown
+  return { client: 'openapi-client', method: unwrap(m).text.toUpperCase(), urlExpr, base: [PH('baseUrl')], baseConf: 'resolved', baseVia: ['generated-client'],
+    query: q ? keysOut(requestKeys(q)) : undefined, body: b ? keysOut(requestKeys(b)) : undefined }
+}
+function kyOrInstanceCall(node, callee) {
+  if (!FW.importSource) return null
+  let recv = null, method = null, optsArg = null
+  if (ts.isIdentifier(callee)) { recv = callee; optsArg = node.arguments[1] }
+  else if (ts.isPropertyAccessExpression(callee) && HTTP_METHODS.has(callee.name.text)) { recv = callee.expression; method = callee.name.text.toUpperCase(); optsArg = node.arguments[1] }
+  else return null
+  let lib = FW.importSource(recv), inst = null
+  if (lib === 'ky' && ts.isIdentifier(unwrap(recv)) && unwrap(recv).text !== 'ky' && !ts.isIdentifier(callee)) lib = 'ky'
+  if (lib !== 'ky') { inst = clientCreateOf(recv); if (!inst) return null; lib = inst.lib }
+  if (lib === 'ofetch' || lib === '$fetch') { if (method) return null }   // ofetch instances are called directly
+  const m = objProp(optsArg, 'method')
+  method = method || (m && ts.isStringLiteralLike(unwrap(m)) ? unwrap(m).text.toUpperCase() : 'GET')
+  let base = null, baseConf = 'exact'
+  for (let i = inst; i; i = i.parent) {
+    const b = objProp(i.cfg, 'prefixUrl') || objProp(i.cfg, 'prefix') || objProp(i.cfg, 'baseURL') || objProp(i.cfg, 'baseUrl')
+    if (b) { const v = evalStr(b); base = v.vals; baseConf = v.conf; break }
+  }
+  const q = objProp(optsArg, 'searchParams') || objProp(optsArg, 'query') || objProp(optsArg, 'params')
+  const b = objProp(optsArg, 'json') || objProp(optsArg, 'body')
+  return { client: lib === 'ky' ? (inst ? 'ky-instance' : 'ky') : 'ofetch-instance', method, urlExpr: node.arguments[0], base, baseConf, baseVia: inst ? [`${lib}.create`] : [],
+    query: q ? keysOut(requestKeys(q)) : undefined, body: b ? keysOut(requestKeys(b)) : undefined }
 }
 
 // 1-level expansion of parameter-dependent URLs at the enclosing function's call sites
@@ -834,5 +1056,8 @@ stats.seconds_program = (tProgram - t0) / 1000
 stats.seconds_total = (Date.now() - t0) / 1000
 const top = Object.entries(stats.unknown_tags).sort((a, b) => b[1] - a[1]).slice(0, 15)
 stats.unknown_tags = Object.fromEntries(top)
-fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, stats }))
+stats.seconds_fw_facts = tFw / 1000
+stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
+stats.config = { tsconfig: noConfig ? null : rel(tsconfigPath), root_files: rootNames.length }
+fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts, stats }))
 console.log(JSON.stringify(stats))

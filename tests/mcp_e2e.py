@@ -23,10 +23,15 @@ from sample import build, PLANS, GATES, EXTRACTOR_DEPS  # noqa: E402
 CALLS = [
     ("stats", {}),
     ("search", {"name": "reserve"}),
+    ("search", {"name": "auth"}),
+    ("routes", {"writes": "*"}),
+    ("routes", {"reaches": ["connection:warehouse"], "unguarded": True}),
+    ("routes", {"writes": "books", "missing": "auth:api"}),
     ("reaches", {"targets": ["connection:warehouse", "table:warehouse_stock"], "max_per_group": 12}),
     ("reaches", {"targets": ["env:WAREHOUSE_DB_*"], "group_by": "entry_kind"}),
     ("impact", {"method": "StockService::recordSale"}),
     ("siblings", {"symbol": "StockService::reserveLocal", "limit": 6}),
+    ("siblings", {"symbol": "StockService::reserve"}),
     ("writers", {"table": "books"}),
     ("node", {"id_or_symbol": "App\\Http\\Controllers\\Admin\\InventoryController::index"}),
     ("path", {"source": "page:/", "target": "SalesReportService::remove"}),
@@ -34,7 +39,8 @@ CALLS = [
     ("api_calls", {"filter": "unmatched"}),
     ("resolutions", {"concept": "timezone"}),
     ("plan_list", {}),
-    ("plan_check", {"name": "preorders", "max_items": 30}),
+    ("plan_check", {"name": "preorders"}),
+    ("plan_check", {"name": "preorders", "details": True, "max_items": 30}),
 ]
 
 
@@ -118,10 +124,22 @@ def check(outs: dict):
         assert hop in p, (hop, p)
     rs = get("resolutions")
     assert "DIVERGENCE" in rs and "never sent" in rs and "ReportController::resolveTimezone" in rs
-    pc = get("plan_check")
+    pc = get("plan_check {'name': 'preorders', 'details'")
     for frag in ("MISSING FROM PLAN", "Filament\\Resources\\BookResource::form", "UpdateBookRequest::rules",
                  "example/bookstore-mobile", "STILL PRESENT", "#8 [open, NOT LINKED in plan]", "lacks auth:api"):
         assert frag in pc, frag
+    compact = get("plan_check {'name': 'preorders'}")
+    for frag in ("MISSING FROM PLAN", "REVIEW (", "STILL PRESENT", "#8 [open, NOT LINKED in plan]", "lacks auth:api", "details=true"):
+        assert frag in compact, frag
+    assert len(compact) < len(pc) / 2, (len(compact), len(pc))
+    rw = get("routes {'writes': '*'}")
+    assert "NO AUTH" in rw and "auth:api" in rw and "DELETE" in rw, rw
+    assert "auth:api" in get("search {'name': 'auth'}")
+    assert "reserveLocal" in get("siblings {'symbol': 'StockService::reserve'}")
+    # replies carry repo-relative paths only
+    for k, v in outs.items():
+        if not k.startswith("_"):
+            assert str(ROOT) not in v[0] and not re.search(r"(?<![\w.~])/(?:tmp|home|workspace|Users|var)/", v[0]), (k, v[0][:400])
 
 
 def run_all() -> dict:

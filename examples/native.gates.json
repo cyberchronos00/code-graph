@@ -1,0 +1,11 @@
+{
+  "note": "Gate scenarios for Rust / C / C++ samples. Rust: features_on / features_off ('pkg/feature' or 'feature'), cargo_features ('default' | 'none' | list: the exact enabled set), cfg_true / cfg_false (cfg atoms such as unix, target_os=\"linux\"). C/C++: defines_on (NAME or NAME=VALUE) / defines_off (NAME). Code under a #[cfg]/#if that is false in the scenario is labelled gated. Beta: the first scenario is used.",
+  "scenarios": [
+    {
+      "name": "minimal_build",
+      "description": "kv-core built without its default 'fs' feature and without 'compression'; C/C++ samples built without RB_THREADSAFE and without BUS_WITH_METRICS.",
+      "features_off": ["kv-core/fs", "kv-core/compression"],
+      "defines_off": ["RB_THREADSAFE", "BUS_WITH_METRICS"]
+    }
+  ]
+}

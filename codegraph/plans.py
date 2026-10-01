@@ -83,7 +83,10 @@ def list_plans(root: str | Path | None = None) -> list[dict]:
 
 def _yaml(path: Path) -> dict:
     import yaml
-    d = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        d = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as e:
+        raise PlanError(f"{path.name}: invalid YAML: {e}") from None
     if not isinstance(d, dict):
         raise PlanError(f"{path}: top level must be a mapping")
     return d
@@ -118,7 +121,8 @@ def validate_schema(d: dict) -> list[str]:
         for i, it in enumerate(items):
             where = f"{section}[{i}]"
             if not isinstance(it, dict):
-                errs.append(f"{where}: must be a mapping")
+                keys = ", ".join(f"{r}: ..." for r in sorted(req))
+                errs.append(f"{where}: must be a mapping like {{{keys}}} (got {type(it).__name__} {str(it)[:60]!r})")
                 continue
             for r in req:
                 if not it.get(r):
@@ -168,12 +172,26 @@ def load_plan(name_or_path: str, root: str | Path | None = None) -> dict:
     d = _yaml(p)
     d["_file"] = str(p)
     d["_schema_errors"] = validate_schema(d)
+    _drop_malformed(d)
     ctx = d.get("context") or {}
+    if not isinstance(ctx, dict):
+        ctx = d["context"] = {}
     base = p.parent
     d["_findings"] = _load_findings(base / ctx["findings"]) if ctx.get("findings") else None
     cl = ctx.get("clients") or []
     d["_clients"] = [_yaml(base / c) for c in ([cl] if isinstance(cl, str) else cl)]
     return d
+
+
+def _drop_malformed(d: dict) -> None:
+    """Keep only well-formed section items (mappings with their required keys) so a typo in one item is reported as a
+    schema error instead of crashing load / validate / check; the schema errors still name every dropped item."""
+    for section, (req, _allowed) in ITEM_KEYS.items():
+        items = d.get(section)
+        if items is None:
+            continue
+        d[section] = [it for it in items if isinstance(it, dict) and all(it.get(r) for r in req)] \
+            if isinstance(items, list) else []
 
 
 def _load_findings(p: Path) -> dict:
@@ -716,6 +734,51 @@ def _check_clients(cx: Ctx, refs: list[dict], col: Collector, res: dict):
                               + (f"; sends {', '.join(c.get('sends') or [])}" if c.get("sends") else ""), [ev], "missing", anchor=hit[0]))
 
 
+def snapshot_clients(st, route_ids, root: str | Path | None = None) -> list[dict]:
+    """External client call sites (read-only snapshot files next to the plans: `snapshot_version` + `calls`) that match
+    any of route_ids. Used by impact, so callers in apps that are not indexed show up without a plan."""
+    from .link import match_endpoint
+    want = set(route_ids)
+    if not want:
+        return []
+    d = plans_dir(root)
+    if not d.is_dir():
+        return []
+    combined = bool(st.meta().get("repos"))
+    routes = None
+    out = []
+    for f in sorted(d.glob("*.y*ml")):
+        try:
+            snap = _yaml(f)
+        except Exception:  # noqa: BLE001
+            continue
+        if "snapshot_version" not in snap or not isinstance(snap.get("calls"), list):
+            continue
+        base = snap.get("base_prefix") or ""
+        for c in snap["calls"]:
+            if not isinstance(c, dict) or not c.get("path"):
+                continue
+            if routes is None:
+                routes = []
+                for r in st.q("SELECT id, file, line, attrs FROM nodes WHERE kind='route'"):
+                    a = json.loads(r["attrs"] or "{}")
+                    if not a.get("uri") or not a.get("method"):
+                        continue
+                    uris = [("as-declared", a["uri"])]
+                    rf = (r["file"] or "").split("/", 1)[-1] if combined else (r["file"] or "")
+                    if rf.startswith("routes/api"):
+                        uris.append(("api-prefixed", "/api" + a["uri"]))
+                    routes.append({"id": r["id"], "uri": a["uri"], "method": a["method"], "uris": uris,
+                                   "file": r["file"], "line": r["line"]})
+            hit = [m["route"] for m in match_endpoint(c.get("method") or "GET", base + c["path"], routes)["matched"]
+                   if m["route"] in want]
+            if hit:
+                out.append({"route": hit[0], "repo": c.get("repo"), "commit": str(c.get("commit") or "")[:8],
+                            "file": c.get("file"), "line": c.get("line"), "method": c.get("method"), "path": c["path"],
+                            "sends": c.get("sends") or [], "evidence": c.get("evidence", "?"), "snapshot": f.name})
+    return out
+
+
 def _check_parallel(cx: Ctx, ct: dict, impacts: dict, fwd: dict, col: Collector):
     st = cx.st
     allcols = defaultdict(set)
@@ -1136,4 +1199,55 @@ def render_check(res: dict, max_items: int = 60, show_covered: bool = True) -> s
     chains = [i["chain"] for i in res["items"] if i["check"] == "entry_point" and i.get("chain")]
     if chains:
         o += ["", "ENTRY CHAINS (entry point -> modified code)"] + [f"  {c}" for c in dict.fromkeys(chains)]
+    return "\n".join(o)
+
+
+def render_check_summary(res: dict, max_items: int = 5) -> str:
+    """Compact plan check: counts per section and per check, the top missing items (one line each), failed
+    requirements, middleware gaps, forbidden paths, open findings and verify counts. The full report is render_check."""
+    s = res["summary"]
+    o = [f"PLAN CHECK {res['plan']} [{res['mode']} mode] {res['title']}",
+         f"plan {res['file']} | graph {res['graph'].get('project')} indexed {res['graph'].get('indexed_at')}",
+         f"summary: refs {s['references'] - s['unresolved']}/{s['references']} resolve | MISSING FROM PLAN {s['missing_from_plan']} | "
+         f"review {s['review']} | covered {s['covered']} | forbidden paths present {s['forbidden_paths_present']} | "
+         f"open findings touching {s['open_findings_touching']} (unlinked {s['unlinked_open_findings']}) | requirements failed {s['requirements_failed']}"
+         + (f" | verify {s['verify']}" if s.get("verify") else "")]
+    o += [f"SCHEMA {e}" for e in res["schema_errors"]]
+    bad = [r for r in res["resolve"]["refs"] if r["status"] in ("unresolved", "ambiguous")]
+    o += [f"  {r['status'].upper()} {r['where']}: {r['spec']}" for r in bad[:max_items]]
+    for r in res.get("require") or []:
+        if r["missing"]:
+            o.append(f"require {r['route'].split(':', 1)[1]}: MISSING {', '.join(r['missing'])} (has {', '.join(r['middleware']) or 'none'} @{bloc(r['at'])})")
+    for rid, d in (res.get("middleware_diff") or {}).items():
+        o.append(f"middleware: {rid.split(':', 1)[1]} lacks {', '.join(d['lacks'])} which peer route(s) "
+                 f"{', '.join(p.split(':', 1)[1] for p in d['peers'])} have")
+    miss = [i for i in res["items"] if i["severity"] == "missing" and not i["covered"]]
+    rev = [i for i in res["items"] if i["severity"] == "review" and not i["covered"]]
+
+    def by_check(items):
+        c = defaultdict(int)
+        for i in items:
+            c[i["check"]] += 1
+        return ", ".join(f"{k} {v}" for k, v in sorted(c.items(), key=lambda kv: (-kv[1], kv[0]))) or "-"
+    o += ["", f"2 MISSING FROM PLAN ({len(miss)}) by check: {by_check(miss)}"]
+    for i in miss[:max_items]:
+        o.append(f"  - [{i['check']}] {short(i['node'])}: {i['why']} @ {(i['evidence'] or ['-'])[0]}")
+    if len(miss) > max_items:
+        o.append(f"  … +{len(miss) - max_items} more")
+    o.append(f"  REVIEW ({len(rev)}) by check: {by_check(rev)}")
+    o += ["", "3 CONFLICTS"]
+    for c in res["conflicts"]:
+        o.append(f"  forbid {c['id']}: path {'STILL PRESENT' if c['present'] else 'absent'}" + (f" (when {c['when']})" if c.get("when") else ""))
+    for f in res["findings"]:
+        if f["touches"]:
+            tag = "linked in plan" if f["linked"] else ("NOT LINKED in plan" if f["touches_plan"] else "touches gaps only")
+            o.append(f"  {f['id']} [{f['state']}, {tag}] {f['title']}")
+    if res.get("verify"):
+        v = res["verify"]
+        o += ["", f"4 VERIFY implementation vs plan: {'OK' if s.get('verify_ok') else 'INCOMPLETE'} "
+                  f"({', '.join(f'{k} {x}' for k, x in s['verify'].items())})"]
+        o += [f"  NOT MET {k[:-1] if k.endswith('s') else k}: {x.get('id') or x.get('edge') or x.get('target') or x.get('route')}"
+              for k in ("nodes", "edges", "forbid", "require") for x in v[k] if not x["ok"]][:max_items]
+    o += ["", "details=true for every item with file:line evidence and call chains (CLI: plan check without --summary); "
+              "max_items=N shows more top items."]
     return "\n".join(o)

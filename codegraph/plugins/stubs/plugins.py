@@ -30,10 +30,9 @@ class ScipIndexerPlugin(LanguagePlugin):
 
 SCIP_PLUGINS = [
     ScipIndexerPlugin("go", ["go.mod"], ["scip-go"], "go"),
-    ScipIndexerPlugin("rust", ["Cargo.toml"], ["rust-analyzer", "scip", "."], "rust"),
-    ScipIndexerPlugin("c_cpp", ["compile_commands.json"], ["scip-clang", "--compdb-path=compile_commands.json"], "c_cpp"),
-    ScipIndexerPlugin("python", ["pyproject.toml", "setup.py"], ["scip-python", "index", "."], "python"),
     ScipIndexerPlugin("java", ["pom.xml", "build.gradle"], ["scip-java", "index"], "java"),
 ]
 
-# TypeScript/Vue/Nuxt moved to plugins/ts (language) and plugins/nuxt (framework).
+# TypeScript/Vue/Nuxt moved to plugins/ts (language) and plugins/nuxt (framework); Python to plugins/python
+# (+ plugins/django); Dart to plugins/dart (+ plugins/flutter). `index --scip` still imports a scip-python index.
+# Rust and C/C++ moved to plugins/rust and plugins/cfamily (native plugins on rust-analyzer / scip-clang).

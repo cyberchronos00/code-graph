@@ -6,10 +6,12 @@ How code-graph is put together: the codemap, the plugin interface, how queries w
 
 These hold everywhere in the code base; a change that breaks one is a design change, not a bug fix.
 
-- **Deterministic edges only.** Every edge comes from a parser, the type checker or a named rule. No model guesses.
+- **Deterministic edges.** Every edge comes from a parser, the type checker or a named rule, so the same code always
+  gives the same graph.
 - **Edges carry evidence.** The `file:line` of the code that produced them, plus a confidence level (`exact`, `resolved`, `heuristic`).
-- **Static only.** The indexer reads files. It never boots the app, runs its code or connects to its databases.
-- **Plans are overlays.** Loading or checking a plan never writes to the graph DB.
+- **Static analysis.** The indexer works from source files alone, so it is safe on any checkout: the app, its code
+  and its databases stay untouched.
+- **Plans are overlays.** Loading or checking a plan leaves the graph DB unchanged.
 - **Read-only serving.** The MCP server and the visual view only read the graph (except the MCP `index` tool, which
   rebuilds it from source).
 
@@ -31,12 +33,42 @@ codegraph/
   plugins/scip/      generic SCIP importer (any SCIP indexer -> same node ids)
   plugins/ts/        TypeScript/Vue language plugin
      extractor/extract.mjs   TS compiler API + @vue/compiler-sfc -> JSON facts (one Node process per project)
+     extractor/fw.mjs        framework-neutral facts for the TS server layers (decorators, router calls, instances, ...)
      plugin.py               facts -> nodes/edges, client URL normalisation, http endpoint nodes, facts cache
   plugins/nuxt/      Nuxt framework plugin (sits on TS): .nuxt tsconfig/auto-imports/components, page routes,
                      layouts, entry kinds, i18n keys
-  plugins/stubs/     SCIP-indexer recipes for Go, Rust, C/C++, Python, Java (untested stubs)
+  plugins/native/    shared by Rust and C/C++: SCIP reader (scipread.py), tree-sitter helpers (ts.py), cached
+                     indexer runner (runner.py), cfg/feature/#if gate evaluation (gates.py)
+  plugins/rust/      Rust language plugin: cargo.py (workspace/packages/targets/features), syntax.py (tree-sitter
+                     items, impls, cfg, unsafe, FFI, env, routes), plugin.py (rust-analyzer SCIP -> exact edges,
+                     heuristic resolver fallback, trait dispatch, entry points)
+  plugins/cfamily/   C/C++ language plugin: syntax.py (tree-sitter items, includes, #if regions, getenv, macro
+                     masking), plugin.py (compile database, scip-clang -> exact edges, heuristic fallback,
+                     virtual dispatch, entry points)
+  plugins/python/    Python language plugin (stdlib `ast`, no Python env needed): modules/classes/functions, import
+                     resolution (relative, `__init__` re-exports, aliases), type inference for calls, hook API
+  plugins/django/    Django framework plugin (sits on Python): urls.py (path/re_path/include/namespaces), django-ninja
+                     (NinjaAPI, Router, add_router, operations, auth, Schema/ModelSchema), DRF (routers, ViewSets,
+                     @action, APIView, serializers), models -> tables/columns/relations, ORM reads/writes, settings +
+                     env (os.environ/getenv/django-environ), signals, Celery, Channels, management commands, admin;
+                     shapes.py builds response shapes from returned dict literals / schemas
+  plugins/dart/      Dart language plugin
+     extractor/bin/extract.dart  package:analyzer (parse only, no pub get) -> JSON facts; compiled once to .bin/
+     program.py              libraries/parts/exports, import prefixes, type inference, call resolution
+     http.py                 HTTP client calls (package:http, Dio + BaseOptions, dart:io HttpClient/WebSocket,
+                             Retrofit/Chopper annotations), URL templates, body keys, response parsing
+     models.py               json_serializable / freezed (.g.dart or annotations) and hand-written fromJson/toJson keys
+  plugins/flutter/   Flutter framework plugin (sits on Dart): widgets/State, bloc/cubit events -> handlers -> emitted
+                     states -> UI handling (`state_flow`), Navigator / go_router / auto_route pages, entry kinds
+  plugins/tsweb/     helpers shared by the TS server layers: path templates, route nodes, env/config, ORM tables,
+                     in-repo client -> route links
+  plugins/nest/      NestJS framework plugin (sits on TS): modules, routes, DI, enhancers, jobs/events/messages, CLI
+  plugins/nextjs/    Next.js framework plugin (sits on TS): app + pages router, route handlers, server actions, middleware
+  plugins/express/   Express / Fastify / Koa / Hono plugin (sits on TS): routes, mounting chains, middleware
+  plugins/stubs/     SCIP-indexer recipes for Go and Java (untested stubs)
   indexer.py         detect -> language plugins (+framework hooks) -> framework contribute -> store -> entry tagging
   link.py            cross-repo link: backend DB + frontend DB -> combined DB with MATCHES_ROUTE edges
+  payload.py         request/response field check for linked calls (client JSON keys vs server schema/shape)
   query.py           reaches / impact / writers / siblings / downstream / path / api_calls
   concepts.py        the `resolutions` concept query
   plans.py           planned-change layer (plan files, checks, verify, baseline)
@@ -77,6 +109,23 @@ class FrameworkPlugin(ABC):           # e.g. Laravel on PHP, Nuxt on TypeScript
   require), package.json/tsconfig (js/ts), nuxt.config.* or a `nuxt` dependency (nuxt), vue, Cargo.toml, go.mod,
   CMakeLists.txt/compile_commands.json, pyproject/requirements, pom.xml/build.gradle.
 
+
+## Rust and C/C++ plugins
+
+Both use the same two layers (details and env vars in [native.md](native.md)):
+
+1. **Syntax (tree-sitter).** Every definition becomes a node with a stable key: the Rust path or the C++ qualified
+   name, with a file prefix for file-local items. This layer also produces every fact a compiler index doesn't
+   carry: cfg / `#if` regions, `unsafe`, FFI, env reads, routes, attributes, and entry kinds.
+2. **References.** In exact mode, rust-analyzer or scip-clang writes a SCIP index (cached by source fingerprint).
+   Each SCIP definition is matched to a syntax item by (file, line, name), and each reference occurrence is
+   attributed to the innermost item whose range encloses it. The edge kind comes from the target's kind (CALLS,
+   USES_TYPE, ACCESSES_FIELD, USES_VALUE, REFERENCES_FN). Without an index, a scope-aware name resolver
+   (imports / `use`, the module tree, receiver type hints, unique-name fallback) produces the same edges, labelled
+   `heuristic`. Node ids are identical in both modes.
+
+Dispatch: trait and virtual method calls land on the declaring method. IMPLEMENTED_BY / OVERRIDDEN_BY edges then
+fan out to every impl or override, so `reaches` on an impl method includes the callers that go through the trait.
 
 ## How `reaches` works
 1. A recursive CTE walks propagating edges in reverse from the target(s), with an optional minimum confidence, and
@@ -125,6 +174,12 @@ similarity of their callee sets.
 - **Facts cache:** extractor output is cached in `~/.cache/codegraph/ts/` keyed by the extractor code + lockfile, the config, and
   (path, size, mtime) of every project file outside `node_modules` (incl. `.nuxt` and the lockfile). `CODEGRAPH_NO_CACHE=1` disables it.
 
+## TypeScript server and full-stack frameworks
+`plugins/nest`, `plugins/nextjs` and `plugins/express` sit on the same TS program. `extractor/fw.mjs` emits generic facts
+(decorators with described arguments, router-style calls, instances and their initialisers, exports, directives, env reads),
+and the Python layers turn them into routes, DI edges and entry points. Details, path notation and validation numbers:
+[ts-frameworks.md](ts-frameworks.md).
+
 ## Cross-repo link (combined DB)
 `codegraph.cli link --backend out/api.db --frontend out/web.db --db out/graph.db [--report out/api_matches]`
 copies both graphs into one SQLite DB (ids don't collide: PHP and TS ids use different key shapes; `file` gets the repo prefix,
@@ -140,6 +195,38 @@ Matching (deterministic, `codegraph/link.py`):
 - best candidate = fewest heuristic fits, then most literal agreements; a tie is reported as ambiguous (heuristic);
 - confidence: `exact` (all segments literal/param-to-param, base traced to the API client), `resolved` (literal into a param),
   `heuristic` (embedded fits, ties, or the base was not traced: origin `unknown` → suffix match against route URIs);
+- catch-all route segments (`{rest*}` one or more, `{rest*?}` zero or more) absorb the remaining client segments;
+  with origin `unknown`, suffix candidates are ranked by literal agreement before parameter fits;
 - unmatched reasons: dynamic URL, other origin (not the API), same-origin relative URL, method mismatch, no route.
 The report (`.md` + `.json`) lists every endpoint with its call sites, match, confidence and evidence (`routes/api.php:<line>`).
+
+### Payload / field check
+For every client endpoint with a single route match, `codegraph/payload.py` compares what the client sends and parses with
+what the server declares or returns, and writes the result to the `payload_checks` table of the combined DB (plus a report section):
+- client side: request body keys with types (map literals incl. collection-`if`/spread, `jsonEncode`, `toJson()` of a model,
+  local map writes), and response parsing (keys read from the decoded JSON, `X.fromJson` models with the JSON path they
+  are applied at, e.g. `data.items[]`, status-code checks);
+- server side: ninja `Schema`/`ModelSchema` fields (type, nullability, required, aliases), DRF serializer fields, and
+  response *shapes* derived from the returned dict literals / helpers / `Schema.from_orm` (per status code);
+- issues: `trailing_slash` (ninja does not redirect, so high), `request_missing_required`, `request_unknown_field`,
+  `request_case_mismatch`, `request_type`, `request_nullability` (an explicit `null` vs. an omitted key),
+  `request_body_missing`, `response_missing_key`, `response_case_mismatch`, `response_type`, `response_nullability`,
+  `response_enum_values`, `status_code`. Each carries `file:line` on both sides.
+Error envelopes (`*Error*` models) are compared with every shape, including non-2xx; success models only with 2xx shapes.
+
+## Python / Django plugin
+Parsing uses the stdlib `ast` module (any Python 3 syntax the running interpreter understands); no project environment
+or import of the project is needed. Call resolution: local/imported names (relative imports, `__init__` re-exports,
+`import a.b as c`), `self`/`cls` methods with MRO, annotated params/returns, constructor results, `super()`, a few
+container generics; otherwise a unique-method-name fallback labelled `heuristic`. `sync_to_async(f)(...)` and similar wrappers
+count as calls to `f`. Django entry kinds: `http_route` (urls/ninja/DRF), `websocket` (Channels), `queue_job` (Celery
+tasks), `listener` (signal receivers), `management_command` and `admin_panel` (operator).
+
+## Dart / Flutter plugin
+The extractor is a small Dart program using `package:analyzer` in parse-only mode (no `pub get` of the target project,
+no resolution), compiled once with `dart compile exe` and cached per file hash in `~/.cache/codegraph/dart`.
+Resolution is done in Python (`program.py`) from imports (`package:` via every `pubspec.yaml` name, relative, `part`/`part of`,
+`export show/hide`, prefixes). URLs are evaluated statically: string interpolation becomes `{param}`, constants/getters/
+constructor-provided fields are followed, `String.fromEnvironment`/`dotenv` become `{env:NAME}` (values from `.env` files
+are recorded), helper wrappers (`get(path: ...)`) are expanded at their call sites.
 

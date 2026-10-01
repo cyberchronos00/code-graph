@@ -5,17 +5,30 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 ## Commands at a glance
 
 - `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE]`: detect languages/frameworks and build the graph.
+  Prints the stats JSON on stdout and a per-language coverage summary on stderr; a missing toolchain skips that
+  language with a note instead of failing the index.
+- `coverage --db DB [--json]`: which languages and files the index covers: `exact`, `heuristic` (exact-mode indexer
+  missing), `skipped` (toolchain missing, with the install hint) or `unsupported` (file counts by extension). On a
+  combined graph, one block per linked repo. See [limitations.md](limitations.md#coverage-and-missing-indexers).
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
-- `impact METHOD`: reverse walk from a method up to its entry points.
+- `impact METHOD [--plans-dir DIR]`: reverse walk from a method up to its entry points. With `--plans-dir`, external
+  clients recorded in snapshot files there (`snapshot_version` + `calls`) that call an affected route are listed too.
 - `downstream SPEC`: forward dependencies (page → composables → HTTP → routes → services → tables).
 - `path SRC DST`: one shortest evidence chain. A `table:` target with no direct table edge on the way falls back to
-  its columns (the path then ends at the column that is read or written). Exits with status 1 and prints `no path`
-  when there is none.
+  its columns (the path then ends at the column that is read or written). When a hop passes keys that the next request
+  never sends, a `note: sent but not forwarded: …` line follows the path. Without a path it prints `no path …` with
+  the reason (for example a path that exists in the other direction) and exits with status 1.
+- `routes [--writes [TABLE]] [--reaches SPEC...] [--missing NAME] [--unguarded] [--auth-pattern RE]`: routes with their
+  middleware / guards / auth, scoped to what they write or reach, with one evidence chain each and the frontend
+  callers on a combined graph (see [Routes and guards](#routes-and-guards)).
+- `search NAME [--kind K]`: nodes by name / FQN substring, plus the routes whose middleware, guard or auth names match.
 - `writers TABLE`, `siblings SYMBOL`, `node SPEC`, `stats`: writers of a table, similar code, node details, counts.
+  `siblings` prints text (`--json` for the raw result).
 - `api-calls SPEC`: client endpoints with call sites, request keys and the matched route.
 - `resolutions CONCEPT [--within S]`: where a value is resolved, its fallback chains, and whether the client sends it.
-- `plan {list,load,validate,check,baseline} NAME [--verify]`: the planned-change layer.
+- `plan {list,load,validate,check,baseline} NAME [--verify] [--summary]`: the planned-change layer. `--summary` prints
+  counts per section and check plus the top `--max-items` items (default 5).
 - `serve`, `viz-export`, `viz-plan`: the visual view (local server or self-contained HTML).
 
 Most query commands take `--json`, `--min-confidence resolved` (or `exact`) and `--max-depth`.
@@ -32,7 +45,65 @@ Most query commands take `--json`, `--min-confidence resolved` (or `exact`) and 
 - `http:GET /v1/{store}/…` and `route:GET /v1/{store}/…`: a client endpoint / a backend route (`*` glob).
 - `request_key:timezone`, `setting:reports.timezone`: value facts (see [value-facts.md](value-facts.md)).
 
+- Rust / C / C++ (see [native.md](native.md#query-specs)): `crate::module::Type::method`, `Type::method` (also
+  matches `<Type as Trait>::method`), `ns::Class::method`, `rb_create`, `mod:kv_core::store` or `kv_core::store` (every
+  function in a module), a source file path, and the fact nodes `feature:<pkg>/<name>`, `cfg:unix`, `define:MACRO`,
+  `unsafe:<crate>`, `env:KEY`.
+
 Several specs in one `reaches` call are unioned.
+
+## Empty results
+
+When `impact`, `writers`, `siblings`, `path`, `routes`, `search` or `resolutions` find nothing, they say why and
+suggest the next query: a table name that does not exist lists the similar (or all) table names, a method without
+callers lists its other incoming edges, a symbol without siblings points to its callees that touch data, and a missing
+path reports a path in the opposite direction when there is one.
+
+```text
+$ cg siblings StockService::reserve --db out/graph.db
+target: Services\StockService::reserve
+no siblings found for Services\StockService::reserve: its class has no parent class, interface or trait shared with other classes; it touches no table, column, config, env key or connection directly; all 2 of its callees are in its own class, which co-caller matching skips.
+try: siblings('Services\StockService::reserveLocal') (a callee that touches data); siblings('Services\StockService::reserveFromWarehouse') (a callee that touches data); impact('Services\StockService::reserve') for its callers and entry points; downstream('Services\StockService::reserve') for the tables, config and connections it reaches
+```
+
+## Routes and guards
+
+`routes` joins three facts per route: its guards, what it reaches, and who calls it.
+
+- **Guards** come from Laravel route and group middleware, Nest `@UseGuards` / `@UseInterceptors` / `@UsePipes`
+  (controller and method level, plus `APP_GUARD` providers and `useGlobalGuards` / `useGlobalInterceptors`), Express / Fastify / Koa / Hono route and router
+  middleware, Next.js `middleware.ts` matchers and handler wrappers, django-ninja `auth=`, Django view decorators
+  (`login_required`, `permission_required`, `user_passes_test`, `staff_member_required`, `method_decorator`), access
+  mixins (`LoginRequiredMixin`, `PermissionRequiredMixin`, …) and DRF `permission_classes` / `authentication_classes`.
+- **Auth** is a guard whose name matches the auth pattern (tokens such as `auth`, `login`, `jwt`, `token`, `session`,
+  `permission`, `IsAuthenticated`, `ApiKey`, …). `--auth-pattern REGEX` adds project-specific names.
+- **Scope:** `--writes` (any table) or `--writes TABLE`, and/or `--reaches SPEC...` (any node spec). Without a scope
+  every route is listed.
+- Laravel kernel middleware and Django's `MIDDLEWARE` setting apply to every route and are not repeated per route.
+- **Filters:** `--unguarded` keeps routes without an auth guard; `--missing NAME` keeps routes without a guard whose
+  name contains NAME.
+
+```text
+$ cg routes --writes books --missing auth:api --db out/graph.db
+routes reaching a write to books: 3 of 9 routes | filter: missing a guard matching 'auth:api' -> 2
+auth guard: 0 with, 2 without (auth = guard name matches the auth pattern; name-based)
+
+POST /v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
+    guards: (none)
+    writes books via Http\Controllers\Admin\BookController::store conf=resolved  ROUTES_TO@api.php:23 → WRITES_COLUMN@BookController.php:15~r → column:books.store_id
+
+PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
+    guards: (none)
+    writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:24 → WRITES_COLUMN@BookController.php:30~r → column:books.title
+```
+
+`cg search auth` lists the same guard names with the routes that carry them:
+
+```text
+$ cg search auth --db out/graph.db
+middleware / guards / auth matching 'auth' (route attributes): 1 name(s) on 1 route(s)
+  auth:api  (middleware) on 1 route(s): POST /v1/orders
+```
 
 
 ## Full usage
@@ -55,6 +126,17 @@ options:
   --name NAME
   --scip SCIP
   --gates GATES  gate scenarios JSON (e.g. examples/bookstore.gates.json)
+```
+
+### `coverage`
+
+```
+usage: python -m codegraph.cli coverage [-h] --db DB [--json]
+
+options:
+  -h, --help  show this help message and exit
+  --db DB
+  --json
 ```
 
 ### `link`
@@ -102,6 +184,7 @@ options:
 usage: python -m codegraph.cli impact [-h] --db DB [--json]
                         [--min-confidence {heuristic,resolved,exact}]
                         [--no-paths] [--max-depth MAX_DEPTH] [--gate GATE]
+                        [--plans-dir PLANS_DIR]
                         spec
 
 positional arguments:
@@ -116,6 +199,9 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                         indexed; 'none' to disable)
+  --plans-dir PLANS_DIR
+                        also list external clients from the snapshot files in
+                        this directory (e.g. examples/plans)
 ```
 
 ### `downstream`
@@ -199,6 +285,51 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                         indexed; 'none' to disable)
+```
+
+### `routes`
+
+```
+usage: python -m codegraph.cli routes [-h] --db DB [--writes [TABLE]]
+                        [--reaches SPEC [SPEC ...]] [--missing NAME]
+                        [--unguarded] [--auth-pattern AUTH_PATTERN]
+                        [--min-confidence {heuristic,resolved,exact}]
+                        [--max-items MAX_ITEMS] [--no-paths] [--json]
+
+options:
+  -h, --help            show this help message and exit
+  --db DB
+  --writes [TABLE]      routes reaching a DB write (any table, or TABLE)
+  --reaches SPEC [SPEC ...]
+                        routes reaching any of these nodes (table, column,
+                        connection:, env:, Class::method)
+  --missing NAME        keep routes with no guard whose name contains NAME
+                        (e.g. auth:api, ApiKeyGuard)
+  --unguarded           keep routes with no auth-like guard (name-based, see
+                        --auth-pattern)
+  --auth-pattern AUTH_PATTERN
+                        extra regex for guard names that count as auth
+  --min-confidence {heuristic,resolved,exact}
+  --max-items MAX_ITEMS
+  --no-paths
+  --json
+```
+
+### `search`
+
+```
+usage: python -m codegraph.cli search [-h] --db DB [--kind KIND] [--limit LIMIT] [--json]
+                        name
+
+positional arguments:
+  name
+
+options:
+  -h, --help     show this help message and exit
+  --db DB
+  --kind KIND
+  --limit LIMIT
+  --json
 ```
 
 ### `node`
@@ -285,7 +416,7 @@ options:
 
 ```
 usage: python -m codegraph.cli plan [-h] [--db DB] [--plans-dir PLANS_DIR] [--verify]
-                      [--json] [-o OUT] [--max-items MAX_ITEMS]
+                      [--json] [-o OUT] [--max-items MAX_ITEMS] [--summary]
                       {list,load,validate,check,baseline} [name]
 
 positional arguments:
@@ -301,6 +432,8 @@ options:
   --json
   -o, --out OUT         also write the report to this file
   --max-items MAX_ITEMS
+  --summary             compact report: counts per section and check plus the
+                        top --max-items items
 ```
 
 ### `viz-export`

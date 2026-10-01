@@ -1,0 +1,14 @@
+# Syntactic-only fixture for route / async-entry detection: never built (dependencies are not fetched).
+[package]
+name = "routes-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = "0.7"
+actix-web = "4"
+tokio = { version = "1", features = ["full"] }
+
+[features]
+default = []
+admin = []

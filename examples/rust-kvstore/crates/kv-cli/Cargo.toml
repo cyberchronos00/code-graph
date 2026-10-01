@@ -1,0 +1,15 @@
+[package]
+name = "kv-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kv"
+path = "src/main.rs"
+
+[dependencies]
+kv-core = { path = "../kv-core" }
+
+[features]
+compression = ["kv-core/compression"]

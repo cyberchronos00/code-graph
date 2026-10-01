@@ -1,0 +1,15 @@
+[package]
+name = "kv-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[features]
+default = ["fs"]
+fs = []
+compression = []
+
+[[bench]]
+name = "put"
+harness = false

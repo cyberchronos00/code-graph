@@ -1,7 +1,7 @@
 # Planned changes
 
 A **plan** records an agreed scope as a small versioned YAML file, `<plans-dir>/<name>.yaml`. It is an overlay:
-loading or checking it never writes to the graph DB. The checks compare it with the real graph and need no LLM.
+loading or checking it never writes to the graph DB. The checks compare it with the real graph deterministically, so the same plan and code always give the same report.
 Example: `examples/plans/preorders.yaml` (deliberately incomplete, so `plan check` has something to find).
 
 Schema (`plan_version: 1`; `codegraph plan validate` reports unknown keys and wrong shapes with their path):

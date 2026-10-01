@@ -1,4 +1,4 @@
-"""Deterministic guard / gating analysis for PHP (no LLM, no app boot).
+"""Deterministic guard / gating analysis for PHP, computed from the source files alone.
 
 Given a *gate scenario* (e.g. "new_inventory": the tenant's settings have
 features.new_inventory.enabled = true),

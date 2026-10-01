@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -467,6 +468,13 @@ class PhpPlugin(LanguagePlugin):
 
     def detect(self, project: Project) -> bool:
         return project.exists("composer.json") or any(project.root.glob("*.php"))
+
+    def prerequisite_problem(self, project: Project) -> str | None:
+        if not shutil.which("php"):
+            return "php not installed (PHP 8.2+ is needed for the PHP extractor)"
+        if not (EXTRACTOR.parent / "vendor" / "autoload.php").exists():
+            return "PHP extractor dependencies missing: run `(cd codegraph/plugins/php/extractor && composer install)`"
+        return None
 
     def list_files(self, project: Project) -> list[str]:
         skip = ("vendor/", "node_modules/", "storage/", "tests/", "bootstrap/cache/", ".git/")

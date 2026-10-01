@@ -11,6 +11,8 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `writers`: Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
 - `node`: Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
 - `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
+- `routes`: Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
+- `coverage`: Which languages and files this index covers: exact, heuristic only (an exact-mode indexer such as rust-analyzer
 - `stats`: Index metadata and node/edge counts by kind.
 - `downstream`: Forward dependencies of a node: what it ends up calling/reading. On a combined graph a frontend page goes
 - `path`: Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
@@ -18,16 +20,18 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `plan_list`: List planned-change files (plans/*.yaml): name, status, title, counts, schema errors.
 - `plan_load`: Show one plan (name or path): planned nodes (+), modified targets with intent (~), planned edges, forbidden
 - `plan_validate`: Schema check + does every referenced existing node resolve in the graph (unresolved / ambiguous specs with
-- `plan_check`: Deterministic check of a plan against the real graph.
+- `plan_check`: Deterministic check of a plan against the real graph. Default reply: a compact summary (counts per section and
 - `plan_baseline`: Fingerprint (sha1 of source lines) every modified target of a plan before implementing it, so
-- `index`: Re-index the project into this server's DB (static analysis only: never boots the app or touches a database).
+- `index`: Re-index after editing (static analysis only: never boots the app or touches a database).
 
-## `stats {}`  (953 chars)
+## `stats {}`  (1034 chars)
 
 ```
 project=bookstore-api+bookstore-web root=None indexed_at=<indexed_at> index_seconds=None
 nodes: method×32, column×29, class×19, config×13, property×10, route×9, request_key×7, env×6, external_class×6, function×6, http×6, module×5, table×5, composable×4, resolution×4, script×4, setting×3, connection×2, i18n×2, page×2, admin×1, command×1, component×1, layout×1, store×1, type×1
 edges: CONTAINS×83, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, CONFIGURED_BY×2, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
+coverage bookstore-api: php 22 exact
+coverage bookstore-web: typescript 14 exact
 ```
 
 ## `search {'name': 'reserve'}`  (379 chars)
@@ -38,6 +42,74 @@ method     method:App\Services\StockService::reserve  StockService.php:10
 method     method:App\Services\StockService::reserveLocal  StockService.php:20
 method     method:App\Http\Controllers\StockController::reserve  StockController.php:14
 method     method:App\Services\StockService::reserveFromWarehouse  StockService.php:30
+```
+
+## `search {'name': 'auth'}`  (142 chars)
+
+```
+middleware / guards / auth matching 'auth' (route attributes): 1 name(s) on 1 route(s)
+  auth:api  (middleware) on 1 route(s): POST /v1/orders
+```
+
+## `routes {'writes': '*'}`  (1583 chars)
+
+```
+routes reaching a write (any table): 4 of 9 routes
+auth guard: 1 with, 3 without (auth = guard name matches the auth pattern; name-based)
+
+DELETE /v1/{store}/admin/reports/{report}  @bookstore-api/routes/api.php:14  NO AUTH
+    guards: (none)
+    writes orders via Services\SalesReportService::remove conf=resolved  ROUTES_TO@api.php:14 → CALLS@ReportController.php:40~r → WRITES_TABLE@SalesReportService.php:24~r → table:orders
+    called from: page:app/pages/index.vue @index.vue:4
+
+POST /v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
+    guards: (none)
+    writes books via Http\Controllers\Admin\BookController::store conf=resolved  ROUTES_TO@api.php:23 → WRITES_COLUMN@BookController.php:15~r → column:books.store_id
+
+PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
+    guards: (none)
+    writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:24 → WRITES_COLUMN@BookController.php:30~r → column:books.title
+
+POST /v1/orders  @bookstore-api/routes/api.php:21
+    guards: auth:api [auth]
+    writes books via Services\StockService::recordSale conf=resolved  ROUTES_TO@api.php:21 → CALLS@OrderController.php:24~r → WRITES_COLUMN@StockService.php:42~r → column:books.sold_count
+    writes orders via Http\Controllers\OrderController::store conf=resolved  ROUTES_TO@api.php:21 → WRITES_COLUMN@OrderController.php:18~r → column:orders.user_id
+
+guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
+```
+
+## `routes {'reaches': ['connection:warehouse'], 'unguarded': True}`  (861 chars)
+
+```
+routes reaching connection:warehouse: 3 of 9 routes | filter: no auth guard -> 2
+auth guard: 0 with, 2 without (auth = guard name matches the auth pattern; name-based)
+
+GET /v1/{store}/admin/inventory  @bookstore-api/routes/api.php:15  NO AUTH
+    guards: (none)
+    reaches connection:warehouse [gated-only] conf=resolved  ROUTES_TO@api.php:15 → USES_CONNECTION@InventoryController.php:17~r → connection:warehouse
+
+POST /v1/stock/reserve  @bookstore-api/routes/api.php:19  NO AUTH
+    guards: (none)
+    reaches connection:warehouse conf=resolved  ROUTES_TO@api.php:19 → CALLS@StockController.php:16~r → CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → connection:warehouse
+
+guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
+```
+
+## `routes {'writes': 'books', 'missing': 'auth:api'}`  (855 chars)
+
+```
+routes reaching a write to books: 3 of 9 routes | filter: missing a guard matching 'auth:api' -> 2
+auth guard: 0 with, 2 without (auth = guard name matches the auth pattern; name-based)
+
+POST /v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
+    guards: (none)
+    writes books via Http\Controllers\Admin\BookController::store conf=resolved  ROUTES_TO@api.php:23 → WRITES_COLUMN@BookController.php:15~r → column:books.store_id
+
+PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
+    guards: (none)
+    writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:24 → WRITES_COLUMN@BookController.php:30~r → column:books.title
+
+guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
 
 ## `reaches {'targets': ['connection:warehouse', 'table:warehouse_stock'], 'max_per_group': 12}`  (1358 chars)
@@ -121,6 +193,15 @@ shared resources:
   Http\Controllers\Admin\BookController::update: column:books.price
 ```
 
+## `siblings {'symbol': 'StockService::reserve'}`  (793 chars)
+
+```
+target: Services\StockService::reserve
+no siblings found for Services\StockService::reserve: its class has no parent class, interface or trait shared with other classes; it touches no table, column, config, env key or connection directly; all 2 of its callees are in its own class, which co-caller matching skips.
+try: siblings('Services\StockService::reserveLocal') (a callee that touches data); siblings('Services\StockService::reserveFromWarehouse') (a callee that touches data); impact('Services\StockService::reserve') for its callers and entry points; downstream('Services\StockService::reserve') for the tables, config and connections it reaches
+coverage: every source file cg found is indexed (php, typescript); code outside these languages or generated at runtime is not in the graph.
+```
+
 ## `writers {'table': 'books'}`  (579 chars)
 
 ```
@@ -187,7 +268,7 @@ GET /version.json  ⇒ UNMATCHED
    ← useAppVersion (useReports.ts) @ useReports.ts:19
 ```
 
-## `resolutions {'concept': 'timezone'}`  (2557 chars)
+## `resolutions {'concept': 'timezone'}`  (2926 chars)
 
 ```
 concept: timezone (head-word forms: timezone, timezones)
@@ -215,6 +296,9 @@ backend resolution sites: 2 in 2 distinct fallback chains; request keys of the c
 == CLIENT (frontend endpoints reaching request-driven sites)
   GET /v1/main/admin/reports/top  -> chain B via GET /v1/{store}/admin/reports/top
      app/composables/useReports.ts#useReports.fetchTop @bookstore-web/app/composables/useReports.ts:9 (1 caller(s)) => 'timezone': never sent (builder key is conditional and no call site passes it); client fallback @bookstore-web/app/pages/reports/[id].vue:12: rows.value[0]?.timezone ?? 'UTC'
+
+== SENT BUT NOT FORWARDED (a call site passes the key; the request it calls never sends it)
+  app/pages/reports/[id].vue @bookstore-web/app/pages/reports/[id].vue:10 passes date_from to app/composables/useReports.ts#useReports.fetchTop; the request @bookstore-web/app/composables/useReports.ts:9 (GET /v1/main/admin/reports/top) sends only category_id, mode, timezone
 ```
 
 ## `plan_list {}`  (180 chars)
@@ -223,7 +307,34 @@ backend resolution sites: 2 in 2 distinct fallback chains; request keys of the c
 preorders [agreed] Pre-order books: signed-in customers only, never filled from warehouse stock | +1 nodes ~3 modified +3 edges 1 forbidden 1 required | issues #7 | schema errors 0
 ```
 
-## `plan_check {'name': 'preorders', 'max_items': 30}`  (5493 chars)
+## `plan_check {'name': 'preorders'}`  (2175 chars)
+
+```
+PLAN CHECK preorders [plan mode] Pre-order books: signed-in customers only, never filled from warehouse stock
+plan examples/plans/preorders.yaml | graph bookstore-api+bookstore-web indexed <indexed_at>
+summary: refs 15/15 resolve | MISSING FROM PLAN 10 | review 7 | covered 7 | forbidden paths present 1 | open findings touching 2 (unlinked 1) | requirements failed 1
+require POST /v1/stock/reserve: MISSING auth:api (has none @api.php:19)
+middleware: POST /v1/stock/reserve lacks auth:api which peer route(s) POST /v1/orders have
+
+2 MISSING FROM PLAN (10) by check: caller 2, entry_point 2, admin_surface 1, api_resource 1, external_client 1, model_fillable 1, table_writer 1, validation 1
+  - [admin_surface] Filament\Resources\BookResource::form: Filament form for Book ($model @BookResource.php:11); saves bypass the graph's WRITES edges — must expose preorder_until @ bookstore-api/app/Filament/Resources/BookResource.php:13
+  - [api_resource] Http\Resources\BookResource::toArray: serializes Book in API responses (built at BookController.php:24, BookController.php:36); decide whether to expose preorder_until @ bookstore-api/app/Http/Resources/BookResource.php:9
+  - [caller] OrderController::store: calls modified StockService::reserve @ bookstore-api/app/Http/Controllers/OrderController.php:17
+  - [caller] StockController::reserve: calls modified StockService::reserve @ bookstore-api/app/Http/Controllers/StockController.php:16
+  - [entry_point] route:POST /v1/admin/books: http_route reaching modified Admin\BookController::store @ bookstore-api/routes/api.php:23
+  … +5 more
+  REVIEW (7) by check: parallel_method 2, table_reader 2, referencing_column 1, relation 1, table_writer 1
+
+3 CONFLICTS
+  forbid no-warehouse-for-preorders: path STILL PRESENT (when the book is a pre-order (books.preorder_until set))
+  #7 [open, linked in plan] Pre-orders can be reserved without an account
+  #8 [open, NOT LINKED in plan] Sold-out check ignores pending reservations
+  #9 [closed, touches gaps only] Order book relation (closed)
+
+details=true for every item with file:line evidence and call chains (CLI: plan check without --summary); max_items=N shows more top items.
+```
+
+## `plan_check {'name': 'preorders', 'details': True, 'max_items': 30}`  (5493 chars)
 
 ```
 PLAN CHECK preorders [plan mode] Pre-order books: signed-in customers only, never filled from warehouse stock
@@ -294,12 +405,13 @@ ENTRY CHAINS (entry point -> modified code)
   route:POST /v1/stock/reserve -ROUTES_TO@api.php:19-> StockController::reserve -CALLS@StockController.php:16-> StockService::reserve
 ```
 
-## `index (gating fixture, temp db)`  (472 chars)
+## `index (gating fixture, temp db)`  (503 chars)
 
 ```
-indexed tests/gating_fixture -> <tmp>/fixture.db: 24 nodes, 53 edges in <s>s; gated edges {'new_inventory': 10}
+indexed tests/gating_fixture -> fixture.db: 24 nodes, 53 edges in <s>s; gated edges {'new_inventory': 10}
 project=gating_fixture root=tests/gating_fixture indexed_at=<indexed_at> index_seconds=<s>
 nodes: method×16, class×5, property×3
 edges: CALLS×30(gated 10), CONTAINS×19, INJECTS×3, REFERENCES×1
 gate predicates: [new_inventory] Support\FeatureGate::oldMode=false; [new_inventory] Support\FeatureGate::usesNewInventory=true; [new_inventory] Support\Flags::on=true
+coverage gating_fixture: php 1 exact
 ```

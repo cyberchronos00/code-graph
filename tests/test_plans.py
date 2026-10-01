@@ -49,6 +49,33 @@ def test_schema_valid_and_broken():
     assert {p["name"] for p in P.list_plans(BROKEN)} == {"Bad Name"}
 
 
+def test_malformed_items_are_errors_not_crashes(dbs, tmp_path):
+    """A string where a mapping belongs (covers: [page:x]) or invalid YAML is reported, never a crash."""
+    before, _ = dbs
+    (tmp_path / "typo.yaml").write_text(
+        "plan_version: 1\nname: typo\ntitle: Guard a route\nmodify:\n  - target: StockService::reserve\n"
+        "    intent: guard it\ncovers:\n  - page:app/pages/index.vue\nrequire: route:POST /v1/orders\n", encoding="utf-8")
+    (tmp_path / "bad.yaml").write_text("plan_version: 1\nname: bad\ntitle: [unclosed\n", encoding="utf-8")
+    pl = P.load_plan("typo", tmp_path)
+    joined = "\n".join(pl["_schema_errors"])
+    assert "covers[0]: must be a mapping like {spec: ...}" in joined and "require: must be a list" in joined
+    assert "SCHEMA covers[0]" in P.render_check_summary(P.check(before, pl))
+    assert "covers[0]" in P.render_load(pl) and "INVALID" in P.render_validate(P.validate(before, pl))
+    with pytest.raises(P.PlanError, match="invalid YAML"):
+        P.load_plan("bad", tmp_path)
+    assert any(r.get("error", "").startswith("bad.yaml: invalid YAML") for r in P.list_plans(tmp_path))
+    from codegraph import mcp_server as M
+    old = dict(M.STATE)
+    try:
+        M.STATE.update(db=dbpath(before), plans=str(tmp_path))
+        assert M.plan_check("bad").startswith("plan error: bad.yaml: invalid YAML")
+        assert M.plan_load("missing").startswith("plan error: plan not found: missing")
+        assert "SCHEMA covers[0]" in M.plan_check("typo")
+    finally:
+        M.STATE.clear()
+        M.STATE.update(old)
+
+
 def test_validate_resolution(dbs):
     before, _ = dbs
     v = P.validate(before, plan())

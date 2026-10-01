@@ -32,6 +32,7 @@ from .core.model import CONFIDENCE_RANK
 from .core.store import GraphStore
 
 PARAM = re.compile(r"^\{(\w+)(\?)?\}$")
+CATCH_ALL = re.compile(r"^\{(\w+)\*(\?)?\}$")   # {rest*} one or more segments, {rest*?} zero or more (TS routers, Next.js)
 PH = re.compile(r"\{[^{}]*\}")
 
 
@@ -42,9 +43,16 @@ def _segs(p: str) -> list[str]:
 def match_path(client: str, route: str) -> tuple[bool, dict]:
     c, r = _segs(client), _segs(route)
     info = {"lit": 0, "param": 0, "lit_into_param": 0, "ph_into_lit": 0}
-    if len(c) > len(r):
+    if len(c) > len(r) and not (r and CATCH_ALL.match(r[-1])):
         return False, info
     for i, rs in enumerate(r):
+        cm = CATCH_ALL.match(rs)
+        if cm and i == len(r) - 1:
+            rest = c[i:]
+            if not rest and not cm.group(2):
+                return False, info
+            info["lit_into_param" if any(not PH.search(x) for x in rest) else "param"] += 1
+            return True, info
         pm = PARAM.match(rs)
         if i >= len(c):
             if pm and pm.group(2):
@@ -115,8 +123,13 @@ def match_endpoint(method: str, path: str, routes: list[dict], origin_kind: str 
             else:
                 method_miss.append(r)
             break
-    if not hits and origin_kind == "unknown":
+    if not hits and origin_kind in ("unknown", "env"):
         sx = [h for h in suffix_candidates(path, routes) if _method_ok(method, h[0]["method"])]
+        if len(sx) > 1:   # prefer the most specific alignment (literal over param, param over placeholder-into-literal)
+            rank = lambda h: (h[2]["lit"], h[2]["param"], -h[2]["lit_into_param"], -h[2]["ph_into_lit"])
+            best = max(rank(h) for h in sx)
+            if sum(1 for h in sx if rank(h) == best) == 1:
+                sx = [h for h in sx if rank(h) == best]
         if len(sx) == 1:
             r, variant, info = sx[0]
             return {"matched": [{"route": r["id"], "uri_variant": "suffix (origin unknown)", "confidence": "heuristic", "segments": info}], "path": path}
@@ -157,6 +170,8 @@ def match_endpoint(method: str, path: str, routes: list[dict], origin_kind: str 
             conf = "heuristic"
         if origin_kind == "unknown":
             conf = "heuristic"  # base not traced to the API client config
+        elif origin_kind == "env" and conf == "exact":
+            conf = "resolved"  # base is a configured server URL (env key) whose value is not in the repo
         out.append({"route": r["id"], "uri_variant": variant, "confidence": conf, "segments": info})
     return {"matched": out, "path": path}
 
@@ -198,7 +213,8 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
         uris = [("as-declared", uri)]
         if (r[1] or "").startswith("routes/api.php") or (r[1] or "").startswith("routes/api/"):
             uris.append(("api-prefixed", "/api" + uri))
-        routes.append({"id": r[0], "uri": uri, "method": method, "uris": uris, "file": f"{backend_name}/{r[1]}" if r[1] else None, "line": r[3]})
+        routes.append({"id": r[0], "uri": uri, "method": method, "uris": uris, "file": f"{backend_name}/{r[1]}" if r[1] else None, "line": r[3],
+                       "attrs": dict(a, _file=r[1], _line=r[3])})
     calls_by_ep = defaultdict(list)
     for e in db.execute("SELECT src, dst, file, line, confidence, attrs FROM f.edges WHERE kind='HTTP_CALLS'"):
         calls_by_ep[e[1]].append({"src": e[0], "at": f"{frontend_name}/{e[2]}:{e[3]}", "confidence": e[4], **json.loads(e[5] or "{}")})
@@ -215,6 +231,36 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
             new_edges.append((ep_id, m["route"], "MATCHES_ROUTE", rr["file"], rr["line"], m["confidence"], CONFIDENCE_RANK[m["confidence"]],
                               json.dumps({"client_path": a["path"], "uri_variant": m["uri_variant"], "segments": m["segments"]}), None))
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)", new_edges)
+    db.commit()
+    # ---- payload / field contract checks + routes without a client caller
+    from .payload import Checker
+    fe_nodes = {r[0]: json.loads(r[1] or "{}") for r in db.execute(
+        "SELECT id, attrs FROM f.nodes WHERE kind='class' AND (attrs LIKE '%json_from%' OR attrs LIKE '%enum_values%' OR attrs LIKE '%json_to%')")}
+    be_nodes = {r[0]: json.loads(r[1] or "{}") for r in db.execute("SELECT id, attrs FROM b.nodes WHERE kind='class' AND attrs LIKE '%schema_fields%'")}
+    checker = Checker(fe_nodes, be_nodes, frontend_name, backend_name)
+    rmap = {r["id"]: r for r in routes}
+    issues = []
+    called = set()
+    for res in results:
+        for m in res["matched"]:
+            called.add(m["route"])
+        if len(res["matched"]) != 1:
+            continue
+        rr = rmap[res["matched"][0]["route"]]
+        for c in res["calls"]:
+            try:
+                issues += checker.check(res["endpoint"], rr["id"], rr["attrs"], c)
+            except Exception as ex:  # a malformed fact must not abort linking
+                issues.append({"endpoint": res["endpoint"], "route": rr["id"], "kind": "checker_error", "severity": "info", "message": str(ex)[:200]})
+    db.execute("""CREATE TABLE IF NOT EXISTS payload_checks (endpoint TEXT, route TEXT, kind TEXT, severity TEXT, message TEXT,
+                  client_at TEXT, server_at TEXT, details TEXT)""")
+    db.executemany("INSERT INTO payload_checks VALUES (?,?,?,?,?,?,?,?)",
+                   [(i.get("endpoint"), i.get("route"), i["kind"], i["severity"], i["message"], i.get("client_at"), i.get("server_at"),
+                     json.dumps({k: v for k, v in i.items() if k not in ("endpoint", "route", "kind", "severity", "message", "client_at", "server_at")}))
+                    for i in issues])
+    uncalled = [{"route": r["id"], "at": f"{r['file']}:{r['line']}", "framework": r["attrs"].get("framework"), "auth": r["attrs"].get("auth")}
+                for r in routes if r["id"] not in called and r["attrs"].get("mounted", True) is not False
+                and r["attrs"].get("framework") not in ("django-admin",)]
     db.commit()
     # ---- entry tagging over the union
     prop = {r[0] for r in db.execute("SELECT kind FROM edge_kinds WHERE propagates=1")}
@@ -245,6 +291,8 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
     stats.update({"endpoints": n_ep, "endpoints_matched": m_ep, "call_sites": len(sites), "call_sites_matched": m_sites,
                   "endpoint_match_confidence": dict(conf_ct), "unmatched_reasons": dict(reasons),
                   "ambiguous_endpoints": sum(1 for r in results if len(r["matched"]) > 1),
+                  "payload_issues": dict(sorted({k: sum(1 for i in issues if i["severity"] == k) for k in ("high", "medium", "low", "info")}.items())),
+                  "routes_without_client_call": len(uncalled),
                   "link_seconds": round(time.time() - t0, 2)})
     db.execute("DETACH DATABASE b")
     db.execute("DETACH DATABASE f")
@@ -252,7 +300,7 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
                    sources={backend_name: str(Path(backend_db).resolve()), frontend_name: str(Path(frontend_db).resolve())},
                    indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()))
     db.close()
-    return {"stats": stats, "results": results}
+    return {"stats": stats, "results": results, "payload_issues": issues, "uncalled_routes": uncalled}
 
 
 def write_match_report(res: dict, out_prefix: str) -> None:
@@ -273,4 +321,12 @@ def write_match_report(res: dict, out_prefix: str) -> None:
     for r in res["results"]:
         if r["matched"] and (len(r["matched"]) > 1 or any(m["confidence"] == "heuristic" for m in r["matched"])):
             L.append(f"- `{r['endpoint']}` -> " + ", ".join(f"`{m['route']}` ({m['confidence']})" for m in r["matched"]))
+    L += ["", "## Payload / contract issues", ""]
+    order = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    for i in sorted(res.get("payload_issues") or [], key=lambda i: (order.get(i["severity"], 9), i["kind"], i.get("endpoint") or "")):
+        ev = ", ".join(x for x in (i.get("client_field") or i.get("client_at"), i.get("server_field") or i.get("server_at")) if x)
+        L.append(f"- **{i['severity']}** `{i['kind']}` `{i.get('endpoint')}` -> `{i.get('route')}`: {i['message']} ({ev})")
+    L += ["", "## Backend routes without a client call", ""]
+    for u in res.get("uncalled_routes") or []:
+        L.append(f"- `{u['route']}` ({u.get('framework')}, auth={u.get('auth')}) at {u['at']}")
     Path(out_prefix + ".md").write_text("\n".join(L) + "\n")

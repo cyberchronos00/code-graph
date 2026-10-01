@@ -40,7 +40,9 @@ Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, pl
 2. **Framework plugin:** subclass `FrameworkPlugin`. Use `register_hooks` for type rules and fact handlers that must
    run during resolution, and `contribute` for framework nodes and edges (routes, entry points, …) afterwards.
 3. **SCIP instead:** if a SCIP indexer exists for the language, a `ScipIndexerPlugin(...)` entry in
-   `codegraph/plugins/stubs/plugins.py` is often enough to start.
+   `codegraph/plugins/stubs/plugins.py` is often enough to start. For a first-class plugin that combines a SCIP
+   indexer with a tree-sitter syntax layer, `codegraph/plugins/rust/` and `codegraph/plugins/cfamily/` (on top of
+   the shared `codegraph/plugins/native/` helpers) are the templates.
 4. Register the plugin in `LANGUAGE_PLUGINS` / `FRAMEWORK_PLUGINS` in `codegraph/indexer.py` and, if needed, add
    marker files to `codegraph/core/detect.py`.
 5. Add a **small fixture** under `tests/` (a few files, written from scratch) and a test that asserts the exact edges
@@ -49,7 +51,7 @@ Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, pl
 ## Pull request expectations
 
 - **Tests pass** and `git status` is clean after running them.
-- **Deterministic edges only.** Every edge comes from a parser fact, the type checker or a named rule. No model output.
+- **Deterministic edges only.** Every edge comes from a parser fact, the type checker or a named rule, so results are reproducible.
 - **Evidence and honest confidence.** `exact` if syntactically certain, `resolved` if it needed type or name
   resolution, `heuristic` for fallbacks.
 - **No real-world code in fixtures.** Write fixtures from scratch; don't copy code from private or third-party

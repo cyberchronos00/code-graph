@@ -1,0 +1,7 @@
+name: codegraph_dart_extractor
+description: Parses Dart sources (package:analyzer, unresolved AST) into JSON facts for code-graph.
+publish_to: none
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+dependencies:
+  analyzer: ^10.0.0
