@@ -10,6 +10,8 @@ deterministic and reproducible.
 > Express/Fastify/Koa/Hono), Flutter (Dart), Rust, C and C++ are
 > supported natively; other languages can be imported through SCIP. See [Limitations](#limitations).
 
+[![cg visual view: the graph around the warehouse connection, a selected node with its evidence paths and source, then the planned-change overlay for the preorders plan showing planned, missing and forbidden paths in colour. Click for the full video](docs/media/cg-view-preview.gif)](docs/media/cg-view-demo.mp4)
+
 [![Terminal demo: cg indexes the bundled Laravel and Nuxt sample apps, links them, then runs reaches on the warehouse connection (runtime, operator-only and gated callers), a path from a Nuxt page to a database column, impact of StockService::reserve, and a plan check that lists everything a planned change still needs to cover](docs/media/cg-terminal-demo.gif)](docs/media/cg-terminal-demo.mp4)
 
 [Quickstart](#quickstart-about-2-minutes-on-the-bundled-sample-apps) · [Demo](#demo) · [What you get](#what-you-get) · [Supported stacks](#supported-languages-and-frameworks) · [Prerequisites](#prerequisites-per-language) · [AI agents](#using-it-with-an-ai-agent) · [Docs](#documentation)
@@ -134,6 +136,8 @@ Five short videos on the bundled sample apps; everything they show is also writt
 - [Visual view demo (MP4, about 40 s)](docs/media/cg-view-demo.mp4): `cg serve` in a browser. Search for the warehouse
   connection, select a node to highlight its evidence paths and open its source, then switch to the planned-change
   overlay for the `preorders` plan and inspect two items it still needs to cover.
+
+  [![cg visual view preview: evidence paths for a selected node, then the planned-change overlay for the preorders plan](docs/media/cg-view-preview.gif)](docs/media/cg-view-demo.mp4)
 - [AI agent over MCP (MP4, about 195 s)](docs/media/cg-agent-demo.mp4): a live Cursor CLI agent with cg connected.
   It finds every route that writes data without auth in one `routes` call, catches what the `preorders` plan leaves
   out before any code is written, then fixes all of it in the same chat (guards every unprotected write route and
