@@ -20,7 +20,13 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   without a named guard (`missing="auth:api"`) or without an auth-like guard (`unguarded=true`); each route shows one
   evidence chain and its frontend callers on a combined graph (see [cli.md](cli.md#routes-and-guards));
 - `downstream` (forward dependencies), `path` (one shortest evidence chain between two specs), `api_calls` (frontend
-  endpoints with call sites, request keys and the matched route + controller; `unmatched` filter);
+  endpoints with call sites, request keys and the matched route + controller; `unmatched`, a substring or a `*` glob
+  such as `GET /v1/*/orders*` as the filter);
+- `channels(pattern?, source?)`: broadcast channels with who can join (auth route, callback source, the checks it
+  calls), the events that publish on them and the client code that subscribes (see
+  [channels-and-tests.md](channels-and-tests.md#broadcast-channels));
+- `tests_covering(target, min_confidence?, paths?)`: the tests that exercise a symbol, route or table, direct and
+  transitive, closest first (see [channels-and-tests.md](channels-and-tests.md#tests));
 - `resolutions(concept, within?, client?, detail?)` (see [value-facts.md](value-facts.md));
 - `plan_list`, `plan_load`, `plan_validate`, `plan_check(name, verify?, details?, max_items?, review?)`, `plan_baseline`.
   `plan_check` replies with a compact summary by default: counts per section and per check, the top `max_items` (5)
@@ -31,7 +37,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   picks the repo whose recorded root contains it, or every repo below it (a parent directory such as the workspace
   root). The link is rebuilt afterwards. A `root` that matches no recorded repo, an unknown `repo`, or a result with
   0 nodes is refused with an error and the current graph is kept;
-- `coverage(path?)`: which languages and files the index covers (see [Coverage](#coverage)).
+- `coverage(path?)`: which languages and files the index covers (see [Coverage](#coverage)); on a combined DB, per
+  linked repo.
 
 Rust, C and C++ graphs use the same tools. Specs take native forms (`kv_core::store::Store::get`, `ns::Class::method`,
 `mod:crate::module`, a file path, `feature:`/`cfg:`/`define:`/`unsafe:`/`env:` nodes; see [native.md](native.md#query-specs)).

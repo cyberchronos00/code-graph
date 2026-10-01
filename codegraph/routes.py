@@ -12,6 +12,10 @@ Guards are read from what the framework plugins record on route nodes, so the sa
 
 A guard counts as *auth* when its name matches AUTH_PATTERN, tested on the name's word tokens (name-based, and labelled
 as such in the output); pass `auth_pattern` (a regex tested on the raw name) to add project-specific names.
+A route without auth whose guards verify a shared secret or signature (webhook signature checks, HMAC, Laravel `signed`
+URLs; SECRET_PATTERN) is reported as SECRET-CHECKED instead of NO AUTH, and `unguarded` leaves it out (and says how
+many it left out). The Laravel broadcasting auth route counts as auth: it rejects private / presence subscriptions
+without an authenticated user and runs each channel's callback.
 """
 from __future__ import annotations
 
@@ -27,8 +31,12 @@ from . import query as Q
 # matched against the guard name split into lower-case word tokens joined by "_" (ApiKeyGuard -> api_key_guard,
 # auth:api -> auth_api, IsAuthenticated -> is_authenticated), so AuditLogInterceptor does not count as "login"
 AUTH_PATTERN = (r"(^|_)(auth|authn|authz|authed|authenticate[ds]?|authentication|authori[sz](e[ds]?|ation|er)|login|logged|jwt|token|session|sanctum|passport|bearer|api_key|permissions?|"
-                r"permission_[a-z]+|admin|staff|superuser|signed|can|roles?|acl|verified|protected|protect|require_user|"
+                r"permission_[a-z]+|admin|staff|superuser|can|roles?|acl|verified|protected|protect|require_user|"
                 r"current_user|oauth[a-z0-9]*|oidc|saml|clerk|firebase_auth)(_|$)")
+# shared-secret / signature verification (webhooks, signed URLs): the caller proves it knows a secret, not who it is
+SECRET_PATTERN = (r"(^|_)(signed|signature|signatures|hmac|secret|webhook_secret)(_|$)|(^|_)verify(_[a-z0-9]+)*_webhooks?(_|$)|"
+                  r"(^|_)webhooks?(_[a-z0-9]+)*_(verify|verified|verification|signature|secret|hmac)(_|$)")
+SECRET_RE = re.compile(SECRET_PATTERN)
 WRITE_KINDS = ("WRITES_TABLE", "WRITES_COLUMN")
 GUARD_ATTRS = (("guards", "guard"), ("interceptors", "interceptor"), ("pipes", "pipe"), ("auth", "auth"),
                ("access", "access"), ("wrapped_by", "wrapper"), ("middleware", "middleware"))
@@ -67,12 +75,16 @@ def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
     """Every guard-like fact recorded on a route, deduplicated by name, each with kind, source and an auth flag."""
     out, seen = [], set()
 
-    def add(name, kind, source, display=None):
+    def add(name, kind, source, display=None, auth=None):
         k = (name or "").lower()
         if not name or k in seen:
             return
         seen.add(k)
-        out.append({"name": display or name, "kind": kind, "source": source, "auth": is_auth(name)})
+        out.append({"name": display or name, "kind": kind, "source": source, "auth": is_auth(name) if auth is None else auth,
+                    "secret": bool(SECRET_RE.search(tokens(name)))})
+    if attrs.get("broadcast_auth"):
+        add("channel callbacks", "broadcast-auth", "Laravel BroadcastController: authenticated user + Broadcast::channel callback",
+            auth=True)
     for key, kind in GUARD_ATTRS:
         for n in _names(attrs.get(key)):
             add(n, kind, f"attrs.{key}")
@@ -179,7 +191,8 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
         a = json.loads(n.get("attrs") or "{}")
         g = route_guards(a, mw.get(rid, []), is_auth)
         it = {"route": rid, "name": n["name"], "at": _route_loc(n, a), "framework": a.get("framework"), "guards": g,
-              "has_auth": any(x["auth"] for x in g), "reaches": sorted(reached.get(rid, []), key=lambda x: x["what"]),
+              "has_auth": any(x["auth"] for x in g), "secret_checked": any(x.get("secret") for x in g),
+              "reaches": sorted(reached.get(rid, []), key=lambda x: x["what"]),
               "clients": _clients(st, rid)}
         items.append(it)
     total = len(items)
@@ -189,9 +202,11 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
         items = [i for i in items if not any(m in x["name"].lower() for x in i["guards"])]
         flt.append(f"missing a guard matching '{missing}'")
     if unguarded:
-        items = [i for i in items if not i["has_auth"]]
-        flt.append("no auth guard")
-    items.sort(key=lambda i: (i["has_auth"], i["at"], i["name"]))
+        secret = [i for i in items if not i["has_auth"] and i["secret_checked"]]
+        items = [i for i in items if not i["has_auth"] and not i["secret_checked"]]
+        flt.append("no auth guard" + (f" ({len(secret)} secret-checked route(s) left out: "
+                                      f"{', '.join(i['name'] for i in secret[:4])}{' …' if len(secret) > 4 else ''})" if secret else ""))
+    items.sort(key=lambda i: (i["has_auth"], i["secret_checked"], i["at"], i["name"]))
     below = []
     if mode != "all" and min_conf != "heuristic":
         # a stricter confidence level silently drops routes whose only chain has a resolved / heuristic hop: name them
@@ -245,8 +260,10 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
     head = f"{what}: {res['matched']} of {res['total_routes']} routes"
     if res["filters"]:
         head += f" | filter: {'; '.join(res['filters'])} -> {len(items)}"
-    na = sum(1 for i in items if not i["has_auth"])
-    out = [head, f"auth guard: {len(items) - na} with, {na} without (auth = guard name matches the auth pattern; name-based)"]
+    na = sum(1 for i in items if not i["has_auth"] and not i.get("secret_checked"))
+    ns = sum(1 for i in items if not i["has_auth"] and i.get("secret_checked"))
+    out = [head, f"auth guard: {len(items) - na - ns} with, {na} without" + (f", {ns} secret-checked (signature / shared secret, no user auth)" if ns else "")
+           + " (auth = guard name matches the auth pattern; name-based)"]
     if res.get("below_confidence"):
         b = res["below_confidence"]
         out.append(f"+{len(b)} more route(s) match only through lower-confidence edges, hidden by "
@@ -257,8 +274,8 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
         out.append(explain_empty(st, res) if st is not None else "no routes match")
         return "\n".join(out)
     for i in items[:max_items]:
-        gs = ", ".join(f"{g['name']}{' [auth]' if g['auth'] else ''}" for g in i["guards"]) or "(none)"
-        flag = "" if i["has_auth"] else "  NO AUTH"
+        gs = ", ".join(f"{g['name']}{' [auth]' if g['auth'] else (' [secret]' if g.get('secret') else '')}" for g in i["guards"]) or "(none)"
+        flag = "" if i["has_auth"] else ("  SECRET-CHECKED" if i.get("secret_checked") else "  NO AUTH")
         out.append("")
         out.append(f"{i['name']}  @{i['at']}{flag}")
         out.append(f"    guards: {gs}")

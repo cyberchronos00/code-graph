@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED, CONFIDENCE_RANK
+from ...core.fsutil import stat_key
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from .http import TOKEN, HttpExtractor, Tpl, UrlEval, bind_args, join, load_env_files, min_conf
 from .models import ModelIndex
@@ -59,8 +60,8 @@ def facts_fingerprint(root: Path, cfg: dict) -> str:
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS and not d.startswith("."))
         for fn in sorted(fns):
             if fn.endswith((".dart", ".yaml")) or fn.startswith(".env"):
-                st = os.stat(os.path.join(dp, fn))
-                h.update(f"{os.path.relpath(os.path.join(dp, fn), root)}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+                p = os.path.join(dp, fn)
+                h.update(f"{os.path.relpath(p, root)}|{stat_key(p)}\n".encode())
     return h.hexdigest()[:20]
 
 

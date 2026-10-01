@@ -336,7 +336,7 @@ class ValueAnalysis:
         # FormRequest rules + actions validated by them
         prog = self.prog
         for c in prog.classes.values():
-            if c.kind != "class" or not any(a.lower() == FORM_REQUEST for a in prog.ancestors(c.fqcn)):
+            if c.kind != "class" or prog.is_test_class(c.fqcn) or not any(a.lower() == FORM_REQUEST for a in prog.ancestors(c.fqcn)):
                 continue
             rules = c.methods.get("rules")
             if not rules:

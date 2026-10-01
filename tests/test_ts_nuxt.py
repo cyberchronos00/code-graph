@@ -56,12 +56,12 @@ def test_jsdoc_attached():
 
 
 def test_http_calls_base_url_union_and_request_keys():
-    c, a = edge(f"function:{REPORTS}.fetchTop", "HTTP_CALLS", "http:GET /v1/main/admin/reports/top")
+    c, a = edge(f"function:{REPORTS}.fetchTop", "HTTP_CALLS", "http:GET /api/v1/main/admin/reports/top")
     assert a["client"] == "axios-instance" and a["base"] == "{runtimeConfig.SERVER_API_URL}/v1/main"
     assert a["query_keys"] == {"keys": ["mode"], "conditional": ["category_id", "timezone"]}
     for fmt in ("csv", "xlsx"):  # string-literal union expanded
-        assert edge(f"function:{REPORTS}.exportTop", "HTTP_CALLS", f"http:GET /v1/main/admin/reports/top/export.{fmt}")
-    assert edge("page:app/pages/index.vue", "HTTP_CALLS", "http:DELETE /v1/main/admin/reports/{id}")
+        assert edge(f"function:{REPORTS}.exportTop", "HTTP_CALLS", f"http:GET /api/v1/main/admin/reports/top/export.{fmt}")
+    assert edge("page:app/pages/index.vue", "HTTP_CALLS", "http:DELETE /api/v1/main/admin/reports/{id}")
     c, a = edge("composable:app/composables/useReports.ts#useAppVersion", "HTTP_CALLS", "http:GET /version.json")
     assert a["client"] == "$fetch" and a["query_keys"]["keys"] == ["t"]
     na = json.loads(fe().execute("SELECT attrs FROM nodes WHERE id='http:GET /version.json'").fetchone()[0])
@@ -84,12 +84,12 @@ def test_match_path_rules():
 def test_link_confidence_and_match_rate():
     res = build()["link"]
     by = {r["endpoint"]: r for r in res["results"]}
-    assert by["http:GET /v1/main/admin/reports/top"]["matched"][0]["confidence"] == "resolved"  # main -> {store}
-    assert by["http:DELETE /v1/main/admin/reports/{id}"]["matched"][0]["route"] == "route:DELETE /v1/{store}/admin/reports/{report}"
-    assert by["http:GET /v1/main/admin/reports/top/export.csv"]["matched"][0]["confidence"] == "resolved"
+    assert by["http:GET /api/v1/main/admin/reports/top"]["matched"][0]["confidence"] == "resolved"  # main -> {store}
+    assert by["http:DELETE /api/v1/main/admin/reports/{id}"]["matched"][0]["route"] == "route:DELETE /v1/{store}/admin/reports/{report}"
+    assert by["http:GET /api/v1/main/admin/reports/top/export.csv"]["matched"][0]["confidence"] == "resolved"
     assert (res["stats"]["endpoints_matched"], res["stats"]["endpoints"]) == (4, 6)
     assert by["http:GET /version.json"]["reason"].startswith("not a backend URL: same-origin")
-    assert by["http:GET /v1/main/admin/session"]["reason"].startswith("no backend route")  # the sample API has no such route
+    assert by["http:GET /api/v1/main/admin/session"]["reason"].startswith("no backend route")  # the sample API has no such route
 
 
 def test_cross_repo_impact_and_downstream():

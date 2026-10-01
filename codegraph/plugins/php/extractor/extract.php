@@ -171,7 +171,10 @@ function argsDesc(array $args, Ctx $c, int $depth = 0): array {
 
 function addFact(Ctx $c, array $f, Node $n): void {
     $f['line'] = $n->getStartLine();
-    if (($f['t'] ?? null) === 'call') $c->nodeFact[spl_object_id($n)] = count($c->facts);
+    if (($f['t'] ?? null) === 'call') {
+        $c->nodeFact[spl_object_id($n)] = count($c->facts);
+        if ($n->getEndLine() > $f['line']) $f['end'] = $n->getEndLine();   // multi-line calls: closure bodies lie inside
+    }
     if ($c->closureStack) $f['ctx'] = end($c->closureStack);
     $c->facts[] = $f;
 }
@@ -250,10 +253,13 @@ function walkNode(Node $node, Ctx $c, \PhpParser\NameContext $nc): void {
     // push call context for closures passed as arguments (used by migrations, Route groups, Schedule)
     $pushed = false;
     if (($node instanceof Expr\StaticCall || $node instanceof Expr\MethodCall || $node instanceof Expr\FuncCall)) {
-        $hasClosure = false;
-        foreach ($node->args as $a) { if ($a instanceof Node\Arg && ($a->value instanceof Expr\Closure || $a->value instanceof Expr\ArrowFunction)) { $hasClosure = true; break; } }
+        $hasClosure = false; $clo = null;
+        foreach ($node->args as $a) { if ($a instanceof Node\Arg && ($a->value instanceof Expr\Closure || $a->value instanceof Expr\ArrowFunction)) { $hasClosure = true; $clo = $a->value; break; } }
         if ($hasClosure) {
-            $cc = ['m' => nameStr($node->name), 'line' => $node->getStartLine()];
+            // end: last line of the call (closure bodies of Broadcast::channel / Pest test() / Route groups lie inside)
+            // cparams: the closure's parameter names (the first one of a channel callback is the authenticated user)
+            $cc = ['m' => nameStr($node->name), 'line' => $node->getStartLine(), 'end' => $node->getEndLine(),
+                   'cparams' => array_values(array_map(fn($p) => ($p->var instanceof Expr\Variable && is_string($p->var->name)) ? $p->var->name : '?', $clo->params))];
             if ($node instanceof Expr\StaticCall) $cc['class'] = resolveSpecial(nameStr($node->class), $c);
             $first = $node->args[0] ?? null;
             if ($first instanceof Node\Arg && $first->value instanceof Scalar\String_) $cc['arg0'] = $first->value->value;
@@ -342,7 +348,10 @@ function classLike(Stmt\ClassLike $cl, Ctx $c, \PhpParser\NameContext $nc, strin
             if ($s->name->toString() === '__construct') {
                 foreach ($f['params'] as $p) if ($p['promoted']) $props[] = ['name' => $p['name'], 'types' => $p['types'], 'static' => false, 'default' => null, 'line' => $p['line'], 'doc' => null, 'promoted' => true];
             }
+            $attrNames = [];
+            foreach ($s->attrGroups as $ag) foreach ($ag->attrs as $at) $attrNames[] = ltrim($at->name->toString(), '\\');
             $methods[] = ['name' => $s->name->toString(), 'static' => $s->isStatic(), 'abstract' => $s->isAbstract() || $cl instanceof Stmt\Interface_,
+                'attributes' => $attrNames,
                 'visibility' => $s->isPublic() ? 'public' : ($s->isProtected() ? 'protected' : 'private'),
                 'line' => $s->getStartLine(), 'end_line' => $s->getEndLine(), 'doc' => $md] + $f;
         }

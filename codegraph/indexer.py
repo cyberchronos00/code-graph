@@ -29,6 +29,16 @@ LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(
 FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin()]
 
 
+def _crash_site(ex: BaseException) -> str | None:
+    """Innermost codegraph frame of an exception (file:line function), for plugin crash reports."""
+    import traceback
+    frames = [f for f in traceback.extract_tb(ex.__traceback__) if "codegraph" in f.filename]
+    if not frames:
+        return None
+    f = frames[-1]
+    return f"{Path(f.filename).name}:{f.lineno} {f.name}"
+
+
 def tag_entries(builder: GraphBuilder, skip_gate: str | None = None) -> list[tuple]:
     """Forward closure from every entry node over propagating edges (optionally ignoring edges
     that are dead under gate scenario `skip_gate`). Returns rows (node_id, entry_kind, entry_count, sample_entry)."""
@@ -90,7 +100,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
             try:
                 stats["plugins"][f"{lp.name}/{fw.name}"] = fw.contribute(project, builder, ctx)
             except Exception as ex:  # noqa: BLE001
-                stats["plugins"][f"{lp.name}/{fw.name}"] = {"status": "skipped", "reason": f"{type(ex).__name__}: {str(ex)[:300]}"}
+                stats["plugins"][f"{lp.name}/{fw.name}"] = {"status": "skipped", "reason": f"{type(ex).__name__}: {str(ex)[:300]}",
+                                                            "at": _crash_site(ex)}
     for fw in frameworks:
         if f"{fw.language}/{fw.name}" not in stats["plugins"]:
             stats["plugins"][f"{fw.language}/{fw.name}"] = {"status": "detected; language plugin not active"}
@@ -98,6 +109,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
         from .plugins.scip.importer import import_scip
         for s in scip:
             stats["plugins"][f"scip:{s}"] = import_scip(s, builder)
+    # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
+    from .tests_index import isolate_tests
+    stats["tests"] = isolate_tests(builder)
+    from .tests_index import link_local_channels
+    if (ch := link_local_channels(builder)):
+        stats["channels_linked"] = ch
     # dangling edge targets -> placeholder nodes so every edge resolves
     for e in list(builder.edges.values()):
         for nid in (e.src, e.dst):

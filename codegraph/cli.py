@@ -9,10 +9,12 @@
   python -m codegraph.cli detect <project_root>
   python -m codegraph.cli link --backend out/api.db --frontend out/web.db --db out/combined.db [--report out/x]
   python -m codegraph.cli downstream <spec> --db out/combined.db        (forward: page -> ... -> routes/tables)
-  python -m codegraph.cli api-calls <filter|all|unmatched> --db out/combined.db
+  python -m codegraph.cli api-calls <all|unmatched|substring|glob*> --db out/combined.db
   python -m codegraph.cli plan list|load|validate|check|baseline [<name>] --db out/combined.db [--verify] [--summary] [--json]
   python -m codegraph.cli routes --db ... [--writes [TABLE]] [--reaches SPEC...] [--missing NAME] [--unguarded]
   python -m codegraph.cli search <name> --db ... [--kind route]
+  python -m codegraph.cli channels [PATTERN] --db ...   (who can join, which events publish, which client code listens)
+  python -m codegraph.cli tests <spec> --db ...          (tests covering a symbol / route / table: direct + transitive)
 spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class::method | Class
 """
 from __future__ import annotations
@@ -68,12 +70,21 @@ def main(argv=None):
     p = sub.add_parser("search", help="nodes by name / FQN substring, plus route middleware / guard / auth names")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("--kind"); p.add_argument("--limit", type=int, default=30)
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("channels", help="broadcast channels: who can join (auth callback + checks), which events publish on it, which client code / pages listen")
+    p.add_argument("pattern", nargs="?", help="channel pattern or concrete name (orders.{id}, orders.42, orders.*); omit to list all")
+    p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-source", action="store_true")
+    p = sub.add_parser("tests", help="tests covering a symbol / route / table: direct (test code calls it) and transitive (through app code)")
+    p.add_argument("spec", help="Class::method, Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
+    p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-paths", action="store_true")
+    p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
     for name in ("reaches", "siblings", "writers", "impact", "stats", "node", "downstream", "api-calls"):
         p = sub.add_parser(name)
         if name == "reaches":
             p.add_argument("specs", nargs="+")
+        elif name == "api-calls":
+            p.add_argument("spec", help="all | unmatched | a substring | a * glob ('GET /v1/*/orders*', '*useOrders*')")
         elif name != "stats":
             p.add_argument("spec")
         p.add_argument("--db", required=True)
@@ -138,6 +149,15 @@ def main(argv=None):
         res = R.routes_report(st, writes=a.writes, reaches=a.reaches, missing=a.missing, unguarded=a.unguarded,
                               auth_pattern=a.auth_pattern, min_conf=a.min_confidence)
         print(json.dumps(res, indent=1, default=str) if a.json else R.render_routes(res, st, max_items=a.max_items, paths=not a.no_paths))
+        return
+    if a.cmd == "channels":
+        from .realtime import channels, render_channels
+        res = channels(st, a.pattern, with_source=not a.no_source)
+        print(json.dumps(res, indent=1, default=str) if a.json else render_channels(res))
+        return
+    if a.cmd == "tests":
+        res = Q.tests_covering(st, a.spec, min_conf=a.min_confidence)
+        print(json.dumps(res, indent=1, default=str) if a.json else Q.render_tests_covering(res, show_paths=not a.no_paths))
         return
     if a.cmd == "search":
         res = Q.search(st, a.name, kind=a.kind, limit=a.limit)

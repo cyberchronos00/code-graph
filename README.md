@@ -94,7 +94,7 @@ cg path page:/reports/:id table:orders --db out/graph.db                  # fron
 cg resolutions timezone --db out/graph.db                                 # where is "timezone" decided?
 cg routes --writes --db out/graph.db                                      # which routes write data, and with which guards?
 cg plan check preorders --plans-dir examples/plans --db out/graph.db      # what does this planned change miss?
-.venv/bin/python -m pytest -q tests/                                      # 105 tests
+.venv/bin/python -m pytest -q tests/                                      # 130 tests
 ```
 
 **The same bookstore in other stacks.** Each sample indexes on its own; PHP is only needed for Laravel and Node only
@@ -172,14 +172,14 @@ The 7 plan gaps are the admin update path, `UpdateBookRequest`, `Book::$fillable
 
 ### 1. A CLI for impact questions
 
-`reaches`, `impact`, `downstream`, `path`, `writers`, `siblings`, `routes`, `search` and `api-calls` all work on one
-SQLite graph, and across repos once the frontend and backend are linked. Every hop shows its evidence:
+`reaches`, `impact`, `downstream`, `path`, `writers`, `siblings`, `routes`, `search`, `api-calls`, `channels` and `tests`
+all work on one SQLite graph, and across repos once the frontend and backend are linked. Every hop shows its evidence:
 
 ```text
 $ cg path page:/reports/:id table:orders --db out/graph.db
 page:app/pages/reports/[id].vue
           -CALLS[resolved @ bookstore-web/app/pages/reports/[id].vue:10]-> function:app/composables/useReports.ts#useReports.fetchTop
-          -HTTP_CALLS[resolved @ bookstore-web/app/composables/useReports.ts:9]-> http:GET /v1/main/admin/reports/top
+          -HTTP_CALLS[resolved @ bookstore-web/app/composables/useReports.ts:9]-> http:GET /api/v1/main/admin/reports/top
           -MATCHES_ROUTE[resolved @ bookstore-api/routes/api.php:11]-> route:GET /v1/{store}/admin/reports/top
           -ROUTES_TO[exact @ bookstore-api/routes/api.php:11]-> method:App\Http\Controllers\ReportController::top
           -CALLS[resolved @ bookstore-api/app/Http/Controllers/ReportController.php:21]-> method:App\Services\SalesReportService::report
@@ -195,7 +195,7 @@ $ cg resolutions timezone --db out/graph.db      # abridged
 [A] input:timezone > column:orders.customer_timezone > setting:locale.timezone > column:stores.default_timezone > 'UTC'
 [B] input:timezone > setting:reports.timezone > 'UTC'
   [A] vs [B]: same up to input:timezone; then [A] column:orders.customer_timezone vs [B] setting:reports.timezone
-  GET /v1/main/admin/reports/top  -> chain B
+  GET /api/v1/main/admin/reports/top  -> chain B
        => 'timezone': never sent (builder key is conditional and no call site passes it)
 ```
 
@@ -224,14 +224,45 @@ POST /v1/orders  @bookstore-api/routes/api.php:21
 ```
 
 Add `--unguarded` for the routes without an auth-like guard, or `--missing auth:api` for the routes without one
-specific guard. When a query comes back empty, the answer says why and suggests the next query to run.
+specific guard. Routes whose only check is a shared secret or signature (webhook signature middleware, Laravel
+`signed` URLs) are shown as `SECRET-CHECKED` rather than `NO AUTH`. When a query comes back empty, the answer says why
+and suggests the next query to run.
+
+`channels` answers who may join a broadcast channel, what publishes on it and which client code listens, and `tests`
+lists the tests that exercise a symbol, route or table (test code never counts as a caller in the other queries):
+
+```text
+$ cg channels board.42 --no-source --db out/graph.db      # abridged
+== channel board.{board}  [private]  @ backend/routes/channels.php:22
+WHO CAN JOIN
+  auth route route:POST /api/broadcasting/auth  middleware=['api', 'auth:sanctum']  (from ->withBroadcasting bootstrap/app.php:7)
+  channel class App\Broadcasting\BoardChannel (join())
+    CALLS Support\BoardAccess::visibleBoardIds  @ backend/app/Broadcasting/BoardChannel.php:12 [exact]
+PUBLISHED BY (1)
+  event:App\Events\TaskMoved  name=board.{board_id}  [private]  broadcastOn @ app/Events/TaskMoved.php:22
+      dispatched by Http\Controllers\TaskController::move @ backend/app/Http/Controllers/TaskController.php:22  http_route(1)
+LISTENED TO BY (1)
+  board.{boardId}  [private]  events: TaskMoved  (exact)
+      subscribed in useBoardRealtime (useBoardRealtime.ts) @ frontend/app/composables/useBoardRealtime.ts:5
+      pages: page:app/pages/boards/[id].vue
+
+$ cg tests 'PATCH /api/tasks/{task}/move' --no-paths --db out/graph.db
+targets: 1 node(s): route:PATCH /tasks/{task}/move
+tests: 2 direct, 0 transitive (of 10 test cases in the graph)
+
+== DIRECT (the test code itself calls / requests the target): 2
+  TaskMoveTest::test_moving_a_task_updates_its_state  [phpunit] backend/tests/Feature/TaskMoveTest.php:17  depth=2 conf=exact
+  board page > moving a task through the API  [playwright] frontend/e2e/board.spec.ts:9  depth=2 conf=resolved
+```
+
+Details: [docs/channels-and-tests.md](docs/channels-and-tests.md).
 
 Full reference: [docs/cli.md](docs/cli.md) · value facts: [docs/value-facts.md](docs/value-facts.md)
 
 ### 2. An MCP server for AI agents
 
 The same queries as MCP tools (`reaches`, `impact`, `siblings`, `path`, `downstream`, `routes`, `search`, `api_calls`,
-`resolutions`, `plan_check`, `index`, `coverage`, …), so an agent can check the blast radius before it edits. Replies are compact,
+`channels`, `tests_covering`, `resolutions`, `plan_check`, `index`, `coverage`, …), so an agent can check the blast radius before it edits. Replies are compact,
 use repo-relative paths, and `plan_check` starts with a summary (`details=true` for the full report). It runs locally
 over stdio:
 
@@ -283,10 +314,10 @@ or `heuristic` (a labelled name-based fallback). The **mode** column says where 
 | language / framework | mode | what is modelled |
 |---|---|---|
 | PHP | exact + resolved (nikic/php-parser, type inference) | classes, methods, calls with type inference, properties, interfaces, traits |
-| Laravel | exact + resolved | routes + middleware, Eloquent models → tables/columns, migrations, DB connections, config/env, commands, scheduler, jobs, events/listeners, container bindings, FormRequests, settings reads |
+| Laravel | exact + resolved | routes + middleware, Eloquent models → tables/columns, migrations, DB connections, config/env, commands, scheduler, jobs, events/listeners, container bindings, FormRequests, settings reads, broadcast channels (auth callbacks, `broadcastOn()`, the auth route), PHPUnit / Pest tests |
 | Filament | resolved | admin panels as entry points, resource `$model` binding |
-| TypeScript / Vue | exact + resolved (TypeScript checker, Vue SFC compiler) | modules, functions, components, template usage, HTTP calls (fetch, `$fetch`, axios) |
-| Nuxt | exact + resolved | file-based page routes, layouts, auto-imports, global components, Pinia stores, i18n keys |
+| TypeScript / Vue | exact + resolved (TypeScript checker, Vue SFC compiler) | modules, functions, components, template usage, HTTP calls (fetch, `$fetch`, axios, ofetch / ky instances) with base URLs from runtime config and env, Laravel Echo / pusher-js channel subscriptions, Vitest / Jest / Playwright / Cypress tests |
+| Nuxt | exact + resolved | file-based page routes, layouts, auto-imports, global components, Pinia stores, i18n keys; source at the root, `app/` or `src/`; clean checkouts without `.nuxt` |
 | NestJS | exact + resolved | modules, controllers + routes (global prefix, URI versioning, `RouterModule`), DI (class / `@Inject` tokens, `useClass`/`useExisting`/`useFactory`/`useValue`), guards / interceptors / pipes, DTO fields, GraphQL resolvers, `@Cron`/`@Interval`, Bull/BullMQ, `@OnEvent`, microservice and WebSocket handlers, nest-commander (operator), TypeORM / Mongoose / Prisma / Kysely tables, `ConfigService` / env |
 | Next.js | exact + resolved | app router (pages, layouts, `route.ts` handlers, dynamic / catch-all segments, route groups, parallel / intercepting routes), pages router + `pages/api`, server actions, `middleware.ts` matchers, `basePath` / rewrites, env incl. `NEXT_PUBLIC_*`, in-repo client → handler links |
 | Express, Fastify, Koa, Hono | exact + resolved | routes, router mounting chains across files (`use`, `register({prefix})`, `route`, `basePath`), route and router-level middleware, Fastify schemas |
@@ -420,7 +451,7 @@ Everything else (environment variables, screenshot tooling): [docs/configuration
 
 ## Limitations
 
-The current scope, so you know how far each answer reaches. The full list is in [docs/limitations.md](docs/limitations.md).
+The scope as of v0.3, so you know how far each answer reaches. The full list is in [docs/limitations.md](docs/limitations.md).
 
 - **Coverage.** `cg index` prints which languages it covered (`exact`, `heuristic`, `skipped` when a toolchain
   such as `php` or `node` is missing, `unsupported` with file counts); `cg coverage` and the MCP `coverage` tool show
@@ -433,8 +464,16 @@ The current scope, so you know how far each answer reaches. The full list is in 
 - **Python/Dart are parsed, not type-checked.** Calls through untyped parameters, `**kwargs`, dynamic dispatch
   (`getattr`, DI containers, Riverpod/Provider lookups without a type) fall back to `heuristic` or stay unresolved.
   GraphQL APIs (graphene/strawberry) and Django template rendering are not modelled.
-- **Next to index:** seeders, `Artisan::command` closures, broadcast channels, observers fired by model writes, Nuxt
-  server routes, and navigation edges (`NuxtLink`, `navigateTo`).
+- **Next to index:** seeders, `Artisan::command` closures, observers fired by model writes, Nuxt server routes, and
+  navigation edges (`NuxtLink`, `navigateTo`).
+- **Broadcast channels** are read from `Broadcast::channel` and `broadcastOn()`; names cg cannot evaluate keep a
+  `{?}` segment, and Livewire Echo listeners are not client subscriptions. A channel's checks are the calls its
+  callback makes. See [docs/channels-and-tests.md](docs/channels-and-tests.md#limits).
+- **Tests** are found by naming conventions and never count as callers. Transitive test paths are static, so a browser
+  test that stubs the API still reaches the backend through the page it opens.
+- **Base URLs** from runtime config and env are folded into endpoint paths when the value is in the repo (`nuxt.config`
+  defaults, `.env`, `.env.example`, `||` defaults in code); values set only at deploy time stay an unknown origin.
+  A Nuxt checkout without `.nuxt` is indexed with generated stand-ins for its own auto-imports and components.
 - **TS frameworks:** `link` compares method and path for Nest/Express routes. Nest providers are global (one module
   scope). Express middleware order is tracked within one file. Monorepo roots are indexed per app. Details:
   [docs/ts-frameworks.md](docs/ts-frameworks.md#limitations).
@@ -456,17 +495,18 @@ The current scope, so you know how far each answer reaches. The full list is in 
 
 ## Roadmap
 
-Ideas we are exploring. Feedback on priorities is welcome.
+Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 
 - Packaging: `pip install` with a `code-graph` console script, plus prebuilt extractor deps.
 - Nuxt server routes (Nitro) and navigation edges.
 - Payload checks in `link` (Nest DTO / Fastify schema fields against client request keys), and Nest module scoping.
-- Laravel: seeders, closure commands, broadcast channels, and observers triggered by model writes.
+- Laravel: seeders, closure commands, and observers triggered by model writes; Livewire Echo listeners as channel
+  subscriptions.
 - Multiple gate scenarios per index, and middleware-level gates.
 - Tested SCIP recipes for Go and Java.
 - Rust/C/C++: macro-expanded items, function-pointer dataflow, Bazel and Meson autodetection.
 - Route guards: Laravel kernel middleware groups and Django's `MIDDLEWARE` setting shown on each route.
-- More HTTP clients beyond fetch/axios, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
+- More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
 
 ## Documentation
 
@@ -479,12 +519,13 @@ Ideas we are exploring. Feedback on priorities is welcome.
 | [docs/native.md](docs/native.md) | Rust, C and C++: install, compile database, modes, facts, entry kinds, query specs, gates, env vars, validation numbers |
 | [docs/ts-frameworks.md](docs/ts-frameworks.md) | NestJS, Next.js and Express-style layers, validation on public projects |
 | [docs/value-facts.md](docs/value-facts.md) | request keys, settings, fallback chains, `resolutions` |
+| [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`) |
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | gates, presets, plans dir, environment variables |
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
 | [docs/validation.md](docs/validation.md) | results on public Django and Flutter projects |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 105 tests, adding a plugin |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 130 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
 

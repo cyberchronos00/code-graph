@@ -112,6 +112,12 @@ class LaravelPlugin(FrameworkPlugin):
         prog.prop_rules.append(self._rule_prop)
         prog.func_rules.append(self._rule_func)
         prog.fact_handlers.append(self._handle_fact)
+        from .broadcast import BroadcastAnalysis
+        from .tests import LaravelTests
+        self.broadcast = BroadcastAnalysis(self, prog)
+        self.broadcast.register()          # types channel-callback users before inference
+        self.tests = LaravelTests(self, prog)
+        prog.test_fact_handlers.append(self.tests.handle_fact)
 
     # ---- config/*.php
     def _parse_config(self):
@@ -246,7 +252,7 @@ class LaravelPlugin(FrameworkPlugin):
         prog, b = self.prog, self.b
         self.models: dict[str, dict] = {}
         for c in prog.classes.values():
-            if c.kind != "class" or c.fqcn.startswith("class@anonymous"):
+            if c.kind != "class" or c.fqcn.startswith("class@anonymous") or prog.is_test_class(c.fqcn):
                 continue
             if not any(prog.is_a(c.fqcn, base) for base in MODEL_BASES):
                 continue
@@ -666,6 +672,9 @@ class LaravelPlugin(FrameworkPlugin):
         t0 = _t.time()
         vst = ValueAnalysis(self, prog, b).run()
         vst["seconds"] = round(_t.time() - t0, 2)
+        # after every edge of the files is emitted: channel callbacks / Pest tests re-attribute edges by line range
+        self.stats["broadcast"] = self.broadcast.contribute()
+        self.stats["tests"] = self.tests.contribute()
         st = dict(self.stats)
         st["values"] = vst
         st.update({"connections": len(self.connections), "config_keys": len(self.config_keys)})
@@ -716,9 +725,15 @@ class LaravelPlugin(FrameworkPlugin):
             for rt in r.get("routes") or []:
                 for verb in rt["methods"]:
                     key = f"{verb.upper()} {rt['full_uri']}"
+                    # middleware given as a non-literal expression (a constant, a method call) comes back as a dict: kept
+                    # out of the name list, counted
+                    mws = [m for m in rt.get("middleware") or [] if isinstance(m, str)]
+                    if len(mws) != len(rt.get("middleware") or []):
+                        self.stats["route_middleware_unresolved"] = self.stats.get("route_middleware_unresolved", 0) + 1
                     rid = b.add_node("route", key, name=key, file=f, line=rt["line"], module=module_of(f), lang="php",
                                      entry_kind="http_route",
-                                     attrs={"name": rt.get("name") or None, "middleware": rt.get("middleware"), "uri": rt["full_uri"], "method": verb.upper()})
+                                     attrs={"name": rt.get("name") or None, "middleware": mws if rt.get("middleware") is not None else None,
+                                            "uri": rt["full_uri"], "method": verb.upper()})
                     n += 1
                     act = rt.get("action") or {}
                     if act.get("class"):
@@ -730,7 +745,7 @@ class LaravelPlugin(FrameworkPlugin):
                             b.nodes[rid].module = module_of(c.file)
                         else:
                             self.stats["routes_unresolved_action"] += 1
-                    for mw in rt.get("middleware") or []:
+                    for mw in mws:
                         alias = mw.split(":")[0]
                         cls = aliases.get(alias) or (mw if prog.cls(mw) else None)
                         if cls and prog.cls(cls):
@@ -743,7 +758,7 @@ class LaravelPlugin(FrameworkPlugin):
         b, prog = self.b, self.prog
         self.command_by_class = {}
         for c in prog.classes.values():
-            if c.kind != "class" or not prog.is_a(c.fqcn, "Illuminate\\Console\\Command"):
+            if c.kind != "class" or prog.is_test_class(c.fqcn) or not prog.is_a(c.fqcn, "Illuminate\\Console\\Command"):
                 continue
             sig = prog.find_prop(c.fqcn, "signature") or prog.find_prop(c.fqcn, "name")
             if not sig or not isinstance(sig.get("default"), str):
@@ -783,7 +798,7 @@ class LaravelPlugin(FrameworkPlugin):
     def _jobs_listeners_admin_out(self):
         b, prog = self.b, self.prog
         for c in prog.classes.values():
-            if c.kind != "class":
+            if c.kind != "class" or prog.is_test_class(c.fqcn):
                 continue
             if self._is_job(c.fqcn):
                 h = prog.find_method(c.fqcn, "handle")

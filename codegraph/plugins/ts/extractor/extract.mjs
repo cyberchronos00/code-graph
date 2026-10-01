@@ -24,6 +24,14 @@ const SKIP_FILE = /(\.test|\.spec)\.(ts|js|mts)$|\/node_modules\/|\/\.nuxt\//
 // framework plugins may exclude more (tests, build output) by a regex over the repo-relative path
 const SKIP_REL = cfg.skip_re ? new RegExp(cfg.skip_re) : null
 const SRC_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/
+// test code (Vitest / Jest / Playwright / Cypress): indexed as test nodes unless cfg.index_tests === false; kept out of
+// the application graph by the indexer (TEST_* edges)
+const INDEX_TESTS = cfg.index_tests !== false
+const TEST_FILE_RE = /\.(test|spec|e2e-spec|e2e|cy)\.(t|j)sx?$/
+const TEST_DIR_RE = /(^|\/)(__tests__|e2e|tests?|cypress|playwright)\//
+const TEST_ROOTS = ['e2e', 'test', 'tests', 'cypress', 'playwright', 'src/test', 'src/tests', 'src/e2e']
+const TEST_WALK_SKIP = new Set(['node_modules', 'dist', 'build', 'coverage', 'playwright-report', 'test-results', 'fixtures', '__fixtures__', '__snapshots__'])
+const isTestRel = r => TEST_FILE_RE.test(r) || /(^|\/)__tests__\//.test(r) || TEST_ROOTS.some(d => r.startsWith(d + '/'))
 
 // ---------- file kinds (from the framework plugin: [[prefix, kind], ...]) ----------
 function fileKind(r) {
@@ -70,18 +78,57 @@ if (noConfig) Object.assign(options, { jsx: ts.JsxEmit.Preserve, module: ts.Modu
 if (options.moduleResolution === ts.ModuleResolutionKind.Classic) options.moduleResolution = ts.ModuleResolutionKind.Bundler
 const pathsBase = options.pathsBasePath || options.baseUrl || path.dirname(tsconfigPath)
 
+// symlinks: a link to a file is indexed, a link to a directory is not followed, a dangling link (e.g. to a file
+// outside the checkout) is skipped with a warning; an unreadable directory is skipped, never fatal
+const skippedLinks = []
+function fileEntry(e, p) {
+  if (e.isFile()) return true
+  if (!e.isSymbolicLink()) return false
+  try { return fs.statSync(p).isFile() } catch (err) {
+    skippedLinks.push(rel(p)); process.stderr.write(`codegraph: skipping ${rel(p)}: dangling symlink\n`); return false
+  }
+}
 function walkDir(d, out) {
-  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+  let ents = []
+  try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch (err) { process.stderr.write(`codegraph: skipping ${d}: ${err.code || err}\n`); return out }
+  for (const e of ents) {
     if (e.name === 'node_modules' || e.name.startsWith('.')) continue
     const p = path.join(d, e.name)
     if (SKIP_REL && SKIP_REL.test(rel(p))) continue
     if (e.isDirectory()) walkDir(p, out)
-    else out.push(p)
+    else if (fileEntry(e, p)) out.push(p)
   }
   return out
 }
-const srcDirs = (cfg.src_dirs || ['app']).map(d => path.resolve(ROOT, d)).filter(fs.existsSync)
+let srcDirs = (cfg.src_dirs || ['app']).map(d => path.resolve(ROOT, d)).filter(fs.existsSync)
+// none of the conventional dirs holds code the tsconfig includes: use the top dirs of the tsconfig's own files
+{
+  const inside = f => srcDirs.some(d => f.startsWith(d + path.sep))
+  const own = (parsed.fileNames || []).filter(f => !f.includes('/node_modules/') && !f.endsWith('.d.ts'))
+  if (own.length && !own.some(inside)) {
+    const tops = new Set(own.map(f => { const r = path.relative(ROOT, f).split(path.sep); return r.length > 1 ? r.slice(0, Math.min(r.length - 1, 3)).join(path.sep) : '.' }))
+    const dirs = [...tops].sort((a, b) => a.length - b.length).filter((d, i, all) => !all.slice(0, i).some(p => p === '.' || d.startsWith(p + path.sep)))
+    srcDirs = dirs.map(d => path.resolve(ROOT, d))
+    process.stderr.write(`codegraph: source dirs from tsconfig: ${dirs.join(', ')}\n`)
+  }
+}
 const allFiles = srcDirs.flatMap(d => walkDir(d, []))
+// test files: spec/test files anywhere in the source dirs, plus top-level test trees (e2e/, tests/, ...)
+const testFiles = new Set()
+function walkTests(d, all) {
+  let ents = []
+  try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+  for (const e of ents) {
+    if (e.name.startsWith('.') || TEST_WALK_SKIP.has(e.name)) continue
+    const p = path.join(d, e.name)
+    if (e.isDirectory()) walkTests(p, all)
+    else if (SRC_EXT.test(e.name) && (e.isFile() || (e.isSymbolicLink() && !skippedLinks.includes(rel(p)) && fileEntry(e, p))) && !e.name.endsWith('.d.ts') && (all || isTestRel(rel(p)))) testFiles.add(p)
+  }
+}
+if (INDEX_TESTS) {
+  for (const d of srcDirs) walkTests(d, false)
+  for (const d of TEST_ROOTS) { const p = path.resolve(ROOT, d); if (fs.existsSync(p) && fs.statSync(p).isDirectory()) walkTests(p, true) }
+}
 const vueFiles = allFiles.filter(f => f.endsWith('.vue'))
 const vueSet = new Set(vueFiles)
 
@@ -107,7 +154,8 @@ function blank(src, keep) {
 }
 
 function buildVirtualVue(file) {
-  const src = fs.readFileSync(file, 'utf8')
+  let src
+  try { src = fs.readFileSync(file, 'utf8') } catch (e) { process.stderr.write(`codegraph: skipping ${rel(file)}: ${e.code || e}\n`); return '' }
   let d
   try { d = parseSFC(src, { filename: file }).descriptor } catch (e) { stats.sfc_errors++; return '' }
   const keep = []
@@ -228,7 +276,8 @@ let configFiles = parsed.fileNames
 if (noConfig || cfg.walk_src) configFiles = [...new Set([...configFiles, ...allFiles.filter(f => SRC_EXT.test(f) && !f.endsWith('.d.ts'))])]
 const extraFiles = (cfg.extra_files || []).map(f => path.resolve(ROOT, f)).filter(f => fs.existsSync(f))
 if (extraFiles.some(f => /\.(c|m)?jsx?$/.test(f))) options.allowJs = true
-const rootNames = [...new Set([...configFiles.filter(f => !SKIP_ROOT.test(f) && !(SKIP_REL && SKIP_REL.test(rel(f)))), ...extraFiles]), ...virtual.keys()]
+const rootNames = [...new Set([...configFiles.filter(f => !SKIP_ROOT.test(f) && !(SKIP_REL && SKIP_REL.test(rel(f)))), ...extraFiles, ...testFiles]), ...virtual.keys()]
+if ([...testFiles].some(f => /\.(c|m)?jsx?$/.test(f))) options.allowJs = true
 const program = ts.createProgram({ rootNames, options, host })
 const checker = program.getTypeChecker()
 const tProgram = Date.now()
@@ -240,7 +289,7 @@ const projectSf = sf => {
   let v = projectSfMemo.get(fn)
   if (v !== undefined) return v
   const real = fn.endsWith('.vue.ts') ? fn.slice(0, -3) : fn
-  v = !fn.includes('/node_modules/') && !fn.includes('/.nuxt/') && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real)))
+  v = testFiles.has(real) || (!fn.includes('/node_modules/') && !fn.includes('/.nuxt/') && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))))
   projectSfMemo.set(fn, v)
   return v
 }
@@ -314,9 +363,31 @@ const fileNode = new Map()        // abs real path -> node id
 const usedIds = new Set()
 function mkId(kind, key) { let id = `${kind}:${key}`, i = 2; while (usedIds.has(id)) id = `${kind}:${key}~${i++}`; usedIds.add(id); return id }
 
+// describe / it / test (Vitest, Jest, Mocha, Playwright test, Cypress): {name, describe, framework}
+const TEST_FNS = new Set(['it', 'test', 'describe', 'suite', 'context', 'specify'])
+const TEST_MODS = new Set(['only', 'skip', 'todo', 'concurrent', 'serial', 'parallel', 'fixme', 'fail', 'slow', 'sequential', 'describe', 'each', 'skipIf', 'runIf'])
+let testFramework = 'test'
+function testCallInfo(node) {
+  let c = unwrap(node.expression)
+  if (ts.isCallExpression(c)) c = unwrap(c.expression)   // it.each([...])('name', fn) / test.skipIf(x)('name', fn)
+  let base = c, mods = []
+  while (ts.isPropertyAccessExpression(base)) { mods.unshift(base.name.text); base = unwrap(base.expression) }
+  if (!ts.isIdentifier(base) || !TEST_FNS.has(base.text) || !mods.every(m => TEST_MODS.has(m))) return null
+  const a0 = node.arguments[0] && unwrap(node.arguments[0])
+  if (!a0 || !(ts.isStringLiteralLike(a0) || ts.isTemplateExpression(a0))) return null
+  if (!node.arguments.some(a => isFn(unwrap(a)))) return null
+  const describe = base.text === 'describe' || base.text === 'suite' || base.text === 'context' || mods.includes('describe')
+  const name = ts.isStringLiteralLike(a0) ? a0.text : a0.getText().slice(1, -1)
+  return { name: name.replace(/\s+/g, ' ').slice(0, 160), describe, framework: testFramework }
+}
 const sourceFiles = program.getSourceFiles().filter(projectSf)
 for (const sf of sourceFiles) {
   const real = realFile(sf), r = rel(real), fk = fileKind(r)
+  const isTestSf = testFiles.has(real)
+  if (isTestSf) {
+    const txt = sf.text
+    testFramework = /@playwright\/test/.test(txt) ? 'playwright' : /from ['"]vitest['"]/.test(txt) ? 'vitest' : /\bcy\./.test(txt) ? 'cypress' : /@jest\/globals|jest\./.test(txt) ? 'jest' : 'test'
+  }
   if (!real.endsWith('.vue')) stats.ts_files++
   if (sf.parseDiagnostics && sf.parseDiagnostics.length) {   // the parser recovers; count files that needed recovery
     stats.syntax_error_files = (stats.syntax_error_files || 0) + 1
@@ -325,7 +396,7 @@ for (const sf of sourceFiles) {
   const fid = real.endsWith('.vue') ? `${fk}:${r}` : `module:${r}`
   usedIds.add(fid)
   fileNode.set(real, fid)
-  nodes.push({ id: fid, kind: real.endsWith('.vue') ? fk : 'module', name: r, file: r, line: 1, end_line: sf.getLineAndCharacterOfPosition(sf.end).line + 1, attrs: { file_kind: fk } })
+  nodes.push({ id: fid, kind: real.endsWith('.vue') ? fk : 'module', name: r, file: r, line: 1, end_line: sf.getLineAndCharacterOfPosition(sf.end).line + 1, attrs: { file_kind: fk, ...(isTestSf ? { test: true } : {}) } })
   if (real.endsWith('.vue')) continue // SFC: references are attributed to the component node
   const visit = (node, qual, parentId, inObj) => {
     let name = null, kind = null, body = null, wrapped = null
@@ -362,6 +433,21 @@ for (const sf of sourceFiles) {
       } else if (ts.isPropertyAccessExpression(l) && (unwrap(l.expression).getText() === 'exports' || isModuleExports(l.expression)) && f) {
         name = l.name.text; kind = 'function'; body = f
       }
+    } else if (ts.isCallExpression(node) && isTestSf && testCallInfo(node)) {
+      const tc = testCallInfo(node)
+      const cb = [...node.arguments].reverse().map(unwrap).find(isFn)
+      if (tc.describe) {
+        if (cb) ts.forEachChild(cb, c => visit(c, qual ? `${qual} > ${tc.name}` : tc.name, parentId))
+        for (const a of node.arguments) if (unwrap(a) !== cb) visit(a, qual, parentId)
+        return
+      }
+      const q = qual ? `${qual} > ${tc.name}` : tc.name
+      const id = mkId('test', `${r}#${q}`)
+      nodes.push({ id, kind: 'test', name: q, file: r, line: lineOf(node, sf), end_line: sf.getLineAndCharacterOfPosition(node.end).line + 1,
+        doc: null, parent: parentId, attrs: { framework: tc.framework, test: true } })
+      stats.test_cases = (stats.test_cases || 0) + 1
+      if (cb) { declId.set(cb, id); declId.set(node, id); ts.forEachChild(cb, c => visit(c, q, id)) }
+      return
     } else if (ts.isCallExpression(node)) {
       const rc = routeCallInfo(node)
       if (rc) {
@@ -412,6 +498,8 @@ for (const sf of sourceFiles) {
   }
   ts.forEachChild(sf, c => visit(c, '', fid))
 }
+for (const n of nodes) if (testFiles.has(path.resolve(ROOT, n.file)) && n.kind !== 'test') n.attrs = { ...(n.attrs || {}), test: true }
+stats.test_files = testFiles.size
 const nodeById = new Map(nodes.map(n => [n.id, n]))
 
 // ---------- symbol -> target node ----------
@@ -439,6 +527,11 @@ function importTypeTarget(d) {
   if (!msym) return null
   const name = ts.isIdentifier(tn.qualifier) ? tn.qualifier.text : tn.qualifier.right.text
   return checker.getExportsOfModule(msym).find(s => s.name === name) || null
+}
+// a Nuxt auto-import global (`const x: typeof import('…').x`), if that is all the symbol is
+function autoImportDecl(sym) {
+  const ds = sym.declarations || []
+  return ds.length === 1 && ts.isVariableDeclaration(ds[0]) && ds[0].type && ts.isImportTypeNode(ds[0].type) ? ds[0] : null
 }
 // returns {id, conf, via} or null
 function resolveSymbol(sym, conf = 'exact', via = []) {
@@ -523,11 +616,80 @@ function fnDeclOf(sym) {
   }
   return null
 }
+// configured values: runtime config (useRuntimeConfig().public.X / config.public.X) and env (process.env.X,
+// import.meta.env.X) become {runtimeConfig.X} / {env.X} placeholders; the Python side folds in their values
+// (nuxt.config runtimeConfig defaults, .env files). `X || 'default'` records the in-code default.
+const CONF_PH = /^\u0001(runtimeConfig|env)\.[^\u0002]*\u0002$/
+const configDefaults = {}
+function envKey(e) {
+  e = unwrap(e)
+  if (!(ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e))) return null
+  const name = ts.isPropertyAccessExpression(e) ? e.name.text : (ts.isStringLiteralLike(unwrap(e.argumentExpression)) ? unwrap(e.argumentExpression).text : null)
+  if (!name) return null
+  const o = unwrap(e.expression).getText().replace(/\s+/g, '')
+  if (o === 'process.env' || o === 'import.meta.env' || o === 'Bun.env' || o === 'Deno.env') return 'env.' + name
+  if (/(^|\.)public$|useRuntimeConfig\(\)$|^\$config$|runtimeConfig$/.test(o)) return 'runtimeConfig.' + name
+  return null
+}
+// destructured config: const { apiBase } = useRuntimeConfig().public / const { public: { apiBase } } = useRuntimeConfig()
+function bindingConfigKey(d) {
+  if (!ts.isBindingElement(d)) return null
+  const name = (d.propertyName || d.name).getText()
+  let pat = d.parent, outer = []
+  while (pat && ts.isBindingElement(pat.parent)) { outer.unshift((pat.parent.propertyName || pat.parent.name).getText()); pat = pat.parent.parent }
+  const decl = pat && pat.parent
+  if (!decl || !ts.isVariableDeclaration(decl) || !decl.initializer) return null
+  const init = unwrap(decl.initializer).getText().replace(/\s+/g, '')
+  const full = [init, ...outer].join('.')
+  if (/^(process\.env|import\.meta\.env)$/.test(full)) return 'env.' + name
+  if (/(useRuntimeConfig\(\)|\$config|runtimeConfig)(\.public)?$/.test(full) || /(^|\.)public$/.test(full)) {
+    if (/(useRuntimeConfig\(\)|\$config|runtimeConfig)$/.test(full) && name === 'public') return null
+    return 'runtimeConfig.' + name
+  }
+  if (/^(config|runtimeConfig)$/.test(init) && outer[0] === 'public') return 'runtimeConfig.' + name
+  return null
+}
+// ref / computed unwrapping: x.value where x = computed(() => expr) | ref(expr) | useX() returning one of them
+function refValue(e, depth, ctx) {
+  e = unwrap(e)
+  if (!e || depth > 8) return null
+  if (ts.isIdentifier(e)) {
+    const sym = checker.getSymbolAtLocation(e)
+    const d = sym && (sym.declarations || [])[0]
+    if (d && ts.isVariableDeclaration(d) && d.initializer) return refValue(d.initializer, depth + 1, ctx)
+    return null
+  }
+  if (!ts.isCallExpression(e)) return null
+  const callee = unwrap(e.expression)
+  const cname = ts.isIdentifier(callee) ? callee.text : (ts.isPropertyAccessExpression(callee) ? callee.name.text : '')
+  // computed(() => expr) only: a ref's initial value (ref(null), ref('')) is not what it holds at request time
+  if (cname === 'computed') {
+    const a = unwrap(e.arguments[0])
+    if (!a) return null
+    if (isFn(a)) {
+      const rs = returnExprs(a)
+      if (!rs.length || rs.length > 4) return null
+      let vals = []
+      for (const r of rs) vals.push(...evalStr(r, depth + 1, ctx).vals)
+      return { vals: [...new Set(vals)].slice(0, MAXV), conf: 'resolved' }
+    }
+    return null
+  }
+  const fn = fnDeclOf(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(callee) ? callee.name : callee))
+  if (fn && projectDecl(fn)) {
+    const rs = returnExprs(fn)
+    if (!rs.length || rs.length > 4) return null
+    let vals = []
+    for (const r of rs) { const v = refValue(r, depth + 1, { fn, args: e.arguments, outer: ctx }); if (v) vals.push(...v.vals) }
+    return vals.length ? { vals: [...new Set(vals)].slice(0, MAXV), conf: 'resolved' } : null
+  }
+  return null
+}
 // evalStr -> {vals:[...], conf:'exact'|'resolved', params:Set}
 function evalStr(e, depth = 0, ctx = {}) {
   e = unwrap(e)
   const R = (vals, conf = 'exact') => ({ vals, conf })
-  if (!e || depth > 8) return R([PH('?')], 'resolved')
+  if (!e || depth > 12) return R([PH('?')], 'resolved')
   if (ts.isStringLiteralLike(e)) return R([e.text])
   if (ts.isNumericLiteral(e)) return R([e.text])
   if (ts.isTemplateExpression(e)) {
@@ -562,8 +724,10 @@ function evalStr(e, depth = 0, ctx = {}) {
       ctx.params && ctx.params.add(e.text)
       return R([PH(e.text)])
     }
+    if (d && ts.isBindingElement(d)) { const k = bindingConfigKey(d); if (k) return R([PH(k)]) }
     if (d && ts.isVariableDeclaration(d) && d.initializer && (ts.getCombinedNodeFlags(d) & ts.NodeFlags.Const)) {
       const v = evalStr(d.initializer, depth + 1, ctx)
+      if (v.vals.length === 1 && CONF_PH.test(v.vals[0])) return R(v.vals, v.conf)
       if (v.vals.length === 1 && /^\u0001[^\u0002]*\u0002$/.test(v.vals[0])) return R([PH(e.text)], v.conf)
       return R(v.vals, v.conf === 'exact' && !(d.getSourceFile() !== e.getSourceFile()) ? 'exact' : 'resolved')
     }
@@ -574,8 +738,11 @@ function evalStr(e, depth = 0, ctx = {}) {
     const lu = literalUnion(e); if (lu) return R(lu, 'resolved')
     return R([PH(e.text)])
   }
-  if (ts.isPropertyAccessExpression(e) && /(^|\.)public$|useRuntimeConfig\(\)$/.test(unwrap(e.expression).getText())) {
-    return R([PH('runtimeConfig.' + e.name.text)])
+  const ek = envKey(e)
+  if (ek) return R([PH(ek)])
+  if (ts.isPropertyAccessExpression(e) && e.name.text === 'value') {
+    const rv = refValue(e.expression, depth + 1, ctx)
+    if (rv && rv.vals.length && !rv.vals.some(v => v.includes(PH('?')))) return R(rv.vals, 'resolved')
   }
   if (ts.isElementAccessExpression(e) || ts.isPropertyAccessExpression(e)) {
     const objSym = checker.getSymbolAtLocation(unwrap(e.expression))
@@ -596,12 +763,13 @@ function evalStr(e, depth = 0, ctx = {}) {
   if (ts.isCallExpression(e)) {
     const callee = unwrap(e.expression)
     const cname = ts.isIdentifier(callee) ? callee.text : (ts.isPropertyAccessExpression(callee) ? callee.name.text : '')
+    // value-preserving wrappers do not count against the depth budget
     if (['encodeURIComponent', 'encodeURI', 'String', 'Number'].includes(cname) && e.arguments[0]) {
-      const v = evalStr(e.arguments[0], depth + 1, ctx)
+      const v = evalStr(e.arguments[0], depth, ctx)
       return R(v.vals, 'resolved')
     }
     if (['toString', 'trim', 'replace', 'replaceAll', 'toLowerCase', 'toUpperCase'].includes(cname) && ts.isPropertyAccessExpression(callee)) {
-      const v = evalStr(callee.expression, depth + 1, ctx)
+      const v = evalStr(callee.expression, depth, ctx)
       return R(v.vals, cname === 'toString' ? v.conf : 'resolved')
     }
     const fn = fnDeclOf(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(callee) ? callee.name : callee))
@@ -618,6 +786,12 @@ function evalStr(e, depth = 0, ctx = {}) {
   }
   if (ts.isBinaryExpression(e) && (e.operatorToken.kind === ts.SyntaxKind.BarBarToken || e.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)) {
     const l = evalStr(e.left, depth + 1, ctx)
+    if (l.vals.length === 1 && CONF_PH.test(l.vals[0])) {
+      const r = evalStr(e.right, depth + 1, ctx)
+      const lits = r.vals.filter(v => v && !v.includes('\u0001'))
+      if (lits.length) configDefaults[l.vals[0].slice(1, -1)] = lits[0]
+      return R(l.vals, 'resolved')
+    }
     if (l.vals.length === 1 && /^\u0001[^\u0002]*\u0002$/.test(l.vals[0])) return R(l.vals, 'resolved')
     return R([PH(e.left.getText().split('.').pop().replace(/\W/g, '') || '?')])
   }
@@ -651,6 +825,8 @@ function axiosCreateOf(expr, depth = 0) {
   let sym = ts.isPropertyAccessExpression(expr) ? checker.getSymbolAtLocation(expr.name) : checker.getSymbolAtLocation(expr)
   for (let i = 0; sym && i < 10; i++) {
     if (sym.flags & ts.SymbolFlags.Alias) { sym = checker.getAliasedSymbol(sym); continue }
+    const ai = autoImportDecl(sym)
+    if (ai) { sym = importTypeTarget(ai); continue }
     const d = (sym.declarations || []).find(projectDecl)
     if (!d) return null
     if ((ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d)) && d.initializer) { const o = axiosCreateOf(d.initializer, depth + 1); return o && { cfg: o.cfg, via: [...o.via, 'var'] } }
@@ -687,11 +863,18 @@ function clientCreateOf(expr, depth = 0) {
       const inner = clientCreateOf(c.expression, depth + 1)   // api.extend({...}) on an instance
       if (inner) return { lib: inner.lib, cfg: expr.arguments[0] || inner.cfg, parent: inner }
     }
+    // factory: useApiClient() returning $fetch.create({...}) / ky.create({...})
+    const fn = fnDeclOf(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(c) ? c.name : c))
+    if (fn && projectDecl(fn)) {
+      for (const r of returnExprs(fn)) { const o = clientCreateOf(r, depth + 1); if (o) return o }
+    }
     return null
   }
   let sym = ts.isPropertyAccessExpression(expr) ? checker.getSymbolAtLocation(expr.name) : checker.getSymbolAtLocation(expr)
   for (let i = 0; sym && i < 8; i++) {
     if (sym.flags & ts.SymbolFlags.Alias) { try { sym = checker.getAliasedSymbol(sym) } catch { return null } continue }
+    const ai = autoImportDecl(sym)
+    if (ai) { sym = importTypeTarget(ai); continue }
     const d = (sym.declarations || []).find(projectDecl)
     if (!d) return null
     if (ts.isVariableDeclaration(d) && d.initializer) return clientCreateOf(d.initializer, depth + 1)
@@ -796,6 +979,131 @@ function addEdge(src, dst, kind, file, line, conf, attrs) {
 }
 const callSites = []
 const deferredParamCalls = []   // api calls whose URL depends on an enclosing-function parameter
+const subscriptions = []        // realtime channel subscriptions (laravel-echo, pusher-js, useEcho hooks)
+const visits = []               // browser tests opening a page: page.goto('/x'), cy.visit('/x')
+
+// ---------- realtime: laravel-echo / pusher-js ----------
+const ECHO_SUB = { private: 'private', channel: 'public', join: 'presence', encryptedPrivate: 'private-encrypted' }
+const ECHO_HOOKS = { useEcho: 'private', useEchoPublic: 'public', useEchoPresence: 'presence', useEchoNotification: 'private', useEchoModel: 'private' }
+function declOfExpr(e) {
+  try {
+    const sym = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(e) ? e.name : e)
+    return sym && (sym.declarations || [])[0]
+  } catch { return null }
+}
+// how sure we are that `expr` is a laravel-echo (lib='echo') / pusher-js (lib='pusher') client: 'exact' | 'resolved' | 'heuristic' | null
+function clientKind(expr, lib) {
+  const e = unwrap(expr)
+  if (!e) return null
+  const tre = lib === 'echo' ? /\bEcho\b/ : /\bPusher\b/
+  const pkg = lib === 'echo' ? 'laravel-echo' : 'pusher-js'
+  try { const s = checker.typeToString(checker.getNonNullableType(checker.getTypeAtLocation(e))); if (tre.test(s)) return 'exact' } catch { }
+  if (FW.importSource && FW.importSource(e) === pkg) return 'exact'
+  const d = declOfExpr(e)
+  if (d && (ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d) || ts.isParameter(d) || ts.isPropertySignature(d))) {
+    if (d.type && tre.test(d.type.getText())) return 'exact'
+    if (d.initializer && new RegExp('new\\s+' + (lib === 'echo' ? 'Echo' : 'Pusher') + '\\b').test(d.initializer.getText())) return 'exact'
+  }
+  const txt = e.getText()
+  if (lib === 'echo' && /^(window\.|globalThis\.)?Echo$/.test(txt)) return 'resolved'
+  if (new RegExp('(^|\\.)\\$?' + lib + '(Instance|Client)?$', 'i').test(txt)) return 'heuristic'
+  return null
+}
+function strVals(e) {
+  if (!e) return []
+  const v = evalStr(e)
+  return shapeDedupe(v.vals).map(render)
+}
+// .listen('X') / .listenToAll / .notification / .listenForWhisper chained on (or called on a const holding) a subscription
+function listenedEvents(call) {
+  const ev = new Set()
+  const add = (m, c) => {
+    if (m === 'listen' && c.arguments[0]) strVals(c.arguments[0]).forEach(x => ev.add(x))
+    else if (m === 'listenToAll') ev.add('*')
+    else if (m === 'notification') ev.add('(notification)')
+    else if (m === 'listenForWhisper' && c.arguments[0]) strVals(c.arguments[0]).forEach(x => ev.add('whisper:' + x))
+  }
+  let n = call
+  for (let i = 0; i < 20; i++) {
+    const pa = n.parent
+    if (!(pa && ts.isPropertyAccessExpression(pa) && pa.expression === n && pa.parent && ts.isCallExpression(pa.parent))) break
+    add(pa.name.text, pa.parent); n = pa.parent
+  }
+  let holder = n.parent
+  while (holder && (ts.isAwaitExpression(holder) || ts.isParenthesizedExpression(holder) || ts.isAsExpression(holder))) holder = holder.parent
+  if (holder && ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name)) {
+    const sym = checker.getSymbolAtLocation(holder.name)
+    let scope = holder
+    while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+    const v = x => {
+      if (ts.isCallExpression(x) && ts.isPropertyAccessExpression(x.expression) && ts.isIdentifier(unwrap(x.expression.expression))
+          && checker.getSymbolAtLocation(unwrap(x.expression.expression)) === sym) add(x.expression.name.text, x)
+      ts.forEachChild(x, v)
+    }
+    if (scope && sym) v(scope)
+  }
+  // this.channel = Echo.private(...) / ctx.channel = Echo.join(...): listeners chained on `<any>.channel` in the same
+  // file (matched by property name)
+  if (holder && ts.isBinaryExpression(holder) && holder.operatorToken.kind === ts.SyntaxKind.EqualsToken && holder.right === n
+      && ts.isPropertyAccessExpression(holder.left)) {
+    const prop = holder.left.name.text
+    const v = x => {
+      if (ts.isPropertyAccessExpression(x) && x.name.text === prop && x !== holder.left) {
+        let c = x
+        for (let i = 0; i < 20; i++) {
+          const pa = c.parent
+          if (!(pa && ts.isPropertyAccessExpression(pa) && pa.expression === c && pa.parent && ts.isCallExpression(pa.parent))) break
+          add(pa.name.text, pa.parent); c = pa.parent
+        }
+      }
+      ts.forEachChild(x, v)
+    }
+    v(holder.getSourceFile())
+  }
+  return [...ev]
+}
+function realtimeSub(node, callee) {
+  if (!ts.isCallExpression(node)) return null
+  if (ts.isIdentifier(callee) && ECHO_HOOKS[callee.text] && node.arguments[0]) {
+    let names
+    if (callee.text === 'useEchoModel') {
+      const m = strVals(node.arguments[0]), id = node.arguments[1] ? strVals(node.arguments[1]) : ['{id}']
+      names = m.flatMap(a => id.map(b => `${a}.${b}`))
+    } else names = strVals(node.arguments[0])
+    const evs = callee.text === 'useEchoNotification' ? ['(notification)'] : (node.arguments[1] && callee.text !== 'useEchoModel' ? strVals(node.arguments[1]) : [])
+    const lib = FW.importSource ? FW.importSource(callee) : null
+    return { client: callee.text, names, visibility: ECHO_HOOKS[callee.text], events: evs, conf: lib && /echo/.test(lib) ? 'exact' : 'resolved' }
+  }
+  if (!ts.isPropertyAccessExpression(callee) || !node.arguments[0]) return null
+  const m = callee.name.text
+  if (ECHO_SUB[m]) {
+    const k = clientKind(callee.expression, 'echo')
+    if (!k) return null
+    return { client: 'echo', names: strVals(node.arguments[0]), visibility: ECHO_SUB[m], events: listenedEvents(node), conf: k }
+  }
+  if (m === 'subscribe') {
+    const k = clientKind(callee.expression, 'pusher')
+    if (!k) return null
+    const out = { client: 'pusher', names: [], visibility: 'public', events: [], conf: k }
+    for (const n of strVals(node.arguments[0])) {
+      const pm = n.match(/^(private-encrypted-|private-|presence-)(.*)$/)
+      if (pm) { out.visibility = pm[1] === 'presence-' ? 'presence' : pm[1] === 'private-' ? 'private' : 'private-encrypted'; out.names.push(pm[2]) } else out.names.push(n)
+    }
+    // channel.bind('event', cb) on the returned channel
+    const evs = new Set()
+    let holder = node.parent
+    if (holder && ts.isPropertyAccessExpression(holder) && holder.name.text === 'bind' && holder.parent && ts.isCallExpression(holder.parent) && holder.parent.arguments[0]) strVals(holder.parent.arguments[0]).forEach(x => evs.add(x))
+    if (holder && ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name)) {
+      const sym = checker.getSymbolAtLocation(holder.name)
+      let scope = holder; while (scope && !ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+      const v = x => { if (ts.isCallExpression(x) && ts.isPropertyAccessExpression(x.expression) && x.expression.name.text === 'bind' && ts.isIdentifier(unwrap(x.expression.expression)) && checker.getSymbolAtLocation(unwrap(x.expression.expression)) === sym && x.arguments[0]) strVals(x.arguments[0]).forEach(e => evs.add(e)); ts.forEachChild(x, v) }
+      if (scope && sym) v(scope)
+    }
+    out.events = [...evs]
+    return out
+  }
+  return null
+}
 
 function edgeKindFor(targetId, isCall) {
   const k = targetId.split(':')[0]
@@ -935,10 +1243,29 @@ function handleCall(node, cur, sf, r, encFn) {
     http = { client: callee.text, method, urlExpr: node.arguments[0], base: bv ? bv.vals : null, baseConf: bv ? bv.conf : 'exact', baseVia: [],
       query: fq ? keysOut(requestKeys(fq)) : undefined, body: fb ? keysOut(requestKeys(fb)) : undefined }
   }
+  // browser / API tests: page.goto('/x'), cy.visit('/x'); Playwright request.get('/api/x'), cy.request('/api/x')
+  const testSf = testFiles.has(realFile(sf))
+  if (testSf && !http && ts.isCallExpression(node) && node.arguments[0]) {
+    const recvTxt = ts.isPropertyAccessExpression(callee) ? unwrap(callee.expression).getText() : ''
+    if (ts.isPropertyAccessExpression(callee) && ((callee.name.text === 'goto' && /(^|\.)page$|Page$/i.test(recvTxt)) || (callee.name.text === 'visit' && recvTxt === 'cy'))) {
+      for (const u of strVals(node.arguments[0])) visits.push({ src: cur, file: r, line, url: u, via: `${recvTxt}.${callee.name.text}` })
+    } else if (ts.isPropertyAccessExpression(callee) && (HTTP_METHODS.has(callee.name.text) || callee.name.text === 'fetch') && /(^|\.)request$|apiContext|requestContext/i.test(recvTxt)) {
+      const o = node.arguments[1]; const mo = objProp(o, 'method')
+      const method = callee.name.text === 'fetch' ? (mo && ts.isStringLiteralLike(unwrap(mo)) ? unwrap(mo).text.toUpperCase() : 'GET') : callee.name.text.toUpperCase()
+      http = { client: 'playwright-request', method, urlExpr: node.arguments[0], base: null, baseConf: 'exact', baseVia: [] }
+    } else if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'request' && recvTxt === 'cy') {
+      const a0 = unwrap(node.arguments[0])
+      if (ts.isObjectLiteralExpression(a0)) { const mo = objProp(a0, 'method'), uo = objProp(a0, 'url'); if (uo) http = { client: 'cypress', method: mo && ts.isStringLiteralLike(unwrap(mo)) ? unwrap(mo).text.toUpperCase() : 'GET', urlExpr: uo, base: null, baseConf: 'exact', baseVia: [] } }
+      else if (node.arguments.length >= 2 && ts.isStringLiteralLike(a0) && /^[A-Z]+$/.test(a0.text)) http = { client: 'cypress', method: a0.text, urlExpr: node.arguments[1], base: null, baseConf: 'exact', baseVia: [] }
+      else http = { client: 'cypress', method: 'GET', urlExpr: node.arguments[0], base: null, baseConf: 'exact', baseVia: [] }
+    }
+  }
+  const sub = realtimeSub(node, callee)
+  if (sub && sub.names.length) subscriptions.push({ src: cur, file: r, line, ...sub, test: testSf || undefined })
   if (http) {
     const params = new Set()
     const v = http.urlExpr ? evalStr(http.urlExpr, 0, { params }) : { vals: [PH('?')], conf: 'resolved' }
-    const rec = { src: cur, file: r, line, client: http.client, method: http.method, template: inTpl || undefined,
+    const rec = { src: cur, file: r, line, client: http.client, method: http.method, template: inTpl || undefined, test: testSf || undefined,
       urls: shapeDedupe(v.vals).map(render), url_conf: v.conf, base: http.base && shapeDedupe(http.base).map(render), base_conf: http.baseConf, base_via: http.baseVia,
       expr: http.urlExpr ? http.urlExpr.getText().slice(0, 160) : null, query: http.query, body: http.body }
     // URL built from a parameter of the enclosing function: expand at its call sites (1 level)
@@ -980,7 +1307,7 @@ function generatedClientCall(node, callee) {
 function kyOrInstanceCall(node, callee) {
   if (!FW.importSource) return null
   let recv = null, method = null, optsArg = null
-  if (ts.isIdentifier(callee)) { recv = callee; optsArg = node.arguments[1] }
+  if (ts.isIdentifier(callee) || ts.isCallExpression(callee)) { recv = callee; optsArg = node.arguments[1] }   // api(...) / useApi()(...)
   else if (ts.isPropertyAccessExpression(callee) && HTTP_METHODS.has(callee.name.text)) { recv = callee.expression; method = callee.name.text.toUpperCase(); optsArg = node.arguments[1] }
   else return null
   let lib = FW.importSource(recv), inst = null
@@ -1051,6 +1378,8 @@ stats.nodes = nodes.length
 stats.edges = edges.length
 stats.api_calls = apiCalls.length
 stats.api_calls_param_expanded = expanded
+stats.subscriptions = subscriptions.length
+stats.test_visits = visits.length
 stats.program_files = program.getSourceFiles().length
 stats.seconds_program = (tProgram - t0) / 1000
 stats.seconds_total = (Date.now() - t0) / 1000
@@ -1059,5 +1388,7 @@ stats.unknown_tags = Object.fromEntries(top)
 stats.seconds_fw_facts = tFw / 1000
 stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
 stats.config = { tsconfig: noConfig ? null : rel(tsconfigPath), root_files: rootNames.length }
-fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts, stats }))
+fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts,
+  subscriptions, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
+  skipped_links: [...new Set(skippedLinks)].sort(), stats }))
 console.log(JSON.stringify(stats))

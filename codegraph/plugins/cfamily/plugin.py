@@ -21,6 +21,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+from ...core.fsutil import keep_file
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from ..native import gates as G
 from ..native import runner, scipread
@@ -64,7 +65,7 @@ def source_files(root: Path, limit: int | None = None):
                        and not (Path(dp) / d / "CMakeCache.txt").exists())
         for f in sorted(fn):
             ext = os.path.splitext(f)[1]
-            if ext in C_EXT or ext in CPP_EXT or ext in HDR_EXT:
+            if (ext in C_EXT or ext in CPP_EXT or ext in HDR_EXT) and keep_file(os.path.join(dp, f)):
                 yield (f if rel_dir == "." else f"{rel_dir}/{f}")
                 n += 1
                 if limit and n >= limit:

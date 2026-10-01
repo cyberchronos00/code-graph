@@ -81,7 +81,20 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     "HANDLES_STATE": (False, "UI code checks for a state class (is / switch pattern / BlocListener)"),
     "NAVIGATES_TO": (False, "UI code navigates to a page/route (Navigator.push, context.go, named route)"),
     "PARSES_JSON": (False, "code parses an HTTP response into a model (X.fromJson) or serialises a request body (toJson)"),
+    # realtime broadcasting (Laravel channels, Echo / pusher-js subscriptions)
+    "AUTHORIZES_CHANNEL": (True, "broadcasting auth route -> channel whose authorization callback it runs"),
+    "BROADCASTS_ON": (False, "broadcast event -> channel it publishes on (broadcastOn(); attrs.name = evaluated channel name)"),
+    "SUBSCRIBES_CHANNEL": (True, "client code subscribes to a channel (Echo.private / channel / join, pusher.subscribe, useEcho)"),
+    "MATCHES_CHANNEL": (True, "client channel subscription matched to a backend channel pattern (cross-repo link)"),
+    "LISTENS_FOR": (False, "client channel subscription listens for a backend broadcast event (.listen('Name'))"),
+    # test code (tests/, *.spec.ts, ...). Never propagating: tests do not change blast radius, caller counts or entry
+    # tagging; the `tests` query walks these on purpose
+    "TEST_CALLS": (False, "test code calls / dispatches to code (attrs.orig = the original edge kind)"),
+    "TEST_USES": (False, "test code touches a table, config key, class... (attrs.orig = the original edge kind)"),
+    "TEST_HTTP": (False, "test sends an HTTP request to a route ($this->getJson('/x'), Pest get(), Playwright request)"),
+    "TEST_VISITS": (False, "browser test opens a frontend page (Playwright / Cypress page.goto('/x'))"),
 }
+TEST_EDGE_KINDS = ("TEST_CALLS", "TEST_USES", "TEST_HTTP", "TEST_VISITS")
 PROPAGATING = sorted(k for k, (p, _) in EDGE_KINDS.items() if p)
 
 ENTRY_KINDS = ("http_route", "websocket", "artisan_command", "management_command", "scheduled", "queue_job", "listener",
@@ -98,6 +111,9 @@ DEV_ENTRY_KINDS = ("test", "bench", "example", "build_script")
 # operator-only, like artisan commands.
 ENTRY_KINDS += ("message_handler", "cli_command")
 RUNTIME_ENTRY_KINDS += ("message_handler",)
+# realtime: a channel authorization callback (Laravel Broadcast::channel) runs on every private/presence subscription
+ENTRY_KINDS += ("channel_auth",)
+RUNTIME_ENTRY_KINDS += ("channel_auth",)
 OPERATOR_ENTRY_KINDS += ("cli_command",)
 
 

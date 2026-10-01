@@ -17,6 +17,12 @@ Matching is deterministic (no guessing):
     placeholder fully matches a route literal (heuristic, e.g. export.{format} ~ export.csv);
   - method must match (HEAD ~ GET); the most specific route (most literal==literal segments)
     wins; ties are kept and marked heuristic (ambiguous).
+
+Realtime: client channel subscriptions (channel_sub:<name>, from Echo / pusher-js / useEcho) get MATCHES_CHANNEL ->
+the backend channel pattern they fit (`orders.{id}` ~ `orders.{orderId}`, a literal fits a {param} segment), and
+LISTENS_FOR -> the backend broadcast event named by `.listen('X')` (`App\\Events\\X` by Echo's default namespace,
+`.listen('.name')` by broadcastAs()). Endpoints called only from tests (attrs.test_only) are matched too, so
+`tests` can follow them to routes, but they do not count in the match statistics or the uncalled-routes list.
 """
 from __future__ import annotations
 
@@ -105,7 +111,22 @@ def suffix_candidates(path: str, routes: list[dict]):
     return out
 
 
-def match_endpoint(method: str, path: str, routes: list[dict], origin_kind: str = "api", origin: str | None = None) -> dict:
+def match_endpoint(method: str, path: str, routes: list[dict], origin_kind: str = "api", origin: str | None = None,
+                   base_prefix: str | None = None) -> dict:
+    """base_prefix: path part of a configured base URL already folded into `path` (http node attrs.base); when the
+    full path matches nothing, the path without it is tried as an unknown-origin path (heuristic)."""
+    if base_prefix and path.startswith(base_prefix + "/"):
+        res = match_endpoint(method, path, routes, origin_kind, origin)
+        if res["matched"]:
+            return res
+        alt = match_endpoint(method, path[len(base_prefix):], routes, "unknown", origin)
+        if alt["matched"]:
+            for m in alt["matched"]:
+                m["uri_variant"] = f"{m['uri_variant']}, without configured base {base_prefix}"
+                m["confidence"] = "heuristic"
+            alt["path"] = path
+            return alt
+        return res
     if "{?}" in path or path in ("", "/") or re.fullmatch(r"(/\{[^{}]*\})*", path or ""):
         return {"matched": [], "reason": "dynamic URL: path not statically resolvable", "path": path}
     if origin_kind == "other":
@@ -222,7 +243,9 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
     new_edges = []
     for ep_id, attrs in db.execute("SELECT id, attrs FROM f.nodes WHERE kind='http'"):
         a = json.loads(attrs or "{}")
-        res = match_endpoint(a["method"], a["path"], routes, a.get("origin_kind", "api"), a.get("origin"))
+        from .plugins.ts.baseurl import base_path
+        bp = base_path((a.get("base") or {}).get("value") or "") if a.get("base") else None
+        res = match_endpoint(a["method"], a["path"], routes, a.get("origin_kind", "api"), a.get("origin"), base_prefix=bp or None)
         res.update({"endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, [])})
         results.append(res)
         rmap = {r["id"]: r for r in routes}
@@ -232,6 +255,10 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
                               json.dumps({"client_path": a["path"], "uri_variant": m["uri_variant"], "segments": m["segments"]}), None))
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)", new_edges)
     db.commit()
+    stats.update(link_channels(db, backend_name))
+    test_only = {r[0] for r in db.execute("SELECT id FROM f.nodes WHERE kind='http' AND json_extract(attrs,'$.test_only')=1")}
+    test_results = [r for r in results if r["endpoint"] in test_only]
+    results = [r for r in results if r["endpoint"] not in test_only]
     # ---- payload / field contract checks + routes without a client caller
     from .payload import Checker
     fe_nodes = {r[0]: json.loads(r[1] or "{}") for r in db.execute(
@@ -288,6 +315,7 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
     for r in results:
         if not r["matched"]:
             reasons[r["reason"].split(":")[0].split(" (")[0]] += 1
+    stats.update({"test_endpoints": len(test_results), "test_endpoints_matched": sum(1 for r in test_results if r["matched"])})
     stats.update({"endpoints": n_ep, "endpoints_matched": m_ep, "call_sites": len(sites), "call_sites_matched": m_sites,
                   "endpoint_match_confidence": dict(conf_ct), "unmatched_reasons": dict(reasons),
                   "ambiguous_endpoints": sum(1 for r in results if len(r["matched"]) > 1),
@@ -296,11 +324,82 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
                   "link_seconds": round(time.time() - t0, 2)})
     db.execute("DETACH DATABASE b")
     db.execute("DETACH DATABASE f")
-    store.set_meta(project=f"{backend_name}+{frontend_name}", stats=stats, repos=[backend_name, frontend_name],
+    from .coverage import for_graph
+    cov = {}
+    for name, path in ((backend_name, backend_db), (frontend_name, frontend_db)):
+        got = for_graph(GraphStore(path))
+        cov.update({name: next(iter(got.values()))} if len(got) == 1 else got)
+    store.set_meta(project=f"{backend_name}+{frontend_name}", stats=stats, repos=[backend_name, frontend_name], coverage=cov,
                    sources={backend_name: str(Path(backend_db).resolve()), frontend_name: str(Path(frontend_db).resolve())},
                    indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()))
     db.close()
     return {"stats": stats, "results": results, "payload_issues": issues, "uncalled_routes": uncalled}
+
+
+def channel_links(chans, subs, events, on):
+    """Pure matching shared by cg link and single-repo indexing (backend + Echo client in one checkout).
+    chans: [(id, attrs, file, line)], subs: [(id, attrs)], events: {event id: attrs}, on: {channel id: {event ids}}.
+    Returns (edges [(src, dst, kind, confidence, attrs, file, line)], stats)."""
+    from .plugins.php.strings import channel_match, same_shape
+    rows, st = [], {"channel_subscriptions": len(subs), "channel_subscriptions_matched": 0, "listened_events": 0,
+                    "listened_events_matched": 0}
+    for sid, a in subs:
+        name = a.get("name") or sid.split(":", 1)[1]
+        exact = [c for c in chans if same_shape(name, c[1].get("pattern") or c[0][8:])]
+        hits = exact or [c for c in chans if channel_match(name, c[1].get("pattern") or c[0][8:])]
+        conf = "exact" if exact and len(exact) == 1 else ("resolved" if len(hits) == 1 else "heuristic")
+        for cid, ca, cf, cl in hits:
+            ea = {"client_name": name}
+            cv, sv = ca.get("visibility"), a.get("visibility")
+            if cv and sv and cv != sv and not (cv == "private" and sv == "private-encrypted"):
+                ea["visibility_mismatch"] = f"client subscribes as {sv}, backend channel is {cv}"
+            rows.append((sid, cid, "MATCHES_CHANNEL", conf, ea, cf, cl))
+        if hits:
+            st["channel_subscriptions_matched"] += 1
+        # events: .listen('OrderShipped') -> App\\Events\\OrderShipped; .listen('.custom') -> broadcastAs() == 'custom'
+        near = set().union(*(on.get(c[0], set()) for c in hits)) if hits else set()
+        for ev in a.get("events") or []:
+            if ev == "*" or ev.startswith(("(", "whisper:", "client-", "pusher:")):
+                continue
+            st["listened_events"] += 1
+            if ev.startswith("."):
+                cands = [e for e, ea in events.items() if ea.get("broadcast_as") == ev[1:]]
+            else:
+                fq = ev.replace(".", "\\")
+                cands = [e for e in events if e == f"event:{fq}" or e == f"event:App\\Events\\{fq}"]
+                if not cands:
+                    cands = [e for e, ea in events.items() if not ea.get("broadcast_as") and e.rsplit("\\", 1)[-1] == ev.rsplit(".", 1)[-1].rsplit("\\", 1)[-1]]
+                if not cands:   # broadcastAs() names used without the leading dot (pusher-js bind / useEcho)
+                    cands = [e for e, ea in events.items() if ea.get("broadcast_as") == ev]
+            pref = [e for e in cands if e in near] or cands
+            for e in pref:
+                c = "exact" if e in near and len(pref) == 1 else "resolved" if len(pref) == 1 else "heuristic"
+                rows.append((sid, e, "LISTENS_FOR", c, {"event_name": ev}, None, None))
+            if pref:
+                st["listened_events_matched"] += 1
+    return rows, st
+
+
+def link_channels(db, backend_name: str) -> dict:
+    """MATCHES_CHANNEL (client subscription -> backend channel) and LISTENS_FOR (subscription -> broadcast event)."""
+    chans = [(r[0], json.loads(r[1] or "{}"), r[2], r[3]) for r in db.execute("SELECT id, attrs, file, line FROM b.nodes WHERE kind='channel'")]
+    subs = [(r[0], json.loads(r[1] or "{}")) for r in db.execute("SELECT id, attrs FROM f.nodes WHERE kind='channel_sub'")]
+    if not subs:
+        return {}
+    events = {}
+    for r in db.execute("SELECT id, attrs FROM b.nodes WHERE kind='event'"):
+        a = json.loads(r[1] or "{}")
+        if a.get("broadcast"):
+            events[r[0]] = a
+    on = defaultdict(set)
+    for r in db.execute("SELECT src, dst FROM b.edges WHERE kind='BROADCASTS_ON'"):
+        on[r[1]].add(r[0])
+    rows, st = channel_links(chans, subs, events, on)
+    db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)",
+                   [(s, d, k, f"{backend_name}/{f}" if f else None, l, c, CONFIDENCE_RANK[c], json.dumps(a), None)
+                    for s, d, k, c, a, f, l in rows])
+    db.commit()
+    return st
 
 
 def write_match_report(res: dict, out_prefix: str) -> None:

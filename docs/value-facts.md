@@ -48,7 +48,7 @@ Result for `resolutions timezone` on the sample (abridged):
 [B] input:timezone > setting:reports.timezone > 'UTC'   (1 site)
     SalesReportService::build  $timezone  (expr)  @bookstore-api/app/Services/SalesReportService.php:17
   [A] vs [B]: same up to input:timezone; then [A] column:orders.customer_timezone vs [B] setting:reports.timezone; same final fallback 'UTC'
-  GET /v1/main/admin/reports/top  -> chain B via GET /v1/{store}/admin/reports/top
+  GET /api/v1/main/admin/reports/top  -> chain B via GET /v1/{store}/admin/reports/top
      request app/composables/useReports.ts#useReports.fetchTop @bookstore-web/app/composables/useReports.ts:9  builder keys: timezone: conditional
        called by app/pages/reports/[id].vue @bookstore-web/app/pages/reports/[id].vue:10  sends timezone=no  (passes: category_id, date_from)
        client fallback @bookstore-web/app/pages/reports/[id].vue:12: rows.value[0]?.timezone ?? 'UTC'

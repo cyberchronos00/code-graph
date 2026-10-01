@@ -1,6 +1,6 @@
 # Known limitations
 
-code-graph is beta. This page maps out where the current analysis ends, so you know how far each answer reaches.
+code-graph is beta (v0.3). This page maps out where the current analysis ends, so you know how far each answer reaches.
 Issues and pull requests that extend it are welcome.
 
 - **Types are flow-insensitive** (one type set per variable per function), and PHP generics are outside the current scope. When a receiver is unresolvable, a unique-method-name fallback is used (`heuristic`, with a stoplist).
@@ -9,7 +9,6 @@ Issues and pull requests that extend it are welcome.
 - Next to index:
   - seeders as entry points;
   - `Artisan::command` closures;
-  - broadcast channels;
   - observers fired by model writes (observer nodes exist but aren't propagated from writes).
 - Filament resources: all methods of a resource/page class count as admin entry points.
 - Dynamic connection names are normalized (e.g. `tenant_{store.id}`). String-built column/table names are not resolved.
@@ -26,13 +25,25 @@ Issues and pull requests that extend it are welcome.
 - SCIP importer: references are attributed to the nearest enclosing definition by range, and scip-php closures show up as anonymous functions.
 - Go and Java come in through SCIP: detection plus indexer recipes exist, and the recipes are next in line for testing.
 - TS/Vue/Nuxt:
-  - auto-imports and global components resolve through `.nuxt`, so run `nuxi prepare` after installing deps;
+  - auto-imports and global components resolve through `.nuxt` when it exists. A clean checkout without `.nuxt` gets
+    generated stand-ins for the project's own composables, utils, stores and components (a warning suggests
+    `npx nuxi prepare`); without `node_modules`, Vue / Nuxt built-ins (`ref`, `useFetch`, …) stay unresolved, and
+    module-provided auto-imports and `imports.dirs` beyond `composables/`, `utils/` and `stores/` need `.nuxt`;
+  - the source directory is `srcDir` from `nuxt.config`, else `app/` or `src/` when they hold Nuxt directories, else
+    the repo root; layers (`extends`) are not merged;
   - library components (Nuxt UI etc.) are not nodes; `<component :is>`, `Teleport`/`Transition` are not resolved;
   - functions declared inside a `.vue` `<script setup>` collapse into the component node;
   - parameter-dependent URLs are expanded one call level only; numeric literal args stay `{param}`;
   - the axios detection is by type name (`AxiosInstance`/`AxiosStatic`); other HTTP wrappers need to be added;
   - bases not traced to `axios.create` fall back to a heuristic suffix match;
-  - no navigation edges (`NuxtLink to`, `navigateTo`), no parent/child nested-page links, no laravel-echo channel links;
+  - no navigation edges (`NuxtLink to`, `navigateTo`), no parent/child nested-page links;
+  - base URLs from runtime config and env are folded into endpoint paths when their value is in the repo
+    (`nuxt.config` `runtimeConfig` defaults, `.env`, `.env.example`, `NUXT_PUBLIC_*` overrides, `process.env.X || '…'`
+    defaults in code). Values set only in CI or the deployment stay an unknown origin; `ref()` values and `baseURL`
+    assigned inside interceptors / `onRequest` hooks are not tracked (`computed(() => …)` is). When the path with the
+    configured base matches no route, `link` retries without it and labels the match `heuristic`;
+  - a request whose whole URL is an opaque value (a wrapper's parameter without callers) names no endpoint
+    (`http_url_unknown` in the index stats);
   - i18n keys are one global namespace (per-SFC `<i18n>` scopes are not separated);
   - no server/ or api/ handlers (Nitro routes would need a small addition);
   - request keys: builder functions are followed up to 4 levels; call-site argument keys one level (direct callers of
@@ -51,7 +62,8 @@ Issues and pull requests that extend it are welcome.
     (`getServerSideProps` etc.) only the CALLS made inside them are recorded;
   - monorepo roots are not split automatically: index each app (`apps/api`, `apps/web`) separately and `link` them;
   - JavaScript without types resolves only what the checker can infer (CommonJS exports, object literals);
-  - calls through generated API clients or env-configured bases have an unknown origin, so they always match `heuristic`.
+  - calls through generated API clients, or bases configured outside the repo, have an unknown origin, so they always
+    match `heuristic`.
 - Value facts / `resolutions`:
   - concept matching is lexical (head word of the target / first source key), so `$code` holding a timezone is missed and
     `--within` is a substring filter;
@@ -114,6 +126,15 @@ Issues and pull requests that extend it are welcome.
   - auto_route v4 annotation configs (`@MaterialAutoRouter(routes: [...])`) are not read, and `@RoutePage` pages carry no path;
   - route tables generated from data (`demos.map((d) => GoRoute(path: d.route))`) and custom routers are not modelled
     as pages; navigation targets to them stay `unresolved` page nodes.
+- Broadcast channels and tests (details in [channels-and-tests.md](channels-and-tests.md#limits)):
+  - channel names that cannot be evaluated keep a `{?}` segment, fully dynamic names are skipped, and custom
+    broadcasters are not modelled;
+  - Livewire Echo listeners (`echo-private:…` keys in PHP components) and server-side pusher clients are not client
+    subscriptions;
+  - a channel's checks are the calls its callback makes; whether they really restrict access is for the reader;
+  - transitive test paths are static: a browser test that stubs the API still reaches the backend through its page;
+  - tests are found by naming conventions (PHPUnit / Pest under `tests/`, `*.test.*` / `*.spec.*`, `__tests__/`,
+    `e2e/`, `cypress/`, `playwright/`); parameterised cases are one node per declaration.
 - Payload check: one route per endpoint (ambiguous matches are skipped); server shapes are static, so framework-generated
   bodies (validation 422, auth 401, 500 pages) are not known; enum checks need `choices=` or a `Literal`/`Enum` annotation.
 
@@ -131,6 +152,9 @@ Issues and pull requests that extend it are welcome.
 - **An empty answer is only as complete as the coverage.** Replies that come back empty, or name an unknown symbol,
   end with a coverage line; for code in a language that is not covered or only heuristic, use normal search and file
   reading. Code generated at build or run time, and files outside the indexed root, are not counted at all.
+- **Symlinks.** Dangling symlinks (for example ones that point outside the checkout) are skipped with a warning per
+  file instead of stopping the language; the TypeScript stats list them as `skipped_dangling_symlinks`, and the
+  TypeScript walker does not follow symlinked directories.
 
 ## Rust, C and C++
 

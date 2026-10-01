@@ -82,6 +82,36 @@ class GraphBuilder:
                                gate=g["gate"] if g else None)
 
 
+    def move_edges(self, moves: dict[str, list[tuple[int, int, str]]]) -> int:
+        """Re-attribute edges to a finer-grained source: moves = {src: [(lo, hi, new_src), ...]}; an edge from src
+        whose line lies in [lo, hi] now starts at new_src (the innermost range wins). Used for closures that are
+        their own graph nodes (channel callbacks, Pest tests) while the PHP plugin emits their facts from the file."""
+        n = 0
+        for key, e in list(self.edges.items()):
+            rs = moves.get(e.src)
+            if not rs or e.line is None:
+                continue
+            hit = [r for r in rs if r[0] <= e.line <= r[1]]
+            if not hit:
+                continue
+            new_src = min(hit, key=lambda r: r[1] - r[0])[2]
+            del self.edges[key]
+            nk = (new_src,) + key[1:]
+            if nk not in self.edges and not (new_src == e.dst and e.kind == "CALLS"):
+                e.src = new_src
+                self.edges[nk] = e
+            n += 1
+        return n
+
+    def retype_edge(self, key: tuple, kind: str, **attrs) -> None:
+        e = self.edges.pop(key)
+        e.kind = kind
+        e.attrs = {**e.attrs, **attrs}
+        nk = (key[0], key[1], kind) + key[3:]
+        if nk not in self.edges:
+            self.edges[nk] = e
+
+
 class LanguagePlugin(ABC):
     name: str = "?"
 

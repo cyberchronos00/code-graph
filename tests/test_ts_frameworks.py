@@ -157,8 +157,8 @@ def test_link_nuxt_frontend_to_nest_backend():
     assert res["stats"]["endpoints_matched"] >= 4
     c = sqlite3.connect(build()["web_nest_db"])
     m = dict(c.execute("SELECT src, dst FROM edges WHERE kind='MATCHES_ROUTE'").fetchall())
-    assert m["http:GET /v1/main/admin/reports/top"] == "route:GET /v1/{store}/admin/reports/top"
-    assert m["http:GET /v1/main/admin/reports/top/export.csv"] == "route:GET /v1/{store}/admin/reports/top/export.{format}"
+    assert m["http:GET /api/v1/main/admin/reports/top"] == "route:GET /v1/{store}/admin/reports/top"
+    assert m["http:GET /api/v1/main/admin/reports/top/export.csv"] == "route:GET /v1/{store}/admin/reports/top/export.{format}"
 
 
 # ---------------------------------------------------------------- Next.js

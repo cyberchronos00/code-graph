@@ -12,9 +12,14 @@ meta(key, value)                                 -- corpus, commit, stats
 ```
 
 **Node kinds:** class, interface, trait, method (incl. functions), property, external_class (vendor placeholder), route, command, schedule, job,
-event, listener, observer, admin (Filament surface), table, column, connection, config, env, script (migrations/routes/config files).
+event, listener, observer, admin (Filament surface), table, column, connection, config, env, script (migrations/routes/config files),
+channel (`channel:<pattern>`, a broadcast channel; attrs `pattern`, `visibility`, `declared`, `callback` / `handler`).
+**test** (every language): one test case (`test:<file>::<name>`; attrs `framework` = phpunit, pest, vitest, jest,
+playwright, cypress; `suite`). Test edges never propagate (see below).
 TS/Vue (lang='ts'): module (TS file), page, component, layout, app (Vue SFCs), composable, store, function, class, type,
-http (client endpoint `http:<METHOD> <path template>`), i18n.
+http (client endpoint `http:<METHOD> <path template>`; attrs `origin`, `origin_kind`, `base` when a configured base URL
+was folded in, `test_only` when only tests call it), channel_sub (a client channel subscription `channel_sub:<name>`;
+attrs `visibility`, `events`, `clients`, `test_only`), i18n.
 Rust / C / C++ (lang='rust', 'c', 'cpp'; see [native.md](native.md)): crate, mod (Rust module `mod:<path>`), file
 (C/C++ translation unit or header), function, method, struct, enum, union, class, typedef, type_alias, trait, field,
 variant / enumerator, const, static, global, macro, ffi (extern block declaration), plus fact nodes `feature:<pkg>/<f>`,
@@ -45,6 +50,11 @@ GATED_BY✓ (→ feature/cfg/define), INCLUDES✓ (file → header); IMPLEMENTED
 virtual dispatch (`attrs.dispatch`), and IMPLEMENTS links a Rust type to its trait.
 Python/Django: USES_SCHEMA (handler → ninja Schema / DRF serializer, attrs.role request|response).
 Dart/Flutter: EMITS_STATE (bloc → state), HANDLES_STATE (UI → state check), NAVIGATES_TO (UI → page), PARSES_JSON (→ model).
+Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (event → channel; attrs `name`, `visibility`,
+`site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs
+`visibility_mismatch`), LISTENS_FOR (channel_sub → event).
+Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind), TEST_HTTP (test → route),
+TEST_VISITS (browser test → page). None of them propagate, so tests never count as callers.
 MAPS_TO_TABLE, HAS_RELATION, CONTAINS, EXTENDS, IMPLEMENTS, USES_TRAIT, INSTANTIATES, INJECTS, REFERENCES (`X::class`), OBSERVED_BY, BINDS, DEFINES.
 
 **Confidence:**
@@ -53,7 +63,7 @@ MAPS_TO_TABLE, HAS_RELATION, CONTAINS, EXTENDS, IMPLEMENTS, USES_TRAIT, INSTANTI
 - `heuristic`: a unique-method-name fallback, or a column-name literal.
 
 **Entry kinds:**
-- Runtime: `http_route`, `websocket` (Django Channels routes), `scheduled`, `queue_job` (Laravel jobs, Celery tasks), `listener` (Laravel listeners, Django signal receivers), `message_handler` (Nest microservice / WebSocket / gRPC handlers).
+- Runtime: `http_route`, `channel_auth` (a broadcast channel's authorization callback), `websocket` (Django Channels routes), `scheduled`, `queue_job` (Laravel jobs, Celery tasks), `listener` (Laravel listeners, Django signal receivers), `message_handler` (Nest microservice / WebSocket / gRPC handlers).
 - Operator: `artisan_command`, `management_command` (Django `manage.py <name>`), `cli_command` (nest-commander), `admin_panel` (Filament, Django admin).
 - `observer`.
 - Native runtime: `main` (bin targets, `#[tokio::main]`, C/C++ `main`), `ffi_export` (`#[no_mangle]`).

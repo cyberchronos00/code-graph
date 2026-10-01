@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ...core.fsutil import is_real_file
 from ...core.model import EXACT, HEURISTIC, RESOLVED, CONFIDENCE_RANK
 from .program import Ctx, DartProgram, DClass, DFunc, DVar, ctor_type, last_name, root_name, split_type, walk_repr
 
@@ -58,7 +59,7 @@ def load_env_files(root: Path, pkg_dirs: list[str]) -> dict[str, tuple[str, str]
         cands = sorted(set(list(base.glob(".env")) + list(base.glob(".env*")) + list(base.glob("assets/.env*")) + list(base.glob("env/.env*"))),
                        key=lambda p: (p.name != ".env", p.name.endswith((".example", ".sample", ".template")), str(p)))
         for p in cands:
-            if not p.is_file() or p.stat().st_size > 200_000:
+            if not is_real_file(p) or p.stat().st_size > 200_000:
                 continue
             try:
                 txt = p.read_text(errors="replace")

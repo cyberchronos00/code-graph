@@ -1,0 +1,1 @@
+{ "name": "taskboard-web", "private": true, "dependencies": { "nuxt": "^4.4.2", "laravel-echo": "^2.0.0", "pusher-js": "^8.4.0" }, "devDependencies": { "vitest": "^3.0.0", "@playwright/test": "^1.50.0" } }

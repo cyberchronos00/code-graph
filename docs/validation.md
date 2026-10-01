@@ -1,6 +1,7 @@
 # Validation on public projects
 
-The Python/Django and Dart/Flutter plugins were checked against shallow clones of well-known open-source projects
+The Python/Django and Dart/Flutter plugins, Laravel broadcasting and test indexing, and the Nuxt layout
+handling were checked against shallow clones of well-known open-source projects
 (default branch, October 2026). Numbers are from `python -m codegraph.cli index <repo>` on a single 8-core Linux box;
 wall time includes the Dart extractor (facts cache cold) but not the one-off `dart compile exe` of the extractor.
 
@@ -56,3 +57,37 @@ Gaps seen:
 
 Before the analyzer 10 upgrade, 499 lichess files failed to parse (Dart 3.13 primary constructors); they now parse with
 the `primary-constructors` experiment fallback.
+
+## Laravel broadcasting and tests
+
+Shallow clones of Laravel apps that use `Broadcast::channel` (default branch, October 2026). "Channels" lists the
+declared and undeclared channels found; publishers were compared by hand with every `ShouldBroadcast` event's
+`broadcastOn()`, subscriptions and listened events with every `Echo` / pusher call in the repo's own JS.
+
+| Project | Channels | Publishers (events → channel) | Client subscriptions matched | Listened events matched | Notes |
+|---|---|---|---|---|---|
+| UNIT3D | 2 (presence chatroom, private chatter) | 4 / 4 | 2 / 2 (Alpine + Echo in `resources/js`) | 3 / 3 that have a backend event (`.new.ping` and whispers have none) | presence visibility comes from the publishers |
+| koel | 2 | 2 / 2 | 2 / 2 (Echo and pusher-js `private-…`) | 2 / 2 | the base event's `broadcastOn()` returns `[]` (correctly no channel) |
+| invoiceninja | 4 (2 declared, 2 undeclared public) | 10 / 10 events that name a channel | n/a (the frontend is a separate repo) | n/a | one broadcast event returns `[]` |
+| pixelfed | 4 | 9 / 9 | n/a (no Echo client in the repo) | n/a | `live.chat.{id}` has a callback but its 7 events publish on a public `Channel`: flagged PUBLIC PUBLISH |
+| coolify | 2 | 18 / 18 | 0: listeners are Livewire `echo-private:` keys in PHP (not modelled) | n/a | route middleware given as arrays is skipped |
+
+Tests: TEST_HTTP edges, 10 sampled at random per project and checked against the cited source line (verb, path or
+route name, target route): 40 / 40 correct.
+
+| Project | Test cases | HTTP test calls | Matched to a route | Unmatched (main reason) |
+|---|---|---|---|---|
+| UNIT3D | 861 (852 Pest) | 601 | 538 | 59 (incl. 9 calls to a route name shared by a whole route group, left out on purpose) |
+| koel | 1,673 PHPUnit (+ Vitest) | 741 (449 through `getAs()` / `postAs()` helpers) | 502 | 237 (Subsonic routes are registered in a `foreach`) |
+| invoiceninja | 5,981 PHPUnit (+ Playwright) | 2,023 | 1,970 | 46 |
+| pixelfed | 1,410 (1,175 Pest) | 592 | 566 | 20 |
+
+## Nuxt layouts and clean checkouts
+
+Shallow clones indexed without `npm install` and without `.nuxt` (the clean-checkout path):
+
+| Project | Layout | Pages / layouts / components found | Checks |
+|---|---|---|---|
+| breeze-nuxt (Nuxt 3 client for a Laravel Breeze API) | source at the repo root | 8 / 2 / 14 (all) | 8 / 8 HTTP calls found with method and path (7 through a `$fetch.create` instance auto-imported from `utils/`); the `runtimeConfig.public.backendUrl` default resolves from `nuxt.config.ts` |
+| elk | `app/` | 59 / 2 / 196 (all) | RENDERS edges: 20 / 20 sampled correct; of the 25 components without a RENDERS edge, 14 are rendered through `<component :is>` and 11 from TS (`h()`, TipTap node views) |
+

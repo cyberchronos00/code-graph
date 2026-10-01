@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+from ...core.fsutil import keep_file
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
 SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "env", ".env", "__pycache__", "site-packages", ".tox", ".nox",
@@ -261,7 +262,8 @@ class PyProgram:
             for fn in sorted(fns):
                 if fn.endswith(".py"):
                     p = os.path.join(dp, fn)
-                    out.append(os.path.relpath(p, self.root))
+                    if keep_file(p):
+                        out.append(os.path.relpath(p, self.root))
         return out
 
     def load(self, skip_migrations=True) -> dict:
@@ -280,7 +282,7 @@ class PyProgram:
                     continue
                 src = p.read_text(encoding="utf-8", errors="replace")
                 tree = ast.parse(src, filename=rel)
-            except (SyntaxError, ValueError, RecursionError) as ex:
+            except (SyntaxError, ValueError, RecursionError, OSError) as ex:
                 self.parse_errors.append({"file": rel, "error": f"{type(ex).__name__}: {getattr(ex, 'msg', str(ex))}",
                                           "line": getattr(ex, "lineno", None)})
                 continue

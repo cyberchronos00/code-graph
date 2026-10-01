@@ -7,6 +7,11 @@ maps its facts into the graph:
          (component, page, layout, ... as named by the framework plugin), http (client endpoint)
   edges  IMPORTS, CALLS, USES_COMPOSABLE, USES_STORE, RENDERS, INSTANTIATES, REFERENCES_TYPE,
          HTTP_CALLS (function -> http:<METHOD> <path template>)
+         SUBSCRIBES_CHANNEL (function -> channel_sub:<name>: laravel-echo Echo.private/channel/join, pusher-js
+         subscribe, useEcho hooks; attrs.events = .listen('X') names)
+  tests  spec / test files (Vitest, Jest, Playwright, Cypress) are indexed with attrs.test and one `test` node per
+         it() / test(); their HTTP calls become TEST_HTTP edges, page.goto / cy.visit become TEST_VISITS to the page
+         (resolved after the framework plugin set page routes, see codegraph/tests_index.py)
 
 Framework plugins (Nuxt) configure the extractor through `TsContext.extractor_cfg` in
 register_hooks(): tsconfig (e.g. .nuxt/tsconfig.app.json for auto-import globals), the
@@ -19,6 +24,7 @@ import re
 import shutil
 import hashlib
 import os
+import sys
 import subprocess
 import tempfile
 import time
@@ -27,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from ...core.model import CONFIDENCE_RANK
+from ...core.fsutil import stat_key
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
 EXTRACTOR_DIR = Path(__file__).parent / "extractor"
@@ -79,6 +86,9 @@ def join_url(base: str | None, url: str) -> str:
     return base.rstrip("/") + "/" + url.lstrip("/")
 
 
+LARAVEL_ASSET_DIRS = ("resources/js", "resources/ts", "resources/assets/js", "resources/scripts", "app/javascript")
+
+
 class TypeScriptPlugin(LanguagePlugin):
     name = "typescript"
 
@@ -88,6 +98,8 @@ class TypeScriptPlugin(LanguagePlugin):
     def detect(self, project: Project) -> bool:
         if project.exists("tsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
             return True
+        if project.exists("package.json") and any((project.root / d).is_dir() for d in LARAVEL_ASSET_DIRS):
+            return True     # Laravel / Rails-style app with a plain-JS frontend under resources/js (allowJs)
         from ..tsweb.common import has_server_framework   # plain-JS server projects (Express, Koa, ...): allowJs
         return project.exists("package.json") and has_server_framework(project)
 
@@ -107,7 +119,10 @@ class TypeScriptPlugin(LanguagePlugin):
             return {"status": "skipped", "reason": "node not installed"}
         self.ensure_extractor()
         ctx = TsContext(project=project)
-        ctx.extractor_cfg = {"root": str(project.root), "tsconfig": "tsconfig.json", "kinds": [], "src_dirs": ["src", "app"]}
+        # src/ and app/ (SPA / Next / Nuxt 4), and the Laravel + Vite asset dirs; the extractor falls back to the
+        # tsconfig's own files when none of these hold any
+        ctx.extractor_cfg = {"root": str(project.root), "tsconfig": "tsconfig.json", "kinds": [],
+                             "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]}
         for fw in frameworks:
             fw.register_hooks(ctx)
         self.program = ctx
@@ -165,36 +180,108 @@ class TypeScriptPlugin(LanguagePlugin):
                         api_origins.add(o)
         self.api_origins = sorted(api_origins)
         expanded_helpers = {(a["via_helper"]["at"]) for a in facts["api_calls"] if a.get("via_helper")}
-        n_http = 0
+        # configured base URLs ({runtimeConfig.X} / {env.X}): their path part prefixes the client path
+        from .baseurl import ConfigValues, base_path, is_config_ph, API_NAME
+        cv = ConfigValues(project.root, facts.get("config_defaults") or {})
+        base_hits, base_unresolved = {}, set()
+
+        def prefer_config(vals):
+            """A value built from a configured URL or an opaque override (remote config, a parameter) -> the
+            configured one: `remote || config.public.apiBase` is read as the configured API."""
+            if not vals or len(vals) < 2:
+                return vals
+            orig = [normalize_client_url(v or "")[1].get("origin") if v else None for v in vals]
+            # a config key whose configured value is empty is unset at run time: the other branch is what runs
+            unset = [is_config_ph(o) and (cv.lookup(o[1:-1]) or ("x",))[0] == "" for o in orig]
+            if any(unset) and not all(unset):
+                vals = [v for v, u in zip(vals, unset) if not u]
+                orig = [o for o, u in zip(orig, unset) if not u]
+            if len(vals) < 2:
+                return vals
+            if any(is_config_ph(o) for o in orig):
+                keep = [v for v, o in zip(vals, orig) if is_config_ph(o) or not (o and o.startswith("{"))]
+                return keep or vals
+            return vals
+        n_http = n_url_unknown = 0
         for a in facts["api_calls"]:
             at = f"{a['file']}:{a['line']}"
             if not a.get("via_helper") and at in expanded_helpers:
                 a["expanded_at_callsites"] = True
                 continue  # helper whose URL is a parameter: represented by its call-site expansions
-            bases = a.get("base") or [None]
+            bases = prefer_config(a.get("base")) or [None]
             for base in bases:
-                for url in a["urls"]:
+                for url in prefer_config(a["urls"]):
                     path, info = normalize_client_url(join_url(base, url))
                     origin = info.get("origin")
-                    if origin and origin in api_origins:
+                    if path == "/" and not base and origin and origin.startswith("{") and not is_config_ph(origin):
+                        # the whole URL is an opaque value (a wrapper's parameter without callers): no endpoint to name
+                        n_url_unknown += 1
+                        continue
+                    resolved_base = None
+                    if is_config_ph(origin):
+                        hit = cv.lookup(origin[1:-1])
+                        bp = base_path(hit[0]) if hit else None
+                        if bp is not None:
+                            resolved_base = {"placeholder": origin, "value": hit[0], "from": hit[1]}
+                            path = (bp + path) if path != "/" else (bp or "/")
+                            base_hits[origin] = resolved_base
+                        else:
+                            base_unresolved.add(origin)
+                    if resolved_base:
+                        okind = "env"           # a configured server URL whose value is in the repo
+                    elif origin and origin in api_origins:
                         okind = "api"
-                    elif origin and (origin.startswith("{runtimeConfig.") or "://" in origin):
+                    elif is_config_ph(origin) and origin.startswith("{env."):
+                        okind = "unknown"       # env value not in the repo: the base is some configured server
+                    elif is_config_ph(origin):
+                        okind = "env" if API_NAME.search(origin) else "other"
+                    elif origin and "://" in origin:
                         okind = "other"
                     elif origin:
                         okind = "unknown"
                     else:
                         okind = "same-origin" if not base else "api"
-                    key = f"{a['method']} {path}" if okind in ("api", "unknown") else f"{a['method']} {origin or ''}{path}"
+                    key = f"{a['method']} {path}" if okind in ("api", "unknown", "env") else f"{a['method']} {origin or ''}{path}"
                     nid = builder.add_node("http", key, key, fqn=key, lang="ts", attrs={"method": a["method"], "path": path, "client": a["client"],
                                                                                 "origin": origin, "origin_kind": okind})
+                    if resolved_base:
+                        builder.nodes[nid].attrs["base"] = resolved_base
                     ctx.http_nodes.setdefault(nid, {"method": a["method"], "path": path, "calls": []})["calls"].append(a)
-                    conf = min_conf(a["url_conf"], a.get("base_conf") or "exact")
-                    builder.add_edge(a["src"], nid, "HTTP_CALLS", file=a["file"], line=a["line"], confidence=conf,
+                    conf = min_conf(a["url_conf"], a.get("base_conf") or "exact", "resolved" if resolved_base else "exact")
+                    if a.get("test"):
+                        builder.nodes[nid].attrs.setdefault("test_only", True)
+                    else:
+                        builder.nodes[nid].attrs["test_only"] = False
+                    builder.add_edge(a["src"], nid, "TEST_HTTP" if a.get("test") else "HTTP_CALLS", file=a["file"], line=a["line"], confidence=conf,
                                      client=a["client"], url=url, base=base, expr=a.get("expr"), origin=info.get("origin"),
                                      query=info.get("query"), via_helper=a.get("via_helper"),
                                      query_keys=a.get("query"), body_keys=a.get("body"),
                                      helper_template=a.get("expanded_at_callsites"))
                     n_http += 1
+        # realtime subscriptions -> channel_sub:<name> client channel nodes
+        n_sub = 0
+        for sub in facts.get("subscriptions") or []:
+            for name in sub["names"]:
+                if not name or not PH.sub("", name).strip(". -_:"):
+                    continue   # fully dynamic channel name
+                nid = builder.add_node("channel_sub", name, name, fqn=name, lang="ts", attrs={"name": name})
+                n = builder.nodes[nid]
+                n.attrs["visibility"] = sub["visibility"] if n.attrs.get("visibility") in (None, sub["visibility"]) else "mixed"
+                n.attrs["events"] = sorted(set(n.attrs.get("events") or []) | set(sub.get("events") or []))
+                n.attrs["clients"] = sorted(set(n.attrs.get("clients") or []) | {sub["client"]})
+                if not sub.get("test"):
+                    n.attrs["test_only"] = False
+                else:
+                    n.attrs.setdefault("test_only", True)
+                builder.add_edge(sub["src"], nid, "TEST_CALLS" if sub.get("test") else "SUBSCRIBES_CHANNEL", file=sub["file"],
+                                 line=sub["line"], confidence=sub["conf"], client=sub["client"], visibility=sub["visibility"],
+                                 events=sub.get("events") or None)
+                n_sub += 1
+        # browser tests opening pages: resolved to page nodes once the framework plugin has set page routes
+        pv = getattr(builder, "pending_visits", None)
+        if pv is None:
+            pv = builder.pending_visits = []
+        pv += [{"src": v["src"], "url": v["url"], "file": v["file"], "line": v["line"], "via": v.get("via")} for v in facts.get("visits") or []]
         # literal fallbacks (`x ?? y ?? 'UTC'`) -> resolution nodes (concept queries)
         n_fb = 0
         for fb in facts.get("fallbacks") or []:
@@ -210,7 +297,13 @@ class TypeScriptPlugin(LanguagePlugin):
             builder.add_edge(fb["owner"], rid, "HAS_RESOLUTION", file=fb["file"], line=fb["line"], confidence="exact")
             n_fb += 1
         st = dict(facts["stats"])
-        st.update({"literal_fallbacks": n_fb})
+        if facts.get("skipped_links"):
+            st["skipped_dangling_symlinks"] = facts["skipped_links"]
+            print(f"typescript: skipped {len(facts['skipped_links'])} dangling symlink(s): "
+                  + ", ".join(facts["skipped_links"][:5]), file=sys.stderr)
+        st.update({"literal_fallbacks": n_fb, "channel_subscriptions": n_sub,
+                   "config_base_urls": {k: f"{v['value']} ({v['from']})" for k, v in sorted(base_hits.items())},
+                   "config_base_urls_unresolved": sorted(base_unresolved), "http_url_unknown": n_url_unknown})
         st.update({"extract_seconds": round(t_extract, 2), "http_edges": n_http, "http_endpoints": len(ctx.http_nodes),
                    "api_origins": self.api_origins})
         return st
@@ -226,13 +319,19 @@ def facts_fingerprint(root, cfg: dict) -> str:
     h = hashlib.sha256()
     for f in (EXTRACTOR, EXTRACTOR_DIR / "package-lock.json"):
         h.update(f.read_bytes() if f.exists() else b"")
-    h.update(json.dumps(cfg, sort_keys=True).encode())
+    # generated stand-in types live in a fresh temp dir per run; their content follows from the project files
+    c = {k: v for k, v in cfg.items() if not (cfg.get("generated_types") and k in ("tsconfig", "components_dts"))}
+    h.update(json.dumps(c, sort_keys=True).encode())
+    if cfg.get("generated_types"):   # ... and from the code that writes them: hash their content
+        gen = Path(cfg["tsconfig"]).parent
+        for f in sorted(gen.rglob("*.d.ts")):
+            h.update(f.read_bytes().replace(str(gen).encode(), b""))
     root = Path(root)
     for dp, dns, fns in os.walk(root):
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
         for fn in sorted(fns):
-            st = os.stat(os.path.join(dp, fn))
-            h.update(f"{os.path.relpath(os.path.join(dp, fn), root)}|{st.st_size}|{st.st_mtime_ns}\n".encode())
+            p = os.path.join(dp, fn)
+            h.update(f"{os.path.relpath(p, root)}|{stat_key(p)}\n".encode())   # dangling symlinks hash too
     return h.hexdigest()[:20]
 
 

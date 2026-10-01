@@ -1,0 +1,3 @@
+{ "compilerOptions": { "target": "ESNext", "module": "ESNext", "moduleResolution": "Bundler", "strict": false, "skipLibCheck": true,
+    "baseUrl": ".", "paths": { "~/*": ["app/*"] } },
+  "include": ["app/**/*", "e2e/**/*"] }

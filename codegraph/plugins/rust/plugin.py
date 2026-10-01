@@ -21,6 +21,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+from ...core.fsutil import keep_file
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from ..native import gates as G
 from ..native import runner, scipread
@@ -50,7 +51,7 @@ def _rust_files(root: Path):
     for dp, dn, fn in os.walk(root):
         dn[:] = sorted(d for d in dn if d not in SKIP_DIRS and not d.startswith("."))
         for f in sorted(fn):
-            if f.endswith(".rs") or f in ("Cargo.toml", "Cargo.lock"):
+            if (f.endswith(".rs") or f in ("Cargo.toml", "Cargo.lock")) and keep_file(os.path.join(dp, f)):
                 yield (Path(dp) / f).relative_to(root).as_posix()
 
 

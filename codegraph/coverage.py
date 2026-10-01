@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import os
 from collections import Counter
+
+from .core.fsutil import is_real_file
 from pathlib import Path
 
 # source extensions per language plugin (key = plugin name in stats["plugins"])
@@ -49,7 +51,7 @@ def scan(root: str | Path) -> Counter:
         dns[:] = [d for d in dns if d not in SKIP_DIRS and not d.startswith("._")]
         for fn in fns:
             ext = os.path.splitext(fn)[1].lower()
-            if ext and not fn.startswith("._"):
+            if ext and not fn.startswith("._") and is_real_file(os.path.join(dp, fn)):
                 c[ext] += 1
     return c
 
@@ -63,6 +65,8 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
     mode = st.get("mode")
     if lang in ("rust", "c_cpp") and mode and mode != "scip":
         return "heuristic", None
+    if lang == "typescript" and st.get("program_files") == 0 and not st.get("nodes"):
+        return "not_indexed", "the TypeScript plugin ran but found no source files (tsconfig include / source dirs)"
     return "exact", None
 
 
@@ -153,11 +157,19 @@ def for_graph(store) -> dict[str, dict | None]:
     except Exception:  # noqa: BLE001  (not a cg graph yet: coverage unknown, never a crash)
         return {"": None}
     if m.get("repos"):
+        if isinstance(m.get("coverage"), dict) and m["coverage"]:
+            return dict(m["coverage"])          # copied in by cg link
         out = {}
-        for r in m["repos"]:
-            try:
-                out[r] = (GraphStore(m["sources"][r]).meta().get("stats") or {}).get("coverage")
-            except Exception:  # noqa: BLE001
+        for r in m["repos"]:                    # older combined graphs: read the source DBs if they are still there
+            here = Path(getattr(store, "path", "") or "").parent / f"{r}.db"
+            for src in ((m.get("sources") or {}).get(r), str(here)):
+                try:
+                    if src and Path(src).exists():
+                        out[r] = (GraphStore(src).meta().get("stats") or {}).get("coverage")
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
                 out[r] = None
         return out
     return {m.get("project") or "": (m.get("stats") or {}).get("coverage")}

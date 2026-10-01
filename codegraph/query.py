@@ -15,10 +15,14 @@ CALL_LIKE = ["CALLS", "IMPLEMENTED_BY", "OVERRIDDEN_BY", "BOUND_TO", "ROUTES_TO"
              # TypeScript / Vue / Nuxt + cross-repo link
              "USES_COMPOSABLE", "USES_STORE", "RENDERS", "HTTP_CALLS", "MATCHES_ROUTE",
              # native code: function pointers / callbacks / dispatch tables
-             "REFERENCES_FN"]
+             "REFERENCES_FN",
+             # realtime: broadcasting auth route -> channel callbacks; client subscriptions -> backend channels
+             "AUTHORIZES_CHANNEL", "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL"]
 TS_CODE_KINDS = ("composable", "store", "component", "module")
 CODE_KINDS = ("method", "function", "script") + TS_CODE_KINDS
-ENTRY_NODE_KINDS = ("route", "command", "schedule", "job", "listener", "admin", "observer", "page", "layout", "app", "message")
+ENTRY_NODE_KINDS = ("route", "command", "schedule", "job", "listener", "admin", "observer", "page", "layout", "app", "message",
+                    "channel")
+CLASS_KINDS = ("class", "interface", "trait", "enum")
 
 
 def resolve_targets(st: GraphStore, spec: str) -> list[str]:
@@ -70,6 +74,8 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
     for r in rows:
         out.append(r["id"])
         out += [x["id"] for x in st.q("SELECT id FROM nodes WHERE kind='method' AND fqn LIKE ?", (r["fqn"] + "::%",))]
+        # an event / job class also selects its dispatch node (event:X, job:X): `impact OrderShipped` follows dispatches
+        out += [x["id"] for x in st.q("SELECT id FROM nodes WHERE id IN (?, ?)", ("event:" + r["fqn"], "job:" + r["fqn"]))]
     return out
 
 
@@ -128,7 +134,9 @@ def default_gate(st: GraphStore) -> str | None:
 
 
 def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="heuristic", max_depth=30,
-                    exclude_gate: str | None = None) -> dict[str, int]:
+                    exclude_gate: str | None = None, seed_inst: bool = False) -> dict[str, int]:
+    """Reverse transitive closure over `kinds`. seed_inst: code that instantiates a targeted class (`new X`) is a
+    dependent too (INSTANTIATES is followed into the targets only, never further up)."""
     kinds = kinds or PROPAGATING
     if not targets:
         return {}
@@ -136,19 +144,21 @@ def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="he
     st.db.execute("CREATE TEMP TABLE t_targets(id TEXT PRIMARY KEY)")
     st.db.executemany("INSERT OR IGNORE INTO t_targets VALUES (?)", [(t,) for t in targets])
     kq = ",".join("?" * len(kinds))
+    inst = "OR (e.kind = 'INSTANTIATES' AND r.depth = 0)" if seed_inst else ""
     sql = f"""
     WITH RECURSIVE r(id, depth) AS (
         SELECT id, 0 FROM t_targets
         UNION
         SELECT e.src, r.depth + 1 FROM edges e JOIN r ON e.dst = r.id
-        WHERE e.kind IN ({kq}) AND e.conf_rank >= ? AND r.depth < ? AND (e.gate IS NULL OR e.gate != ?)
+        WHERE (e.kind IN ({kq}) {inst}) AND e.conf_rank >= ? AND r.depth < ? AND (e.gate IS NULL OR e.gate != ?)
     )
     SELECT id, MIN(depth) AS depth FROM r GROUP BY id"""
     rows = st.q(sql, (*kinds, CONFIDENCE_RANK[min_conf], max_depth, exclude_gate or "\x00"))
     return {r["id"]: r["depth"] for r in rows}
 
 
-def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="heuristic", exclude_gate: str | None = None) -> dict[str, list[dict]]:
+def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="heuristic", exclude_gate: str | None = None,
+                   seed_inst: bool = False) -> dict[str, list[dict]]:
     """For each reached node pick an outgoing edge to a node one step closer to a target."""
     kinds = set(kinds or PROPAGATING)
     best = {}
@@ -157,7 +167,9 @@ def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="
         chunk = ids[i:i + 500]
         q = ",".join("?" * len(chunk))
         for e in st.q(f"SELECT src,dst,kind,file,line,confidence,conf_rank,gate,attrs FROM edges WHERE src IN ({q})", chunk):
-            if e["kind"] not in kinds or e["conf_rank"] < CONFIDENCE_RANK[min_conf]:
+            if e["conf_rank"] < CONFIDENCE_RANK[min_conf]:
+                continue
+            if e["kind"] not in kinds and not (seed_inst and e["kind"] == "INSTANTIATES" and depth.get(e["dst"]) == 0):
                 continue
             if exclude_gate and e["gate"] == exclude_gate:
                 continue
@@ -258,13 +270,14 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
         t = resolve_targets(st, s)
         resolved[s] = t
         targets += t
-    depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth)
-    paths = shortest_paths(st, depth, min_conf=min_conf)
+    si = _has_class_target(targets)
+    depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
+    paths = shortest_paths(st, depth, min_conf=min_conf, seed_inst=si)
     ids = list(depth)
     ents = entry_info(st, ids)
-    live_depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, exclude_gate=gate) if gate else depth
+    live_depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, exclude_gate=gate, seed_inst=si) if gate else depth
     live_ents = entry_info(st, ids, gate=gate) if gate else ents
-    live_paths = shortest_paths(st, live_depth, min_conf=min_conf, exclude_gate=gate) if gate else paths
+    live_paths = shortest_paths(st, live_depth, min_conf=min_conf, exclude_gate=gate, seed_inst=si) if gate else paths
     nodes = {}
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
@@ -376,10 +389,15 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
     return "\n".join(out)
 
 
+def _has_class_target(targets: list[str]) -> bool:
+    return any(t.split(":", 1)[0] in CLASS_KINDS for t in targets)
+
+
 def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
     targets = resolve_targets(st, spec)
-    depth = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf)
-    paths = shortest_paths(st, depth, kinds=CALL_LIKE, min_conf=min_conf)
+    si = _has_class_target(targets)
+    depth = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si)
+    paths = shortest_paths(st, depth, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si)
     rows = {}
     ids = list(depth)
     for i in range(0, len(ids), 500):
@@ -395,6 +413,7 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
 
 
 def writers(st: GraphStore, table: str) -> list[dict]:
+    table = table[len("table:"):] if table.startswith("table:") else table   # `writers table:X` == `writers X`
     rows = st.q("""SELECT e.src, e.kind, e.dst, e.file, e.line, e.confidence, n.module, n.fqn
                    FROM edges e JOIN nodes n ON n.id = e.src
                    WHERE (e.kind='WRITES_TABLE' AND e.dst=?) OR (e.kind='WRITES_COLUMN' AND e.dst LIKE ?)
@@ -603,7 +622,9 @@ def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=(
 
 def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
     """Client HTTP endpoints with call sites and matched backend routes (combined DB).
-    flt: 'all' | 'unmatched' | substring of the endpoint/route/caller."""
+    flt: 'all' | 'unmatched' | substring of the endpoint/route/caller/file | a glob with `*` (any characters, `/`
+    included) matched against the endpoint (`GET /v1/*/orders*`), its path, a matched route, controller or caller,
+    or a call-site file (`*useOrders*`); a glob without a verb matches every verb. Case-insensitive."""
     eps = {r["id"]: dict(r) for r in st.q("SELECT id, name, attrs FROM nodes WHERE kind='http'")}
     calls = defaultdict(list)
     for e in st.q("SELECT src, dst, file, line, confidence, attrs FROM edges WHERE kind='HTTP_CALLS'"):
@@ -620,16 +641,37 @@ def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
         row = {"endpoint": nid, "attrs": json.loads(n["attrs"] or "{}"), "calls": calls.get(nid, []), "routes": routes.get(nid, [])}
         if flt == "unmatched" and row["routes"]:
             continue
-        if flt not in ("all", "unmatched") and flt not in json.dumps(row):
+        if flt not in ("all", "unmatched") and not _api_row_matches(flt, row, n["name"]):
             continue
         out.append(row)
     return sorted(out, key=lambda r: r["endpoint"])
 
 
+def _api_row_matches(flt: str, row: dict, name: str | None) -> bool:
+    if "*" not in flt:
+        return flt in json.dumps(row) or flt in (name or "")
+    rx = re.compile("^" + ".*".join(re.escape(x) for x in flt.strip().split("*")) + "$", re.I)
+    a = row["attrs"]
+    fields = [name or "", row["endpoint"], row["endpoint"].split(":", 1)[-1], a.get("path") or ""]
+    if re.match(r"^[A-Za-z]+\s", flt.strip()) is None:           # no verb: the path part alone also counts
+        fields += [f"{a.get('method') or ''} {a.get('path') or ''}"]
+    for r in row["routes"]:
+        fields += [r["route"], r["route"].split(":", 1)[-1], *r["controller"]]
+    for c in row["calls"]:
+        fields += [c["caller"], c["at"], (c["at"] or "").rsplit(":", 1)[0], c.get("url") or ""]
+        if c.get("via_helper"):
+            fields += [c["via_helper"].get("fn") or "", (c["via_helper"].get("at") or "").rsplit(":", 1)[0]]
+    return any(rx.match(f or "") for f in fields)
+
+
 def render_api_calls(rows: list[dict], max_calls=4) -> str:
     out = [f"{len(rows)} client endpoints ({sum(1 for r in rows if r['routes'])} matched)"]
     for r in rows:
-        out.append(f"{r['endpoint']}")
+        a = r.get("attrs") or {}
+        tag = "  (called from tests only)" if a.get("test_only") else ""
+        if a.get("base"):
+            tag += f"  (base {a['base']['placeholder']} = {a['base']['value']}, {a['base']['from']})"
+        out.append(f"{r['endpoint']}{tag}")
         for m in r["routes"]:
             out.append(f"   => {m['route']} [{m['confidence']}] -> {', '.join(m['controller']) or '?'}")
         if not r["routes"]:
@@ -860,3 +902,101 @@ def render_siblings(st: GraphStore, spec: str, res: dict, limit: int = 15) -> st
     for s in res["co_callers"][:limit]:
         out.append(f"co-caller   {short_id(s['node'])} J={s['jaccard']}: {', '.join(short_id(x) for x in s['shared_callees'][:5])}")
     return "\n".join(out)
+
+
+# ----------------------------------------------------------------------------------------------- tests covering
+HTTP_SPEC_RE = re.compile(r"^(?:(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD|ANY)\s+)?(/\S*)$", re.I)
+
+
+def route_targets(st: GraphStore, spec: str) -> list[str]:
+    """`/path` or `VERB /path` (concrete or with {params}) -> backend route nodes it matches."""
+    m = HTTP_SPEC_RE.match(spec.strip())
+    if not m:
+        return []
+    from .link import _method_ok, match_path
+    verb, path = (m.group(1) or "").upper(), m.group(2)
+    out = []
+    for r in st.q("SELECT id, file, attrs FROM nodes WHERE kind='route'"):
+        a = json.loads(r["attrs"] or "{}")
+        uri, meth = a.get("uri"), a.get("method")
+        if not uri:
+            continue
+        if verb and meth and not _method_ok(verb, meth):
+            continue
+        uris = [uri] + (["/api" + uri] if re.search(r"(^|/)routes/api(\.php|/)", r["file"] or "") else [])
+        if any(match_path(path, u)[0] and match_path(path, u)[1]["lit"] == len([s for s in u.split("/") if s and not s.startswith("{")])
+               for u in uris):
+            out.append(r["id"])
+    return out
+
+
+def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30) -> dict:
+    """Tests that exercise a symbol / route / table...: direct (the test code itself calls / requests it) and
+    transitive (through application code: test -> route -> controller -> service -> target)."""
+    from .core.model import TEST_EDGE_KINDS
+    targets = route_targets(st, spec) or resolve_targets(st, spec)
+    # a cross-repo hop (frontend http call -> backend route) is still the test's own request
+    tk = list(TEST_EDGE_KINDS) + ["MATCHES_ROUTE"]
+    si = _has_class_target(targets)
+    direct = reverse_closure(st, targets, kinds=tk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
+    allk = CALL_LIKE + tk
+    trans = reverse_closure(st, targets, kinds=allk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
+    ids = list(set(direct) | set(trans))
+    tests = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for r in st.q(f"SELECT id, kind, name, fqn, file, line, attrs, entry_kind FROM nodes WHERE id IN ({q}) "
+                      f"AND (kind='test' OR entry_kind='test')", chunk):
+            tests[r["id"]] = dict(r)
+    dpaths = shortest_paths(st, {k: v for k, v in direct.items()}, kinds=tk, min_conf=min_conf, seed_inst=si)
+    tpaths = shortest_paths(st, trans, kinds=allk, min_conf=min_conf, seed_inst=si)
+    out = {"targets": targets, "direct": [], "transitive": []}
+    for tid, t in sorted(tests.items(), key=lambda x: (x[1]["file"] or "", x[1]["line"] or 0)):
+        a = json.loads(t["attrs"] or "{}")
+        it = {"test": tid, "name": t["name"], "framework": a.get("framework"), "file": t["file"], "line": t["line"]}
+        if tid in direct:
+            out["direct"].append({**it, "depth": direct[tid], "path": dpaths.get(tid, []),
+                                  "path_confidence": path_confidence(dpaths.get(tid, []))})
+        else:
+            out["transitive"].append({**it, "depth": trans[tid], "path": tpaths.get(tid, []),
+                                      "path_confidence": path_confidence(tpaths.get(tid, []))})
+    for k in ("direct", "transitive"):     # closest tests first
+        out[k].sort(key=lambda t: (t["depth"], CONFIDENCE_RANK.get(t["path_confidence"], 0) * -1, t["file"] or "", t["line"] or 0))
+    out["stats"] = {"direct": len(out["direct"]), "transitive": len(out["transitive"]),
+                    "tests_in_graph": st.q("SELECT count(*) c FROM nodes WHERE kind='test'")[0]["c"]}
+    return out
+
+
+def _path_short(path: list[dict]) -> str:
+    if not path:
+        return ""
+    s = short_id(path[0]["from"])
+    for p in path:
+        s += f" -{p['kind']}-> {short_id(p['to'])}"
+    return s
+
+
+def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
+    L = [f"targets: {len(res['targets'])} node(s): {', '.join(short_id(t) for t in res['targets'][:6])}"
+         + (" ..." if len(res["targets"]) > 6 else "")]
+    if not res["targets"]:
+        return L[0] + "\n(nothing matched the spec)"
+    st = res["stats"]
+    L.append(f"tests: {st['direct']} direct, {st['transitive']} transitive (of {st['tests_in_graph']} test cases in the graph)")
+    for label, key in (("DIRECT (the test code itself calls / requests the target)", "direct"),
+                       ("TRANSITIVE (through application code)", "transitive")):
+        group = res[key]
+        if not group:
+            continue
+        L += ["", f"== {label}: {len(group)}"]
+        for t in group[:limit]:
+            L.append(f"  {t['name']}  [{t.get('framework') or 'test'}] {t['file']}:{t['line']}  depth={t['depth']} conf={t['path_confidence']}")
+            if show_paths and t["path"]:
+                L.append(f"      {_path_short(t['path'][:8])}{' ...' if len(t['path']) > 8 else ''}")
+        if len(group) > limit:
+            L.append(f"  ... {len(group) - limit} more")
+    if not res["direct"] and not res["transitive"]:
+        L.append("no indexed test reaches the target" + ("" if st["tests_in_graph"] else
+                                                          " (the graph has no test nodes: tests/ or *.spec files were not indexed)"))
+    return "\n".join(L)

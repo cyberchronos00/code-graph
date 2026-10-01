@@ -1,0 +1,1 @@
+{ "name": "taskboard-lite", "private": true, "dependencies": { "nuxt": "^3.17.0", "axios": "^1.7.0" } }

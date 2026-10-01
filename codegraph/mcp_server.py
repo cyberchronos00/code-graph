@@ -3,7 +3,8 @@
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
 Tools: reaches, impact, siblings, writers, routes, node, search, stats, index, downstream, path, api_calls, resolutions,
-plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer, plans/<name>.yaml).
+channels, tests_covering, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
 shortest evidence path (KIND@file:line hops). Every edge comes from parsers and static rules, so the same graph always
@@ -52,6 +53,13 @@ server = MCPServer(
         "`resolutions` lists every place a concept (e.g. timezone) is resolved from request input / settings / columns / "
         "literal fallbacks, groups them into fallback chains, shows where chains diverge, which routes reach each, and "
         "whether the frontend sends the key (plus client-side fallbacks and keys a helper drops before the request). "
+        "Realtime: `channels` lists broadcast channels (Laravel Broadcast::channel) with who can join (auth route + "
+        "middleware, the callback and the checks it calls), which events publish on each (broadcastOn, dispatch sites, "
+        "entry points) and, on a combined graph, which client code / pages subscribe (Echo / pusher-js) and listen for "
+        "which events; spec channel:<pattern>. "
+        "Tests: test code (tests/, *.spec.ts / *.test.ts, e2e specs) is indexed as `test` nodes kept out of every other "
+        "query (TEST_* edges never propagate); `tests_covering` lists the tests that exercise a symbol / route / table, "
+        "direct (the test calls or requests it) and transitive (through application code). "
         "When a query finds nothing, the reply says why and which query to run instead. "
         "COVERAGE: `coverage` says which languages / files the index covers (exact, heuristic only, skipped because an "
         "indexer is missing, or unsupported, e.g. Go/Java/Kotlin/Swift/Ruby/C# files). For anything not covered or only "
@@ -99,7 +107,8 @@ def _display(p) -> str | None:
 
 EMPTY_MARKERS = ("no method matches", "no symbol matches", "not found:", "no node matches", "no matches for",
                  "nothing depends", "no writers recorded", "no table ", "no path", "no forward path",
-                 "has no recorded callers", "no siblings found", "no routes, tables")
+                 "has no recorded callers", "no siblings found", "no routes, tables", "no indexed test reaches",
+                 "nothing matched the spec", "no channel matches", "no broadcast channels")
 
 
 def _coverage_note() -> str:
@@ -171,7 +180,7 @@ def ek_str(ek: dict) -> str:
     abbrev = {"http_route": "route", "websocket": "ws", "artisan_command": "cmd", "management_command": "cmd", "scheduled": "sched",
               "queue_job": "job", "listener": "listener", "admin_panel": "admin", "observer": "observer", "ui_page": "page",
               "ui_global": "ui-shell", "public_api": "api", "ffi_export": "ffi", "build_script": "build",
-              "message_handler": "msg", "cli_command": "cli"}
+              "message_handler": "msg", "cli_command": "cli", "channel_auth": "channel"}
     return ",".join(f"{abbrev.get(k, k)}×{v}" for k, v in sorted(ek.items())) or "-"
 
 
@@ -388,6 +397,28 @@ def writers(table: str, limit: int = 60) -> str:
 
 
 @tool
+def channels(pattern: str | None = None, source: bool = True) -> str:
+    """Broadcast channels (Laravel Broadcast::channel, events' broadcastOn, Echo / pusher-js subscriptions on a combined
+    graph). Without a pattern: one line per channel with its auth callback / checks, publishers and subscribers. With
+    a pattern (`orders.{id}`, a concrete name like `orders.42`, or a glob `orders.*`): WHO CAN JOIN (broadcasting auth
+    route + middleware, the callback with its source and every check it calls), PUBLISHED BY (events, the evaluated
+    channel name, dispatch sites and the entry points that reach them) and LISTENED TO BY (client code, pages, events
+    listened for). Flags private channels without a callback and subscriptions that match no backend channel."""
+    from .realtime import channels as _ch, render_channels
+    return render_channels(_ch(_st(), pattern, with_source=source))
+
+
+@tool
+def tests_covering(target: str, min_confidence: str = "heuristic", paths: bool = True) -> str:
+    """Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
+    HTTP request to the route ($this->getJson('/x'), Playwright request.get). TRANSITIVE: through application code
+    (test -> route -> controller -> service -> target). target: Class::method | Class | route:VERB /uri | `VERB /path`
+    or /path (matched against route URIs) | table.column | any node id. Tests are PHPUnit / Pest (tests/), Vitest / Jest
+    / Playwright / Cypress spec files; they never count as callers in the other queries."""
+    return Q.render_tests_covering(Q.tests_covering(_st(), target, min_conf=min_confidence), show_paths=paths)
+
+
+@tool
 def node(id_or_symbol: str) -> str:
     """Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
     by kind (in/out) with a few neighbours."""
@@ -551,7 +582,9 @@ def path(source: str, target: str, min_confidence: str = "heuristic") -> str:
 @tool
 def api_calls(filter: str = "all", max_items: int = 60) -> str:
     """Frontend HTTP calls (method + path template) with call sites, request keys and the matched backend
-    route + controller (combined graph). filter: all | unmatched | any substring (endpoint, route, caller, file)."""
+    route + controller (combined graph). filter: all | unmatched | any substring (endpoint, route, caller, file) |
+    a `*` glob (`GET /v1/*/orders*`, `*/staff/*`, `*useOrders*`) on the endpoint, its path, route, controller,
+    caller or call-site file."""
     st = _st()
     rows = Q.api_calls(st, filter)
     gaps = defaultdict(list)

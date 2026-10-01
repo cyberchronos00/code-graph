@@ -9,7 +9,8 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   language with a note instead of failing the index.
 - `coverage --db DB [--json]`: which languages and files the index covers: `exact`, `heuristic` (exact-mode indexer
   missing), `skipped` (toolchain missing, with the install hint) or `unsupported` (file counts by extension). On a
-  combined graph, one block per linked repo. See [limitations.md](limitations.md#coverage-and-missing-indexers).
+  combined graph, one block per linked repo (stored by `link`, so it also works after the source DBs are gone). See
+  [limitations.md](limitations.md#coverage-and-missing-indexers).
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
 - `impact METHOD [--plans-dir DIR]`: reverse walk from a method up to its entry points. With `--plans-dir`, external
@@ -25,7 +26,16 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `search NAME [--kind K]`: nodes by name / FQN substring, plus the routes whose middleware, guard or auth names match.
 - `writers TABLE`, `siblings SYMBOL`, `node SPEC`, `stats`: writers of a table, similar code, node details, counts.
   `siblings` prints text (`--json` for the raw result).
-- `api-calls SPEC`: client endpoints with call sites, request keys and the matched route.
+- `api-calls SPEC`: client endpoints with call sites, request keys and the matched route. SPEC is `all`, `unmatched`, a
+  substring, or a `*` glob matched against the endpoint, its path, the route, the controller, the caller or the
+  call-site file (`'GET /v1/*/orders*'`, `'*/staff/*'`, `'*useOrders*'`). Endpoints whose base URL comes from runtime
+  config or env show the folded value (`(base {runtimeConfig.apiBase} = http://localhost:8000/api, nuxt.config.ts:6)`);
+  endpoints only tests call are marked `(called from tests only)`.
+- `channels [PATTERN] [--no-source]`: broadcast channels: who can join (auth route, callback, checks), which events
+  publish on it, which client code listens. PATTERN is a channel pattern, a concrete name or a glob. See
+  [channels-and-tests.md](channels-and-tests.md#broadcast-channels).
+- `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
+  [channels-and-tests.md](channels-and-tests.md#tests).
 - `resolutions CONCEPT [--within S]`: where a value is resolved, its fallback chains, and whether the client sends it.
 - `plan {list,load,validate,check,baseline} NAME [--verify] [--summary]`: the planned-change layer. `--summary` prints
   counts per section and check plus the top `--max-items` items (default 5).
@@ -43,6 +53,8 @@ Most query commands take `--json`, `--min-confidence resolved` (or `exact`) and 
 - `page:/reports/:id`: a Nuxt page by its route path. `app/pages/x.vue`, `app/composables/useX.ts`: a TS module or Vue
   SFC by file (repo-relative, suffix match). `useX`, `useX.fn`, `fn`: a TS composable, store or function.
 - `http:GET /v1/{store}/…` and `route:GET /v1/{store}/…`: a client endpoint / a backend route (`*` glob).
+- `channel:orders.{order}`, `channel_sub:orders.{id}`: a backend broadcast channel / a client subscription.
+- `test:tests/Feature/OrderTest.php::…`: a test case (see `cg tests`).
 - `request_key:timezone`, `setting:reports.timezone`: value facts (see [value-facts.md](value-facts.md)).
 
 - Rust / C / C++ (see [native.md](native.md#query-specs)): `crate::module::Type::method`, `Type::method` (also
@@ -381,7 +393,8 @@ usage: python -m codegraph.cli api-calls [-h] --db DB [--json]
                            spec
 
 positional arguments:
-  spec
+  spec                  all | unmatched | a substring | a * glob ('GET
+                        /v1/*/orders*', '*useOrders*')
 
 options:
   -h, --help            show this help message and exit
@@ -392,6 +405,41 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                         indexed; 'none' to disable)
+```
+
+### `channels`
+
+```
+usage: python -m codegraph.cli channels [-h] --db DB [--json] [--no-source] [pattern]
+
+positional arguments:
+  pattern      channel pattern or concrete name (orders.{id}, orders.42,
+               orders.*); omit to list all
+
+options:
+  -h, --help   show this help message and exit
+  --db DB
+  --json
+  --no-source
+```
+
+### `tests`
+
+```
+usage: python -m codegraph.cli tests [-h] --db DB [--json] [--no-paths]
+                       [--min-confidence {heuristic,resolved,exact}]
+                       spec
+
+positional arguments:
+  spec                  Class::method, Class, route:VERB /uri, `VERB /path`,
+                        /path, table.column ...
+
+options:
+  -h, --help            show this help message and exit
+  --db DB
+  --json
+  --no-paths
+  --min-confidence {heuristic,resolved,exact}
 ```
 
 ### `resolutions`

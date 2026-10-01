@@ -9,6 +9,8 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `siblings`: Code parallel to a symbol that often needs the same change: classes sharing its parent/interface/trait,
 - `resolutions`: Every place a concept (e.g. 'timezone', 'locale') is resolved, deterministically: assignment/return sites
 - `writers`: Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
+- `channels`: Broadcast channels (Laravel Broadcast::channel, events' broadcastOn, Echo / pusher-js subscriptions on a combined
+- `tests_covering`: Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
 - `node`: Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
 - `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
 - `routes`: Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
@@ -233,11 +235,11 @@ in: CONTAINS×1, ROUTES_TO×1
   ROUTES_TO: route:GET /v1/{store}/admin/inventory@15
 ```
 
-## `path {'source': 'page:/', 'target': 'SalesReportService::remove'}`  (456 chars)
+## `path {'source': 'page:/', 'target': 'SalesReportService::remove'}`  (460 chars)
 
 ```
 page:app/pages/index.vue
-  -HTTP_CALLS[resolved @ bookstore-web/app/pages/index.vue:4]-> http:DELETE /v1/main/admin/reports/{id}
+  -HTTP_CALLS[resolved @ bookstore-web/app/pages/index.vue:4]-> http:DELETE /api/v1/main/admin/reports/{id}
   -MATCHES_ROUTE[resolved @ bookstore-api/routes/api.php:14]-> route:DELETE /v1/{store}/admin/reports/{report}
   -ROUTES_TO[exact @ bookstore-api/routes/api.php:14]-> Http\Controllers\ReportController::destroy
   -CALLS[resolved @ bookstore-api/app/Http/Controllers/ReportController.php:40]-> Services\SalesReportService::remove
@@ -258,17 +260,17 @@ tables touched (2): orders, stores
   column:stores.settings d8
 ```
 
-## `api_calls {'filter': 'unmatched'}`  (225 chars)
+## `api_calls {'filter': 'unmatched'}`  (229 chars)
 
 ```
 2 client endpoints (0 matched)
-GET /v1/main/admin/session  ⇒ UNMATCHED
+GET /api/v1/main/admin/session  ⇒ UNMATCHED
    ← useSessionStore.load (useSessionStore.ts) @ useSessionStore.ts:7
 GET /version.json  ⇒ UNMATCHED
    ← useAppVersion (useReports.ts) @ useReports.ts:19
 ```
 
-## `resolutions {'concept': 'timezone'}`  (2926 chars)
+## `resolutions {'concept': 'timezone'}`  (2934 chars)
 
 ```
 concept: timezone (head-word forms: timezone, timezones)
@@ -294,11 +296,11 @@ backend resolution sites: 2 in 2 distinct fallback chains; request keys of the c
   [A] vs [B]: same up to input:timezone; then [A] column:orders.customer_timezone vs [B] setting:reports.timezone; same final fallback 'UTC'
 
 == CLIENT (frontend endpoints reaching request-driven sites)
-  GET /v1/main/admin/reports/top  -> chain B via GET /v1/{store}/admin/reports/top
+  GET /api/v1/main/admin/reports/top  -> chain B via GET /v1/{store}/admin/reports/top
      app/composables/useReports.ts#useReports.fetchTop @bookstore-web/app/composables/useReports.ts:9 (1 caller(s)) => 'timezone': never sent (builder key is conditional and no call site passes it); client fallback @bookstore-web/app/pages/reports/[id].vue:12: rows.value[0]?.timezone ?? 'UTC'
 
 == SENT BUT NOT FORWARDED (a call site passes the key; the request it calls never sends it)
-  app/pages/reports/[id].vue @bookstore-web/app/pages/reports/[id].vue:10 passes date_from to app/composables/useReports.ts#useReports.fetchTop; the request @bookstore-web/app/composables/useReports.ts:9 (GET /v1/main/admin/reports/top) sends only category_id, mode, timezone
+  app/pages/reports/[id].vue @bookstore-web/app/pages/reports/[id].vue:10 passes date_from to app/composables/useReports.ts#useReports.fetchTop; the request @bookstore-web/app/composables/useReports.ts:9 (GET /api/v1/main/admin/reports/top) sends only category_id, mode, timezone
 ```
 
 ## `plan_list {}`  (180 chars)

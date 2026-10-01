@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+from ...core.fsutil import keep_file
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
 EXTRACTOR = Path(__file__).parent / "extractor" / "extract.php"
@@ -35,6 +36,12 @@ where map filter each count exists value load refresh fresh push pull put send b
 validate authorize rules messages up down definition casts fill getkey tojson jsonserialize offsetget format parse process
 store show index destroy edit label table form schema query toresponse broadcaston broadcastas broadcastwith via tomail
 toarray failed middleware getname getid title description""".split())
+# test code: Laravel/PHPUnit/Pest keep tests under tests/ (also Modules/<x>/Tests/ in modular apps)
+TEST_PATH_RE = re.compile(r"(^|/)(tests|Tests)/")
+
+
+def is_test_path(path: str | None) -> bool:
+    return bool(path and TEST_PATH_RE.search(path))
 
 
 def module_of(path: str | None) -> str | None:
@@ -69,6 +76,7 @@ class PhpFunc:
     skel: list = field(default_factory=list)
     returns_nullable: bool = False
     dead: dict = field(default_factory=dict)   # fact index -> guard evidence, per gate scenario (see gating.py)
+    attributes: list = field(default_factory=list)   # PHP 8 attribute names on a method (e.g. PHPUnit\Framework\Attributes\Test)
 
 
 @dataclass
@@ -119,13 +127,18 @@ class PhpProgram:
         self.lower_classes: dict[str, str] = {}
         self.functions: dict[str, PhpFunc] = {}
         self.scripts: dict[str, PhpFunc] = {}
-        self.all_funcs: list[PhpFunc] = []
+        self.all_funcs: list[PhpFunc] = []   # application code only
+        # test code (tests/): in the symbol tables so tests resolve their calls into the app, but analysed in a
+        # separate pass whose edges never feed the application graph (see codegraph/tests_index.py)
+        self.test_funcs: list[PhpFunc] = []
+        self.test_classes: set[str] = set()
         # framework hooks
         self.static_call_rules: list[Callable] = []
         self.method_call_rules: list[Callable] = []
         self.prop_rules: list[Callable] = []
         self.func_rules: list[Callable] = []
         self.fact_handlers: list[Callable] = []
+        self.test_fact_handlers: list[Callable] = []   # handlers run on test code only (HTTP test calls, ...)
         self.stats = defaultdict(int)
         self._load()
 
@@ -133,6 +146,8 @@ class PhpProgram:
     def _load(self):
         for rec in self.records:
             f = rec["file"]
+            in_test = is_test_path(f)
+            funcs = self.test_funcs if in_test else self.all_funcs
             for c in rec.get("classes", []):
                 pc = PhpClass(fqcn=c["fqcn"], kind=c["kind"], file=f, line=c["line"], end_line=c["end_line"], doc=c.get("doc"),
                               extends=c["extends"], implements=c["implements"], traits=c["traits"], abstract=c.get("abstract", False),
@@ -142,23 +157,30 @@ class PhpProgram:
                                  end_line=m["end_line"], doc=m.get("doc"), params=m["params"], returns=m["returns"], facts=m["facts"],
                                  static=m["static"], abstract=m["abstract"], visibility=m["visibility"],
                                  skel=m.get("skel") or [], returns_nullable=m.get("returns_nullable", False))
+                    fn.attributes = m.get("attributes") or []
                     pc.methods[m["name"].lower()] = fn
-                    self.all_funcs.append(fn)
+                    funcs.append(fn)
+                if in_test:
+                    self.test_classes.add(pc.fqcn)
                 self.classes[pc.fqcn] = pc
                 self.lower_classes[pc.fqcn.lower()] = pc.fqcn
             for fn in rec.get("functions", []):
                 pf = PhpFunc(id=f"function:{fn['name']}", name=fn["name"], cls=None, file=f, line=fn["line"], end_line=fn["end_line"],
                              doc=fn.get("doc"), params=fn["params"], returns=fn["returns"], facts=fn["facts"],
                              skel=fn.get("skel") or [], returns_nullable=fn.get("returns_nullable", False))
-                self.functions[fn["name"].lower()] = pf
-                self.all_funcs.append(pf)
+                if not in_test or fn["name"].lower() not in self.functions:
+                    self.functions[fn["name"].lower()] = pf
+                funcs.append(pf)
             if rec.get("top"):
                 sf = PhpFunc(id=f"script:{f}", name=f, cls=None, file=f, line=1, end_line=1, doc=None, params=[], returns=[], facts=rec["top"])
                 self.scripts[f] = sf
-                self.all_funcs.append(sf)
-        # method-name index for heuristic fallback
+                funcs.append(sf)
+        # method-name index for heuristic fallback (application classes only: a test double must not make an
+        # application method name ambiguous)
         self.by_name = defaultdict(list)
         for c in self.classes.values():
+            if c.fqcn in self.test_classes:
+                continue
             for ln, m in c.methods.items():
                 self.by_name[ln].append(m)
         self.children = defaultdict(set)
@@ -188,6 +210,12 @@ class PhpProgram:
             if c:
                 stack.extend(c.traits + c.extends + c.implements)
         return out if include_self else out[1:]
+
+    def is_test_class(self, fqcn: str) -> bool:
+        return fqcn in self.test_classes
+
+    def is_test_fn(self, fn: "PhpFunc") -> bool:
+        return is_test_path(fn.file)
 
     def is_a(self, fqcn: str, base: str) -> bool:
         b = base.lower()
@@ -330,9 +358,13 @@ class PhpProgram:
         return env
 
     def run_inference(self, iterations=3):
+        self._infer(self.all_funcs, iterations)
+        self._infer(self.test_funcs, iterations)   # after the application, so tests see its inferred return types
+
+    def _infer(self, funcs, iterations):
         for _ in range(iterations):
             changed = 0
-            for fn in self.all_funcs:
+            for fn in funcs:
                 fn.env = self.infer_env(fn)
                 inf = set()
                 for f in fn.facts:
@@ -348,9 +380,10 @@ class PhpProgram:
     def emit_declarations(self):
         b = self.b
         for c in self.classes.values():
+            ta = {"test": True} if c.fqcn in self.test_classes else {}
             cid = b.add_node(c.kind, c.fqcn, name=c.fqcn.split("\\")[-1], fqn=c.fqcn, file=c.file, line=c.line,
                              end_line=c.end_line, module=module_of(c.file), doc=c.doc, lang="php",
-                             attrs={"abstract": c.abstract} if c.abstract else {})
+                             attrs={**({"abstract": c.abstract} if c.abstract else {}), **ta})
             for rel, kind in ((c.extends, "EXTENDS"), (c.implements, "IMPLEMENTS"), (c.traits, "USES_TRAIT")):
                 for p in rel:
                     pc = self.cls(p)
@@ -359,12 +392,12 @@ class PhpProgram:
             for p in c.props.values():
                 pid = b.add_node("property", f"{c.fqcn}::${p['name']}", name=f"${p['name']}", fqn=f"{c.fqcn}::${p['name']}",
                                  file=c.file, line=p.get("line"), module=module_of(c.file), doc=p.get("doc"), lang="php",
-                                 attrs={"types": p.get("types"), "default": p.get("default")} if (p.get("types") or p.get("default") is not None) else {})
+                                 attrs={**({"types": p.get("types"), "default": p.get("default")} if (p.get("types") or p.get("default") is not None) else {}), **ta})
                 b.add_edge(cid, pid, "CONTAINS", c.file, p.get("line"), EXACT)
             for m in c.methods.values():
                 b.add_node("method", f"{c.fqcn}::{m.name}", name=m.name, fqn=f"{c.fqcn}::{m.name}", file=c.file, line=m.line,
                            end_line=m.end_line, module=module_of(c.file), doc=m.doc, lang="php",
-                           attrs={k: v for k, v in (("visibility", m.visibility), ("static", m.static), ("abstract", m.abstract)) if v and v != "public"})
+                           attrs={**{k: v for k, v in (("visibility", m.visibility), ("static", m.static), ("abstract", m.abstract)) if v and v != "public"}, **ta})
                 b.add_edge(cid, m.id, "CONTAINS", c.file, m.line, EXACT)
                 if m.name.lower() == "__construct":
                     for p in m.params:
@@ -383,16 +416,23 @@ class PhpProgram:
                         b.add_edge(ac.methods[ln].id, m.id, kind, c.file, m.line, RESOLVED)
         for f in self.functions.values():
             b.add_node("function", f.name, name=f.name, fqn=f.name, file=f.file, line=f.line, end_line=f.end_line,
-                       module=module_of(f.file), doc=f.doc, lang="php")
+                       module=module_of(f.file), doc=f.doc, lang="php", attrs={"test": True} if is_test_path(f.file) else {})
         for s in self.scripts.values():
-            b.add_node("script", s.file, name=s.file, file=s.file, line=1, module=module_of(s.file), lang="php")
+            b.add_node("script", s.file, name=s.file, file=s.file, line=1, module=module_of(s.file), lang="php",
+                       attrs={"test": True} if is_test_path(s.file) else {})
 
     def fn_node_exists(self, fn: PhpFunc) -> bool:
         return self.b.has(fn.id)
 
     def emit_references(self):
+        self._emit_refs(self.all_funcs, self.fact_handlers)
+        # test code: calls / instantiations / class refs plus the test-only handlers; framework handlers (columns,
+        # bindings, schedules, listeners...) never run on tests, so a test cannot add facts to the application graph
+        self._emit_refs(self.test_funcs, self.test_fact_handlers)
+
+    def _emit_refs(self, funcs, handlers):
         b = self.b
-        for fn in self.all_funcs:
+        for fn in funcs:
             ctx = ResolveCtx(self, fn)
             for i, f in enumerate(fn.facts):
                 b.current_gate = fn.dead.get(i)
@@ -411,7 +451,7 @@ class PhpProgram:
                     c = self.cls(f["class"])
                     if c:
                         b.add_edge(fn.id, f"{c.kind}:{c.fqcn}", "REFERENCES", fn.file, line, EXACT)
-                for h in self.fact_handlers:
+                for h in handlers:
                     h(self, fn, f, ctx)
             b.current_gate = None
 
@@ -477,14 +517,15 @@ class PhpPlugin(LanguagePlugin):
         return None
 
     def list_files(self, project: Project) -> list[str]:
-        skip = ("vendor/", "node_modules/", "storage/", "tests/", "bootstrap/cache/", ".git/")
+        # tests/ is indexed as test code (codegraph/tests_index.py keeps it out of the application graph)
+        skip = ("vendor/", "node_modules/", "storage/", "bootstrap/cache/", ".git/")
         out = []
         for dp, dns, fns in os.walk(project.root):
             rel_dir = os.path.relpath(dp, project.root)
             rel_dir = "" if rel_dir == "." else rel_dir + "/"
             dns[:] = [d for d in dns if not (rel_dir + d + "/").startswith(skip)]
             for fn in fns:
-                if fn.endswith(".php") and not fn.startswith("._"):
+                if fn.endswith(".php") and not fn.startswith("._") and keep_file(os.path.join(dp, fn)):
                     out.append(rel_dir + fn)
         return sorted(out)
 
@@ -518,7 +559,8 @@ class PhpPlugin(LanguagePlugin):
         prog.emit_declarations()
         prog.emit_references()
         stats = {"files": len(records), "parse_errors": sum(1 for r in records if r.get("error")),
-                 "classes": len(prog.classes), "functions": len(prog.all_funcs),
+                 "classes": len(prog.classes) - len(prog.test_classes), "functions": len(prog.all_funcs),
+                 "test_files": sum(1 for r in records if is_test_path(r["file"])), "test_functions": len(prog.test_funcs),
                  "extract_seconds": round(t_extract, 2), "resolve_seconds": round(time.time() - t1, 2)}
         stats.update(dict(prog.stats))
         if gate_stats:
