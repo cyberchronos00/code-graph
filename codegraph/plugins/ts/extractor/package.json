@@ -1,0 +1,9 @@
+{
+  "name": "codegraph-ts-extractor",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "typescript": "6.0.2",
+    "@vue/compiler-sfc": "3.5.31"
+  }
+}

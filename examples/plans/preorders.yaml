@@ -1,0 +1,45 @@
+# Example plan for the bundled sample app (examples/bookstore-api).
+# Deliberately incomplete: it does NOT list the admin update path, UpdateBookRequest, Book::$fillable,
+# the API/Filament BookResource, the POST /v1/orders entry route or the mobile client. `plan check` should find them.
+plan_version: 1
+name: preorders
+title: "Pre-order books: signed-in customers only, never filled from warehouse stock"
+status: agreed
+issues: ["#7"]
+context:
+  findings: findings.yaml
+  clients: clients.yaml
+rationale: |
+  A book can be marked as pre-order until its release date. Pre-order reservations need a signed-in customer and
+  must not fall back to the old warehouse stock (that stock belongs to already released editions).
+assumptions:
+  - "only authenticated customers place orders"
+add_nodes:
+  - id: column:books.preorder_until
+    attrs: {nullable: true, type: timestamp}
+modify:
+  - target: StockService::reserve
+    role: guard
+    intent: "pre-order books: require a customer; no warehouse fallback"
+    issues: ["#7"]
+  - target: StockService::reserveLocal
+    intent: "check preorder_until against the customer"
+  - target: Admin\BookController::store
+    intent: "accept preorder_until"
+add_edges:
+  - {from: StockService::reserve, kind: READS_COLUMN, to: column:books.preorder_until}
+  - {from: Admin\BookController::store, kind: WRITES_COLUMN, to: column:books.preorder_until}
+  - {from: Admin\StoreBookRequest::rules, kind: VALIDATES, to: request_key:preorder_until}
+forbid:
+  - id: no-warehouse-for-preorders
+    from: StockService::reserve
+    to: table:warehouse_stock
+    when: "the book is a pre-order (books.preorder_until set)"
+    guard: {at: StockService::reserve, reads: column:books.preorder_until}
+require:
+  - route: "route:POST /v1/stock/reserve"
+    middleware: ["auth:api"]
+precedents:
+  - name: atomic counter
+    pattern: "increment\\("
+    within: [StockService::recordSale]

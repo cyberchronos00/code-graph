@@ -1,0 +1,6 @@
+# Read-only snapshot of external client call sites (apps that are not indexed), matched against backend routes.
+snapshot_version: 1
+base_prefix: /v1
+calls:
+  - {repo: example/bookstore-mobile, commit: "4f2c9e1", file: pages/cart.vue, line: 12, method: POST, path: /stock/reserve, evidence: read, sends: [isbn]}
+  - {repo: example/bookstore-mobile, commit: "4f2c9e1", file: pages/profile.vue, line: 3, method: GET, path: /me, evidence: read}

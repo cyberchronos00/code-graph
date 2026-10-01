@@ -1,0 +1,28 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Order;
+use App\Services\StockService;
+use Illuminate\Http\Request;
+
+class OrderController extends Controller
+{
+    public function __construct(private StockService $stock)
+    {
+    }
+
+    public function store(Request $request)
+    {
+        $result = $this->stock->reserve($request->input('isbn'));
+        $order = Order::create([
+            'user_id' => $request->user()->id,
+            'book_id' => $result['book_id'] ?? null,
+            'book_isbn' => $request->input('isbn'),
+            'total' => $result['price'] ?? 0,
+        ]);
+        $this->stock->recordSale((int) ($result['book_id'] ?? 0));
+
+        return response()->json($order);
+    }
+}

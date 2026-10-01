@@ -1,0 +1,1 @@
+{ "name": "example/bookstore-api", "require": { "laravel/framework": "^11.0", "filament/filament": "^3.3" }, "autoload": { "psr-4": { "App\\": "app/" } } }

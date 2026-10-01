@@ -1,0 +1,7 @@
+{
+  "name": "codegraph-viz-tools",
+  "private": true,
+  "description": "Headless screenshots of the code-graph view (uses the system Chrome; no browser download).",
+  "type": "module",
+  "dependencies": { "puppeteer-core": "25.12.0" }
+}

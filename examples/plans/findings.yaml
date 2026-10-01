@@ -1,0 +1,17 @@
+# Read-only snapshot of open findings (issue id, state, evidence file:line) used by `plan check` for conflicts.
+snapshot_version: 1
+repo: example/bookstore-api
+graph_repo: bookstore-api   # repo name in the graph (a combined DB prefixes file paths with it)
+findings:
+  - id: "#7"
+    title: "Pre-orders can be reserved without an account"
+    state: open
+    evidence: [app/Services/StockService.php:10-18]
+  - id: "#8"
+    title: "Sold-out check ignores pending reservations"
+    state: open
+    evidence: [app/Services/StockService.php:22]
+  - id: "#9"
+    title: "Order book relation (closed)"
+    state: closed
+    evidence: [app/Models/Order.php:13]

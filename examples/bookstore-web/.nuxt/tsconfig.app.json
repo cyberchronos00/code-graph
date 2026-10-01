@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "paths": { "~/*": ["../app/*"], "axios": ["./axios-shim.d.ts"] },
+    "strict": true, "module": "preserve", "moduleResolution": "Bundler", "target": "ESNext",
+    "allowJs": true, "resolveJsonModule": true, "noEmit": true, "skipLibCheck": true
+  },
+  "include": ["./nuxt.d.ts", "../app/**/*"]
+}

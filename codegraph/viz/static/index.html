@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>code-graph view</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <div class="brand">code-graph</div>
+  <select id="preset" title="canned queries"><option value="">presets…</option></select>
+  <select id="mode" title="query">
+    <option value="reaches">reaches (what depends on it)</option>
+    <option value="impact">impact (callers → entry points)</option>
+    <option value="downstream">downstream (what it depends on)</option>
+    <option value="path">path (source → target)</option>
+    <option value="plan">plan overlay (plans/&lt;name&gt;.yaml)</option>
+  </select>
+  <div class="specbox"><input id="spec" list="sugg" placeholder="spec(s), comma separated (path: source, [via…,] target): Class::method, table.column, page:/route, connection:x, request_key:timezone …" autocomplete="off"><datalist id="sugg"></datalist></div>
+  <select id="sinks" title="downstream sinks">
+    <option value="table,column">sinks: tables (via columns)</option>
+    <option value="table">sinks: tables (direct only)</option>
+    <option value="table,column,route">sinks: tables + routes</option>
+    <option value="route,http">sinks: routes + http</option>
+    <option value="">sinks: all</option>
+  </select>
+  <select id="minconf" title="minimum edge confidence">
+    <option value="heuristic">≥ heuristic</option><option value="resolved">≥ resolved</option><option value="exact">exact only</option>
+  </select>
+  <button id="go">Show</button>
+  <span class="sep"></span>
+  <select id="layout" title="layout"><option value="fcose">layout: clustered</option><option value="breadthfirst">layout: layered</option></select>
+  <button id="collapse" title="collapse every module">collapse all</button>
+  <button id="expand" title="expand every module">expand all</button>
+  <button id="fit">fit</button>
+</header>
+<main>
+  <div id="cy"></div>
+  <aside id="panel"><div class="hint">Search a node and pick a query, or choose a preset.<br><br>
+    Modules are boxes; click a <b>collapsed module</b> to open it, double-click an open module to fold it.
+    Click a node for its docblock, file:line evidence and source.</div></aside>
+  <div id="status"></div>
+  <div id="legend"></div>
+</main>
+<script src="vendor/cytoscape.min.js"></script>
+<script src="vendor/layout-base.js"></script>
+<script src="vendor/cose-base.js"></script>
+<script src="vendor/cytoscape-fcose.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

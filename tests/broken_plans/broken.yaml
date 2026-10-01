@@ -1,0 +1,14 @@
+plan_version: 2
+name: Bad Name
+title: ""
+status: whatever
+bogus: 1
+modify:
+  - target: NoSuchClass::nope
+add_nodes:
+  - id: widget:foo
+add_edges:
+  - {from: a, kind: reads, to: b}
+forbid:
+  - {id: x, from: a, to: b, type: edge}
+  - {id: x, from: a, to: b, guard: {at: y}}

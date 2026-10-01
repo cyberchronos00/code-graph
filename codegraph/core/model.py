@@ -1,0 +1,111 @@
+"""Graph data model: node/edge kinds, confidence levels, stable ids."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+# Confidence of an edge, strongest first.
+EXACT = "exact"          # syntactically certain (static call, `new X`, $this->m(), literal key)
+RESOLVED = "resolved"    # needed type/name resolution (typed property/param, inferred var type, model->table)
+HEURISTIC = "heuristic"  # best effort (unique-method-name fallback, unique column-name literal)
+CONFIDENCE_RANK = {EXACT: 3, RESOLVED: 2, HEURISTIC: 1}
+
+# Edge kinds. propagates=True means "src depends on dst": reverse traversal from a
+# target follows these edges to find everything that depends on it.
+EDGE_KINDS: dict[str, tuple[bool, str]] = {
+    "CALLS": (True, "function/method calls function/method"),
+    "IMPLEMENTED_BY": (True, "interface/abstract method may dispatch to implementation"),
+    "OVERRIDDEN_BY": (True, "parent method may dispatch to child override"),
+    "BOUND_TO": (True, "container binding abstract -> concrete"),
+    "ROUTES_TO": (True, "HTTP route -> controller action"),
+    "USES_MIDDLEWARE": (True, "route -> middleware handle()"),
+    "HANDLED_BY": (True, "artisan command name -> handler method"),
+    "SCHEDULES": (True, "scheduler entry -> command/job"),
+    "DISPATCHES": (True, "code dispatches job/event"),
+    "LISTENED_BY": (True, "event -> listener handler"),
+    "READS_COLUMN": (True, "code reads column"),
+    "WRITES_COLUMN": (True, "code writes column"),
+    "MENTIONS_COLUMN": (True, "string literal equal to a distinctive column name"),
+    "READS_TABLE": (True, "code reads table"),
+    "WRITES_TABLE": (True, "code writes table"),
+    "USES_CONNECTION": (True, "code/model uses DB connection"),
+    "REGISTERS_CONNECTION": (True, "code registers a (dynamic) DB connection"),
+    "READS_CONFIG": (True, "code reads config key"),
+    "WRITES_CONFIG": (True, "code sets config key at runtime"),
+    "READS_ENV": (True, "code/config reads env key"),
+    "REFERS_TO": (True, "config value names a connection/other entity"),
+    "CONFIGURED_BY": (True, "connection defined by config key"),
+    "CONFIG_CONTAINS": (True, "config parent key contains child key"),
+    "MAPS_TO_TABLE": (False, "model class -> table"),
+    "HAS_RELATION": (False, "model -> related model (hasMany, belongsTo, ...)"),
+    "CONTAINS": (False, "class -> member, table -> column"),
+    "EXTENDS": (False, "class extends class"),
+    "IMPLEMENTS": (False, "class implements interface"),
+    "USES_TRAIT": (False, "class uses trait"),
+    "INSTANTIATES": (False, "code instantiates class (constructor call is a separate CALLS edge)"),
+    "INJECTS": (False, "constructor-injected dependency type"),
+    "REFERENCES": (False, "X::class reference"),
+    "OBSERVED_BY": (False, "model observer registration"),
+    "DEFINES": (False, "file/migration defines table/column"),
+    "BINDS": (False, "service provider registers binding"),
+    # TypeScript / Vue / Nuxt
+    "IMPORTS": (False, "module/component imports module/component"),
+    "RENDERS": (True, "component template renders child component"),
+    "USES_COMPOSABLE": (True, "code calls a composable (useX())"),
+    "USES_STORE": (True, "code calls a Pinia store (useXStore())"),
+    "HTTP_CALLS": (True, "client code calls an HTTP endpoint (method + path template)"),
+    "MATCHES_ROUTE": (True, "client endpoint matched to a backend route (cross-repo link)"),
+    "USES_LAYOUT": (False, "page uses layout"),
+    "USES_I18N": (False, "code/template uses i18n key"),
+    "REFERENCES_TYPE": (False, "code references a type/interface"),
+    # value facts
+    "READS_SETTING": (True, "code reads a JSON settings key (getSetting('a.b', default))"),
+    "WRITES_SETTING": (True, "code writes a JSON settings key (setSetting)"),
+    "READS_INPUT": (True, "code reads an HTTP request key ($request->input('k'), $validated['k'], $filters['k'] via arg flow)"),
+    "VALIDATES": (True, "FormRequest::rules() declares a request key"),
+    "VALIDATED_BY": (True, "controller action is validated by a FormRequest (rules())"),
+    "HAS_RESOLUTION": (True, "code resolves a value through a fallback chain (resolution node)"),
+    "FALLS_BACK_TO": (True, "resolution chain step -> source node (setting, request key, column, config, env); attrs.order"),
+}
+PROPAGATING = sorted(k for k, (p, _) in EDGE_KINDS.items() if p)
+
+ENTRY_KINDS = ("http_route", "artisan_command", "scheduled", "queue_job", "listener", "admin_panel", "observer",
+               "ui_page", "ui_global")
+UI_ENTRY_KINDS = ("ui_page", "ui_global")
+RUNTIME_ENTRY_KINDS = ("http_route", "scheduled", "queue_job", "listener")
+OPERATOR_ENTRY_KINDS = ("artisan_command", "admin_panel")
+
+
+@dataclass
+class Node:
+    id: str
+    kind: str
+    name: str
+    fqn: str | None = None
+    file: str | None = None
+    line: int | None = None
+    end_line: int | None = None
+    module: str | None = None
+    doc: str | None = None
+    lang: str | None = None
+    attrs: dict[str, Any] = field(default_factory=dict)
+    entry_kind: str | None = None  # set when the node itself is an entry point
+
+
+@dataclass
+class Edge:
+    src: str
+    dst: str
+    kind: str
+    file: str | None = None
+    line: int | None = None
+    confidence: str = EXACT
+    attrs: dict[str, Any] = field(default_factory=dict)
+    # gate scenario under which this reference is dead (e.g. "new_inventory"), None = live.
+    # Set deterministically by the guard evaluator (plugins/php/gating.py); evidence in attrs["guard"].
+    gate: str | None = None
+
+
+def node_id(kind: str, key: str) -> str:
+    """Stable id = kind + ':' + canonical key (FQN, table.column, route signature...)."""
+    return f"{kind}:{key}"

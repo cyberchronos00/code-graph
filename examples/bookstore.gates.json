@@ -1,0 +1,12 @@
+{
+  "note": "Gate scenarios for deterministic path gating. A scenario fixes settings flags; code that cannot run under it is labelled gated. Beta: the first scenario is used.",
+  "scenarios": [
+    {
+      "name": "new_inventory",
+      "description": "Store has moved to the new inventory: settings features.new_inventory.enabled = true, so the old warehouse read path is dead.",
+      "setting_accessors": ["getSetting"],
+      "true_settings": ["features.new_inventory.enabled"],
+      "false_settings": []
+    }
+  ]
+}

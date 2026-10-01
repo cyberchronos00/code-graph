@@ -1,0 +1,4 @@
+cytoscape 3.34.3 MIT
+layout-base 2.0.1 MIT
+cose-base 2.2.0 MIT
+cytoscape-fcose 2.2.0 MIT
