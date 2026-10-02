@@ -982,8 +982,9 @@ class PyProgram:
     def elements(self, e, ctx: "Ctx", mode="iter", depth=0) -> list:
         """(expr, ctx) for each element of collection `e`: list / tuple / set / dict literals (mode iter|keys -> dict
         keys, values -> dict values) behind names, module constants, class attributes, `*spread`, `+`,
-        list()/tuple()/sorted() and filtering comprehensions; module-level `.append()` / `.extend()` / `[k] = v`
-        / `.update()` / `.add()` count too."""
+        list()/tuple()/sorted(), `copy.copy()` / `copy.deepcopy()`, filtering comprehensions, the return value of a
+        project function and a constant key of a dict / tuple it returns (`setup()["plugins"]`); module-level
+        `.append()` / `.extend()` / `[k] = v` / `.update()` / `.add()` count too."""
         if e is None or depth > 6:
             return []
         if isinstance(e, (ast.List, ast.Tuple, ast.Set)):
@@ -1020,7 +1021,23 @@ class PyProgram:
                 return self.elements(fn.value, ctx, "values" if fn.attr == "values" else "keys", depth + 1)
             if dotted(fn) in ("itertools.chain", "chain"):
                 return [x for a in e.args for x in self.elements(a, ctx, mode, depth + 1)]
-            return []
+            if dotted(fn) in COPY_FUNCS and e.args:     # a copy holds the same kinds of elements
+                return self.elements(e.args[0], ctx, mode, depth + 1)
+            if isinstance(fn, ast.Attribute) and fn.attr == "copy" and not e.args:      # PLUGINS.copy()
+                return self.elements(fn.value, ctx, mode, depth + 1)
+            return [x for r, rctx in self.returned(e, ctx) for x in self.elements(r, rctx, mode, depth + 1)]
+        if isinstance(e, ast.Subscript) and isinstance(e.slice, ast.Constant):   # plan["plugins"], pair[0]
+            out = []
+            for d, dctx in self.values_of(e.value, ctx, depth + 1):
+                if isinstance(d, ast.Dict):
+                    for k, v in zip(d.keys, d.values):
+                        if isinstance(k, ast.Constant) and k.value == e.slice.value:
+                            out += self.elements(v, dctx, mode, depth + 1)
+                elif isinstance(d, (ast.Tuple, ast.List)) and isinstance(e.slice.value, int) \
+                        and -len(d.elts) <= e.slice.value < len(d.elts) \
+                        and not any(isinstance(x, ast.Starred) for x in d.elts):
+                    out += self.elements(d.elts[e.slice.value], dctx, mode, depth + 1)
+            return out
         if isinstance(e, ast.Name):
             if ctx.func is not None:
                 lv = self.local_vars(ctx)
@@ -1049,6 +1066,44 @@ class PyProgram:
                         return self.elements(k.attrs[e.attr][0], Ctx(k.module, None, k), mode, depth + 1)
             return []
         return []
+
+    def returned(self, call, ctx: "Ctx") -> list:
+        """(expr, callee ctx) for each `return <expr>` of the project function `call` calls (not a class), so a
+        collection a helper builds and returns keeps its elements: `plan = setup(); for p in plan["plugins"]: ...`."""
+        t = self.infer(call.func, ctx)
+        if not t or t[0] not in ("func", "bound") or not isinstance(t[1], FuncInfo):
+            return []
+        f = t[1]
+        fctx = Ctx(f.module, f, f.cls)
+        out, stack = [], list(f.node.body)
+        while stack:
+            n = stack.pop()
+            if isinstance(n, ast.Return):
+                if n.value is not None:
+                    out.append((n.value, fctx))
+            elif not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                stack.extend(ast.iter_child_nodes(n))
+        return out
+
+    def values_of(self, e, ctx: "Ctx", depth: int) -> list:
+        """(expr, ctx) for the values `e` may hold: through local and module names and the returns of a called
+        project function; `e` itself otherwise."""
+        if depth > 6:
+            return []
+        if isinstance(e, ast.Name):
+            if ctx.func is not None:
+                lv = self.local_vars(ctx)
+                if e.id in lv:
+                    return [x for val, _ann, kind in lv[e.id] if kind == "assign" and val is not None
+                            for x in self.values_of(val, ctx, depth + 1)]
+            r = self.resolve_name(ctx.mod, e.id)
+            if r and r[0] == "var":
+                mctx = Ctx(r[1], None, None)
+                return [x for val, _ln, _ann in r[1].vars.get(r[2], ()) for x in self.values_of(val, mctx, depth + 1)]
+            return []
+        if isinstance(e, ast.Call):
+            return [x for r, rctx in self.returned(e, ctx) for x in self.values_of(r, rctx, depth + 1)]
+        return [(e, ctx)]
 
     def module_elements(self, m: ModInfo, name: str, mode: str, depth: int) -> list:
         mctx = Ctx(m, None, None)
@@ -1113,6 +1168,7 @@ class Ctx:
     visiting: set = field(default_factory=set)
 
 
+COPY_FUNCS = {"copy.copy", "copy.deepcopy", "copy", "deepcopy"}
 BUILTINS = {"len", "str", "int", "float", "dict", "list", "set", "tuple", "print", "isinstance", "getattr", "setattr",
             "hasattr", "super", "open", "range", "enumerate", "zip", "map", "filter", "sorted", "min", "max", "sum",
             "any", "all", "bool", "type", "repr", "iter", "next", "round", "abs", "format", "id", "vars", "callable",

@@ -61,6 +61,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Python calls through a collection follow copies and helper-built collections: elements of `copy.copy()` /
+  `copy.deepcopy()` / `.copy()`, of the value a project function returns and of a constant key of a returned dict
+  or tuple (`plan = setup(); for p in plan["plugins"]: p.index()`) keep their types, so `impact` and `tests` reach the
+  callers again when a codebase makes fresh copies of a plugin list
+  ([#9](https://github.com/cyberchronos00/code-graph/issues/9)).
 - Routers, apps and controllers built inside TypeScript test files (`*.spec.ts`, `*.test.ts`, `test/`,
   `__tests__/`) no longer become application routes for the Express / Koa / Fastify / Hono, NestJS and Next.js
   layers; the files stay indexed as tests (immich `server/`: 295 routes, all guarded, instead of 297 with 2 test

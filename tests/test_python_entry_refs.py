@@ -192,6 +192,66 @@ def test_dispatch_tables_lists_dicts_registries_and_plugin_instances(tmp_path):
     assert ("module:app.handlers", H + "on_move") in pairs(st, "REFERENCES_FN", how="assignment")
 
 
+def test_calls_through_copies_and_returned_collections(tmp_path):
+    st, _ = build(tmp_path, "copies", {
+        "app/__init__.py": "",
+        "app/plugins.py": '''
+            class Base:
+                def run(self):
+                    raise NotImplementedError
+
+            class Alpha(Base):
+                def run(self):
+                    return 1
+
+            class Beta(Base):
+                def run(self):
+                    return 2
+
+            PLUGINS = [Alpha(), Beta()]
+            HOOKS = {"a": Alpha, "b": Beta}
+            ''',
+        "app/runner.py": '''
+            import copy
+            from copy import deepcopy
+            from app.plugins import PLUGINS, HOOKS
+
+            def fresh():
+                return [p for p in copy.deepcopy(PLUGINS) if p.run()]
+
+            def setup():
+                active = fresh()
+                return {"plugins": active, "names": ["x"]}
+
+            def pair():
+                return deepcopy(PLUGINS), list(HOOKS.values())
+
+            def run_plan():
+                plan = setup()
+                for p in plan["plugins"]:
+                    p.run()
+
+            def run_pair():
+                plugins = pair()[0]
+                for p in plugins:
+                    p.run()
+
+            def run_shallow():
+                for p in PLUGINS.copy():
+                    p.run()
+                for h in copy.copy(HOOKS).values():
+                    h().run()
+            ''',
+    })
+    c = pairs(st, "CALLS", via="collection")
+    R, P = "function:app.runner.", "method:app.plugins."
+    for f in ("fresh", "run_plan", "run_pair", "run_shallow"):
+        assert {(R + f, P + "Alpha.run"), (R + f, P + "Beta.run")} <= c, f
+    assert P + "Base.run" not in {d for _, d in c}
+    callers = {x["fqn"] for x in Q.impact(st, "app.plugins.Alpha.run")["callers"]}
+    assert {"app.runner.fresh", "app.runner.run_plan", "app.runner.run_pair", "app.runner.run_shallow"} <= callers
+
+
 def test_callbacks_to_stdlib_and_library_apis(tmp_path):
     st, db = build(tmp_path, "cb", {
         "svc/__init__.py": "",

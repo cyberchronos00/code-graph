@@ -98,7 +98,10 @@ class) that mentions it, with `how`:
 
 Properties are attribute reads, not references. A call through the table (`for check in CHECKS: check(item)`,
 `HANDLERS[kind](e)`, `self.plugins[name].run()`) becomes a `CALLS` edge with `via="collection"` to each function the
-table can hold, at `resolved` confidence; it replaces the unique-name guess cg made before. A local decorator also
+table can hold, at `resolved` confidence; it replaces the unique-name guess cg made before. The table's elements are
+followed through copies and the functions that build it: `copy.copy()` / `copy.deepcopy()` / `.copy()`, `list()` /
+`sorted()`, filtering comprehensions, a project function that returns the collection, and a constant key or index of
+a dict or tuple it returns (`plan = setup(); for p in plan["plugins"]: p.index()`). A local decorator also
 gets `CALLS owner -> decorator` with `via="decorator"`. Function-local imports (`from . import routes as R` inside a
 def) resolve per function.
 
