@@ -344,13 +344,21 @@ class UrlResolver:
             app_name = const_str(arg.elts[1]) if len(arg.elts) > 1 else None
             arg = arg.elts[0]
         ns2 = ns + [nsp or app_name] if (nsp or app_name) else ns
+
+        def mod_ns(tm):
+            """include(module) without a namespace: Django uses the module's `app_name` (reverse('core-api:x'))."""
+            if nsp or app_name:
+                return ns2
+            vals = tm.vars.get("app_name") or []
+            an = const_str(vals[-1][0]) if vals else None
+            return ns + [an] if an else ns
         s = const_str(arg)
         if s is not None:
             tm = prog.module(s)
             if tm is None:
                 self.unresolved.append({**where, "reason": f"include('{s}') not found"})
                 return
-            self.walk(tm, prefix, ns2, len(chain), chain)
+            self.walk(tm, prefix, mod_ns(tm), len(chain), chain)
             return
         if isinstance(arg, ast.Attribute) and arg.attr == "urls":
             self.mount_urls(m, arg, prefix, ns2, chain, conds, where["line"])
@@ -360,7 +368,7 @@ class UrlResolver:
             return
         t = prog.infer(arg, Ctx(m, None, None))
         if t and t[0] == "mod":
-            self.walk(t[1], prefix, ns2, len(chain), chain)
+            self.walk(t[1], prefix, mod_ns(t[1]), len(chain), chain)
             return
         if t and t[0] == "var":
             self.walk(t[1], prefix, ns2, len(chain), chain, var=t[2])

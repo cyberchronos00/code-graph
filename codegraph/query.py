@@ -833,7 +833,9 @@ def explain_no_callers(st: GraphStore, spec: str, targets: list[str]) -> str:
         return (f"{s}: no callers found in indexed code (blind spots: {more})" + (f"; other incoming edges: {other}" if other else "")
                 + f". try: reaches('{s}') for every dependent over all edge kinds; search('{n.get('name') or spec}') for "
                 f"similarly named code.\n" + answer_note(comp))
+    tested = sum(r["c"] for r in refs if r["kind"] in ("TEST_CALLS", "TEST_USES", "TEST_HTTP"))
     return (f"{s} has no recorded callers" + (f" (other incoming edges: {other})" if other else "") +
+            (f". Only test code uses it: tests('{s}') lists the tests" if tested else "") +
             ". It may be called dynamically (string callables, container lookups, framework hooks) or be unused. "
             f"try: reaches('{s}') for every dependent over all edge kinds; search('{n.get('name') or spec}') for similarly named code.")
 
@@ -997,8 +999,10 @@ def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30
                                       "path_confidence": path_confidence(tpaths.get(tid, []))})
     for k in ("direct", "transitive"):     # closest tests first
         out[k].sort(key=lambda t: (t["depth"], CONFIDENCE_RANK.get(t["path_confidence"], 0) * -1, t["file"] or "", t["line"] or 0))
+    by_fw = {(r["fw"] or "test"): r["c"] for r in
+             st.q("SELECT json_extract(attrs, '$.framework') fw, count(*) c FROM nodes WHERE kind='test' GROUP BY fw ORDER BY c DESC, fw")}
     out["stats"] = {"direct": len(out["direct"]), "transitive": len(out["transitive"]),
-                    "tests_in_graph": st.q("SELECT count(*) c FROM nodes WHERE kind='test'")[0]["c"]}
+                    "tests_in_graph": sum(by_fw.values()), "tests_by_framework": by_fw}
     return out
 
 
@@ -1017,7 +1021,9 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
     if not res["targets"]:
         return L[0] + "\n(nothing matched the spec)"
     st = res["stats"]
-    L.append(f"tests: {st['direct']} direct, {st['transitive']} transitive (of {st['tests_in_graph']} test cases in the graph)")
+    fws = st.get("tests_by_framework") or {}
+    per = (": " + ", ".join(f"{k} {v}" for k, v in fws.items())) if fws else ""
+    L.append(f"tests: {st['direct']} direct, {st['transitive']} transitive (of {st['tests_in_graph']} test cases in the graph{per})")
     for label, key in (("DIRECT (the test code itself calls / requests the target)", "direct"),
                        ("TRANSITIVE (through application code)", "transitive")):
         group = res[key]

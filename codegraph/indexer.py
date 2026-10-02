@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .core.detect import detect
 from .core.model import ENTRY_KINDS, PROPAGATING
-from .core.plugin import GraphBuilder, Project
+from .core.plugin import GraphBuilder, Project, gc_paused
 from .core.store import GraphStore
 from .plugins.laravel.plugin import LaravelPlugin
 from .plugins.php.plugin import PhpPlugin
@@ -42,6 +42,11 @@ def _crash_site(ex: BaseException) -> str | None:
 def tag_entries(builder: GraphBuilder, skip_gate: str | None = None) -> list[tuple]:
     """Forward closure from every entry node over propagating edges (optionally ignoring edges
     that are dead under gate scenario `skip_gate`). Returns rows (node_id, entry_kind, entry_count, sample_entry)."""
+    with gc_paused():
+        return _tag_entries(builder, skip_gate)
+
+
+def _tag_entries(builder: GraphBuilder, skip_gate: str | None) -> list[tuple]:
     prop = set(PROPAGATING)
     fwd = defaultdict(list)
     for e in builder.edges.values():
@@ -120,6 +125,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
                                                             "at": _crash_site(ex)}
         if fws and hasattr(lp, "after_frameworks"):
             lp.after_frameworks(builder, st)
+        if hasattr(lp, "link_test_requests"):
+            lp.link_test_requests(builder, st)
     for fw in frameworks:
         if f"{fw.language}/{fw.name}" not in stats["plugins"]:
             stats["plugins"][f"{fw.language}/{fw.name}"] = {"status": "detected; language plugin not active"}
@@ -151,7 +158,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     rows = tag_entries(builder)
     stats["entry_tagging_seconds"] = round(time.time() - t_tag, 2)
     store = GraphStore.create(db_path)
-    store.write(builder.nodes.values(), builder.edges.values())
+    with gc_paused():
+        store.write(builder.nodes.values(), builder.edges.values())
     store.db.executemany("INSERT INTO node_entry VALUES (?,?,?,?)", rows)
     scen = [g["name"] for g in (project.options.get("gates") or [])[:1]]
     for sc in scen:

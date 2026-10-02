@@ -96,6 +96,22 @@ MCP: `channels(pattern?, source?)`.
 - PHP: PHPUnit test methods (`test_*`, `@test`, `#[Test]`) and Pest `it()` / `test()` cases (with `describe()`
   prefixes) under `tests/`.
 - TypeScript / JavaScript: Vitest and Jest (`*.test.*`, `*.spec.*`, `__tests__/`), Playwright and Cypress spec files.
+- Python: pytest and unittest. Test files follow pytest's rules: `test_*.py` / `*_test.py`, Django's `tests.py`,
+  `conftest.py`, everything under `tests/` / `test/` and the configured `testpaths`, plus `pytest_plugins` modules.
+  `python_files`, `python_classes`, `python_functions` and `testpaths` are read from `pytest.ini`, `pyproject.toml`
+  (`[tool.pytest.ini_options]`), `tox.ini` or `setup.cfg` at the root or a nested project root. Test cases are pytest
+  `test_*` functions and the methods of `Test*` classes (inherited ones too), and the `test*` methods of
+  `unittest.TestCase` subclasses, Django `TestCase` / `TransactionTestCase` / `SimpleTestCase` and DRF `APITestCase`
+  included. A class's `setUp` / `setUpClass` / `setUpTestData` / `tearDown` (and pytest's `setup_method` /
+  `setup_module` style hooks) run with each of its cases. `@pytest.mark.parametrize` is kept on the test node
+  (`attrs.params`: argument names, literal ids or values, case count), other marks in `attrs.marks`.
+- Python fixtures: `@pytest.fixture` functions in the test module, its classes, every `conftest.py` up the directory
+  tree and `pytest_plugins` modules. A test is linked to each fixture it requests (parameters, `usefixtures`,
+  `request.getfixturevalue('x')`) and to the `autouse=True` fixtures in its scope; fixtures are linked to the fixtures
+  they request, so what a fixture calls counts for every test that uses it. A fixture that overrides a fixture of the
+  same name reaches the outer one, as in pytest.
+- A test directory outside any package (pytest's default import mode) puts its modules on the import path, so
+  `from helpers import build` in a test resolves to the helper next to it.
 
 Each test case is a `test:` node with entry kind `test`. Edges made by test code are rewritten to non-propagating kinds,
 so tests never count as callers and never widen `reaches`, `impact`, `writers`, `routes` or entry tagging:
@@ -103,7 +119,13 @@ so tests never count as callers and never widen `reaches`, `impact`, `writers`, 
 - `TEST_CALLS` / `TEST_USES`: test code calls, instantiates or touches application code (`attrs.orig` keeps the
   original edge kind).
 - `TEST_HTTP`: a test sends a request to a route: `$this->getJson('/api/x')`, `->patchJson(route('tasks.move', …))`,
-  Pest `get('/x')`, `$this->json('PATCH', '/x')`, Playwright `request.patch('/api/x')`, `cy.request`. Project request
+  Pest `get('/x')`, `$this->json('PATCH', '/x')`, Playwright `request.patch('/api/x')`, `cy.request`, Django
+  `self.client.get(reverse('shop:book-detail', args=[…]))`, the pytest-django `client` / `admin_client` fixtures, DRF
+  `APIClient` / `APITestCase.client`, FastAPI / Starlette `TestClient(app)`, `httpx.AsyncClient`, Flask
+  `app.test_client()` (or a fixture that returns one). Python URLs are evaluated from literals, f-strings (with
+  literal `parametrize` values filled in), `%` / `+` / `.format`, local variables, class attributes and `self.url = …`
+  in `setUp`; `reverse()` / `reverse_lazy()` with a literal route name resolve through the Django URL names cg
+  indexes (namespaces, DRF router names `<basename>-list` / `-detail` / `-<action>`). Project request
   helpers whose verb and URL are parameters (`$this->postAs('/x', …)` → `sendAs('post', $uri)` →
   `$this->json($method, $uri)`) are followed to their call sites. Requests are matched to routes like client calls in
   `cg link`; frontend tests are matched when the frontend is linked to its backend. A request whose URL is entirely
@@ -118,7 +140,7 @@ HTTP endpoints that only tests call are tagged `test_only` and kept out of the f
 ```text
 $ cg tests 'App\Support\BoardAccess::visibleBoardIds' --db out/graph.db
 targets: 1 node(s): Support\BoardAccess::visibleBoardIds
-tests: 2 direct, 1 transitive (of 10 test cases in the graph)
+tests: 2 direct, 1 transitive (of 10 test cases in the graph: phpunit 4, pest 3, playwright 2, vitest 1)
 
 == DIRECT (the test code itself calls / requests the target): 2
   board access > it lists the boards of the user teams  [pest] backend/tests/Unit/BoardAccessTest.php:11  depth=1 conf=exact
@@ -129,6 +151,22 @@ tests: 2 direct, 1 transitive (of 10 test cases in the graph)
   board page > shows the tasks of a board  [playwright] frontend/e2e/board.spec.ts:4  depth=6 conf=exact
       test:e2e/board.spec.ts#… -TEST_VISITS-> page:app/pages/boards/[id].vue -USES_COMPOSABLE-> useBoardRealtime (useBoardRealtime.ts) -SUBSCRIBES_CHANNEL-> channel_sub:board.{boardId} -MATCHES_CHANNEL-> channel:board.{board} -HANDLED_BY-> Broadcasting\BoardChannel::join -CALLS-> Support\BoardAccess::visibleBoardIds
 ```
+
+A Python example, from the bundled Django sample (`examples/bookstore-django`):
+
+```text
+$ cg tests catalog.api.get_book --db out/bookstore-django.db
+targets: 1 node(s): catalog.api.get_book
+tests: 0 direct, 1 transitive (of 10 test cases in the graph: pytest 5, unittest 5)
+
+== TRANSITIVE (through application code): 1
+  test_book_endpoints  [pytest] catalog/tests/test_api.py:13  depth=3 conf=exact
+      test:catalog.tests.test_api.test_book_endpoints -TEST_CALLS-> catalog.tests.test_api.test_book_endpoints -TEST_HTTP-> route:GET /api/books/{book_id}/ -ROUTES_TO-> catalog.api.get_book
+```
+
+The header counts the test cases in the graph per framework; `cg coverage` prints the same for Python
+(`python tests: 10 test cases (pytest 5, unittest 5) in 5 files, 5 fixtures; 9 HTTP test requests, 9 linked to
+routes`). A function that only tests call has no callers in `impact` / `callers`, and the answer points to `tests`.
 
 Targets: `Class::method`, `Class`, `route:VERB /uri`, `` `VERB /path` `` or `/path` (matched against route URIs),
 `table.column`, or any node id. **Direct** means the test code itself calls or requests the target; **transitive**
@@ -148,4 +186,11 @@ MCP: `tests_covering(target, min_confidence?, paths?)`.
 - Transitive test paths follow the code statically. A browser test that stubs the API (`page.route(...)`) still
   counts as reaching the backend through the page it visits.
 - Test discovery follows file naming conventions; tests generated at run time (data providers expanding into cases,
-  `test.each`) are one node per declaration.
+  `test.each`, `@pytest.mark.parametrize`) are one node per declaration, with the parameters on the node.
+- Python HTTP test requests link to routes of the web frameworks cg models (Django, DRF, django-ninja). FastAPI,
+  Starlette and Flask requests are found and counted (`cg index` stats, `cg coverage`), and link once those
+  frameworks' routes are indexed. A URL built by a helper method from its arguments (`self._get_url('list')`) or
+  passed as `**request` stays unknown.
+- pytest hooks that generate tests or fixtures at run time (`pytest_generate_tests`, `pytest_collect_file`, fixtures
+  registered by installed plugins other than `pytest_plugins` modules in the repo) are not followed; fixtures from
+  installed plugins (`tmp_path`, `db`, pytest-django's `client`) are not graph nodes.

@@ -10,8 +10,10 @@ ScipPlugin       a LanguagePlugin backed by any SCIP-producing indexer (scip-php
 """
 from __future__ import annotations
 
+import gc
 import json
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -110,6 +112,19 @@ class GraphBuilder:
         nk = (key[0], key[1], kind) + key[3:]
         if nk not in self.edges:
             self.edges[nk] = e
+
+
+@contextmanager
+def gc_paused():
+    """Pause the cyclic garbage collector for a pass over the whole graph that allocates many small, acyclic objects
+    (sets, dicts, deques): on a large graph the collections that allocation triggers cost far more than the pass."""
+    was = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was:
+            gc.enable()
 
 
 class LanguagePlugin(ABC):

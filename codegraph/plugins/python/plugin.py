@@ -30,7 +30,7 @@ from typing import Any, Callable, Iterator
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.fsutil import keep_file
-from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
+from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project, gc_paused
 from .roots import RootPlan, import_names
 
 SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "env", ".env", "__pycache__", "site-packages", ".tox", ".nox",
@@ -1129,6 +1129,7 @@ class PythonPlugin(LanguagePlugin):
 
     def __init__(self):
         self.program: PyProgram | None = None
+        self.tests = None
 
     def detect(self, project: Project) -> bool:
         """A project marker at the root, or a .py file anywhere outside dependency / build / cache directories."""
@@ -1146,6 +1147,9 @@ class PythonPlugin(LanguagePlugin):
         self.program = prog
         st = prog.load(skip_migrations=not project.options.get("python_include_migrations"))
         self.file_report = prog.file_report
+        from .tests import PyTests
+        self.tests = PyTests(prog, builder)
+        n_alias = self.tests.rootdir_aliases()
         for fw in frameworks:
             fw.register_hooks(prog)
         b = builder
@@ -1221,9 +1225,15 @@ class PythonPlugin(LanguagePlugin):
         for m in prog.modules.values():
             n_env += self.env_reads(prog, b, m.id, m.tree, Ctx(m, None, None), top_only=True)
         refs = self.references_and_entries(prog, b, conf_ct, rp)
+        # pytest / unittest: test code marked attrs.test, test cases, fixtures, HTTP test requests (tests.py)
+        with gc_paused():
+            tests_st = self.tests.index()
+        if tests_st and n_alias:
+            tests_st["rootdir_import_names"] = n_alias
         st.update({"classes": len(prog.classes), "functions": sum(1 for f in prog.funcs.values() if f.kind == "function"),
                    "methods": sum(1 for f in prog.funcs.values() if f.kind == "method"), "imports": n_imp,
                    "extends": n_ext, "calls": conf_ct, "env_reads": n_env, **refs,
+                   **({"tests": tests_st} if tests_st else {}),
                    "parse_error_files": [e["file"] for e in prog.parse_errors[:20]],
                    "roots_mode": prog.root_plan.mode, "source_roots": prog.roots_report,
                    **({"roots_warnings": prog.root_plan.warnings} if prog.root_plan.warnings else {}),
@@ -1236,14 +1246,22 @@ class PythonPlugin(LanguagePlugin):
                    "seconds": round(time.time() - t0, 2)})
         return st
 
+    def link_test_requests(self, b, st: dict) -> None:
+        """The HTTP requests of test code, matched to the routes the framework plugins added (runs after them)."""
+        tests = getattr(self, "tests", None)
+        if tests is not None and tests.pending:
+            http = tests.match_http()
+            if http:
+                st.setdefault("tests", {})["http"] = http
+
     def after_frameworks(self, b, st: dict) -> None:
         """A function a framework plugin wired up (Django route -> view, signal -> receiver, task) keeps that precise
         edge; the module-level reference to it (`path("x/", views.x)`, `@router.get(...)`) is the same registration
         seen syntactically and is dropped."""
-        code = {"function", "method", "module", "class", "script", "field"}
+        code = {"function", "method", "module", "class", "script", "field", "test"}
         wired = set()
         for e in b.edges.values():
-            if e.kind in ("CONTAINS", "REFERENCES_FN"):
+            if e.kind in ("CONTAINS", "REFERENCES_FN") or e.kind.startswith("TEST_"):
                 continue
             n = b.nodes.get(e.src)
             if n is not None and n.lang == "python" and n.kind not in code:

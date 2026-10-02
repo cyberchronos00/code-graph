@@ -94,7 +94,7 @@ cg path page:/reports/:id table:orders --db out/graph.db                  # fron
 cg resolutions timezone --db out/graph.db                                 # where is "timezone" decided?
 cg routes --writes --db out/graph.db                                      # which routes write data, and with which guards?
 cg plan check preorders --plans-dir examples/plans --db out/graph.db      # what does this planned change miss?
-.venv/bin/python -m pytest -q tests/                                      # 179 tests
+.venv/bin/python -m pytest -q tests/                                      # 199 tests
 ```
 
 **The same bookstore in other stacks.** Each sample indexes on its own; PHP is only needed for Laravel and Node only
@@ -248,7 +248,7 @@ LISTENED TO BY (1)
 
 $ cg tests 'PATCH /api/tasks/{task}/move' --no-paths --db out/graph.db
 targets: 1 node(s): route:PATCH /tasks/{task}/move
-tests: 2 direct, 0 transitive (of 10 test cases in the graph)
+tests: 2 direct, 0 transitive (of 10 test cases in the graph: phpunit 4, pest 3, playwright 2, vitest 1)
 
 == DIRECT (the test code itself calls / requests the target): 2
   TaskMoveTest::test_moving_a_task_updates_its_state  [phpunit] backend/tests/Feature/TaskMoveTest.php:17  depth=2 conf=exact
@@ -324,8 +324,8 @@ or `heuristic` (a labelled name-based fallback). The **mode** column says where 
 | Next.js | exact + resolved | app router (pages, layouts, `route.ts` handlers, dynamic / catch-all segments, route groups, parallel / intercepting routes), pages router + `pages/api`, server actions, `middleware.ts` matchers, `basePath` / rewrites, env incl. `NEXT_PUBLIC_*`, in-repo client → handler links |
 | Express, Fastify, Koa, Hono | exact + resolved | routes, router mounting chains across files (`use`, `register({prefix})`, `route`, `basePath`), route and router-level middleware, Fastify schemas |
 | JavaScript (CommonJS / ESM) | resolved (TS checker with `allowJs`) | the same extractor; resolution follows what the checker infers |
-| Python | resolved (stdlib `ast`, import resolution, type inference) + heuristic fallback | modules, classes, functions, calls; source roots detected from the layout (`src/`, `lib/`, packaging config, several package roots, namespace packages, nested projects) or set in `.cg.yaml`; entry points (`__main__` blocks, `python -m pkg`, console scripts and plugin entry points from `pyproject.toml` / Poetry / `setup.cfg` / `setup.py`, MCP tools, click / typer commands); functions used as values (dispatch tables, plugin lists, callbacks, registering decorators) and calls through them ([docs/python.md](docs/python.md)) |
-| Django | resolved + heuristic fallback | urls.py (path/re_path/include/namespaces), class/function views, view access checks (`login_required`, permission decorators, access mixins), models → tables/columns/relations, ORM reads/writes, settings/env (os.environ, getenv, django-environ), signals, management commands, admin |
+| Python | resolved (stdlib `ast`, import resolution, type inference) + heuristic fallback | modules, classes, functions, calls; source roots detected from the layout (`src/`, `lib/`, packaging config, several package roots, namespace packages, nested projects) or set in `.cg.yaml`; entry points (`__main__` blocks, `python -m pkg`, console scripts and plugin entry points from `pyproject.toml` / Poetry / `setup.cfg` / `setup.py`, MCP tools, click / typer commands); functions used as values (dispatch tables, plugin lists, callbacks, registering decorators) and calls through them; pytest / unittest tests with fixtures, parametrize and HTTP test clients linked to routes ([docs/python.md](docs/python.md)) |
+| Django | resolved + heuristic fallback | urls.py (path/re_path/include/namespaces, `app_name`), class/function views, view access checks (`login_required`, permission decorators, access mixins), models → tables/columns/relations, ORM reads/writes, settings/env (os.environ, getenv, django-environ), signals, management commands, admin |
 | django-ninja | resolved | NinjaAPI/Router/`add_router` prefixes, operations with path params, `auth=`, request/response Schema and ModelSchema fields |
 | Django REST Framework | resolved | routers, ViewSets (+ `@action`), APIView/generic views, `permission_classes`, serializer fields |
 | Celery / Channels | resolved | tasks + `.delay`/`.apply_async` dispatches; websocket routing to consumers |
@@ -484,8 +484,10 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
 - **Broadcast channels** are read from `Broadcast::channel` and `broadcastOn()`; names cg cannot evaluate keep a
   `{?}` segment, and Livewire Echo listeners are not client subscriptions. A channel's checks are the calls its
   callback makes. See [docs/channels-and-tests.md](docs/channels-and-tests.md#limits).
-- **Tests** are found by naming conventions and never count as callers. Transitive test paths are static, so a browser
-  test that stubs the API still reaches the backend through the page it opens.
+- **Tests** are found by naming conventions (pytest's own settings for Python) and never count as callers. Transitive
+  test paths are static, so a browser test that stubs the API still reaches the backend through the page it opens.
+  Python HTTP test requests link to Django, DRF and django-ninja routes; FastAPI and Flask test clients are counted
+  until those frameworks' routes are modelled.
 - **Base URLs** from runtime config and env are folded into endpoint paths when the value is in the repo (`nuxt.config`
   defaults, `.env`, `.env.example`, `||` defaults in code); values set only at deploy time stay an unknown origin.
   A Nuxt checkout without `.nuxt` is indexed with generated stand-ins for its own auto-imports and components.
@@ -520,6 +522,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Multiple gate scenarios per index, and middleware-level gates.
 - Tested SCIP recipes for Go and Java.
 - Rust/C/C++: macro-expanded items, function-pointer dataflow, Bazel and Meson autodetection.
+- FastAPI, Starlette and Flask routes, so the HTTP requests in their test suites link to the handlers they exercise.
 - Route guards: Laravel kernel middleware groups and Django's `MIDDLEWARE` setting shown on each route.
 - More keys in `.cg.yaml`: include / exclude paths, monorepo apps and link pairs, framework presets and extra
   auth patterns.
@@ -538,9 +541,9 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/schema.md](docs/schema.md) | SQLite tables, node kinds, edge kinds, confidence, entry kinds |
 | [docs/native.md](docs/native.md) | Rust, C and C++: install, compile database, modes, facts, entry kinds, query specs, gates, env vars, validation numbers |
 | [docs/ts-frameworks.md](docs/ts-frameworks.md) | NestJS, Next.js and Express-style layers, validation on public projects |
-| [docs/python.md](docs/python.md) | Python source roots (detection, module names, `.cg.yaml` / `--python-root`, coverage output), entry points and function references, validation |
+| [docs/python.md](docs/python.md) | Python source roots (detection, module names, `.cg.yaml` / `--python-root`, coverage output), entry points and function references, pytest / unittest tests, validation |
 | [docs/value-facts.md](docs/value-facts.md) | request keys, settings, fallback chains, `resolutions` |
-| [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`) |
+| [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`: PHPUnit, Pest, Vitest, Jest, Playwright, Cypress, pytest, unittest) |
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`), gates, presets, plans dir, environment variables |
@@ -548,7 +551,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
 | [docs/validation.md](docs/validation.md) | results on public Django and Flutter projects |
 | [CHANGELOG.md](CHANGELOG.md) | changes per release, and what is coming in the next one |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 179 tests, adding a plugin |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 199 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
 

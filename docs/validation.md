@@ -32,7 +32,8 @@ Gaps seen:
 
 Python source-root detection (`src/` and `lib/` layouts, monorepos, namespace packages) is validated on
 fastapi/full-stack-fastapi-template, opentelemetry-python, ansible, flask, pytest and netbox: see
-[python.md](python.md#validation).
+[python.md](python.md#validation). Test indexing (pytest, unittest, fixtures, Django / DRF test clients) is validated on
+the same projects: see [python.md](python.md#tests-pytest-and-unittest).
 
 ## Flutter / Dart
 

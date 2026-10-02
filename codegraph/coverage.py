@@ -216,6 +216,12 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             for k in ("roots_mode", "source_roots", "roots_warnings", "roots_ambiguous", "module_name_collisions"):
                 if st.get(k):
                     e[k] = st[k]
+            t = st.get("tests") or {}
+            if t.get("cases"):
+                e["tests"] = {"cases": t["cases"], "test_files": sum((t.get("test_files") or {}).values()),
+                              "fixtures": t.get("fixtures", 0),
+                              **({"http": {k: v for k, v in t["http"].items() if k in ("requests", "matched", "unmatched", "url_unknown")}}
+                                 if t.get("http") else {})}
         langs.append(e)
     other: dict = {}
     for ext, lang in UNSUPPORTED.items():
@@ -288,6 +294,23 @@ def python_roots_lines(e: dict, all_files: bool = False, indent: str = "  ") -> 
                    + (f"; {moved} file{' in that package tree is' if moved == 1 else 's in those package trees are'} named "
                       f"by {'its' if moved == 1 else 'their'} path from the indexed root" if moved else ""))
     return out
+
+
+def python_tests_line(e: dict, indent: str = "  ") -> list[str]:
+    """'python tests: 120 test cases (pytest 110, unittest 10) in 30 files, 45 fixtures; 12 HTTP requests, 10 linked to routes'."""
+    t = e.get("tests") or {}
+    cases = t.get("cases") or {}
+    if not cases:
+        return []
+    def n(k, word):
+        return f"{k} {word}{'' if k == 1 else 's'}"
+    line = (f"{indent}python tests: {n(sum(cases.values()), 'test case')} ("
+            + ", ".join(f"{k} {v}" for k, v in sorted(cases.items(), key=lambda x: (-x[1], x[0])))
+            + f") in {n(t.get('test_files', 0), 'file')}" + (f", {n(t['fixtures'], 'fixture')}" if t.get("fixtures") else ""))
+    h = t.get("http") or {}
+    if h.get("requests"):
+        line += f"; {n(h['requests'], 'HTTP test request')}, {h.get('matched', 0)} linked to routes"
+    return [line]
 
 
 def _is_gap(e: dict) -> bool:
@@ -368,6 +391,7 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
         for e in (cov or {}).get("languages", []):
             if e["language"] == "python":
                 out += python_roots_lines(e, all_files)
+                out += python_tests_line(e)
         for e in gaps(cov):
             any_gap = True
             exts = ", ".join(f"{k} {v}" for k, v in sorted(e["by_ext"].items()))

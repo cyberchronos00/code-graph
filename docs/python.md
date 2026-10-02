@@ -1,4 +1,4 @@
-# Python source roots
+# Python: source roots, entry points and tests
 
 cg names every Python module the way the interpreter imports it, so `from core.policy import is_allowed` lands on
 `lib/core/policy.py` whether the project uses a flat layout, a `src/` layout, a `lib/` directory put on `sys.path` by
@@ -146,7 +146,7 @@ The Python plugin stats record `references`, `decorator_calls`, `script_entries`
 
 Not modelled: module-level code that runs on import is not an entry point of its own; property reads are not `CALLS`;
 `getattr(obj, name)()` with a computed name and functions registered by external libraries without a receiver stay
-unresolved. Test code still counts as an ordinary caller until tests are marked for Python.
+unresolved. Test code never counts as a caller: see [Tests](#tests-pytest-and-unittest).
 
 Measured on the same shallow clones as below, before and after:
 
@@ -163,6 +163,50 @@ Calls through a collection: pytest 10, ansible 79, opentelemetry-python 25, netb
 identical before and after (27,897 in netbox). In opentelemetry-python the function-local import fix moved
 `_create_otlp_grpc_*_exporter` from the HTTP exporter class to the gRPC one. The Python plugin takes about 5-10% longer
 (ansible 11.5 s -> 12.4 s, netbox 13.9 s -> 14.8 s, best of three on a shared machine).
+
+## Tests (pytest and unittest)
+
+pytest and unittest suites are indexed as test cases, so `cg tests <symbol>` lists the tests that exercise a function
+and `impact` / `callers` / `reaches` show only application callers. Test files are found the way pytest finds them,
+including the `python_files`, `python_classes`, `python_functions` and `testpaths` settings of `pytest.ini`,
+`pyproject.toml`, `tox.ini` or `setup.cfg`; fixtures are followed through `conftest.py` chains, `autouse`,
+`usefixtures`, fixture-to-fixture requests and `pytest_plugins`; Django test clients with `reverse()`, DRF `APIClient`
+and `APITestCase` requests link to the routes they hit. The full rules are in
+[channels-and-tests.md](channels-and-tests.md#tests).
+
+```text
+$ cg tests checks.check_size --db out/graph.db
+targets: 1 node(s): checks.check_size
+tests: 1 direct, 1 transitive (of 2 test cases in the graph: pytest 2)
+
+== DIRECT (the test code itself calls / requests the target): 1
+  test_check_size_rejects_big_items  [pytest] tests/test_checks.py:8  depth=2 conf=exact
+      test:tests.test_checks.test_check_size_rejects_big_items -TEST_CALLS-> tests.test_checks.test_check_size_rejects_big_items -TEST_CALLS-> checks.check_size
+
+== TRANSITIVE (through application code): 1
+  test_validate_accepts_small_items  [pytest] tests/test_checks.py:4  depth=3 conf=exact
+      test:tests.test_checks.test_validate_accepts_small_items -TEST_CALLS-> tests.test_checks.test_validate_accepts_small_items -TEST_CALLS-> checks.validate -CALLS-> checks.check_size
+```
+
+`cg coverage` adds a `python tests:` line (cases per framework, test files, fixtures, HTTP test requests and how many
+reached a route), and the Python plugin stats carry the same under `tests`.
+
+Measured on the same shallow clones as below, before and after:
+
+| Project | test cases | CALLS edges (now application code only) | TEST_* edges | fixtures / fixture uses | HTTP test requests |
+|---|---|---|---|---|---|
+| pytest-dev/pytest | 0 -> 3,512 (pytest 3,501, unittest 11) | 14,789 -> 2,987 | 0 -> 33,591 | 164 / 2,489 | - |
+| pallets/flask | 0 -> 391 | 1,538 -> 430 | 0 -> 3,151 | 23 / 535 | 331 found (Flask routes not modelled yet) |
+| fastapi/full-stack-fastapi-template | 0 -> 58 | 182 -> 54 | 0 -> 435 | 4 / 123 | 53 found (FastAPI routes not modelled yet) |
+| open-telemetry/opentelemetry-python | 0 -> 2,599 (pytest 192, unittest 2,407) | 11,723 -> 2,860 | 0 -> 19,793 | 36 / 98 | - |
+| ansible/ansible | 0 -> 2,628 (pytest 1,647, unittest 981) | 22,247 -> 14,843 | 0 -> 16,723 | 122 / 845 | - |
+| netbox-community/netbox | 0 -> 14,103 (unittest) | 20,744 -> 5,170 | 0 -> 94,514 | - | 1,005 found, 443 linked to Django / DRF routes |
+
+pytest's own `testpaths = testing` and `python_files = ... testing/python/*.py` settings are honoured. In netbox, 10
+TEST_HTTP edges sampled at random all land on the route the test requests (DRF router names, `app_name` namespaces);
+the requests left unlinked build their URL in a helper method (`self._get_url('list')`) or name routes registered
+at run time. Indexing takes about 3-7% longer
+(ansible 11.2 s -> 12.0 s, netbox 33.0 s -> 34.1 s, best of three on a shared machine).
 
 ## Validation
 

@@ -287,13 +287,14 @@ class DjangoPlugin(FrameworkPlugin):
                     c = t[1]
                     lk = self.class_attr_str(c, "lookup_url_kwarg") or self.class_attr_str(c, "lookup_field") or "pk"
                     acts = self.viewset_actions(c)
+                    base = reg["basename"] or self.drf_basename(c) or pfx
                     for act, verb, detail in ACTION_ROUTES:
                         if act not in acts:
                             continue
                         h = prog.find_method(c, act)
                         self._route(method=verb, uri=pre + pfx + ("/{" + lk + "}" if detail else "") + slash, handler=h or c,
                                     view=f"{c.qual}.{act}", action=act, viewset=c, generic=h is None,
-                                    name=f"{reg['basename'] or pfx}-{'detail' if detail else 'list'}", **kw)
+                                    name=f"{base}-{'detail' if detail else 'list'}", **kw)
                     for f in self.all_methods(c):
                         for d in f.decorators:
                             dn = (dotted(d.func if isinstance(d, ast.Call) else d) or "").split(".")[-1]
@@ -312,9 +313,12 @@ class DjangoPlugin(FrameworkPlugin):
                                     url_path = regex_to_template(url_path)[0].strip("/")
                                 uname = const_str(kwarg(d, "url_name"))
                             uri = pre + pfx + ("/{" + lk + "}" if detail else "") + "/" + url_path + slash
+                            # DRF names an extra action's route '<basename>-<url_name>' (url_name defaults to the
+                            # method name with '-' for '_'), so reverse('review-upvote') finds it
+                            rname = f"{base}-{uname or f.name.replace('_', '-')}"
                             for mth in ms:
                                 self._route(method=mth, uri=uri, handler=f, view=f.qual, action=f.name, viewset=c,
-                                            name=uname, extra_action=True, **kw)
+                                            name=rname, extra_action=True, **kw)
 
     # ---- ninja
     def ninja_routes(self):
@@ -490,6 +494,14 @@ class DjangoPlugin(FrameworkPlugin):
             t = prog.infer(ser[0], Ctx(ser[1].module, None, ser[1]))
             if t and t[0] == "type":
                 b.add_edge(c.id, t[1].id, "USES_SCHEMA", ser[1].file, ser[0].lineno, RESOLVED, role="serializer_class")
+
+    def drf_basename(self, c: ClassInfo) -> str | None:
+        """DRF's default router basename: the lowercased model name of the viewset's `queryset`."""
+        x = self.class_attr_expr(c, "queryset")
+        if x is None:
+            return None
+        t = self.prog.infer(x[0], Ctx(x[1].module, None, x[1]))
+        return t[1].name.lower() if t and t[0] == "qs" else None
 
     def class_attr_expr(self, c: ClassInfo, name):
         for k in [c] + [x[1] for x in self.prog.mro(c) if x[0] == "type"]:

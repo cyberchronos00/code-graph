@@ -70,6 +70,13 @@ def resolve_visits(builder) -> int:
 
 
 def isolate_tests(builder) -> dict:
+    """Retype every edge that touches test code into its TEST_* kind (one pass, garbage collector paused)."""
+    from .core.plugin import gc_paused
+    with gc_paused():
+        return _isolate_tests(builder)
+
+
+def _isolate_tests(builder) -> dict:
     visits = resolve_visits(builder)
     tests = {nid for nid, n in builder.nodes.items() if is_test_node(n)}
     st = {"test_nodes": sum(1 for n in builder.nodes.values() if n.kind == "test"), "test_code_nodes": len(tests),

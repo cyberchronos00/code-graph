@@ -29,7 +29,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   calls), the events that publish on them and the client code that subscribes (see
   [channels-and-tests.md](channels-and-tests.md#broadcast-channels));
 - `tests_covering(target, min_confidence?, paths?)`: the tests that exercise a symbol, route or table, direct and
-  transitive, closest first (see [channels-and-tests.md](channels-and-tests.md#tests));
+  transitive, closest first, with the test cases in the graph per framework (PHPUnit, Pest, Vitest, Jest,
+  Playwright, Cypress, pytest, unittest; see [channels-and-tests.md](channels-and-tests.md#tests));
 - `resolutions(concept, within?, client?, detail?)` (see [value-facts.md](value-facts.md));
 - `plan_list`, `plan_load`, `plan_validate`, `plan_check(name, verify?, details?, max_items?, review?)`, `plan_baseline`.
   `plan_check` replies with a compact summary by default: counts per section and per check, the top `max_items` (5)

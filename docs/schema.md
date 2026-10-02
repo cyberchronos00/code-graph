@@ -14,8 +14,11 @@ meta(key, value)                                 -- corpus, commit, stats
 **Node kinds:** class, interface, trait, method (incl. functions), property, external_class (vendor placeholder), route, command, schedule, job,
 event, listener, observer, admin (Filament surface), table, column, connection, config, env, script (migrations/routes/config files),
 channel (`channel:<pattern>`, a broadcast channel; attrs `pattern`, `visibility`, `declared`, `callback` / `handler`).
-**test** (every language): one test case (`test:<file>::<name>`; attrs `framework` = phpunit, pest, vitest, jest,
-playwright, cypress; `suite`). Test edges never propagate (see below).
+**test** (every language): one test case (`test:<file>::<name>`, Python `test:<module>.<Class>.<method>`; attrs
+`framework` = phpunit, pest, vitest, jest, playwright, cypress, pytest, unittest; `suite`; Python adds `params`
+(parametrize argument names, literal ids or values, `cases`), `marks`, `testcase` (the TestCase base) and
+`inherited_from`; entry kind `test` for Python). Every node declared in test code carries `attrs.test`. Test edges
+never propagate (see below).
 TS/Vue (lang='ts'): module (TS file), page, component, layout, app (Vue SFCs), composable, store, function, class, type,
 http (client endpoint `http:<METHOD> <path template>`; attrs `origin`, `origin_kind`, `base` when a configured base URL
 was folded in, `test_only` when only tests call it), channel_sub (a client channel subscription `channel_sub:<name>`;
@@ -58,7 +61,8 @@ Dart/Flutter: EMITS_STATE (bloc → state), HANDLES_STATE (UI → state check), 
 Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (event → channel; attrs `name`, `visibility`,
 `site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs
 `visibility_mismatch`), LISTENS_FOR (channel_sub → event).
-Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind), TEST_HTTP (test → route),
+Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind; Python test → fixture and
+fixture → fixture with `via` = fixture / autouse fixture and `attrs.fixture`), TEST_HTTP (test → route),
 TEST_VISITS (browser test → page). None of them propagate, so tests never count as callers.
 MAPS_TO_TABLE, HAS_RELATION, CONTAINS, EXTENDS, IMPLEMENTS, USES_TRAIT, INSTANTIATES, INJECTS, REFERENCES (`X::class`), OBSERVED_BY, BINDS, DEFINES.
 
