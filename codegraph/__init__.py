@@ -1,2 +1,2 @@
 """code-graph: deterministic code knowledge graph (beta)."""
-__version__ = "0.4.0"
+__version__ = "0.5.0"
