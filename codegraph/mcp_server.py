@@ -2,8 +2,8 @@
 
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
-Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, index, downstream, path, api_calls,
-resolutions, channels, tests_covering, coverage, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, starters, index, downstream, path,
+api_calls, resolutions, channels, tests_covering, coverage, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -66,6 +66,8 @@ server = MCPServer(
         "query (TEST_* edges never propagate); `tests_covering` lists the tests that exercise a symbol / route / table, "
         "direct (the test calls or requests it) and transitive (through application code). "
         "When a query finds nothing, the reply says why and which query to run instead. "
+        "`starters` lists first questions derived from this graph (unguarded write routes, most-reached tables, "
+        "most-called functions), each with the call to run. "
         "COVERAGE: `coverage` says which languages / files the index covers (exact, heuristic only, skipped because an "
         "indexer is missing, or unsupported, e.g. Go/Java/Kotlin/Swift/QML/shell files), how many files of each language "
         "are indexed (parse failures, unmapped files) and the blind spots: route / handler registrations cg does not "
@@ -388,7 +390,7 @@ def _snapshot_client_lines(route_ids) -> list[str]:
     """External (not indexed) client call sites from the snapshot files next to the plans that hit these routes."""
     from . import plans as P
     try:
-        hits = P.snapshot_clients(_st(), route_ids, STATE["plans"])
+        hits = P.snapshot_clients(_st(), route_ids, _plans_dir())
     except Exception:  # noqa: BLE001  (a broken snapshot file must not break impact)
         return []
     if not hits:
@@ -586,8 +588,8 @@ def routes(writes: str | None = None, reaches: list[str] | None = None, missing:
     """Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
     DB write) or writes="<table>", reaches=[specs] (routes that reach any of these nodes: table, column, connection,
     method, env key...). Optional filters: missing="<name>" keeps routes with no guard whose name contains it (e.g.
-    "auth:api", "ApiKeyGuard"), unguarded=true keeps routes with no auth-like guard (name-based; extend with
-    auth_pattern, a regex). Each route: guards, what it reaches with one evidence chain, and the frontend callers on a
+    "auth:api", "ApiKeyGuard"), unguarded=true keeps routes with no auth guard (the framework presets' auth guards and
+    the auth name pattern; extend with auth_pattern, a regex, or .cg.yaml auth.extra_patterns). Each route: guards, what it reaches with one evidence chain, and the frontend callers on a
     combined graph. Guards come from Laravel middleware, Nest guards/interceptors, Express/Koa/Fastify/Hono
     middleware, Next.js middleware.ts / handler wrappers, django-ninja auth= and Django/DRF view access checks.
     min_confidence: keep the default (heuristic) for reviews: every edge still shows its own label, and a stricter
@@ -642,6 +644,16 @@ def coverage(path: str | None = None, all_files: bool = False, json_output: bool
                    f"{lang} is not supported by cg" if lang else "no node of this graph comes from that path")
             out.append(f"{path}: NOT in the graph ({why}); {FALLBACK}.")
     return "\n".join(out)
+
+
+@tool
+def starters() -> str:
+    """Starter queries derived from this graph, each with the tool call to run: the write route without an auth guard
+    that writes the most tables, the most-written / most-read table, the most-used DB connection and env key, the page
+    with the largest backend reach, the most-called functions. A good first call on an unfamiliar repository."""
+    from .starters import for_graph, render
+    _scope(whole=True, note=False)
+    return render(for_graph(_st()))
 
 
 @tool
@@ -743,16 +755,24 @@ def api_calls(filter: str = "all", max_items: int = 60) -> str:
     return "\n".join(out)
 
 
+def _plans_dir() -> str | None:
+    """--plans, else plans.dir of the indexed project's .cg.yaml, else the default plans/."""
+    if STATE["plans"]:
+        return STATE["plans"]
+    from .plans import resolve_plans_dir
+    return resolve_plans_dir(None, STATE["db"])
+
+
 def _plan(name: str):
     from . import plans as P
-    return P, P.load_plan(name, STATE["plans"])
+    return P, P.load_plan(name, _plans_dir())
 
 
 @tool
 def plan_list() -> str:
     """List planned-change files (plans/*.yaml): name, status, title, counts, schema errors."""
     from . import plans as P
-    rows = P.list_plans(STATE["plans"])
+    rows = P.list_plans(_plans_dir())
     out = []
     for r in rows:
         if r.get("error"):
@@ -954,7 +974,7 @@ def main(argv=None):
     ap.add_argument("--db", default=STATE["db"])
     ap.add_argument("--root")
     ap.add_argument("--gates")
-    ap.add_argument("--plans", help="plans directory (default: <repo>/plans)")
+    ap.add_argument("--plans", help="plans directory (default: plans.dir of the project's .cg.yaml, else <repo>/plans)")
     a = ap.parse_args(argv)
     STATE["plans"] = str(Path(a.plans).resolve()) if a.plans else None
     STATE["db"] = str(Path(a.db).resolve())

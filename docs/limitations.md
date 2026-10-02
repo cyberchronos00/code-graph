@@ -229,10 +229,19 @@ Issues and pull requests that extend it are welcome.
   Laravel route and group middleware, Nest guards / interceptors / pipes (including `APP_GUARD` and `useGlobal*`),
   Express-style route, router and `app.use` middleware, Next.js `middleware.ts` matchers and handler wrappers,
   django-ninja `auth=`, Django view decorators, access mixins and DRF `permission_classes` / `authentication_classes`.
-  Laravel kernel middleware groups and Django's `MIDDLEWARE` setting apply to every route and are not repeated per route.
-- **Auth** is decided by the guard's name (`auth`, `login`, `jwt`, `token`, `permission`, `IsAuthenticated`, `ApiKey`,
-  …); a guard with a project-specific name counts once it matches `--auth-pattern`. Checks inside the handler body
-  (`if (!req.user)`, `request.user.is_authenticated`) are not guards.
+  Project-wide defaults (Laravel kernel middleware groups, Django's `MIDDLEWARE` setting, DRF
+  `DEFAULT_PERMISSION_CLASSES`) and middleware a Laravel controller registers in its constructor
+  (`$this->middleware(...)`) apply outside the route definition and are not repeated per route, so routes they protect
+  are listed by `--unguarded`; [validation.md](validation.md#presets-starter-queries-and-route-guards) shows how
+  often that happens on public projects.
+- **Auth** is decided by the framework preset's guard lists first ([configuration.md](configuration.md#framework-presets)),
+  then by the guard's name (`auth`, `login`, `jwt`, `token`, `permission`, `ApiKey`, …); a guard with a
+  project-specific name counts once it matches `auth.extra_patterns` in `.cg.yaml` or `--auth-pattern`. Checks inside
+  the handler body (`if (!req.user)`, `request.user.is_authenticated`) are not guards.
+- **Presets** cover the frameworks with route plugins; Rust (axum / actix) and C / C++ get the language skip lists
+  and the shared name pattern. `.cg.yaml` `exclude` and `skip_dirs` apply to every plugin; the TypeScript and Dart
+  extractors' built-in skips (build output, generated files) stay on. Starter queries are recorded per indexed repo;
+  a combined graph computes them when asked.
 - **Sent but not forwarded** keys are found when a call site passes an object literal to a request helper whose request
   keys are statically known (query or body keys of the HTTP call, one call level). Spreads, keys built at runtime and
   helpers that forward an opaque object are left out, so no gap is reported for them.

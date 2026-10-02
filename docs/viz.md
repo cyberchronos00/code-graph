@@ -4,8 +4,11 @@
 stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/viz/static/vendor` (MIT, versions in
 `VERSIONS.txt`; everything is served locally, so it works offline). Open `http://127.0.0.1:8177/`.
 - Search box with suggestions; modes `reaches`, `impact`, `downstream` (sinks: tables via columns / routes / all),
-  `path` (`source, [waypoints…,] target`) and `plan overlay`; min confidence; presets (built-in ones target the sample
-  app; `--presets FILE` loads a JSON list of `{id, label, mode, specs[, sinks]}`). State is in the URL hash
+  `path` (`source, [waypoints…,] target`) and `plan overlay`; min confidence; presets: `--presets FILE` (a JSON list of
+  `{id, label, mode, specs[, sinks]}`) or `viz.presets` in `.cg.yaml`, then the sample-app presets whose targets are
+  in the graph, then starter queries derived from the graph (marked as starters; see
+  [configuration.md](configuration.md#viz-presets-and-starter-queries)), so any repository opens with useful first
+  questions. State is in the URL hash
   (`#mode=reaches&spec=…&expand=<group>|…&select=<node id>`), so views can be bookmarked.
 - The subgraph is the union of the query's evidence paths. Nodes are grouped into boxes by module (`repo · module`;
   columns by table; HTTP calls, settings and request keys by kind). Big modules start folded into one box with counts;

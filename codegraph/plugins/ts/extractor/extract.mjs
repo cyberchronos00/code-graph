@@ -23,6 +23,9 @@ const I18N_FNS = new Set(['t', '$t', 'te', '$te', 'tm', 'rt'])
 const SKIP_FILE = /(\.test|\.spec)\.(ts|js|mts)$|\/node_modules\/|\/\.nuxt\//
 // framework plugins may exclude more (tests, build output) by a regex over the repo-relative path
 const SKIP_REL = cfg.skip_re ? new RegExp(cfg.skip_re) : null
+// the project's .cg.yaml exclude globs and skip_dirs.add names: never indexed, test code included
+const EXCLUDE_REL = cfg.exclude_re ? new RegExp(cfg.exclude_re) : null
+const excludedRel = r => !!(EXCLUDE_REL && EXCLUDE_REL.test(r))
 const SRC_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/
 // test code (Vitest / Jest / Playwright / Cypress): indexed as test nodes unless cfg.index_tests === false; kept out of
 // the application graph by the indexer (TEST_* edges)
@@ -94,7 +97,7 @@ function walkDir(d, out) {
   for (const e of ents) {
     if (e.name === 'node_modules' || e.name.startsWith('.')) continue
     const p = path.join(d, e.name)
-    if (SKIP_REL && SKIP_REL.test(rel(p))) continue
+    if ((SKIP_REL && SKIP_REL.test(rel(p))) || excludedRel(rel(p)) || (e.isDirectory() && excludedRel(rel(p) + '/'))) continue
     if (e.isDirectory()) walkDir(p, out)
     else if (fileEntry(e, p)) out.push(p)
   }
@@ -121,6 +124,7 @@ function walkTests(d, all) {
   for (const e of ents) {
     if (e.name.startsWith('.') || TEST_WALK_SKIP.has(e.name)) continue
     const p = path.join(d, e.name)
+    if (excludedRel(rel(p)) || (e.isDirectory() && excludedRel(rel(p) + '/'))) continue
     if (e.isDirectory()) walkTests(p, all)
     else if (SRC_EXT.test(e.name) && (e.isFile() || (e.isSymbolicLink() && !skippedLinks.includes(rel(p)) && fileEntry(e, p))) && !e.name.endsWith('.d.ts') && (all || isTestRel(rel(p)))) testFiles.add(p)
   }
@@ -276,7 +280,7 @@ let configFiles = parsed.fileNames
 if (noConfig || cfg.walk_src) configFiles = [...new Set([...configFiles, ...allFiles.filter(f => SRC_EXT.test(f) && !f.endsWith('.d.ts'))])]
 const extraFiles = (cfg.extra_files || []).map(f => path.resolve(ROOT, f)).filter(f => fs.existsSync(f))
 if (extraFiles.some(f => /\.(c|m)?jsx?$/.test(f))) options.allowJs = true
-const rootNames = [...new Set([...configFiles.filter(f => !SKIP_ROOT.test(f) && !(SKIP_REL && SKIP_REL.test(rel(f)))), ...extraFiles, ...testFiles]), ...virtual.keys()]
+const rootNames = [...new Set([...configFiles.filter(f => !SKIP_ROOT.test(f) && !(SKIP_REL && SKIP_REL.test(rel(f))) && !excludedRel(rel(f))), ...extraFiles, ...testFiles]), ...virtual.keys()]
 if ([...testFiles].some(f => /\.(c|m)?jsx?$/.test(f))) options.allowJs = true
 const program = ts.createProgram({ rootNames, options, host })
 const checker = program.getTypeChecker()
@@ -289,7 +293,7 @@ const projectSf = sf => {
   let v = projectSfMemo.get(fn)
   if (v !== undefined) return v
   const real = fn.endsWith('.vue.ts') ? fn.slice(0, -3) : fn
-  v = testFiles.has(real) || (!fn.includes('/node_modules/') && !fn.includes('/.nuxt/') && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))))
+  v = testFiles.has(real) || (!fn.includes('/node_modules/') && !fn.includes('/.nuxt/') && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))) && !excludedRel(rel(real)))
   projectSfMemo.set(fn, v)
   return v
 }

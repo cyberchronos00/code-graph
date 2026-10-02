@@ -1,0 +1,21 @@
+# Built-in knowledge every project gets, before the language and framework presets and the project's .cg.yaml.
+# Format (every preset file): name, kind (common | language | framework), docs, then any of the sections below.
+#   auth / secret     guard names that count as user auth / as a shared-secret or signature check (`cg routes`)
+#   skip_dirs         directory names that never hold project source: dependencies, build output, caches, tool state
+# Lists are merged in order common -> language -> framework -> .cg.yaml -> command-line flags.
+name: common
+kind: common
+docs: docs/configuration.md#presets
+auth:
+  # Name-based fallback for every stack: matched against the guard name split into lower-case word tokens joined by
+  # "_" (ApiKeyGuard -> api_key_guard, auth:api -> auth_api, IsAuthenticated -> is_authenticated), so
+  # AuditLogInterceptor does not count as "login".
+  token_pattern: '(^|_)(auth|authn|authz|authed|authenticate[ds]?|authentication|authori[sz](e[ds]?|ation|er)|login|logged|jwt|token|session|sanctum|passport|bearer|api_key|permissions?|permission_[a-z]+|admin|staff|superuser|can|roles?|acl|verified|protected|protect|require_user|current_user|oauth[a-z0-9]*|oidc|saml|clerk|firebase_auth)(_|$)'
+secret:
+  # shared-secret / signature verification (webhooks, signed URLs): the caller proves it knows a secret, not who it is
+  token_pattern: '(^|_)(signed|signature|signatures|hmac|secret|webhook_secret)(_|$)|(^|_)verify(_[a-z0-9]+)*_webhooks?(_|$)|(^|_)webhooks?(_[a-z0-9]+)*_(verify|verified|verification|signature|secret|hmac)(_|$)'
+# skipped by every directory walk (language plugins, extractors, the coverage scan)
+skip_dirs: [.git, node_modules, __pycache__]
+# the coverage scan (`cg coverage`: which source files exist) also skips these dependency / build / IDE directories
+scan_skip_dirs: [vendor, target, build, dist, .dart_tool, .venv, venv, .tox, .mypy_cache, .pytest_cache, .next, .output,
+                 out, .gradle, .idea, Pods]

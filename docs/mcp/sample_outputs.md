@@ -16,6 +16,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
 - `routes`: Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
 - `coverage`: Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
+- `starters`: Starter queries derived from this graph, each with the tool call to run: the write route without an auth guard
 - `stats`: Index metadata and node/edge counts by kind.
 - `downstream`: Forward dependencies of a node: what it ends up calling/reading. On a combined graph a frontend page goes
 - `path`: Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
@@ -60,11 +61,12 @@ middleware / guards / auth matching 'auth' (route attributes): 1 name(s) on 1 ro
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 14, "mode": "exact"}}}`
 
-## `routes {'writes': '*'}`  (1583 chars)
+## `routes {'writes': '*'}`  (1641 chars)
 
 ```
 routes reaching a write (any table): 4 of 9 routes
-auth guard: 1 with, 3 without (auth = guard name matches the auth pattern; name-based)
+auth guard: 1 with, 3 without (auth = a framework preset auth guard or a name matching the auth pattern)
+auth guards by source: preset laravel 1
 
 DELETE /v1/{store}/admin/reports/{report}  @bookstore-api/routes/api.php:14  NO AUTH
     guards: (none)
@@ -89,11 +91,11 @@ guards: route-level and global enhancers per framework; Laravel kernel middlewar
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 14, "mode": "exact"}}}`
 
-## `routes {'reaches': ['connection:warehouse'], 'unguarded': True}`  (861 chars)
+## `routes {'reaches': ['connection:warehouse'], 'unguarded': True}`  (879 chars)
 
 ```
 routes reaching connection:warehouse: 3 of 9 routes | filter: no auth guard -> 2
-auth guard: 0 with, 2 without (auth = guard name matches the auth pattern; name-based)
+auth guard: 0 with, 2 without (auth = a framework preset auth guard or a name matching the auth pattern)
 
 GET /v1/{store}/admin/inventory  @bookstore-api/routes/api.php:15  NO AUTH
     guards: (none)
@@ -108,11 +110,11 @@ guards: route-level and global enhancers per framework; Laravel kernel middlewar
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 14, "mode": "exact"}}}`
 
-## `routes {'writes': 'books', 'missing': 'auth:api'}`  (855 chars)
+## `routes {'writes': 'books', 'missing': 'auth:api'}`  (873 chars)
 
 ```
 routes reaching a write to books: 3 of 9 routes | filter: missing a guard matching 'auth:api' -> 2
-auth guard: 0 with, 2 without (auth = guard name matches the auth pattern; name-based)
+auth guard: 0 with, 2 without (auth = a framework preset auth guard or a name matching the auth pattern)
 
 POST /v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
     guards: (none)
@@ -224,11 +226,13 @@ coverage: every source file cg found is indexed (php, typescript); code outside 
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
 
-## `coverage {}`  (183 chars)
+## `coverage {}`  (336 chars)
 
 ```
 coverage bookstore-api: php 22 exact
+  frameworks: laravel | presets: common, php, laravel | config: no .cg.yaml
 coverage bookstore-web: typescript 14 exact
+  frameworks: nuxt | presets: common, typescript, nuxt | config: no .cg.yaml
 every source file cg found is indexed; edges still carry their own exact / resolved / heuristic label.
 ```
 

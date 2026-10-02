@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from collections import Counter
 
+from . import presets
 from .core.fsutil import is_real_file
 from pathlib import Path
 
@@ -65,8 +66,8 @@ HINTS = {
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
     "java": "no native plugin: index with scip-java and pass `--scip index.scip`",
 }
-SKIP_DIRS = {".git", "node_modules", "vendor", "target", "build", "dist", ".dart_tool", "__pycache__", ".venv", "venv",
-             ".tox", ".mypy_cache", ".pytest_cache", ".next", ".output", "out", ".gradle", ".idea", "Pods"}
+# dependency / build / cache directories the scan never descends into (codegraph/presets/common.yaml)
+SKIP_DIRS = presets.skip_dirs("common", "scan_skip_dirs")
 SHOW_ROOTS = 6      # Python source roots shown by default
 FALLBACK = "use your normal search and file reading for those parts; an empty cg answer there is not proof of absence"
 
@@ -106,16 +107,20 @@ def _shebang(path: str) -> str | None:
     return SHEBANGS.get(prog) or SHEBANGS.get(prog.rstrip("0123456789.")) or None
 
 
-def scan_tree(root: str | Path) -> Scan:
-    """Source files under root (generated / dependency directories skipped)."""
+def scan_tree(root: str | Path, rules=None) -> Scan:
+    """Source files under root (generated / dependency directories skipped; `rules`: the project's PathRules,
+    default the built-in scan list)."""
+    from .core.paths import PathRules
+    rules = rules or PathRules(SKIP_DIRS)
     sc = Scan()
     root = str(root)
     for dp, dns, fns in os.walk(root):
-        dns[:] = [d for d in dns if d not in SKIP_DIRS and not d.startswith("._")]
-        rel_dir = os.path.relpath(dp, root)
-        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/") + "/"
+        rd = os.path.relpath(dp, root)
+        rd = "" if rd == "." else rd.replace(os.sep, "/")
+        dns[:] = [d for d in dns if not rules.skip(rd, d) and not d.startswith("._")]
+        rel_dir = rd + "/" if rd else ""
         for fn in fns:
-            if fn.startswith("._"):
+            if fn.startswith("._") or (rules.exclude and rules.excluded(rel_dir + fn)):
                 continue
             ext = os.path.splitext(fn)[1].lower()
             p = os.path.join(dp, fn)
@@ -382,12 +387,21 @@ def blind_spot_lines(bs: list[dict], indent: str = "  ", limit: int = 3) -> list
     return out
 
 
+def setup_line(setup: dict) -> str:
+    """Frameworks found, presets applied and the project config file of one index."""
+    fw = ", ".join(setup.get("frameworks") or []) or "none"
+    return (f"  frameworks: {fw} | presets: {', '.join(setup.get('presets') or [])}"
+            f" | config: {setup.get('config') or 'no .cg.yaml'}")
+
+
 def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
     """Multi-line report for one or more repos (name -> coverage)."""
     out = []
     any_gap = any_bs = False
     for repo, cov in covs.items():
         out.append(summary_line(cov, repo if len(covs) > 1 or repo else None))
+        if (cov or {}).get("setup"):
+            out.append(setup_line(cov["setup"]))
         for e in (cov or {}).get("languages", []):
             if e["language"] == "python":
                 out += python_roots_lines(e, all_files)

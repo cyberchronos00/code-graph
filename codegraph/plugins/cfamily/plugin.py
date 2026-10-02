@@ -20,8 +20,10 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from ... import presets
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.fsutil import content_key, keep_file
+from ...core.paths import rules as path_rules
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from ..native import gates as G
 from ..native import runner, scipread
@@ -31,9 +33,8 @@ from .syntax import CFile, CItem, annotation_macros, annotation_regex, extract
 C_EXT = {".c"}
 CPP_EXT = {".cc", ".cpp", ".cxx", ".c++", ".cp", ".C"}
 HDR_EXT = {".h", ".hh", ".hpp", ".hxx", ".h++", ".ipp", ".inl", ".tcc", ".ixx", ".cuh"}
-SKIP_DIRS = {".git", ".hg", ".svn", "node_modules", "target", "third_party", "thirdparty", "third-party", "3rdparty",
-             "googletest", "gtest", "gmock", "catch2", "doctest",
-             "vendor", "external", "extern", "deps", "_deps", ".cache", "CMakeFiles", "bazel-out", "__pycache__", ".venv"}
+# vendored third-party trees, test frameworks, build output (codegraph/presets/c_cpp.yaml; .cg.yaml skip_dirs adjusts them)
+SKIP_DIRS = presets.skip_dirs("c_cpp")
 CODE = {"function", "method"}
 TYPES = {"class", "struct", "union", "enum", "typedef"}
 VALUES = {"global", "enumerator", "macro"}
@@ -56,17 +57,19 @@ def _skip_dirs() -> set:
     return (SKIP_DIRS | extra) - keep
 
 
-def source_files(root: Path, limit: int | None = None):
-    skip = _skip_dirs()
+def source_files(root: Path, limit: int | None = None, project=None):
+    rules = path_rules(project, "c_cpp", base=_skip_dirs())
     n = 0
     for dp, dn, fn in os.walk(root):
         rel_dir = Path(dp).relative_to(root).as_posix()
-        dn[:] = sorted(d for d in dn if d not in skip and not d.startswith(".") and not d.startswith(("build", "cmake-build"))
-                       and not (Path(dp) / d / "CMakeCache.txt").exists())
+        rd = "" if rel_dir == "." else rel_dir
+        dn[:] = [d for d in rules.prune(rd, dn, dot=True) if not d.startswith(("build", "cmake-build"))
+                 and not (Path(dp) / d / "CMakeCache.txt").exists()]
         for f in sorted(fn):
             ext = os.path.splitext(f)[1]
-            if (ext in C_EXT or ext in CPP_EXT or ext in HDR_EXT) and keep_file(os.path.join(dp, f)):
-                yield (f if rel_dir == "." else f"{rel_dir}/{f}")
+            rel = f if rel_dir == "." else f"{rel_dir}/{f}"
+            if (ext in C_EXT or ext in CPP_EXT or ext in HDR_EXT) and keep_file(os.path.join(dp, f)) and not rules.excluded(rel):
+                yield rel
                 n += 1
                 if limit and n >= limit:
                     return
@@ -122,7 +125,7 @@ class CFamilyPlugin(LanguagePlugin):
                                                      "pubspec.yaml"))
         if other_lang and os.environ.get("CODEGRAPH_CFAMILY") != "1":
             return False
-        return next(source_files(root, limit=1), None) is not None
+        return next(source_files(root, limit=1, project=project), None) is not None
 
     # ------------------------------------------------------------------ main
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
@@ -135,7 +138,7 @@ class CFamilyPlugin(LanguagePlugin):
             parser("cpp")
         except TreeSitterMissing as e:
             return {"status": "error", "reason": str(e)}
-        files = list(source_files(self.root))
+        files = list(source_files(self.root, project=project))
         self.file_report = {"seen": files, "skipped_oversize": []}
         is_cpp = any(os.path.splitext(f)[1] in CPP_EXT for f in files)
         self.compdb_path = find_compdb(self.root)

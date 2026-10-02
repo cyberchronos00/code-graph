@@ -5,7 +5,8 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 ## Commands at a glance
 
 - `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE] [--python-root DIR]...`: detect languages/frameworks and
-  build the graph. Prints the stats JSON on stdout and a per-language coverage summary on stderr; a missing toolchain
+  build the graph. Prints the stats JSON on stdout (including the detected frameworks and applied presets in
+  `presets`, and the starter queries in `starters`) and a per-language coverage summary on stderr; a missing toolchain
   skips that language with a note instead of failing the index. Reads `.cg.yaml` at ROOT when present
   ([configuration.md](configuration.md#project-config-file-cgyaml)); `--python-root` sets the Python source roots for
   this run ([python.md](python.md)). An invalid `.cg.yaml` exits with status 2 and a message naming the key.
@@ -16,6 +17,13 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   handler registrations cg does not model, with `file:line`). For Python, the source roots with their origin
   (detected with the reason, or configured) when the layout uses more than the indexed root. On a combined graph, one block per linked repo (stored
   by `link`, so it also works after the source DBs are gone). See [completeness.md](completeness.md).
+- `config show|validate [ROOT]`: the effective configuration of a project, one row per value with where it comes
+  from (flag, `.cg.yaml`, framework preset, detection); `validate` checks `.cg.yaml` and exits with status 2 when it
+  is invalid. Flags as for `index`, `routes` and `serve` show their effect. See
+  [configuration.md](configuration.md#checking-a-config-file).
+- `starters --db DB [--json]`: starter queries derived from the graph, each with the matching command and MCP call
+  (a write route without an auth guard, the most-written and most-read tables, the busiest connection and env key, the
+  page with the largest backend reach, the most-called functions). The visual view's preset menu offers them too.
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
 - `impact METHOD [--plans-dir DIR]`: reverse walk from a method up to its entry points. A caller that holds the
@@ -108,8 +116,12 @@ coverage note: 1 route registration cg does not model (Django urlpatterns built 
   middleware, Next.js `middleware.ts` matchers and handler wrappers, django-ninja `auth=`, Django view decorators
   (`login_required`, `permission_required`, `user_passes_test`, `staff_member_required`, `method_decorator`), access
   mixins (`LoginRequiredMixin`, `PermissionRequiredMixin`, …) and DRF `permission_classes` / `authentication_classes`.
-- **Auth** is a guard whose name matches the auth pattern (tokens such as `auth`, `login`, `jwt`, `token`, `session`,
-  `permission`, `IsAuthenticated`, `ApiKey`, …). `--auth-pattern REGEX` adds project-specific names.
+- **Auth** is decided in this order: a project pattern (`.cg.yaml` `auth.extra_patterns`, `--auth-pattern REGEX`),
+  the framework preset's list of auth guards and of guards that are not auth (`csrf_protect`, `ThrottlerGuard`,
+  `AllowAny`), then the auth name pattern (tokens such as `auth`, `login`, `jwt`, `token`, `session`, `permission`,
+  `ApiKey`, …). Each auth guard records the rule that matched (`auth_by`: `preset laravel`, `name pattern`,
+  `project pattern`), and the summary counts them (`auth guards by source: …`). Presets:
+  [configuration.md](configuration.md#framework-presets).
 - **Scope:** `--writes` (any table) or `--writes TABLE`, and/or `--reaches SPEC...` (any node spec). Without a scope
   every route is listed.
 - Laravel kernel middleware and Django's `MIDDLEWARE` setting apply to every route and are not repeated per route.
@@ -119,7 +131,7 @@ coverage note: 1 route registration cg does not model (Django urlpatterns built 
 ```text
 $ cg routes --writes books --missing auth:api --db out/graph.db
 routes reaching a write to books: 3 of 9 routes | filter: missing a guard matching 'auth:api' -> 2
-auth guard: 0 with, 2 without (auth = guard name matches the auth pattern; name-based)
+auth guard: 0 with, 2 without (auth = a framework preset auth guard or a name matching the auth pattern)
 
 POST /v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
     guards: (none)
@@ -161,6 +173,41 @@ options:
   --gates GATES      gate scenarios JSON (e.g. examples/bookstore.gates.json)
   --python-root DIR  Python source root, relative to ROOT (repeatable);
                      replaces detection and python.source_roots in .cg.yaml
+```
+
+### `config`
+
+```
+usage: python -m codegraph.cli config [-h] [--python-root DIR] [--gates GATES]
+                        [--auth-pattern AUTH_PATTERN] [--plans-dir PLANS_DIR]
+                        [--presets PRESETS] [--json]
+                        {show,validate} [root]
+
+positional arguments:
+  {show,validate}
+  root                  indexed root (or, for validate, a config file)
+
+options:
+  -h, --help            show this help message and exit
+  --python-root DIR     as for index
+  --gates GATES         as for index
+  --auth-pattern AUTH_PATTERN
+                        as for routes
+  --plans-dir PLANS_DIR
+                        as for plan / serve
+  --presets PRESETS     as for serve
+  --json                the effective configuration as JSON
+```
+
+### `starters`
+
+```
+usage: python -m codegraph.cli starters [-h] --db DB [--json]
+
+options:
+  -h, --help  show this help message and exit
+  --db DB
+  --json
 ```
 
 ### `coverage`
@@ -342,7 +389,8 @@ options:
                         connection:, env:, Class::method)
   --missing NAME        keep routes with no guard whose name contains NAME
                         (e.g. auth:api, ApiKeyGuard)
-  --unguarded           keep routes with no auth-like guard (name-based, see
+  --unguarded           keep routes with no auth guard (framework presets, the
+                        auth name pattern, .cg.yaml auth.extra_patterns and
                         --auth-pattern)
   --auth-pattern AUTH_PATTERN
                         extra regex for guard names that count as auth
@@ -556,8 +604,9 @@ options:
   --port PORT
   --host HOST
   --plans-dir PLANS_DIR
-  --presets PRESETS     JSON list of canned queries for the UI (default: the
-                        bundled sample presets)
+  --presets PRESETS     JSON list of canned queries for the preset menu
+                        (default: viz.presets in .cg.yaml, then the sample
+                        presets that resolve, then the starter queries)
 ```
 
 ### `detect`

@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.fsutil import keep_file
+from ...core.paths import rel_dir, rules as path_rules
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
 EXTRACTOR = Path(__file__).parent / "extractor" / "extract.php"
@@ -518,15 +519,17 @@ class PhpPlugin(LanguagePlugin):
 
     def list_files(self, project: Project) -> list[str]:
         # tests/ is indexed as test code (codegraph/tests_index.py keeps it out of the application graph)
-        skip = ("vendor/", "node_modules/", "storage/", "bootstrap/cache/", ".git/")
+        # Composer vendor/, Laravel storage/ and bootstrap/cache/ at the root (codegraph/presets/php.yaml) + .cg.yaml
+        rules = path_rules(project, "php")
         out = []
         for dp, dns, fns in os.walk(project.root):
-            rel_dir = os.path.relpath(dp, project.root)
-            rel_dir = "" if rel_dir == "." else rel_dir + "/"
-            dns[:] = [d for d in dns if not (rel_dir + d + "/").startswith(skip)]
+            rd = rel_dir(project.root, dp)
+            dns[:] = rules.prune(rd, dns)
+            pre = rd + "/" if rd else ""
             for fn in fns:
-                if fn.endswith(".php") and not fn.startswith("._") and keep_file(os.path.join(dp, fn)):
-                    out.append(rel_dir + fn)
+                if fn.endswith(".php") and not fn.startswith("._") and keep_file(os.path.join(dp, fn)) \
+                        and not rules.excluded(pre + fn):
+                    out.append(pre + fn)
         return sorted(out)
 
     def extract(self, project: Project) -> list[dict]:

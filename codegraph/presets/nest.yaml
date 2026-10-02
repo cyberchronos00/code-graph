@@ -1,0 +1,11 @@
+name: nest
+kind: framework
+docs: https://docs.nestjs.com/guards
+auth:
+  guards:
+    - {name: AuthGuard, source: "@nestjs/passport AuthGuard('jwt' | 'local' | ...), https://docs.nestjs.com/recipes/passport"}
+    - {name: JwtAuthGuard, source: "conventional name of the AuthGuard('jwt') subclass, https://docs.nestjs.com/security/authentication"}
+    - {name: RolesGuard, source: "https://docs.nestjs.com/security/authorization#basic-rbac-implementation"}
+    - {name: PoliciesGuard, source: "https://docs.nestjs.com/security/authorization#implementing-a-policiesguard"}
+  not_auth:
+    - {name: ThrottlerGuard, source: "@nestjs/throttler rate limiting, https://docs.nestjs.com/security/rate-limiting"}

@@ -20,7 +20,9 @@ import tempfile
 import time
 from pathlib import Path
 
+from ... import presets
 from ...core.model import EXACT, HEURISTIC, RESOLVED, CONFIDENCE_RANK
+from ...core.paths import rules as path_rules
 from ...core import fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from .http import TOKEN, HttpExtractor, Tpl, UrlEval, bind_args, join, load_env_files, min_conf
@@ -30,7 +32,9 @@ from .program import Ctx, DartProgram, DClass, DFunc, root_name, split_type, wal
 EXTRACTOR_DIR = Path(__file__).parent / "extractor"
 EXTRACTOR = EXTRACTOR_DIR / "bin" / "extract.dart"
 BIN = EXTRACTOR_DIR / ".bin" / "extract"
-SKIP_DIRS = {".git", ".dart_tool", "build", ".pub-cache", "node_modules", "Pods", ".symlinks", ".fvm", ".idea"}
+# pub / build output, CocoaPods, FVM, IDE state (codegraph/presets/dart.yaml; the compiled extractor skips the same
+# names and receives the project's .cg.yaml skip_dirs.add through its config)
+SKIP_DIRS = presets.skip_dirs("dart")
 
 
 def find_dart() -> str | None:
@@ -177,13 +181,18 @@ class DartPlugin(LanguagePlugin):
     # ------------------------------------------------------------------ index
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
         t0 = time.time()
-        cfg = {"skip_dirs": sorted(set(project.options.get("dart_skip_dirs") or [])),
-               "skip_suffixes": [".freezed.dart", ".mocks.dart", ".config.dart", ".gr.dart"] if not project.options.get("dart_keep_generated") else []}
+        rules = path_rules(project, "dart")
+        added = set((project.options.get("config") or {}).get("skip_dirs", {}).get("add") or [])
+        cfg = {"skip_dirs": sorted(set(project.options.get("dart_skip_dirs") or []) | added),
+               "skip_suffixes": list(presets.values("dart", "generated_suffixes", default=[]))
+               if not project.options.get("dart_keep_generated") else []}
         try:
             facts, cache = self.run_extractor(project, cfg)
         except (FileNotFoundError, RuntimeError, subprocess.CalledProcessError) as ex:
             return {"status": "skipped", "reason": str(ex)[:300]}
         t_ext = time.time() - t0
+        if rules.exclude:     # .cg.yaml exclude globs: dropped from the extractor's output before the graph is built
+            facts = dict(facts, files=[f for f in facts.get("files") or [] if not rules.excluded(f.get("file") or "")])
         prog = DartProgram(project.root, facts)
         prog.load()
         failed = [x.get("file") if isinstance(x, dict) else str(x) for x in facts.get("failures") or []]

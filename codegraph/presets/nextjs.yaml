@@ -1,0 +1,15 @@
+name: nextjs
+kind: framework
+docs: https://nextjs.org/docs/app/building-your-application/authentication
+auth:
+  # middleware.ts exports and handler wrappers of the common auth libraries
+  guards:
+    - {name: withAuth, source: "next-auth/middleware withAuth, https://next-auth.js.org/configuration/nextjs#middleware"}
+    - {name: getServerSession, source: "next-auth getServerSession"}
+    - {name: auth, source: "Auth.js v5 auth() / export { auth as middleware }, https://authjs.dev/getting-started/session-management/protecting"}
+    - {name: clerkMiddleware, source: "@clerk/nextjs clerkMiddleware, https://clerk.com/docs/references/nextjs/clerk-middleware"}
+    - {name: authMiddleware, source: "@clerk/nextjs authMiddleware (Clerk v4)"}
+    - {name: withPageAuthRequired, source: "@auth0/nextjs-auth0 withPageAuthRequired"}
+    - {name: withApiAuthRequired, source: "@auth0/nextjs-auth0 withApiAuthRequired"}
+    - {name: withMiddlewareAuthRequired, source: "@auth0/nextjs-auth0 withMiddlewareAuthRequired"}
+    - {name: withIronSessionApiRoute, source: "iron-session withIronSessionApiRoute"}

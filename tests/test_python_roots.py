@@ -221,8 +221,8 @@ def test_config_file_errors_and_warnings(tmp_path):
         load_config(bad)
     # keys for later versions of the file are kept and reported; a missing configured root is a warning
     st = build(tmp_path, "warn", {"app/__init__.py": "", "app/x.py": "X = 1\n",
-                                  ".cg.yml": "exclude: ['legacy/**']\npython:\n  source_roots: [., gone]\n"})
-    assert st.meta()["stats"]["config"] == {"file": ".cg.yml", "python": {"source_roots": ["", "gone"]}, "ignored_keys": ["exclude"]}
+                                  ".cg.yml": "apps: [{name: api, root: .}]\npython:\n  source_roots: [., gone]\n"})
+    assert st.meta()["stats"]["config"] == {"file": ".cg.yml", "python": {"source_roots": ["", "gone"]}, "ignored_keys": ["apps"]}
     py = py_cov(st)
     assert py["roots_warnings"] == ["configured source root gone/ does not exist"] and py["indexed"] == 2
     out = C.render({"": st.meta()["stats"]["coverage"]})

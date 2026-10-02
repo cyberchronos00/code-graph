@@ -1,0 +1,25 @@
+name: django
+kind: framework
+docs: https://docs.djangoproject.com/en/stable/topics/auth/default/#limiting-access-to-logged-in-users
+auth:
+  guards:
+    - {name: login_required, source: "django.contrib.auth.decorators.login_required"}
+    - {name: permission_required, source: "django.contrib.auth.decorators.permission_required"}
+    - {name: user_passes_test, source: "django.contrib.auth.decorators.user_passes_test"}
+    - {name: staff_member_required, source: "django.contrib.admin.views.decorators.staff_member_required"}
+    - {name: LoginRequiredMixin, source: "django.contrib.auth.mixins.LoginRequiredMixin"}
+    - {name: PermissionRequiredMixin, source: "django.contrib.auth.mixins.PermissionRequiredMixin"}
+    - {name: UserPassesTestMixin, source: "django.contrib.auth.mixins.UserPassesTestMixin"}
+    - {name: LoginRequiredMiddleware, source: "django.contrib.auth.middleware.LoginRequiredMiddleware (Django 5.1)"}
+  # names that read like auth but mark a view public or check something else
+  not_auth:
+    - {name: login_not_required, source: "django.contrib.auth.decorators.login_not_required (Django 5.1): opts a view out of LoginRequiredMiddleware"}
+    - {name: csrf_protect, source: "django.views.decorators.csrf.csrf_protect: CSRF token check, not user auth"}
+# what the Django plugin records as a view's access checks (route attrs.access, read by `cg routes`): these decorators
+# and mixins by name, any decorator whose name matches name_pattern (unless opt_out_pattern), any decorator matching
+# the project's .cg.yaml auth / secret extra_patterns, and signature-check decorators (common secret token pattern)
+access:
+  decorators: [login_required, permission_required, user_passes_test, staff_member_required, superuser_required]
+  mixins: [LoginRequiredMixin, PermissionRequiredMixin, UserPassesTestMixin, AccessMixin]
+  name_pattern: '(auth|login|permission|staff|superuser|token|jwt)'
+  opt_out_pattern: 'not_required|exempt|optional|allow_any'

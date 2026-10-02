@@ -1,0 +1,9 @@
+name: dart
+kind: language
+docs: https://dart.dev/tools/pub/package-layout
+# pub / build output, CocoaPods, FVM and IDE state
+skip_dirs: [.dart_tool, build, .pub-cache, Pods, .symlinks, .fvm, .idea]
+# platform runner directories of a Flutter app: never hold a Dart package of their own
+package_skip_dirs: [build, Pods, ios, android, windows, linux, macos, web]
+# generated Dart sources (freezed, mockito, injectable, auto_route); `dart_keep_generated` keeps them
+generated_suffixes: [.freezed.dart, .mocks.dart, .config.dart, .gr.dart]

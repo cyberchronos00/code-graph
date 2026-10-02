@@ -35,6 +35,15 @@ def main(argv=None):
     p.add_argument("--python-root", action="append", metavar="DIR",
                    help="Python source root, relative to ROOT (repeatable); replaces detection and python.source_roots in .cg.yaml")
     p = sub.add_parser("detect"); p.add_argument("root")
+    p = sub.add_parser("config", help="project config: `show` the effective configuration and where each value comes from, "
+                                      "`validate` a .cg.yaml")
+    p.add_argument("action", choices=["show", "validate"]); p.add_argument("root", nargs="?", default=".", help="indexed root (or, for validate, a config file)")
+    p.add_argument("--python-root", action="append", metavar="DIR", help="as for index")
+    p.add_argument("--gates", help="as for index"); p.add_argument("--auth-pattern", help="as for routes")
+    p.add_argument("--plans-dir", help="as for plan / serve"); p.add_argument("--presets", help="as for serve")
+    p.add_argument("--json", action="store_true", help="the effective configuration as JSON")
+    p = sub.add_parser("starters", help="starter queries derived from the graph (unguarded write routes, most-reached tables, ...)")
+    p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
     p = sub.add_parser("coverage", help="which source files / languages the index covers: exact, heuristic, skipped (indexer missing) or unsupported")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
     p.add_argument("--all-files", action="store_true", help="list every file per bucket (default: the first 5), excluded files too")
@@ -49,7 +58,7 @@ def main(argv=None):
     p.add_argument("--no-client", action="store_true"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("serve", help="local web UI over a graph DB")
     p.add_argument("--db", required=True); p.add_argument("--port", type=int, default=8177); p.add_argument("--host", default="127.0.0.1"); p.add_argument("--plans-dir")
-    p.add_argument("--presets", help="JSON list of canned queries for the UI (default: the bundled sample presets)")
+    p.add_argument("--presets", help="JSON list of canned queries for the preset menu (default: viz.presets in .cg.yaml, then the sample presets that resolve, then the starter queries)")
     p = sub.add_parser("viz-export", help="self-contained HTML view of one query (opens from disk, no server)")
     p.add_argument("mode", choices=["reaches", "impact", "downstream", "path"]); p.add_argument("specs", nargs="+")
     p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True)
@@ -66,7 +75,7 @@ def main(argv=None):
     p.add_argument("--writes", nargs="?", const="*", metavar="TABLE", help="routes reaching a DB write (any table, or TABLE)")
     p.add_argument("--reaches", nargs="+", metavar="SPEC", help="routes reaching any of these nodes (table, column, connection:, env:, Class::method)")
     p.add_argument("--missing", metavar="NAME", help="keep routes with no guard whose name contains NAME (e.g. auth:api, ApiKeyGuard)")
-    p.add_argument("--unguarded", action="store_true", help="keep routes with no auth-like guard (name-based, see --auth-pattern)")
+    p.add_argument("--unguarded", action="store_true", help="keep routes with no auth guard (framework presets, the auth name pattern, .cg.yaml auth.extra_patterns and --auth-pattern)")
     p.add_argument("--auth-pattern", help="extra regex for guard names that count as auth")
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
     p.add_argument("--max-items", type=int, default=200); p.add_argument("--no-paths", action="store_true"); p.add_argument("--json", action="store_true")
@@ -128,6 +137,16 @@ def main(argv=None):
             write_match_report(res, a.report)
         print(json.dumps(res["stats"], indent=2))
         return
+    if a.cmd == "config":
+        return config_cmd(a)
+    if a.cmd == "starters":
+        from .starters import for_graph, render as render_starters
+        rows = for_graph(GraphStore(a.db))
+        print(json.dumps(rows, indent=1) if a.json else render_starters(rows))
+        return
+    if getattr(a, "plans_dir", None) is None and a.cmd in ("plan", "serve", "viz-plan", "impact") and getattr(a, "db", None):
+        from .plans import resolve_plans_dir
+        a.plans_dir = resolve_plans_dir(None, a.db)     # plans.dir of the indexed project's .cg.yaml
     if a.cmd == "detect":
         from .core.detect import detect
         print(json.dumps(detect(a.root), indent=2))
@@ -267,6 +286,32 @@ def _note(comp: dict, as_json: bool) -> None:
         n = answer_note(comp)
         if n:
             print(n)
+
+
+def config_cmd(a) -> int:
+    from .config import ConfigError, effective, find, load_file, render_effective, unknown_key_warnings
+    if a.action == "validate":
+        path = a.root if os.path.isfile(a.root) else find(a.root)
+        if path is None:
+            print(f"no .cg.yaml / .cg.yml in {a.root}: nothing to validate (the file is optional)")
+            return 0
+        try:
+            cfg = load_file(path)
+        except ConfigError as ex:
+            print(f"invalid: {ex}", file=sys.stderr)
+            return 2
+        keys = [k for k in cfg if k not in ("file", "ignored_keys")]
+        print(f"ok: {path} ({', '.join(keys) or 'no keys'})")
+        for w in unknown_key_warnings(cfg):
+            print(f"warning: {w}")
+        return 0
+    try:
+        eff = effective(a.root, a.python_root, a.gates, a.auth_pattern, a.plans_dir, a.presets)
+    except ConfigError as ex:
+        print(f"cg config: {ex}", file=sys.stderr)
+        return 2
+    print(json.dumps(eff, indent=1, default=str) if a.json else render_effective(eff))
+    return 0
 
 
 def plan_cmd(a) -> int:

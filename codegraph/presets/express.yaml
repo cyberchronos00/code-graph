@@ -1,0 +1,17 @@
+name: express
+kind: framework
+docs: https://expressjs.com/en/guide/using-middleware.html
+# Express, Koa, Fastify, Hono and the other servers of the express plugin (SERVER_DEPS in codegraph/plugins/tsweb/common.py)
+auth:
+  guards:
+    - {name: passport.authenticate, source: "passport, https://www.passportjs.org/concepts/authentication/middleware/"}
+    - {name: ensureLoggedIn, source: "connect-ensure-login"}
+    - {name: expressjwt, source: "express-jwt v7+ (`expressjwt`), https://github.com/auth0/express-jwt"}
+    - {name: expressJwt, source: "express-jwt before v7"}
+    - {name: requiresAuth, source: "express-openid-connect requiresAuth"}
+    - {name: koaJwt, source: "koa-jwt"}
+    - {name: authenticate, source: "fastify.authenticate decorator convention, https://github.com/fastify/fastify-jwt"}
+    - {name: jwtVerify, source: "@fastify/jwt request.jwtVerify"}
+    - {name: basicAuth, source: "hono/basic-auth, express-basic-auth"}
+    - {name: bearerAuth, source: "hono/bearer-auth"}
+    - {name: jwt, source: "hono/jwt, koa-jwt"}

@@ -23,6 +23,8 @@ codegraph/
   core/store.py      SQLite schema + writer
   core/plugin.py     Project, GraphBuilder, LanguagePlugin, FrameworkPlugin
   core/detect.py     language/framework detection from project files
+  core/paths.py      shared skip lists and .cg.yaml exclude globs as one PathRules object for every walk
+  presets/           curated per-language and per-framework data (auth / secret guards, skip lists, plan settings)
   plugins/php/       PHP language plugin
      extractor/extract.php   nikic/php-parser AST -> JSON facts (one PHP process for the whole project)
      plugin.py               symbol tables, name resolution, type inference, call resolution, hook API
@@ -69,7 +71,8 @@ codegraph/
   plugins/express/   Express / Fastify / Koa / Hono plugin (sits on TS): routes, mounting chains, middleware
   plugins/stubs/     SCIP-indexer recipes for Go and Java (untested stubs)
   indexer.py         detect -> language plugins (+framework hooks) -> framework contribute -> completeness -> store -> entry tagging
-  config.py          project config file (.cg.yaml at the indexed root): loading and validation
+  config.py          project config file (.cg.yaml at the indexed root): loading, validation, `cg config show`
+  starters.py        starter queries derived from the graph (CLI, MCP, the visual view's preset menu)
   coverage.py        per-language parser mode + file completeness, unsupported source types, scoped completeness of answers
   blindspots.py      index-time detectors for route / handler registrations no plugin models (file:line samples)
   link.py            cross-repo link: backend DB + frontend DB -> combined DB with MATCHES_ROUTE edges
@@ -117,6 +120,11 @@ class FrameworkPlugin(ABC):           # e.g. Laravel on PHP, Nuxt on TypeScript
 - **Detection** (`core/detect.py`) looks for marker files: composer.json/artisan (php, laravel; filament via composer
   require), package.json/tsconfig (js/ts), nuxt.config.* or a `nuxt` dependency (nuxt), vue, Cargo.toml, go.mod,
   CMakeLists.txt/compile_commands.json, pyproject/requirements, pom.xml/build.gradle.
+- **Setup** (`indexer.setup`): detection, then `.cg.yaml` `frameworks.add` / `remove`, then the presets for the active
+  languages and frameworks (`presets.select`, merged common -> languages -> frameworks). Every plugin and the coverage
+  scan take their directory skips and `exclude` globs from `core/paths.rules(...)`, so one list decides what is
+  indexed and what coverage counts. The applied presets and the config's patterns are stored in the graph meta;
+  `routes` reads them back (`routes.guard_setup`).
 
 
 ## Rust and C/C++ plugins

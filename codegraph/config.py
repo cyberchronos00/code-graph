@@ -1,21 +1,49 @@
 """Project config file: `.cg.yaml` (or `.cg.yml`) at the indexed root, discovered automatically.
 
-Records project-specific knowledge once, for the CLI, the MCP server and the visual view. Keys read today:
+Records project-specific knowledge once, for the CLI, the MCP server and the visual view:
 
     version: 1
     python:
-      source_roots: [lib, tools/scripts]   # replace source-root detection (paths relative to the indexed root)
+      source_roots: [lib, tools/scripts]     # replace source-root detection (paths relative to the indexed root)
+    exclude: ["legacy/**", "*.generated.ts"] # paths never indexed, by any language plugin or the coverage scan
+    skip_dirs:
+      add: [fixtures_big]                    # more directory names to skip everywhere
+      keep: [static]                         # directory names skipped by default that hold project code here
+    frameworks:
+      add: [nest]                            # force a framework detection missed (plugin or preset name)
+      remove: [flutter]                      # drop one that was detected
+    auth:
+      extra_patterns: ["requireTenantMember", "withOrgScope"]   # regexes on guard names that count as auth
+    secret:
+      extra_patterns: ["verifyStripeSignature"]                 # ... as a shared-secret / signature check
+    gates: config/gates.json                 # gate scenarios file (cg index --gates)
+    plans:
+      dir: docs/plans                        # plans directory (--plans-dir)
+      text_mention_dirs: [src, templates]    # where plan completeness scans for text mentions
+    viz:
+      presets:                               # canned queries in the visual view's preset menu
+        - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
 
-Command-line flags take precedence over the file (`cg index --python-root DIR`). Top-level keys this version does not
-read are kept and reported in the index stats, so a file written for a newer cg still indexes."""
+Command-line flags take precedence over the file. Top-level keys this version does not read are kept and reported
+in the index stats (and as a warning by `cg config validate`), so a file written for a newer cg still indexes."""
 from __future__ import annotations
 
+import difflib
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 CONFIG_NAMES = (".cg.yaml", ".cg.yml")
-KNOWN_KEYS = {"version", "python"}
-PYTHON_KEYS = {"source_roots"}
+SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None: a scalar or list value)
+    "version": None, "python": {"source_roots"}, "exclude": None, "skip_dirs": {"add", "keep"},
+    "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
+    "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"},
+}
+KNOWN_KEYS = set(SCHEMA)
+PYTHON_KEYS = SCHEMA["python"]
+VIZ_MODES = ("reaches", "impact", "downstream", "path", "plan")
+# framework plugins of codegraph/indexer.py FRAMEWORK_PLUGINS (frameworks.add / remove also take preset names)
+FRAMEWORK_PLUGIN_NAMES = ("laravel", "nuxt", "django", "flutter", "nest", "nextjs", "express")
 
 
 class ConfigError(ValueError):
@@ -42,39 +70,297 @@ def norm_root(value: Any, where: str) -> str:
     return "" if s == "." else s
 
 
-def load(root: str | Path) -> dict:
-    """{"file": ".cg.yaml", "python": {"source_roots": [...]}, "ignored_keys": [...]} or {} without a config file.
-    Raises ConfigError for a file cg cannot use."""
-    p = find(root)
-    if p is None:
-        return {}
-    import yaml
-    try:
-        data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as ex:
-        raise ConfigError(f"{p.name}: not valid YAML ({str(ex).splitlines()[0]})") from None
+def known_frameworks() -> list[str]:
+    from . import presets
+    return sorted(set(FRAMEWORK_PLUGIN_NAMES) | set(presets.frameworks()))
+
+
+def framework_name(value: Any, where: str) -> str:
+    from . import presets
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{where}: expected a framework name, got {value!r}")
+    v = value.strip().lower()
+    v = presets.FRAMEWORK_ALIASES.get(v, v)
+    if v not in known_frameworks():
+        near = difflib.get_close_matches(v, known_frameworks(), n=1)
+        raise ConfigError(f"{where}: unknown framework {value!r}" + (f" (did you mean {near[0]!r}?)" if near else "")
+                          + f"; known: {', '.join(known_frameworks())}")
+    return v
+
+
+def _strings(v: Any, where: str, allow_one: bool = True) -> list[str]:
+    if isinstance(v, str) and allow_one:
+        v = [v]
+    if not isinstance(v, list) or not v or not all(isinstance(x, str) and x.strip() for x in v):
+        raise ConfigError(f"{where}: expected a non-empty list of strings")
+    return list(dict.fromkeys(x.strip() for x in v))
+
+
+def _section(data: dict, key: str, fname: str) -> dict | None:
+    sec = data.get(key)
+    if sec is None:
+        return None
+    if not isinstance(sec, dict):
+        raise ConfigError(f"{fname}: {key}: expected a mapping (keys: {', '.join(sorted(SCHEMA[key]))})")
+    unknown = sorted(set(sec) - SCHEMA[key])
+    if unknown:
+        raise ConfigError(f"{fname}: {key}: unknown key {unknown[0]!r} (known: {', '.join(sorted(SCHEMA[key]))})")
+    return sec
+
+
+def _regexes(v: Any, where: str) -> list[str]:
+    out = _strings(v, where)
+    for i, rx in enumerate(out):
+        try:
+            re.compile(rx)
+        except re.error as ex:
+            raise ConfigError(f"{where}[{i}]: {rx!r} is not a valid regular expression ({ex})") from None
+    return out
+
+
+def _viz_presets(v: Any, where: str) -> list[dict]:
+    if not isinstance(v, list) or not v:
+        raise ConfigError(f"{where}: expected a non-empty list of {{id, label, mode, specs}} entries")
+    out, ids = [], set()
+    for i, p in enumerate(v):
+        w = f"{where}[{i}]"
+        if not isinstance(p, dict):
+            raise ConfigError(f"{w}: expected a mapping with id, label, mode, specs")
+        unknown = sorted(set(p) - {"id", "label", "mode", "specs", "sinks"})
+        if unknown:
+            raise ConfigError(f"{w}: unknown key {unknown[0]!r} (known: id, label, mode, specs, sinks)")
+        for k in ("id", "label", "mode"):
+            if not isinstance(p.get(k), str) or not p[k].strip():
+                raise ConfigError(f"{w}.{k}: required (a string)")
+        if p["mode"] not in VIZ_MODES:
+            raise ConfigError(f"{w}.mode: {p['mode']!r} is not one of {', '.join(VIZ_MODES)}")
+        if p["id"] in ids:
+            raise ConfigError(f"{w}.id: duplicate id {p['id']!r}")
+        ids.add(p["id"])
+        e = {"id": p["id"], "label": p["label"], "mode": p["mode"], "specs": _strings(p.get("specs"), f"{w}.specs")}
+        if p.get("sinks") is not None:
+            e["sinks"] = _strings(p["sinks"], f"{w}.sinks")
+        out.append(e)
+    return out
+
+
+def parse(data: Any, fname: str = ".cg.yaml") -> dict:
+    """Validated, normalized config from parsed YAML (see load())."""
+    if data is None:
+        data = {}
     if not isinstance(data, dict):
-        raise ConfigError(f"{p.name}: expected a mapping of keys at the top level")
+        raise ConfigError(f"{fname}: expected a mapping of keys at the top level")
     ver = data.get("version", 1)
     if ver != 1:
-        raise ConfigError(f"{p.name}: version {ver!r} is not supported (this cg reads version 1)")
-    out: dict = {"file": p.name}
-    py = data.get("python")
+        raise ConfigError(f"{fname}: version {ver!r} is not supported (this cg reads version 1)")
+    out: dict = {"file": fname}
+    py = _section(data, "python", fname)
     if py is not None:
-        if not isinstance(py, dict):
-            raise ConfigError(f"{p.name}: python: expected a mapping (e.g. python: {{source_roots: [src]}})")
-        unknown = sorted(set(py) - PYTHON_KEYS)
-        if unknown:
-            raise ConfigError(f"{p.name}: python: unknown key {unknown[0]!r} (known: {', '.join(sorted(PYTHON_KEYS))})")
         roots = py.get("source_roots")
         if roots is not None:
             if isinstance(roots, str):
                 roots = [roots]
             if not isinstance(roots, list) or not roots:
-                raise ConfigError(f"{p.name}: python.source_roots: expected a non-empty list of directories")
+                raise ConfigError(f"{fname}: python.source_roots: expected a non-empty list of directories")
             out["python"] = {"source_roots": list(dict.fromkeys(
-                norm_root(r, f"{p.name}: python.source_roots[{i}]") for i, r in enumerate(roots)))}
+                norm_root(r, f"{fname}: python.source_roots[{i}]") for i, r in enumerate(roots)))}
+    if data.get("exclude") is not None:
+        globs = _strings(data["exclude"], f"{fname}: exclude")
+        for i, g in enumerate(globs):
+            if ".." in PurePosixPath(g.strip("/")).parts:
+                raise ConfigError(f"{fname}: exclude[{i}]: {g!r} must stay inside the indexed root (no '..')")
+        out["exclude"] = globs
+    sd = _section(data, "skip_dirs", fname)
+    if sd is not None:
+        out["skip_dirs"] = {}
+        for k in ("add", "keep"):
+            if sd.get(k) is not None:
+                names = _strings(sd[k], f"{fname}: skip_dirs.{k}")
+                bad = [n for n in names if "/" in n or "*" in n]
+                if bad:
+                    raise ConfigError(f"{fname}: skip_dirs.{k}: {bad[0]!r} is not a directory name (use exclude for paths and globs)")
+                out["skip_dirs"][k] = names
+    fw = _section(data, "frameworks", fname)
+    if fw is not None:
+        out["frameworks"] = {}
+        for k in ("add", "remove"):
+            if fw.get(k) is not None:
+                out["frameworks"][k] = list(dict.fromkeys(
+                    framework_name(n, f"{fname}: frameworks.{k}[{i}]") for i, n in enumerate(_strings(fw[k], f"{fname}: frameworks.{k}"))))
+        both = set(out["frameworks"].get("add", [])) & set(out["frameworks"].get("remove", []))
+        if both:
+            raise ConfigError(f"{fname}: frameworks: {sorted(both)[0]!r} is in both add and remove")
+    for key in ("auth", "secret"):
+        sec = _section(data, key, fname)
+        if sec is not None and sec.get("extra_patterns") is not None:
+            out[key] = {"extra_patterns": _regexes(sec["extra_patterns"], f"{fname}: {key}.extra_patterns")}
+    if data.get("gates") is not None:
+        out["gates"] = norm_root(data["gates"], f"{fname}: gates")
+    pl = _section(data, "plans", fname)
+    if pl is not None:
+        out["plans"] = {}
+        if pl.get("dir") is not None:
+            out["plans"]["dir"] = norm_root(pl["dir"], f"{fname}: plans.dir")
+        if pl.get("text_mention_dirs") is not None:
+            out["plans"]["text_mention_dirs"] = [norm_root(d, f"{fname}: plans.text_mention_dirs[{i}]")
+                                                 for i, d in enumerate(_strings(pl["text_mention_dirs"], f"{fname}: plans.text_mention_dirs"))]
+    vz = _section(data, "viz", fname)
+    if vz is not None and vz.get("presets") is not None:
+        out["viz"] = {"presets": _viz_presets(vz["presets"], f"{fname}: viz.presets")}
     ignored = sorted(str(k) for k in set(data) - KNOWN_KEYS)
     if ignored:
         out["ignored_keys"] = ignored
     return out
+
+
+def load(root: str | Path) -> dict:
+    """{"file": ".cg.yaml", "python": {...}, "exclude": [...], ..., "ignored_keys": [...]} or {} without a config
+    file. Raises ConfigError for a file cg cannot use."""
+    p = find(root)
+    return load_file(p) if p is not None else {}
+
+
+def load_file(p: str | Path) -> dict:
+    import yaml
+    p = Path(p)
+    try:
+        data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except yaml.YAMLError as ex:
+        raise ConfigError(f"{p.name}: not valid YAML ({str(ex).splitlines()[0]})") from None
+    except OSError as ex:
+        raise ConfigError(f"{p}: cannot read ({ex.strerror})") from None
+    return parse(data, p.name)
+
+
+def unknown_key_warnings(cfg: dict) -> list[str]:
+    out = []
+    for k in cfg.get("ignored_keys") or []:
+        near = difflib.get_close_matches(k, sorted(KNOWN_KEYS), n=1)
+        out.append(f"{cfg.get('file', '.cg.yaml')}: unknown top-level key {k!r} is ignored"
+                   + (f" (did you mean {near[0]!r}?)" if near else f" (keys this cg reads: {', '.join(sorted(KNOWN_KEYS))})"))
+    return out
+
+
+def resolve_path(root: str | Path, rel: str) -> Path:
+    return Path(root) / rel if rel else Path(root)
+
+
+def graph_configs(st) -> list[tuple[str | None, dict, str | None]]:
+    """(repo, config, root) recorded in a graph DB at index time: one entry for a single-repo graph, one per repo for a
+    combined graph (read from the source DBs that still exist)."""
+    try:
+        m = st.meta()
+    except Exception:  # noqa: BLE001
+        return []
+    if not m.get("repos"):
+        return [(None, (m.get("stats") or {}).get("config") or {}, m.get("root"))]
+    out = []
+    for r in m["repos"]:
+        src = (m.get("sources") or {}).get(r)
+        from .routes import _meta_of
+        mm = _meta_of(src)
+        out.append((r, (mm.get("stats") or {}).get("config") or {}, mm.get("root")))
+    return out
+
+
+def configured_plans_dir(st) -> Path | None:
+    """plans.dir of the .cg.yaml recorded in the graph (first repo that sets it), resolved against its root."""
+    for _, cfg, root in graph_configs(st):
+        d = (cfg.get("plans") or {}).get("dir")
+        if d is not None and root:
+            return resolve_path(root, d)
+    return None
+
+
+# ------------------------------------------------------------------------------------------- cg config show
+def effective(root: str | Path, python_roots: list[str] | None = None, gates: str | None = None,
+              auth_pattern: str | None = None, plans_dir: str | None = None, presets_file: str | None = None) -> dict:
+    """Effective configuration of `root` without indexing it: every value with its source (`detected`, `built-in`,
+    `preset <name>`, the config file name, `flag --x`). Raises ConfigError for an invalid config file."""
+    from . import presets as PR
+    from .core.plugin import Project
+    from .indexer import setup
+    root = Path(root).resolve()
+    project = Project(root=root, name=root.name)
+    project.options["config"] = cfg = load(root)
+    fname = cfg.get("file", ".cg.yaml")
+    plan = setup(project)
+    rows: list[dict] = []
+
+    def row(key, value, source):
+        rows.append({"key": key, "value": value, "source": source})
+
+    row("config file", fname if cfg else None, "found at the indexed root" if cfg else "none (optional)")
+    row("languages", plan["languages"], "detected")
+    for f, how in plan["frameworks"].items():
+        row("frameworks", f, f"{fname} frameworks.add" if how == ".cg.yaml" else "detected")
+    for f in plan["removed"]:
+        row("frameworks", f"{f} (removed)", f"{fname} frameworks.remove")
+    row("presets", plan["presets"], "built-in (codegraph/presets), picked by detection")
+    if python_roots:
+        row("python.source_roots", [norm_root(r, "--python-root") for r in python_roots], "flag --python-root")
+    elif (cfg.get("python") or {}).get("source_roots"):
+        row("python.source_roots", cfg["python"]["source_roots"], f"{fname} python.source_roots")
+    elif "python" in plan["languages"]:
+        row("python.source_roots", "detected at index time (cg coverage lists them)", "detected")
+    row("exclude", cfg.get("exclude") or [], f"{fname} exclude" if cfg.get("exclude") else "none")
+    sd = cfg.get("skip_dirs") or {}
+    for p in ["common", *[x for x in plan["presets"] if x != "common"]]:
+        names = PR.values(p, "skip_dirs", default=None)
+        if names:
+            row("skip_dirs", sorted(n for n in names if n not in sd.get("keep", [])), f"preset {p}")
+        sp = PR.values(p, "skip_paths", default=None)
+        if sp:
+            row("skip_paths", sorted(n for n in sp if n not in sd.get("keep", [])), f"preset {p} (root-relative)")
+    row("skip_dirs (coverage scan)", sorted(PR.values("common", "scan_skip_dirs", default=[])), "preset common")
+    if sd.get("add"):
+        row("skip_dirs", sd["add"], f"{fname} skip_dirs.add")
+    if sd.get("keep"):
+        row("skip_dirs kept", sd["keep"], f"{fname} skip_dirs.keep")
+    row("auth.token_pattern", PR.values("common", "auth", "token_pattern"), "preset common")
+    for section in ("auth", "secret"):
+        for key in ("guards", "not_auth") if section == "auth" else ("guards",):
+            for p in plan["presets"]:
+                g = PR.values(p, section, key, default=None)
+                if g:
+                    row(f"{section}.{key}", [x["name"] if isinstance(x, dict) else x for x in g], f"preset {p}")
+        if (cfg.get(section) or {}).get("extra_patterns"):
+            row(f"{section}.extra_patterns", cfg[section]["extra_patterns"], f"{fname} {section}.extra_patterns")
+    if auth_pattern:
+        row("auth.extra_patterns", [auth_pattern], "flag --auth-pattern")
+    row("secret.token_pattern", PR.values("common", "secret", "token_pattern"), "preset common")
+    if gates:
+        row("gates", gates, "flag --gates")
+    else:
+        row("gates", cfg.get("gates"), f"{fname} gates" if cfg.get("gates") else "none")
+    pl = cfg.get("plans") or {}
+    if plans_dir:
+        row("plans.dir", plans_dir, "flag --plans-dir")
+    else:
+        row("plans.dir", pl.get("dir", "plans/ in the cg checkout"), f"{fname} plans.dir" if "dir" in pl else "built-in")
+    row("plans.text_mention_dirs", pl.get("text_mention_dirs") or PR.values("laravel", "plans", "text_mention_dirs"),
+        f"{fname} plans.text_mention_dirs" if pl.get("text_mention_dirs") else "preset laravel")
+    row("plans.short_prefixes", PR.values("laravel", "plans", "short_prefixes"), "preset laravel")
+    if presets_file:
+        row("viz.presets", presets_file, "flag --presets")
+    elif (cfg.get("viz") or {}).get("presets"):
+        row("viz.presets", [p["id"] for p in cfg["viz"]["presets"]], f"{fname} viz.presets")
+    row("viz.presets (starters)", "derived from the graph at index time (cg starters)", "built-in")
+    if cfg.get("ignored_keys"):
+        row("ignored keys", cfg["ignored_keys"], f"{fname} (not read by this cg version)")
+    return {"root": str(root), "config": cfg, "rows": rows, "warnings": unknown_key_warnings(cfg)}
+
+
+def render_effective(eff: dict) -> str:
+    out = [f"effective configuration of {Path(eff['root']).name}"]
+    w = max(len(r["key"]) for r in eff["rows"])
+    for r in eff["rows"]:
+        v = r["value"]
+        if isinstance(v, list):
+            v = ", ".join(map(str, v)) if v else "(none)"
+        v = "(none)" if v is None else str(v)
+        if len(v) > 100:
+            v = v[:97] + "..."
+        out.append(f"  {r['key']:<{w}}  {v}   [{r['source']}]")
+    out += [f"warning: {x}" for x in eff["warnings"]]
+    return "\n".join(out)

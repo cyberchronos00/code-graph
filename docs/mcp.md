@@ -20,7 +20,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   with the routes that carry them (`search("auth")` finds `auth:api`, `ApiKeyGuard`, `IsAuthenticated`, …);
 - `routes(writes?, reaches?, missing?, unguarded?, auth_pattern?, max_items?, paths?, min_confidence?)`: routes with
   their guards, scoped to the routes that write (`writes="*"` or a table) or reach any spec, filtered to routes
-  without a named guard (`missing="auth:api"`) or without an auth-like guard (`unguarded=true`); each route shows one
+  without a named guard (`missing="auth:api"`) or without an auth guard from the framework presets or the auth name
+  pattern (`unguarded=true`); each route shows one
   evidence chain and its frontend callers on a combined graph (see [cli.md](cli.md#routes-and-guards));
 - `downstream` (forward dependencies), `path` (one shortest evidence chain between two specs), `api_calls` (frontend
   endpoints with call sites, request keys and the matched route + controller; `unmatched`, a substring or a `*` glob
@@ -46,6 +47,10 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   blind spots (see [Coverage and completeness](#coverage-and-completeness)), and the Python source roots with their
   origin ([python.md](python.md)); on a combined DB, per linked repo. `json_output=true` adds the roots as
   `python_source_roots`.
+- `starters()`: starter queries derived from the graph, each with the tool call to run: the write route without an
+  auth guard that writes the most tables, the most-written and most-read tables, the busiest DB connection and env
+  key, the page with the largest backend reach and the most-called functions. Every starter resolves to existing
+  nodes, so it is a good first call on an unfamiliar repository; the visual view's preset menu offers the same list.
 
 Rust, C and C++ graphs use the same tools. Specs take native forms (`kv_core::store::Store::get`, `ns::Class::method`,
 `mod:crate::module`, a file path, `feature:`/`cfg:`/`define:`/`unsafe:`/`env:` nodes; see [native.md](native.md#query-specs)).

@@ -29,14 +29,16 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+from ... import presets
 from ...core.fsutil import keep_file
+from ...core.paths import rel_dir, rules as path_rules
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project, gc_paused
 from .roots import RootPlan, import_names
 
-SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "env", ".env", "__pycache__", "site-packages", ".tox", ".nox",
-             "build", "dist", ".mypy_cache", ".eggs", ".pytest_cache", ".ruff_cache", "htmlcov", "static", "media"}
+# virtualenvs, caches, build output, static/ and media/ (codegraph/presets/python.yaml; .cg.yaml skip_dirs adjusts them)
+SKIP_DIRS = presets.skip_dirs("python")
 # directories that never hold project code when deciding whether a repository has Python at all
-DETECT_SKIP = SKIP_DIRS | {"vendor", "target", "out", "Pods", ".next", ".output"}
+DETECT_SKIP = presets.skip_dirs("python", "skip_dirs", "detect_skip_dirs")
 MAX_FILE_BYTES = 1_500_000
 # method names too generic for the unique-name fallback
 STOP_METHODS = {"get", "set", "save", "delete", "update", "filter", "all", "items", "keys", "values", "append", "extend",
@@ -268,13 +270,16 @@ class PyProgram:
 
     def files(self) -> list[str]:
         out = []
+        self.path_rules = rules = path_rules(self.project, "python")
         for dp, dns, fns in os.walk(self.root):
-            dns[:] = sorted(d for d in dns if d not in SKIP_DIRS and not d.startswith("."))
+            rd = rel_dir(self.root, dp)
+            dns[:] = rules.prune(rd, dns, dot=True)
             for fn in sorted(fns):
                 if fn.endswith(".py"):
                     p = os.path.join(dp, fn)
-                    if keep_file(p):
-                        out.append(os.path.relpath(p, self.root).replace(os.sep, "/"))
+                    rel = f"{rd}/{fn}" if rd else fn
+                    if keep_file(p) and not rules.excluded(rel):
+                        out.append(rel)
         return out
 
     def load(self, skip_migrations=True) -> dict:
@@ -306,7 +311,7 @@ class PyProgram:
         configured, origin = self.configured_roots()
         # every discovered file shapes the layout (a namespace package may only hold files that failed to parse)
         plan = RootPlan(self.root, files, import_names(v[1] for v in parsed.values()), configured, origin,
-                        skip_dirs=SKIP_DIRS)
+                        skip_dirs=self.path_rules.names)
         self.root_plan = plan
         names, unmapped = plan.assign()
         owners: dict = {}
@@ -1135,10 +1140,12 @@ class PythonPlugin(LanguagePlugin):
         """A project marker at the root, or a .py file anywhere outside dependency / build / cache directories."""
         if any(project.exists(m) for m in ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "manage.py", "Pipfile")):
             return True
+        rules = path_rules(project, "python", base=DETECT_SKIP)
         for dp, dns, fns in os.walk(project.root):
-            if any(fn.endswith(".py") for fn in fns):
+            rd = rel_dir(project.root, dp)
+            if any(fn.endswith(".py") and not rules.excluded(f"{rd}/{fn}" if rd else fn) for fn in fns):
                 return True
-            dns[:] = [d for d in dns if d not in DETECT_SKIP and not d.startswith(".")]
+            dns[:] = rules.prune(rd, dns, dot=True)
         return False
 
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:

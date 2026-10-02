@@ -51,6 +51,12 @@ def detect(root: Path) -> dict:
         fw["nuxt"] = {"version": deps.get("nuxt")}
     if "vue" in deps:
         fw["vue"] = {"version": deps.get("vue")}
+    from ..plugins.tsweb.common import SERVER_DEPS   # TS / JS servers (NestJS, Next.js, Express / Koa / Fastify / Hono ...)
+    for name, pkgs in SERVER_DEPS.items():
+        hit = [d for d in pkgs if d in deps]
+        if hit:
+            key = {"next": "nextjs"}.get(name, name)           # framework plugin names
+            fw[key] = {"version": deps.get(hit[0])} if name != "express" else {"via": hit, "version": deps.get(hit[0])}
     py_req = ""
     for f in ("requirements.txt", "pyproject.toml", "setup.cfg", "Pipfile", "requirements/base.txt"):
         if (root / f).exists():

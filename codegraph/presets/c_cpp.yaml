@@ -1,0 +1,7 @@
+name: c_cpp
+kind: language
+docs: docs/native.md
+# version-control state, vendored third-party trees and test frameworks, CMake / Bazel build output, caches
+# (CODEGRAPH_EXCLUDE_DIRS / CODEGRAPH_INCLUDE_DIRS adjust this list for C / C++; .cg.yaml skip_dirs for every language)
+skip_dirs: [.hg, .svn, target, third_party, thirdparty, third-party, 3rdparty, googletest, gtest, gmock, catch2,
+            doctest, vendor, external, extern, deps, _deps, .cache, CMakeFiles, bazel-out, .venv]

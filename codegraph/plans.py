@@ -17,6 +17,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
+from . import presets
 from . import query as Q
 from .core.model import PROPAGATING
 from .core.store import GraphStore
@@ -40,8 +41,10 @@ NEW_NODE_KINDS = {"column", "table", "method", "function", "class", "route", "se
 CODE_KINDS = ("method", "function", "script", "composable", "store", "component", "module", "page")
 WRITE_KINDS = ("WRITES_TABLE", "WRITES_COLUMN")
 READ_KINDS = ("READS_TABLE", "READS_COLUMN", "MENTIONS_COLUMN")
-SHORT_PREFIXES = ("App\\Models\\", "App\\Services\\", "App\\Http\\Controllers\\", "App\\Http\\Requests\\", "App\\Support\\",
-                  "App\\Jobs\\", "App\\Console\\Commands\\")
+# class-name prefixes shortened in reports (codegraph/presets/laravel.yaml plans.short_prefixes)
+SHORT_PREFIXES = tuple(presets.values("laravel", "plans", "short_prefixes", default=[]))
+# where text mentions are scanned when .cg.yaml has no plans.text_mention_dirs (codegraph/presets/laravel.yaml)
+TEXT_MENTION_DIRS = tuple(presets.values("laravel", "plans", "text_mention_dirs", default=[]))
 IMPLICIT_NEW = ("request_key", "setting", "config", "env")  # leaf keys a planned edge may introduce without add_nodes
 PAYLOAD_VERBS = re.compile(r"^(store|update|create|save|upsert|fill|import|sync|make|add|edit|set)", re.I)
 
@@ -53,6 +56,35 @@ class PlanError(ValueError):
 
 def plans_dir(root: str | Path | None = None) -> Path:
     return Path(root) if root else Path(__file__).resolve().parents[1] / "plans"
+
+
+def resolve_plans_dir(flag: str | None, db: str | None = None) -> str | None:
+    """--plans-dir, else plans.dir of the .cg.yaml recorded in the graph at `db`, else None (the default plans/)."""
+    if flag:
+        return flag
+    if db and Path(db).is_file():
+        from .config import configured_plans_dir
+        from .core.store import GraphStore
+        g = GraphStore(db)
+        try:
+            d = configured_plans_dir(g)
+        except Exception:  # noqa: BLE001  (not a graph yet)
+            d = None
+        finally:
+            g.db.close()
+        return str(d) if d else None
+    return None
+
+
+def mention_dirs(st, repo: str | None) -> tuple[str, ...]:
+    """plans.text_mention_dirs of that repo's .cg.yaml, else the preset default."""
+    from .config import graph_configs
+    for r, cfg, _ in graph_configs(st):
+        if r is None or r == repo:          # single-repo graph, or this repo of a combined one
+            d = (cfg.get("plans") or {}).get("text_mention_dirs")
+            if d:
+                return tuple(d)
+    return TEXT_MENTION_DIRS
 
 
 def find_plan(name_or_path: str, root: str | Path | None = None) -> Path:
@@ -628,8 +660,8 @@ def _text_mentions(cx: Ctx, names: list[str], col: Collector, cap=40) -> list[di
     out, already = [], col.nodes
     model_files = {(cx.node(r["src"]) or {}).get("file") for r in cx.st.q("SELECT src FROM edges WHERE kind='MAPS_TO_TABLE'")}
     for repo, root in sorted(cx.src.roots.items()):
-        for sub in ("app", "resources/views"):
-            base = root / sub
+        for sub in mention_dirs(cx.st, repo):
+            base = root / sub if sub else root
             if not base.is_dir():
                 continue
             for p in sorted(base.rglob("*.php")):

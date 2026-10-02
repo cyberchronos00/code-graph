@@ -1,0 +1,40 @@
+name: laravel
+kind: framework
+docs: https://laravel.com/docs/middleware
+auth:
+  # route / group middleware aliases and classes (Illuminate\Foundation\Configuration\Middleware::defaultAliases)
+  guards:
+    - {name: auth, source: "Illuminate\\Auth\\Middleware\\Authenticate, https://laravel.com/docs/authentication#protecting-routes"}
+    - {name: auth.basic, source: "AuthenticateWithBasicAuth, https://laravel.com/docs/authentication#http-basic-authentication"}
+    - {name: auth.session, source: "Illuminate\\Session\\Middleware\\AuthenticateSession"}
+    - {name: can, source: "Illuminate\\Auth\\Middleware\\Authorize, https://laravel.com/docs/authorization#via-middleware"}
+    - {name: password.confirm, source: "RequirePassword, https://laravel.com/docs/authentication#password-confirmation"}
+    - {name: verified, source: "EnsureEmailIsVerified, https://laravel.com/docs/verification"}
+    - {name: abilities, source: "Laravel\\Sanctum\\Http\\Middleware\\CheckAbilities, https://laravel.com/docs/sanctum#token-ability-middleware"}
+    - {name: ability, source: "Laravel\\Sanctum\\Http\\Middleware\\CheckForAnyAbility"}
+    - {name: role, source: "spatie/laravel-permission RoleMiddleware, https://spatie.be/docs/laravel-permission/basic-usage/middleware"}
+    - {name: permission, source: "spatie/laravel-permission PermissionMiddleware"}
+    - {name: role_or_permission, source: "spatie/laravel-permission RoleOrPermissionMiddleware"}
+    - {name: Authenticate, source: "Illuminate\\Auth\\Middleware\\Authenticate / Filament\\Http\\Middleware\\Authenticate (class form)"}
+    # the same middleware referenced by class (Route::middleware(EnsureEmailIsVerified::class), $middlewareAliases)
+    - {name: AuthenticateWithBasicAuth, source: "Illuminate\\Auth\\Middleware\\AuthenticateWithBasicAuth"}
+    - {name: AuthenticateSession, source: "Illuminate\\Session\\Middleware\\AuthenticateSession"}
+    - {name: Authorize, source: "Illuminate\\Auth\\Middleware\\Authorize"}
+    - {name: RequirePassword, source: "Illuminate\\Auth\\Middleware\\RequirePassword"}
+    - {name: EnsureEmailIsVerified, source: "Illuminate\\Auth\\Middleware\\EnsureEmailIsVerified"}
+    - {name: CheckAbilities, source: "Laravel\\Sanctum\\Http\\Middleware\\CheckAbilities"}
+    - {name: CheckForAnyAbility, source: "Laravel\\Sanctum\\Http\\Middleware\\CheckForAnyAbility"}
+    - {name: RoleMiddleware, source: "Spatie\\Permission\\Middleware\\RoleMiddleware"}
+    - {name: PermissionMiddleware, source: "Spatie\\Permission\\Middleware\\PermissionMiddleware"}
+    - {name: RoleOrPermissionMiddleware, source: "Spatie\\Permission\\Middleware\\RoleOrPermissionMiddleware"}
+secret:
+  guards:
+    - {name: signed, source: "Illuminate\\Routing\\Middleware\\ValidateSignature, https://laravel.com/docs/urls#signed-urls"}
+    - {name: ValidateSignature, source: "Illuminate\\Routing\\Middleware\\ValidateSignature (class form)"}
+    - {name: VerifyWebhookSignature, source: "Laravel\\Cashier\\Http\\Middleware\\VerifyWebhookSignature, https://laravel.com/docs/billing#verifying-webhook-signatures"}
+plans:
+  # class-name prefixes shortened in plan reports (PSR-4 `App\` namespace, https://laravel.com/docs/structure)
+  short_prefixes: ["App\\Models\\", "App\\Services\\", "App\\Http\\Controllers\\", "App\\Http\\Requests\\", "App\\Support\\",
+                   "App\\Jobs\\", "App\\Console\\Commands\\"]
+  # where plan completeness looks for text mentions of columns / relations (application code and Blade views)
+  text_mention_dirs: [app, resources/views]

@@ -8,6 +8,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Framework presets and a fuller project config: each detected language and framework applies a curated preset
+  (auth and secret guards for Laravel, Django, DRF, django-ninja, NestJS, Next.js, Express-style servers and Nuxt;
+  shared skip lists used by every plugin and the coverage scan), recorded in the index stats; `.cg.yaml` adds
+  `exclude`, `skip_dirs`, `frameworks`, `auth` / `secret` patterns, `gates`, `plans` and `viz.presets`; `cg config
+  show|validate` lists every effective value with its source; `routes` names the rule behind each auth guard; starter
+  queries derived from the graph (`cg starters`, MCP `starters`, the visual view's preset menu)
+  ([#6](https://github.com/cyberchronos00/code-graph/issues/6)).
+
 ## [0.4.0] - 2026-10-02
 
 ### Added

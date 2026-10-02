@@ -1,0 +1,5 @@
+name: rust
+kind: language
+docs: https://doc.rust-lang.org/cargo/guide/build-cache.html
+# Cargo build output, `cargo vendor`, vendored C code, Cargo home
+skip_dirs: [target, vendor, third_party, .cargo]

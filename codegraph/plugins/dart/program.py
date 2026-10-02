@@ -17,7 +17,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from ... import presets
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+
+# directories that never hold a Dart package of their own: build output, Flutter platform runners (presets/dart.yaml)
+PACKAGE_SKIP_DIRS = presets.skip_dirs("dart", "package_skip_dirs")
 
 
 # supertypes of well-known external classes (the analysed project's dependencies are not parsed)
@@ -331,8 +335,7 @@ class DartProgram:
 
     def _packages(self) -> None:
         for dp, dns, fns in os.walk(self.root):
-            dns[:] = [d for d in dns if not d.startswith(".") and d not in ("build", "node_modules", "Pods", "ios", "android", "windows",
-                                                                                "linux", "macos", "web")]
+            dns[:] = [d for d in dns if not d.startswith(".") and d not in PACKAGE_SKIP_DIRS]
             if "pubspec.yaml" in fns:
                 try:
                     txt = (Path(dp) / "pubspec.yaml").read_text(errors="replace")

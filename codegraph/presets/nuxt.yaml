@@ -1,0 +1,9 @@
+name: nuxt
+kind: framework
+docs: https://nuxt.com/docs/guide/directory-structure/nuxt
+# kept out of the generated tsconfig: build output, native shells (Capacitor), static assets, test reports
+skip_dirs: [.output, .nuxt, dist, android, ios, public, coverage, playwright-report]
+auth:
+  guards:
+    - {name: requireUserSession, source: "nuxt-auth-utils requireUserSession, https://github.com/atinux/nuxt-auth-utils"}
+    - {name: getServerSession, source: "@sidebase/nuxt-auth getServerSession"}

@@ -4,7 +4,8 @@ Stdlib HTTP server, read-only. Static page + vendored Cytoscape.js/fcose (no CDN
   /api/search?q=&kind=            node lookup
   /api/graph?mode=&spec=&spec=&min_conf=&sinks=   subgraph = union of the query's evidence paths
   /api/node?id=                   docblock, file:line, source snippet, in/out edges with evidence
-  /api/presets                    canned queries (defaults match examples/; override with --presets)
+  /api/presets                    canned queries: --presets FILE or .cg.yaml viz.presets, the sample-app presets that
+                                  resolve in this graph, and starter queries derived from the graph
   /api/graph?mode=plan&spec=<plan>[&verify=1]   planned-change overlay (plans/<name>.yaml) + check report
   /api/plans                      plan files
 """
@@ -21,8 +22,9 @@ from ..core.store import GraphStore
 from . import graph as G
 
 STATIC = Path(__file__).parent / "static"
-# Canned queries shown in the UI. These match the bundled sample apps (examples/bookstore-*); pass
-# `serve --presets presets.json` (a JSON list of {id, label, mode, specs[, sinks]}) for your own project.
+# Canned queries for the bundled sample apps (examples/bookstore-*), shown when they resolve in the served graph. Your
+# own project: .cg.yaml `viz.presets` or `serve --presets presets.json` (a JSON list of {id, label, mode, specs[, sinks]});
+# starter queries derived from the graph (codegraph/starters.py) are always offered after them.
 PRESETS = [
     {"id": "warehouse_reaches", "label": "what reaches the warehouse connection / warehouse_stock (runtime vs operator vs gated)",
      "mode": "reaches", "specs": ["connection:warehouse", "table:warehouse_stock"]},
@@ -43,9 +45,10 @@ class App:
     def __init__(self, db: str, roots: dict[str, str] | None = None, plans: str | None = None, presets: str | None = None):
         self.db = db
         self.plans = plans
-        self.presets = json.loads(Path(presets).read_text()) if presets else PRESETS
+        self.presets_file = presets
         self.local = threading.local()
         self.sources = G.Sources(GraphStore(db), roots)
+        self._presets = None
 
     def st(self) -> GraphStore:
         if not hasattr(self.local, "st"):
@@ -67,11 +70,48 @@ class App:
         if path == "/api/node":
             return G.node_detail(self.st(), self.sources, one("id", ""))
         if path == "/api/presets":
-            return self.presets
+            if self._presets is None:
+                self._presets = menu(self.st(), self.presets_file, self.plans)
+            return self._presets
         if path == "/api/meta":
             m = self.st().meta()
             return {"project": m.get("project"), "repos": m.get("repos"), "indexed_at": m.get("indexed_at"), "db": self.db}
         raise KeyError(path)
+
+
+def _resolves(st: GraphStore, p: dict, plans: str | None) -> bool:
+    from .. import query as Q
+    if p.get("mode") == "plan":
+        from .. import plans as P
+        try:
+            return all(P.find_plan(s, plans) for s in p.get("specs") or [])
+        except P.PlanError:
+            return False
+    return bool(p.get("specs")) and all(Q.resolve_targets(st, s) for s in p["specs"])
+
+
+def menu(st: GraphStore, presets_file: str | None = None, plans: str | None = None) -> list[dict]:
+    """Preset menu: the project's presets (--presets FILE, else .cg.yaml viz.presets), then the sample-app presets that
+    resolve in this graph, then the starter queries derived from it. Each entry carries `source`."""
+    from ..config import graph_configs
+    from ..starters import for_graph
+    own, src = [], None
+    if presets_file:
+        own, src = json.loads(Path(presets_file).read_text()), "--presets"
+    else:
+        for _, cfg, _ in graph_configs(st):
+            if (cfg.get("viz") or {}).get("presets"):
+                own, src = cfg["viz"]["presets"], cfg.get("file", ".cg.yaml")
+                break
+    out = [dict(p, source=src) for p in own]
+    out += [dict(p, source="examples") for p in PRESETS if _resolves(st, p, plans)]
+    out += [dict(p, source="starter") for p in for_graph(st)]
+    seen, menu_ = set(), []
+    for p in out:
+        if p.get("id") not in seen:
+            seen.add(p.get("id"))
+            menu_.append(p)
+    return menu_
 
 
 def make_handler(app: App):

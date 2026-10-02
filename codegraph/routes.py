@@ -10,8 +10,11 @@ Guards are read from what the framework plugins record on route nodes, so the sa
   django-ninja                  attrs.auth (operation, router or API level `auth=`)
   Django / DRF                  attrs.access (view decorators, access mixins, permission_classes / authentication_classes)
 
-A guard counts as *auth* when its name matches AUTH_PATTERN, tested on the name's word tokens (name-based, and labelled
-as such in the output); pass `auth_pattern` (a regex tested on the raw name) to add project-specific names.
+A guard counts as *auth* when its name is a guard of a framework preset applied at index time (codegraph/presets:
+`login_required`, `IsAuthenticated`, `auth:sanctum`, `password.confirm` ...) or matches AUTH_PATTERN, tested on the
+name's word tokens (name-based, and labelled as such in the output). Project-specific names come from .cg.yaml
+`auth.extra_patterns` or `auth_pattern` (regexes tested on the raw name); preset `not_auth` names (`AllowAny`,
+`csrf_protect`, `ThrottlerGuard`) never count. Each auth guard records `auth_by` (preset, name pattern, project pattern).
 A route without auth whose guards verify a shared secret or signature (webhook signature checks, HMAC, Laravel `signed`
 URLs; SECRET_PATTERN) is reported as SECRET-CHECKED instead of NO AUTH, and `unguarded` leaves it out (and says how
 many it left out). The Laravel broadcasting auth route counts as auth: it rejects private / presence subscriptions
@@ -24,19 +27,18 @@ import os
 import re
 from collections import defaultdict
 
+from . import presets
 from .core.model import PROPAGATING
 from .core.store import GraphStore
 from .coverage import answer_note, completeness_for, possibly_more
 from . import query as Q
 
-# matched against the guard name split into lower-case word tokens joined by "_" (ApiKeyGuard -> api_key_guard,
-# auth:api -> auth_api, IsAuthenticated -> is_authenticated), so AuditLogInterceptor does not count as "login"
-AUTH_PATTERN = (r"(^|_)(auth|authn|authz|authed|authenticate[ds]?|authentication|authori[sz](e[ds]?|ation|er)|login|logged|jwt|token|session|sanctum|passport|bearer|api_key|permissions?|"
-                r"permission_[a-z]+|admin|staff|superuser|can|roles?|acl|verified|protected|protect|require_user|"
-                r"current_user|oauth[a-z0-9]*|oidc|saml|clerk|firebase_auth)(_|$)")
+# name-based fallback for every stack (codegraph/presets/common.yaml): matched against the guard name split into
+# lower-case word tokens joined by "_" (ApiKeyGuard -> api_key_guard, auth:api -> auth_api, IsAuthenticated ->
+# is_authenticated), so AuditLogInterceptor does not count as "login"
+AUTH_PATTERN = presets.values("common", "auth", "token_pattern")
 # shared-secret / signature verification (webhooks, signed URLs): the caller proves it knows a secret, not who it is
-SECRET_PATTERN = (r"(^|_)(signed|signature|signatures|hmac|secret|webhook_secret)(_|$)|(^|_)verify(_[a-z0-9]+)*_webhooks?(_|$)|"
-                  r"(^|_)webhooks?(_[a-z0-9]+)*_(verify|verified|verification|signature|secret|hmac)(_|$)")
+SECRET_PATTERN = presets.values("common", "secret", "token_pattern")
 SECRET_RE = re.compile(SECRET_PATTERN)
 WRITE_KINDS = ("WRITES_TABLE", "WRITES_COLUMN")
 GUARD_ATTRS = (("guards", "guard"), ("interceptors", "interceptor"), ("pipes", "pipe"), ("auth", "auth"),
@@ -62,14 +64,78 @@ def tokens(name: str) -> str:
     return "_".join(t.lower() for t in re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name or ""))
 
 
+def _meta_of(path: str | None) -> dict:
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        g = GraphStore(path)
+        try:
+            return g.meta()
+        finally:
+            g.db.close()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def guard_setup(st: GraphStore) -> dict:
+    """Presets and .cg.yaml patterns recorded at index time, for the guard classification of `st` (a combined graph:
+    the union over its repos). A graph indexed before presets were recorded gets every built-in preset."""
+    metas = []
+    try:
+        m = st.meta()
+    except Exception:  # noqa: BLE001
+        m = {}
+    if m.get("repos"):
+        for r in m["repos"]:
+            src = (m.get("sources") or {}).get(r)
+            metas.append(_meta_of(src))
+    else:
+        metas.append(m)
+    applied, auth_x, secret_x = [], [], []
+    for mm in metas:
+        stt = mm.get("stats") or {}
+        pr = (stt.get("presets") or {}).get("applied")
+        applied += pr if pr else presets.available()
+        cfg = stt.get("config") or {}
+        auth_x += (cfg.get("auth") or {}).get("extra_patterns") or []
+        secret_x += (cfg.get("secret") or {}).get("extra_patterns") or []
+    return {"applied": list(dict.fromkeys(applied or presets.available())),
+            "auth_patterns": list(dict.fromkeys(auth_x)), "secret_patterns": list(dict.fromkeys(secret_x))}
+
+
 class AuthMatcher:
-    def __init__(self, extra: str | None = None):
+    """Classifies guard names: project patterns (.cg.yaml auth.extra_patterns, --auth-pattern; regexes on the raw
+    name), then the applied presets' not_auth and guards names, then the common token pattern."""
+
+    def __init__(self, extra: str | None = None, applied: list[str] | None = None, auth_patterns=(), secret_patterns=()):
+        self.applied = list(applied or presets.available())
+        self.names = presets.guard_names(self.applied, "auth")
+        self.not_auth = presets.guard_names(self.applied, "auth", "not_auth")
+        self.secret_names = presets.guard_names(self.applied, "secret")
         self.base = re.compile(AUTH_PATTERN)
+        pats = [*auth_patterns, *([extra] if extra else [])]
+        self.project = [re.compile(p, re.I) for p in pats]
+        self.secret_project = [re.compile(p, re.I) for p in secret_patterns]
         self.extra = re.compile(extra, re.I) if extra else None
-        self.pattern = AUTH_PATTERN + (f" | /{extra}/i" if extra else "")
+        self.pattern = AUTH_PATTERN + "".join(f" | /{p}/i" for p in pats)
+
+    def why(self, name: str) -> str | None:
+        """'project pattern', 'preset <name>', 'name pattern', or None (not auth)."""
+        if any(rx.search(name or "") for rx in self.project):
+            return "project pattern"
+        if self.not_auth.contains(name):
+            return None
+        hit = self.names.lookup(name)
+        if hit:
+            return f"preset {hit[1]}"
+        return "name pattern" if self.base.search(tokens(name)) else None
 
     def __call__(self, name: str) -> bool:
-        return bool(self.base.search(tokens(name)) or (self.extra and self.extra.search(name)))
+        return self.why(name) is not None
+
+    def secret(self, name: str) -> bool:
+        return bool(SECRET_RE.search(tokens(name)) or self.secret_names.lookup(name)
+                    or any(rx.search(name or "") for rx in self.secret_project))
 
 
 def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
@@ -81,8 +147,13 @@ def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
         if not name or k in seen:
             return
         seen.add(k)
-        out.append({"name": display or name, "kind": kind, "source": source, "auth": is_auth(name) if auth is None else auth,
-                    "secret": bool(SECRET_RE.search(tokens(name)))})
+        why = (is_auth.why(name) if hasattr(is_auth, "why") else ("name pattern" if is_auth(name) else None)) \
+            if auth is None else ("framework" if auth else None)
+        g = {"name": display or name, "kind": kind, "source": source, "auth": why is not None,
+             "secret": is_auth.secret(name) if hasattr(is_auth, "secret") else bool(SECRET_RE.search(tokens(name)))}
+        if why:
+            g["auth_by"] = why
+        out.append(g)
     if attrs.get("broadcast_auth"):
         add("channel callbacks", "broadcast-auth", "Laravel BroadcastController: authenticated user + Broadcast::channel callback",
             auth=True)
@@ -146,7 +217,8 @@ def _groups_for_writes(st: GraphStore, table: str | None) -> dict[str, dict]:
 def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
                   unguarded: bool = False, auth_pattern: str | None = None, min_conf: str = "heuristic",
                   gate: str | None = "auto") -> dict:
-    is_auth = AuthMatcher(auth_pattern)
+    gs = guard_setup(st)
+    is_auth = AuthMatcher(auth_pattern, gs["applied"], gs["auth_patterns"], gs["secret_patterns"])
     if gate == "auto":
         gate = Q.default_gate(st)
     routes = {r["id"]: dict(r) for r in st.q("SELECT id, name, file, line, module, attrs FROM nodes WHERE kind='route'")}
@@ -216,7 +288,7 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
                               auth_pattern=auth_pattern, min_conf="heuristic", gate=gate)
         below = [i["name"] for i in loose["items"] if i["route"] not in mine]
     return {"below_confidence": below, "mode": mode, "writes": writes, "reaches": reaches or [], "unresolved": unresolved, "filters": flt,
-            "total_routes": len(routes), "matched": total, "items": items, "auth_pattern": is_auth.pattern, "gate": gate,
+            "total_routes": len(routes), "matched": total, "items": items, "auth_pattern": is_auth.pattern, "gate": gate, "guard_presets": is_auth.applied,
             "write_tables": sorted({k.split(" ", 1)[1] for k in groups if k.startswith("writes ")}),
             "min_confidence": min_conf}
 
@@ -272,7 +344,14 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
     na = sum(1 for i in items if not i["has_auth"] and not i.get("secret_checked"))
     ns = sum(1 for i in items if not i["has_auth"] and i.get("secret_checked"))
     out = [head, f"auth guard: {len(items) - na - ns} with, {na} without" + (f", {ns} secret-checked (signature / shared secret, no user auth)" if ns else "")
-           + " (auth = guard name matches the auth pattern; name-based)"]
+           + " (auth = a framework preset auth guard or a name matching the auth pattern)"]
+    by = defaultdict(int)
+    for i in items:
+        for g in i["guards"]:
+            if g.get("auth_by"):
+                by[g["auth_by"]] += 1
+    if any(k.startswith(("preset", "project")) for k in by):
+        out.append("auth guards by source: " + ", ".join(f"{k} {v}" for k, v in sorted(by.items(), key=lambda kv: (-kv[1], kv[0]))))
     if res.get("below_confidence"):
         b = res["below_confidence"]
         out.append(f"+{len(b)} more route(s) match only through lower-confidence edges, hidden by "

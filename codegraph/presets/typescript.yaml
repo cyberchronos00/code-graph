@@ -1,0 +1,8 @@
+name: typescript
+kind: language
+docs: https://www.typescriptlang.org/tsconfig#exclude
+# not hashed into the extractor facts cache key (build output, tool caches, test reports)
+skip_dirs: [.output, dist, .cache, coverage, playwright-report, test-results]
+# build output of the JS frameworks cg models (Next.js .next, Nuxt .nuxt / .output, SvelteKit, Turborepo, Vercel,
+# Storybook); never application source for the Nest / Next.js / Express plugins
+build_dirs: [.next, .nuxt, .output, .svelte-kit, .turbo, .vercel, dist, build, out, coverage, storybook-static]

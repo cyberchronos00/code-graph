@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import re
 
+from ... import presets
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.plugin import FrameworkPlugin, GraphBuilder, Project
 from ..python.plugin import ClassInfo, Ctx, FuncInfo, ModInfo, PyProgram, ann_text, const_str, dotted, kwarg, walk_body
@@ -35,11 +36,19 @@ from .urls import ACTION_ROUTES, GENERIC_METHODS, HTTP_METHODS, VIEWSET_ACTIONS,
 from . import extras
 
 # view-level access checks recorded on route nodes (attrs.access); `routes` / `search` read them
-ACCESS_DECORATORS = {"login_required", "permission_required", "user_passes_test", "staff_member_required",
-                     "superuser_required"}
-ACCESS_NAME = re.compile(r"(auth|login|permission|staff|superuser|token|jwt)", re.I)
-ACCESS_OPT_OUT = re.compile(r"not_required|exempt|optional|allow_any", re.I)   # login_not_required, csrf_exempt
-ACCESS_MIXINS = {"LoginRequiredMixin", "PermissionRequiredMixin", "UserPassesTestMixin", "AccessMixin"}
+# (codegraph/presets/django.yaml `access`)
+ACCESS_DECORATORS = set(presets.values("django", "access", "decorators", default=[]))
+ACCESS_NAME = re.compile(presets.values("django", "access", "name_pattern"), re.I)
+ACCESS_OPT_OUT = re.compile(presets.values("django", "access", "opt_out_pattern"), re.I)   # login_not_required, csrf_exempt
+ACCESS_MIXINS = set(presets.values("django", "access", "mixins", default=[]))
+SECRET_NAME = re.compile(presets.values("common", "secret", "token_pattern"))      # on word tokens (verify_signature)
+
+
+def project_access_rx(project) -> re.Pattern | None:
+    """The project's .cg.yaml auth / secret extra_patterns: decorators matching them are recorded as access checks."""
+    cfg = (project.options.get("config") or {}) if project is not None else {}
+    pats = [p for k in ("auth", "secret") for p in ((cfg.get(k) or {}).get("extra_patterns") or [])]
+    return re.compile("|".join(f"(?:{p})" for p in pats), re.I) if pats else None
 
 CONSUMER_BASES = ("WebsocketConsumer", "AsyncWebsocketConsumer", "JsonWebsocketConsumer", "AsyncJsonWebsocketConsumer",
                   "AsyncConsumer", "SyncConsumer", "AsyncHttpConsumer", "GenericAsyncAPIConsumer", "ObserverModelInstanceMixin")
@@ -81,6 +90,7 @@ class DjangoPlugin(FrameworkPlugin):
     def contribute(self, project: Project, builder: GraphBuilder, prog: PyProgram) -> dict:
         self.b = b = builder
         self.prog = prog
+        self.access_rx = project_access_rx(project)
         st = {}
         self.schemas = Schemas(prog, self.models)
         from .shapes import ShapeBuilder
@@ -423,6 +433,8 @@ class DjangoPlugin(FrameworkPlugin):
             self.payload_facts(rid, r, h)
         return n
 
+    access_rx = None
+
     def access_of(self, h, viewset=None) -> list[dict]:
         """Access checks declared on the view: auth decorators (login_required, permission_required, DRF
         @permission_classes, method_decorator(...)), access mixins (LoginRequiredMixin, ...) and DRF
@@ -453,7 +465,8 @@ class DjangoPlugin(FrameworkPlugin):
                     for kw in ("permission_classes", "authentication_classes"):
                         for x in elems(kwarg(d, kw)):
                             add(x.split(".")[-1], f"@action {kw}")
-                elif (nm in ACCESS_DECORATORS or ACCESS_NAME.search(nm)) and not ACCESS_OPT_OUT.search(nm):
+                elif (nm in ACCESS_DECORATORS or ACCESS_NAME.search(nm) or SECRET_NAME.search(presets.name_tokens(nm))
+                      or (self.access_rx and self.access_rx.search(nm))) and not ACCESS_OPT_OUT.search(nm):
                     add(nm, via)
 
         cls = h if isinstance(h, ClassInfo) else (h.cls if isinstance(h, FuncInfo) else None)

@@ -4,22 +4,100 @@ code-graph indexes a project with zero configuration. The optional inputs are li
 
 ## Project config file (`.cg.yaml`)
 
-A `.cg.yaml` (or `.cg.yml`) at the indexed root is read on every index, by the CLI and by the MCP `index` tool, so
-project-specific knowledge is recorded once. Command-line flags take precedence over it.
+A `.cg.yaml` (or `.cg.yml`) at the indexed root is read on every index, by the CLI, the MCP `index` tool and the
+visual view, so project-specific knowledge is recorded once and travels with the repository. Command-line flags take
+precedence over it.
 
 ```yaml
 version: 1
 python:
   source_roots: [lib, tools/scripts]   # directories Python imports from; replaces detection ("." = the indexed root)
+exclude: ["legacy/**", "*.generated.ts"]  # paths no plugin indexes and the coverage scan leaves out
+skip_dirs:
+  add: [fixtures_big]                  # more directory names to skip everywhere
+  keep: [static]                       # directory names skipped by default that hold project code here
+frameworks:
+  add: [nest]                          # turn on a framework layer or preset detection did not pick
+  remove: [flutter]                    # turn off one that was detected
+auth:
+  extra_patterns: ["requireTenantMember", "withOrgScope"]   # guard names (regex) that count as auth
+secret:
+  extra_patterns: ["verifyStripeSignature"]                 # guard names that check a shared secret / signature
+gates: config/gates.json               # gate scenarios file (cg index --gates)
+plans:
+  dir: docs/plans                      # plans directory (--plans-dir)
+  text_mention_dirs: [src, templates]  # where plan checks look for text mentions of a planned name
+viz:
+  presets:                             # canned queries for the visual view's preset menu
+    - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
 ```
 
 | key | meaning | flag |
 |---|---|---|
 | `version` | file format version, `1` (optional) | |
 | `python.source_roots` | Python source roots, relative to the indexed root ([python.md](python.md)) | `cg index --python-root DIR` (repeatable) |
+| `exclude` | gitignore-style globs (`legacy/**`, `*.generated.ts`, `/tools`), applied by every language plugin and by the coverage scan | |
+| `skip_dirs.add` / `skip_dirs.keep` | directory names to add to, or take out of, the shared skip lists | |
+| `frameworks.add` / `frameworks.remove` | framework layers and presets to turn on or off (`laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `express`; aliases such as `nestjs`, `next`, `fastify`, `drf` work too) | |
+| `auth.extra_patterns` | regexes on guard names that count as auth in `routes` | `--auth-pattern` |
+| `secret.extra_patterns` | regexes on guard names that count as a secret or signature check | |
+| `gates` | gate scenarios file, relative to the indexed root | `cg index --gates FILE` |
+| `plans.dir` | plans directory used by `plan`, `viz-plan`, `serve`, `impact` and the MCP server | `--plans-dir DIR` / `--plans DIR` |
+| `plans.text_mention_dirs` | directories scanned for text mentions of planned names | |
+| `viz.presets` | preset menu entries for `serve` (`{id, label, mode, specs[, sinks]}`) | `serve --presets FILE` |
+
+The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` and the MCP server read the plans
+directory, auth patterns and presets from the graph without repeating the flags.
+
+### Checking a config file
+
+`cg config show [ROOT]` prints the effective configuration, one row per value with the place it comes from (a
+flag, `.cg.yaml`, a framework preset or detection); `--json` gives the same as data. `cg config validate [ROOT]`
+checks the file and exits with status 2 when it is invalid:
+
+```text
+$ cg config show .
+effective configuration of bookstore-api
+  config file                .cg.yaml   [found at the indexed root]
+  languages                  php   [detected]
+  frameworks                 laravel   [detected]
+  presets                    common, php, laravel   [built-in (codegraph/presets), picked by detection]
+  exclude                    legacy/**   [.cg.yaml exclude]
+  skip_dirs                  fixtures_big   [.cg.yaml skip_dirs.add]
+  auth.guards                auth, auth.basic, auth.session, can, password.confirm, verified, ...   [preset laravel]
+  auth.extra_patterns        requireTenantMember   [.cg.yaml auth.extra_patterns]
+  plans.dir                  plans   [.cg.yaml plans.dir]
+  ...
+$ cg config validate .
+invalid: .cg.yaml: auth.extra_patterns[0]: '(unclosed' is not a valid regular expression (missing ), unterminated subpattern at position 0)
+```
 
 Invalid files stop the index with a message that names the file and the key. Top-level keys this version does not
-read are kept and listed under `stats.config.ignored_keys`, so one file can serve several cg versions.
+read are kept and listed under `stats.config.ignored_keys`, so one file can serve several cg versions; `cg config
+validate` names them with a suggestion for a likely typo (`skip_dir` → `skip_dirs`).
+
+## Framework presets
+
+Each detected language and framework brings a curated preset from `codegraph/presets/*.yaml`, so a typical project
+gets accurate results with no configuration:
+
+| preset | contents |
+|---|---|
+| `common` | auth and secret name patterns, directory names every plugin and the coverage scan skip |
+| `php`, `python`, `typescript`, `dart`, `rust`, `c_cpp` | per-language skip lists (vendor, build output, caches, generated-file suffixes) |
+| `laravel` | auth middleware (`auth`, `auth:*`, `can:*`, `verified`, Sanctum abilities, Spatie roles / permissions), signature middleware, plan prefixes and text-mention dirs |
+| `django`, `djangorestframework`, `django-ninja` | view access decorators and mixins, DRF permission classes, ninja auth classes |
+| `nest`, `nextjs`, `express`, `nuxt` | Nest passport and RBAC guards, Next.js auth helpers (next-auth, Auth.js, Clerk, Auth0, iron-session), Express / Fastify / Koa / Hono auth middleware, Nuxt session helpers |
+
+Every guard entry names its source (the framework's documentation or package). An entry matches the guard's own
+name, with its namespace, parameters and call arguments aside (`auth:sanctum`, `AuthGuard('jwt')`,
+`Illuminate\Auth\Middleware\EnsureEmailIsVerified`); a project's own guards are recognised by the shared name pattern
+or by `auth.extra_patterns`. Presets are merged in order:
+`common`, then the languages, then the frameworks, then `.cg.yaml`, then flags. `cg index` records the detected
+frameworks and the applied presets in `stats.presets` and on the `cg coverage` summary line, and `cg routes`
+reports which guards each preset or project pattern recognised (`auth guards by source: preset laravel 169, name
+pattern 6`). Entries a preset marks as not auth (`csrf_protect`, `ThrottlerGuard`, `AllowAny`) never count.
+`cg config show` lists every preset value with its source.
 
 ## Gate scenarios (`--gates`)
 A gates file names scenarios and the settings that are true in each, e.g. `examples/bookstore.gates.json`:
@@ -74,9 +152,18 @@ under a false `#[cfg]`, and C/C++ code in a false `#if` region, are reported as 
 list) fixes the exact enabled set, including what `default` and feature dependencies turn on. Atoms the scenario
 doesn't mention stay unknown, and unknown code is treated as live. Example: `examples/native.gates.json`.
 
-## Viz presets (`serve --presets FILE`)
+## Viz presets and starter queries
 
-The preset menu in the visual view. The built-in presets target the sample apps. For your own project, pass a JSON list:
+The preset menu in the visual view is built from, in order:
+
+1. `serve --presets FILE` (a JSON list), or `viz.presets` in `.cg.yaml`;
+2. the sample presets for the bundled example apps, when their targets exist in the graph;
+3. **starter queries** derived from the graph at index time: a write route without an auth guard, the most-written
+   and most-read tables, the busiest connection and env key, the page with the largest backend reach and the
+   most-called functions. Each one resolves to existing nodes; `cg starters --db DB` and the MCP `starters` tool list
+   them with the matching command.
+
+A presets file:
 
 ```json
 [
@@ -98,8 +185,8 @@ The preset menu in the visual view. The built-in presets target the sample apps.
 
 ## Plans directory
 
-`plan …`, `viz-plan` and `serve` take `--plans-dir DIR` (MCP server: `--plans DIR`). Default: `plans/` in the
-repository root.
+`plan …`, `viz-plan` and `serve` take `--plans-dir DIR` (MCP server: `--plans DIR`). Without the flag they use
+`plans.dir` from the indexed project's `.cg.yaml`, then `plans/` in the repository root.
 
 ## Environment variables
 

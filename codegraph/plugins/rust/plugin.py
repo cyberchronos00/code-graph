@@ -26,6 +26,7 @@ from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Projec
 from ..native import gates as G
 from ..native import runner, scipread
 from ..native.ts import TreeSitterMissing
+from ...core.paths import PathRules, rel_dir, rules as path_rules
 from .cargo import SKIP_DIRS, discover
 from .syntax import ENTRY_ATTRS, ROUTE_ATTRS, RFile, RItem, extract
 
@@ -47,12 +48,15 @@ SCIP_KIND = {17: "function", 26: "method", 70: "method", 66: "method", 80: "meth
              15: "field", 12: "variant", 29: "mod"}
 
 
-def _rust_files(root: Path):
+def _rust_files(root: Path, rules: PathRules | None = None):
+    rules = rules or PathRules(SKIP_DIRS)
     for dp, dn, fn in os.walk(root):
-        dn[:] = sorted(d for d in dn if d not in SKIP_DIRS and not d.startswith("."))
+        rd = rel_dir(root, dp)
+        dn[:] = rules.prune(rd, dn, dot=True)
         for f in sorted(fn):
-            if (f.endswith(".rs") or f in ("Cargo.toml", "Cargo.lock")) and keep_file(os.path.join(dp, f)):
-                yield (Path(dp) / f).relative_to(root).as_posix()
+            rel = f"{rd}/{f}" if rd else f
+            if (f.endswith(".rs") or f in ("Cargo.toml", "Cargo.lock")) and keep_file(os.path.join(dp, f)) and not rules.excluded(rel):
+                yield rel
 
 
 class RustPlugin(LanguagePlugin):
@@ -66,6 +70,7 @@ class RustPlugin(LanguagePlugin):
         t0 = time.time()
         root = project.root
         self.root, self.b = root, builder
+        self.rules = path_rules(project, "rust")
         stats: dict = defaultdict(int)
         try:
             from ..native.ts import parser
@@ -83,7 +88,7 @@ class RustPlugin(LanguagePlugin):
         self.file_meta: dict[str, dict] = {}
         self._module_trees(pkgs, stats)
         stats["files"] = len(self.files)
-        orphans = [f for f in _rust_files(root) if f.endswith(".rs") and f not in self.files
+        orphans = [f for f in _rust_files(root, self.rules) if f.endswith(".rs") and f not in self.files
                    and "/target/" not in f and not f.startswith("target/")]
         stats["orphan_rs_files"] = len(orphans)
         # coverage: .rs files outside every crate's module tree are not in the graph
@@ -124,6 +129,9 @@ class RustPlugin(LanguagePlugin):
                     rel, module, cfgs, in_test, pub_chain, is_root = todo.pop(0)
                     if rel in self.files:
                         self.file_meta[rel].setdefault("also_in", []).append(tgt.crate)
+                        continue
+                    if self.rules.excluded(rel):          # .cg.yaml exclude: the file and the modules it declares
+                        stats["excluded_files"] += 1
                         continue
                     try:
                         src = (self.root / rel).read_bytes()
@@ -356,7 +364,7 @@ class RustPlugin(LanguagePlugin):
         cfg_path = runner.cache_dir() / f"ra-config-{int(unsafe_ok)}.json"
         cfg_path.write_text(json.dumps(cfg))
         ver = runner.tool_version(ra)
-        files = list(_rust_files(self.root))
+        files = list(_rust_files(self.root, getattr(self, "rules", None)))
         key = runner.fingerprint(self.root, files, f"{ver}|{json.dumps(cfg, sort_keys=True)}")
         timeout = int(os.environ.get("CODEGRAPH_INDEXER_TIMEOUT", "3600"))
         env_path = os.environ.get("PATH", "")

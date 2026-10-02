@@ -1,0 +1,17 @@
+name: djangorestframework
+kind: framework
+docs: https://www.django-rest-framework.org/api-guide/permissions/
+auth:
+  guards:
+    - {name: IsAuthenticated, source: "rest_framework.permissions.IsAuthenticated"}
+    - {name: IsAdminUser, source: "rest_framework.permissions.IsAdminUser"}
+    - {name: IsAuthenticatedOrReadOnly, source: "rest_framework.permissions.IsAuthenticatedOrReadOnly (writes need auth)"}
+    - {name: DjangoModelPermissions, source: "rest_framework.permissions.DjangoModelPermissions"}
+    - {name: DjangoModelPermissionsOrAnonReadOnly, source: "rest_framework.permissions.DjangoModelPermissionsOrAnonReadOnly"}
+    - {name: DjangoObjectPermissions, source: "rest_framework.permissions.DjangoObjectPermissions"}
+    - {name: TokenAuthentication, source: "rest_framework.authentication.TokenAuthentication, https://www.django-rest-framework.org/api-guide/authentication/"}
+    - {name: SessionAuthentication, source: "rest_framework.authentication.SessionAuthentication"}
+    - {name: BasicAuthentication, source: "rest_framework.authentication.BasicAuthentication"}
+    - {name: JWTAuthentication, source: "rest_framework_simplejwt.authentication.JWTAuthentication"}
+  not_auth:
+    - {name: AllowAny, source: "rest_framework.permissions.AllowAny: explicitly public"}

@@ -15,7 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 LIB_KINDS = {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}
-SKIP_DIRS = {"target", ".git", "node_modules", "vendor", "third_party", ".cargo"}
+from ... import presets
+
+# Cargo build output, vendored sources, Cargo home (codegraph/presets/rust.yaml; .cg.yaml skip_dirs adjusts them)
+SKIP_DIRS = presets.skip_dirs("rust")
 
 
 @dataclass

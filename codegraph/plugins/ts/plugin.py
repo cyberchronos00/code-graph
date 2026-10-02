@@ -32,7 +32,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ... import presets
 from ...core.model import CONFIDENCE_RANK
+from ...core.paths import names_regex, rules as path_rules
 from ...core import fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
@@ -125,6 +127,13 @@ class TypeScriptPlugin(LanguagePlugin):
                              "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]}
         for fw in frameworks:
             fw.register_hooks(ctx)
+        # .cg.yaml exclude globs and skip_dirs.add names (keep only affects the Python-side walks: the extractor's
+        # dependency / build skips are conventions of the TS toolchain)
+        rules = path_rules(project, "typescript")
+        added = set((project.options.get("config") or {}).get("skip_dirs", {}).get("add") or [])
+        ex = [x for x in (rules.exclude_regex(), names_regex(added)) if x]
+        if ex:
+            ctx.extractor_cfg["exclude_re"] = "|".join(f"(?:{x})" for x in ex)
         self.program = ctx
         t0 = time.time()
         cache_file, cache_status = None, "disabled"
@@ -309,7 +318,8 @@ class TypeScriptPlugin(LanguagePlugin):
         return st
 
 
-SKIP_DIRS = {"node_modules", ".git", ".output", "dist", ".cache", "coverage", "playwright-report", "test-results"}
+# not hashed into the facts cache key: build output, tool caches, test reports (codegraph/presets/typescript.yaml)
+SKIP_DIRS = presets.skip_dirs("typescript")
 
 
 def facts_fingerprint(root, cfg: dict) -> str:

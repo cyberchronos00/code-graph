@@ -1,7 +1,7 @@
 # Validation on public projects
 
-The Python/Django and Dart/Flutter plugins, Laravel broadcasting and test indexing, and the Nuxt layout
-handling were checked against shallow clones of well-known open-source projects
+The Python/Django and Dart/Flutter plugins, Laravel broadcasting and test indexing, the Nuxt layout
+handling, and the framework presets with their starter queries and route-guard classification were checked against shallow clones of well-known open-source projects
 (default branch, October 2026). Numbers are from `python -m codegraph.cli index <repo>` on a single 8-core Linux box;
 wall time includes the Dart extractor (facts cache cold) but not the one-off `dart compile exe` of the extractor.
 
@@ -96,3 +96,54 @@ Shallow clones indexed without `npm install` and without `.nuxt` (the clean-chec
 | breeze-nuxt (Nuxt 3 client for a Laravel Breeze API) | source at the repo root | 8 / 2 / 14 (all) | 8 / 8 HTTP calls found with method and path (7 through a `$fetch.create` instance auto-imported from `utils/`); the `runtimeConfig.public.backendUrl` default resolves from `nuxt.config.ts` |
 | elk | `app/` | 59 / 2 / 196 (all) | RENDERS edges: 20 / 20 sampled correct; of the 25 components without a RENDERS edge, 14 are rendered through `<component :is>` and 11 from TS (`h()`, TipTap node views) |
 
+## Presets, starter queries and route guards
+
+`cg index <repo>` with no flags and no `.cg.yaml`, then `cg starters` and `cg routes --unguarded`. Monorepos are
+indexed per app (`immich/server`, `cal.com/apps/web`, ...). "Starters" counts the starter queries that resolve to
+existing nodes out of those generated; "auth by" counts auth guards by the rule that recognised them (`preset X`: the
+framework preset lists the guard by its own name; `name pattern`: the shared auth token pattern; `framework`: the
+plugin knows the check, e.g. Laravel broadcast channel callbacks). Index time includes the starters (last column).
+
+| Project | Commit | Frameworks detected | Presets applied (+ common) | Starters | Routes / with auth / unguarded | Auth by | Index | Starters |
+|---|---|---|---|---|---|---|---|---|
+| koel/koel | 295d8c1 | laravel | php, typescript, laravel | 5 / 5 | 191 / 166 / 23 | preset laravel 161, name pattern 8, framework 2 | 12.22 s | 0.08 s |
+| laravelio/laravel.io | 24be489 | laravel | php, typescript, laravel | 6 / 6 | 64 / 0 / 64 | – | 2.55 s | 0.01 s |
+| netbox-community/netbox | 251458b | django, djangorestframework | python, django, djangorestframework | 6 / 6 | 956 / 92 / 864 | name pattern 105, preset django 31, preset djangorestframework 2 | 34.78 s | 1.2 s |
+| saleor/saleor | 8385ca6 | django | python, django | 1 / 1 | 9 / 0 / 9 | – | 83.65 s | 0.17 s |
+| immich-app/immich `server/` | c5e06dc | nest, express | typescript, nest, express | 4 / 4 | 297 / 295 / 2 | name pattern 295, preset nest 295 | 13.67 s | 0.16 s |
+| immich-app/immich `mobile/` | c5e06dc | flutter | python, dart | 3 / 3 | – | – | 3.79 s | 0.07 s |
+| calcom/cal.com `apps/api/v2` | 54343aa | nest | typescript, nest | 3 / 3 | 162 / 140 / 22 | name pattern 217 | 7.76 s | 0.01 s |
+| calcom/cal.com `apps/web` | 54343aa | nextjs | typescript, nextjs | 4 / 4 | 99 / 0 / 99 | – | 11.28 s | 0.06 s |
+| brocoders/nestjs-boilerplate | 9620f15 | nest | typescript, nest | 6 / 6 | 22 / 11 / 11 | preset nest 16 | 2.6 s | 0.01 s |
+| hagopj13/node-express-boilerplate | 179ae84 | express | typescript, express | 2 / 2 | 14 / 6 / 8 | name pattern 6 | 2.18 s | 0.0 s |
+| elk-zone/elk | 8a90074 | nuxt | typescript, nuxt | 3 / 3 | – | – | 4.29 s | 0.01 s |
+| BurntSushi/ripgrep | 3fce3b5 | – | rust | 3 / 3 | – | – | 27.59 s | 0.05 s |
+| redis/redis | b540ca4 | – | python, c_cpp | 3 / 3 | – | – | 5.53 s | 0.09 s |
+| pallets/flask | d73fa1c | – | python | 3 / 3 | – | – | 0.74 s | 0.01 s |
+
+Every starter resolved on every project. Index time on netbox, best of three on the same box: 34.1 s before (v0.4.0)
+and 33.5 s after, with 1.1 s of that spent on the starters; the shared skip lists and presets add no measurable cost.
+
+**Hand-checked `routes --unguarded` samples.** For each framework, the first unguarded routes and a sample of the
+guarded ones were compared with the source:
+
+| Project | Guards found by the framework preset | Unguarded routes, checked against the source | Needs a project pattern or a later feature |
+|---|---|---|---|
+| koel (Laravel) | `auth`, `auth:sanctum`-style aliases on route groups (161) | `GET /api/ping`, `POST /api/me` (login), `POST /api/forgot-password`, `POST /api/reset-password`, `GET /api/invitations`, `GET /demo/new-session`: public by design | – |
+| laravel.io (Laravel) | – | `POST /forum/{thread}/lock`, `PUT /forum/{thread}/mark-solution/{reply}`, `POST /articles`, `PUT /admin/articles/{article}/pinned`: protected by `$this->middleware(Authenticate::class, ...)` in the controller constructor | controller-constructor middleware (planned) |
+| netbox (Django + DRF) | `LoginRequiredMixin`, `UserPassesTestMixin`, `IsAuthenticated`; netbox's own `ConditionalLoginRequiredMixin`, `ObjectPermissionRequiredMixin` and `IsSuperuser` by name pattern | 851 REST API routes (`POST /api/wireless/wireless-links/`, ...): protected by `REST_FRAMEWORK['DEFAULT_PERMISSION_CLASSES']` in settings; `GET /login/`, `GET /logout/`, `POST /oauth/begin/{backend}/`: public by design | DRF settings defaults (planned); `IsAuthenticatedOrLoginNotRequired` (anonymous access when `LOGIN_REQUIRED` is off) counts once listed in `auth.extra_patterns`: 864 → 860 |
+| saleor (Django) | – | 9 plain Django views (the GraphQL endpoint, plugin webhook endpoints, thumbnails, images, JWKS, static files): public endpoints; the GraphQL API checks permissions per resolver and each plugin checks its own requests | – |
+| immich `server/` (NestJS) | `AuthGuard` on 295 of 297 routes (with immich's `MaintenanceAuthGuard` by name pattern) | 2 routes found in `test/medium/specs/*.spec.ts` (test code, not app routes) | – |
+| cal.com `apps/api/v2` (NestJS) | cal.com's `ApiAuthGuard`, `PermissionsGuard`, `OAuthClientGuard` by name pattern | `GET /health`, `GET /v2/atoms/event-types/{eventSlug}/public`, `POST /v2/auth/oauth2/token`, OAuth callbacks: public by design; `POST /v2/webhooks/vercel/deployment-promoted` | `VercelWebhookGuard` counts as a signature check once listed in `secret.extra_patterns` (22 → 21) |
+| cal.com `apps/web` (Next.js) | – | `POST /api/auth/two-factor/totp/disable`, `POST /api/availability/calendar`: the handler calls `getServerSession()` and returns 401 itself; `POST /api/auth/signup`, `POST /api/auth/forgot-password`: public by design | session checks inside the handler body |
+| nestjs-boilerplate (NestJS) | `AuthGuard('jwt')`, `RolesGuard` (16) | `POST /v1/auth/email/login`, `/register`, `/forgot/password`, `/reset/password`, social logins: public by design | – |
+| node-express-boilerplate (Express) | the project's `auth()` middleware by name pattern | `POST /login`, `/register`, `/refresh-tokens`, `/forgot-password`, `/reset-password`, `/verify-email`: public by design | – |
+
+A `.cg.yaml` for the two project patterns above:
+
+```yaml
+auth:
+  extra_patterns: ["IsAuthenticatedOrLoginNotRequired"]   # netbox
+secret:
+  extra_patterns: ["WebhookGuard$"]                        # cal.com apps/api/v2
+```

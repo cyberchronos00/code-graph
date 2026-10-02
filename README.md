@@ -94,7 +94,7 @@ cg path page:/reports/:id table:orders --db out/graph.db                  # fron
 cg resolutions timezone --db out/graph.db                                 # where is "timezone" decided?
 cg routes --writes --db out/graph.db                                      # which routes write data, and with which guards?
 cg plan check preorders --plans-dir examples/plans --db out/graph.db      # what does this planned change miss?
-.venv/bin/python -m pytest -q tests/                                      # 199 tests
+.venv/bin/python -m pytest -q tests/                                      # 214 tests
 ```
 
 **The same bookstore in other stacks.** Each sample indexes on its own; PHP is only needed for Laravel and Node only
@@ -212,7 +212,8 @@ Django and DRF access checks):
 ```text
 $ cg routes --writes --db out/graph.db --no-paths      # abridged
 routes reaching a write (any table): 4 of 9 routes
-auth guard: 1 with, 3 without (auth = guard name matches the auth pattern; name-based)
+auth guard: 1 with, 3 without (auth = a framework preset auth guard or a name matching the auth pattern)
+auth guards by source: preset laravel 1
 
 DELETE /v1/{store}/admin/reports/{report}  @bookstore-api/routes/api.php:14  NO AUTH
     guards: (none)
@@ -262,7 +263,7 @@ Full reference: [docs/cli.md](docs/cli.md) · value facts: [docs/value-facts.md]
 ### 2. An MCP server for AI agents
 
 The same queries as MCP tools (`reaches`, `impact`, `callers`, `siblings`, `path`, `downstream`, `routes`, `search`, `api_calls`,
-`channels`, `tests_covering`, `resolutions`, `plan_check`, `index`, `coverage`, …), so an agent can check the blast radius before it edits. Replies are compact,
+`channels`, `tests_covering`, `resolutions`, `plan_check`, `index`, `coverage`, `starters`, …), so an agent can check the blast radius before it edits. Replies are compact,
 use repo-relative paths, and `plan_check` starts with a summary (`details=true` for the full report). Every reply also
 carries a machine-readable `completeness` object, so the agent knows when an answer covers the whole repository and
 where to fall back to text search when it does not ([docs/completeness.md](docs/completeness.md)). It runs locally
@@ -312,6 +313,8 @@ Workflow: [Planned changes](#planned-changes) · schema and checks: [docs/plans.
 
 Every edge carries a confidence: `exact` (the parser or compiler saw it), `resolved` (needed type or name resolution)
 or `heuristic` (a labelled name-based fallback). The **mode** column says where each stack gets its references from.
+Each detected framework also applies its preset (the auth guards it ships, its skip lists), so the stacks below work
+without configuration; `cg config show` lists what was applied ([docs/configuration.md](docs/configuration.md#framework-presets)).
 
 | language / framework | mode | what is modelled |
 |---|---|---|
@@ -448,11 +451,24 @@ code-graph indexes a project with zero configuration. The optional inputs are:
   ```
 
 - **Viz presets** (`serve --presets FILE`): a JSON list of canned queries for the preset menu,
-  `{id, label, mode, specs[, sinks]}`.
+  `{id, label, mode, specs[, sinks]}`. Without one, the menu offers starter queries derived from your graph (a
+  write route without an auth guard, the busiest tables, connections and env keys, the most-called functions;
+  `cg starters`).
 - **Plans directory** (`--plans-dir DIR`; MCP server: `--plans DIR`). The default is `plans/`.
-- **Project config file** (`.cg.yaml` at the indexed root, read automatically): `python.source_roots` names the
-  directories Python imports from when you want them fixed instead of detected (`cg index --python-root DIR` for a
-  single run). See [docs/python.md](docs/python.md#configuration).
+- **Framework presets** are picked by detection: each detected framework brings its curated auth guards (Laravel,
+  Django, DRF, django-ninja, NestJS, Next.js, Express / Fastify / Koa / Hono, Nuxt) and every language its skip lists,
+  so `routes --unguarded` is accurate out of the box. `cg index` records the detected frameworks and applied presets.
+- **Project config file** (`.cg.yaml` at the indexed root, read automatically) records project knowledge once:
+  `exclude` globs, extra `skip_dirs`, `frameworks` to add or remove, `auth` / `secret` patterns for your own guards,
+  `gates`, `plans` and `viz.presets`, and `python.source_roots`. `cg config show` prints every effective value with
+  where it comes from, and `cg config validate` checks the file:
+
+  ```yaml
+  exclude: ["legacy/**"]
+  frameworks: {remove: [flutter]}
+  auth: {extra_patterns: ["requireTenantMember"]}
+  plans: {dir: docs/plans}
+  ```
 
 Everything else (environment variables, screenshot tooling): [docs/configuration.md](docs/configuration.md)
 
@@ -501,7 +517,8 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   heuristic mode. Heuristic mode covers about half of the calls in generic or template-heavy code. See
   [docs/limitations.md](docs/limitations.md#rust-c-and-c).
 - **Route guards** come from route definitions and global enhancers (Nest `APP_GUARD` / `useGlobal*`, Express
-  `app.use`). Whether a guard counts as auth is decided by its name (extendable with `--auth-pattern`). Details:
+  `app.use`). Whether a guard counts as auth is decided by the framework preset, then by its name; project guards are
+  added with `auth.extra_patterns` in `.cg.yaml` or `--auth-pattern`. Details:
   [docs/limitations.md](docs/limitations.md#route-guards-and-forwarded-keys).
 - **Sent but not forwarded** keys are found for call sites that pass an object literal to a request helper whose
   request keys are statically known (one call level).
@@ -523,9 +540,10 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Tested SCIP recipes for Go and Java.
 - Rust/C/C++: macro-expanded items, function-pointer dataflow, Bazel and Meson autodetection.
 - FastAPI, Starlette and Flask routes, so the HTTP requests in their test suites link to the handlers they exercise.
-- Route guards: Laravel kernel middleware groups and Django's `MIDDLEWARE` setting shown on each route.
-- More keys in `.cg.yaml`: include / exclude paths, monorepo apps and link pairs, framework presets and extra
-  auth patterns.
+- Route guards: Laravel kernel middleware groups and controller-constructor middleware, Django's `MIDDLEWARE`
+  setting and DRF `DEFAULT_PERMISSION_CLASSES` shown on each route.
+- More keys in `.cg.yaml`: monorepo apps and link pairs, and `include` paths for the TypeScript and Dart
+  extractors' built-in skips.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.
@@ -546,12 +564,12 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`: PHPUnit, Pest, Vitest, Jest, Playwright, Cypress, pytest, unittest) |
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
-| [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`), gates, presets, plans dir, environment variables |
+| [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`, `cg config show`), framework presets, gates, viz presets and starter queries, plans dir, environment variables |
 | [docs/completeness.md](docs/completeness.md) | file completeness, unsupported source types, blind-spot detectors, notes on partial answers, the MCP `completeness` object |
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
-| [docs/validation.md](docs/validation.md) | results on public Django and Flutter projects |
+| [docs/validation.md](docs/validation.md) | results on public projects: Django, Flutter, and presets / starter queries / route guards per framework |
 | [CHANGELOG.md](CHANGELOG.md) | changes per release, and what is coming in the next one |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 199 tests, adding a plugin |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 214 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
 

@@ -15,6 +15,7 @@ import json
 import re
 from pathlib import Path
 
+from ... import presets
 from ...core.plugin import GraphBuilder, Project
 
 # package.json dependencies that mark a TS/JS server framework (any of them enables the TS plugin, even without a
@@ -26,8 +27,10 @@ SERVER_DEPS = {
 }
 # test trees: anywhere for the unambiguous names; `test/`, `tests/`, `e2e/` only at the top (or under src/), since
 # deeper directories with those names are often real route segments (app/api/test/route.ts)
-TEST_SKIP_RE = (r"(^|/)(node_modules|\.next|\.nuxt|\.output|\.svelte-kit|\.turbo|\.vercel|dist|build|out|coverage|"
-                r"__tests__|__mocks__|__fixtures__|cypress|playwright|storybook-static|\.storybook)(/|$)"
+# build output (codegraph/presets/typescript.yaml build_dirs) and test tooling directories
+TEST_TOOL_DIRS = ("__tests__", "__mocks__", "__fixtures__", "cypress", "playwright", ".storybook")
+TEST_SKIP_RE = (r"(^|/)(" + "|".join(re.escape(d) for d in sorted(presets.skip_dirs("typescript", "build_dirs"))
+                                      + list(TEST_TOOL_DIRS)) + r")(/|$)"
                 r"|^(src/)?(test|tests|e2e|spec)(/|$)"
                 r"|\.(test|spec|e2e-spec|stories)\.(t|j)sx?$")
 HTTP_VERBS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")

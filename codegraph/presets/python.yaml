@@ -1,0 +1,8 @@
+name: python
+kind: language
+docs: https://docs.python.org/3/library/venv.html
+# virtualenvs, packaging / tool caches, build output, and Django's collected static / uploaded media
+skip_dirs: [venv, .venv, env, .env, site-packages, .tox, .nox, build, dist, .mypy_cache, .eggs, .pytest_cache,
+            .ruff_cache, htmlcov, static, media]
+# also skipped when deciding whether a repository holds Python at all (vendored / other-stack build output)
+detect_skip_dirs: [vendor, target, out, Pods, .next, .output]

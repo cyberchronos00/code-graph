@@ -1,0 +1,15 @@
+name: django-ninja
+kind: framework
+docs: https://django-ninja.dev/guides/authentication/
+auth:
+  # values of `auth=` on an operation, router or NinjaAPI
+  guards:
+    - {name: django_auth, source: "ninja.security.django_auth (session auth)"}
+    - {name: django_auth_superuser, source: "ninja.security.django_auth_superuser"}
+    - {name: django_auth_is_staff, source: "ninja.security.django_auth_is_staff"}
+    - {name: HttpBearer, source: "ninja.security.HttpBearer"}
+    - {name: HttpBasicAuth, source: "ninja.security.HttpBasicAuth"}
+    - {name: APIKeyHeader, source: "ninja.security.APIKeyHeader"}
+    - {name: APIKeyQuery, source: "ninja.security.APIKeyQuery"}
+    - {name: APIKeyCookie, source: "ninja.security.APIKeyCookie"}
+    - {name: SessionAuth, source: "ninja.security.SessionAuth"}

@@ -70,31 +70,67 @@ def _tag_entries(builder: GraphBuilder, skip_gate: str | None) -> list[tuple]:
     return [(nid, k, c, sample[(nid, k)]) for nid, ks in counts.items() for k, c in ks.items()]
 
 
+def setup(project: Project) -> dict:
+    """Which language plugins, framework plugins and presets apply to `project` (detection, then .cg.yaml
+    frameworks.add / remove). Fills project.options["presets"] (the applied preset names)."""
+    from . import presets
+    from .config import FRAMEWORK_PLUGIN_NAMES
+    cfg = project.options.get("config") or {}
+    fwc = cfg.get("frameworks") or {}
+    add, remove = set(fwc.get("add") or []), set(fwc.get("remove") or [])
+    if not project.detected:
+        project.detected = detect(project.root)
+    langs = [lp for lp in LANGUAGE_PLUGINS if lp.detect(project)]
+    detected = [f for f in FRAMEWORK_PLUGINS if f.detect(project)]
+    fws = [f for f in FRAMEWORK_PLUGINS if (f in detected or f.name in add) and f.name not in remove]
+    found = {f.name: "detected" for f in detected}
+    for k in (project.detected.get("frameworks") or {}):        # sub-frameworks with a preset (DRF, django-ninja)
+        k = presets.FRAMEWORK_ALIASES.get(k, k)
+        if k in presets.frameworks() and k not in FRAMEWORK_PLUGIN_NAMES:
+            found.setdefault(k, "detected")
+    names = {k: v for k, v in found.items() if k not in remove}
+    for k in sorted(add):
+        names.setdefault(k, ".cg.yaml")
+    applied = presets.select([lp.name for lp in langs], list(names))
+    project.options["presets"] = applied
+    return {"language_plugins": langs, "framework_plugins": fws, "languages": [lp.name for lp in langs],
+            "frameworks": names, "removed": sorted(remove & set(found)), "presets": applied}
+
+
 def index_project(root: str | Path, db_path: str | Path, name: str | None = None, scip: list[str] | None = None,
                   gates: str | None = None, python_roots: list[str] | None = None) -> dict:
     """Index `root` into a new graph DB. The project config file (.cg.yaml at the root) is read automatically;
-    python_roots (`cg index --python-root`) overrides its python.source_roots. Raises config.ConfigError for an
-    invalid config file or root."""
-    from .config import load as load_config, norm_root
+    python_roots (`cg index --python-root`) overrides its python.source_roots and `gates` its gates. Raises
+    config.ConfigError for an invalid config file or root."""
+    from .config import ConfigError, load as load_config, norm_root, resolve_path
     t0 = time.time()
     project = Project(root=Path(root).resolve(), name=name or Path(root).name)
-    project.options["config"] = load_config(project.root)
+    project.options["config"] = cfg = load_config(project.root)
     if python_roots:
         project.options["python_roots"] = list(dict.fromkeys(norm_root(r, "--python-root") for r in python_roots))
+    gates_from = "flag" if gates else None
+    if not gates and cfg.get("gates"):
+        gates, gates_from = str(resolve_path(project.root, cfg["gates"])), cfg["file"]
+        if not Path(gates).is_file():
+            raise ConfigError(f"{cfg['file']}: gates: {cfg['gates']!r} does not exist")
     if gates:
         project.options["gates"] = json.loads(Path(gates).read_text())["scenarios"]
     project.detected = detect(project.root)
     builder = GraphBuilder()
     stats = {"detected": project.detected, "plugins": {}}
-    if project.options["config"]:
-        stats["config"] = {k: v for k, v in project.options["config"].items()}
+    if cfg:
+        stats["config"] = {k: v for k, v in cfg.items()}
     if python_roots:
         stats["python_roots_flag"] = project.options["python_roots"]
+    if gates_from:
+        stats["gates_from"] = gates_from
+    plan = setup(project)
+    stats["presets"] = {"applied": plan["presets"], "languages": plan["languages"], "frameworks": plan["frameworks"]}
+    if plan["removed"]:
+        stats["presets"]["frameworks_removed"] = plan["removed"]
     file_reports: dict = {}   # language -> per-file outcome (coverage file completeness)
-    frameworks = [f for f in FRAMEWORK_PLUGINS if f.detect(project)]
-    for lp in LANGUAGE_PLUGINS:
-        if not lp.detect(project):
-            continue
+    frameworks = plan["framework_plugins"]
+    for lp in plan["language_plugins"]:
         fws = [f for f in frameworks if f.language == lp.name]
         lp.program = None
         # one missing indexer / toolchain never fails the whole index: that language is skipped with a note
@@ -150,7 +186,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     from .coverage import compute, scan_tree
     from .blindspots import detect as detect_blind_spots
     t_cov = time.time()
-    scanned = scan_tree(project.root)
+    from .core.paths import rules as path_rules
+    scanned = scan_tree(project.root, path_rules(project, "common", "scan_skip_dirs"))
     progs = {lp.name: lp.program for lp in LANGUAGE_PLUGINS if getattr(lp, "program", None) is not None
              and lp.name in stats["plugins"] and "status" not in (stats["plugins"][lp.name] or {})}
     bspots = detect_blind_spots(project.root, scanned.paths, builder, progs)
@@ -171,6 +208,20 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     store.db.commit()
     stats["coverage"] = compute(project.root, {k: v for k, v in stats["plugins"].items() if "/" not in k and not k.startswith("scip:")},
                                 scip_imported=bool(scip), reports=file_reports, scanned=scanned, blind_spots=bspots)
+    # starter queries for the visual view / MCP, derived from this graph (each resolves to existing nodes)
+    from .starters import generate as gen_starters
+    t_st = time.time()
+    store.set_meta(project=project.name, root=str(project.root), stats=stats)    # presets / config for the route guards
+    gst = GraphStore(db_path)
+    try:
+        stats["starters"] = gen_starters(gst)
+    except Exception as ex:  # noqa: BLE001  (never fails an index)
+        stats["starters"], stats["starters_error"] = [], f"{type(ex).__name__}: {str(ex)[:200]}"
+    finally:
+        gst.db.close()
+    stats["starters_seconds"] = round(time.time() - t_st, 2)
+    stats["coverage"]["setup"] = {"frameworks": sorted(plan["frameworks"]), "presets": plan["presets"],
+                                  "config": cfg.get("file")}
     stats["completeness_seconds"] = round(t_tag - t_cov, 2)
     stats["nodes"] = len(builder.nodes)
     stats["edges"] = len(builder.edges)

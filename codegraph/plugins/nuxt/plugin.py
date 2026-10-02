@@ -23,6 +23,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from ... import presets
 from ...core.plugin import FrameworkPlugin, GraphBuilder, Project
 
 DIR_KINDS = [("pages/", "page"), ("layouts/", "layout"), ("components/", "component"), ("composables/", "composable"),
@@ -76,7 +77,8 @@ def find_src_dir(root: Path) -> str:
 
 
 AUTO_IMPORT_DIRS = ("composables", "utils", "stores")
-EXCLUDE = ["node_modules", ".output", ".nuxt", "dist", ".git", "android", "ios", "public", "coverage", "playwright-report"]
+# kept out of the generated tsconfig: build output, native shells, static assets (codegraph/presets/nuxt.yaml)
+EXCLUDE = sorted(presets.skip_dirs("nuxt"))
 
 
 def _exports(f: Path) -> list[tuple[str, str]]:

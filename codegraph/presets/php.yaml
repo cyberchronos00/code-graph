@@ -1,0 +1,5 @@
+name: php
+kind: language
+docs: https://getcomposer.org/doc/articles/vendor-binaries.md
+# root-relative paths the PHP file discovery skips: Composer dependencies, Laravel's runtime storage and cache
+skip_paths: [vendor, node_modules, storage, bootstrap/cache, .git]
