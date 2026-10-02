@@ -46,7 +46,9 @@ codegraph/
                      masking), plugin.py (compile database, scip-clang -> exact edges, heuristic fallback,
                      virtual dispatch, entry points)
   plugins/python/    Python language plugin (stdlib `ast`, no Python env needed): modules/classes/functions, import
-                     resolution (relative, `__init__` re-exports, aliases), type inference for calls, hook API
+                     resolution (relative, `__init__` re-exports, aliases), type inference for calls, hook API;
+                     roots.py detects source roots (packaging config, src/lib/python, nested projects, namespace
+                     packages, package parents) and picks one module name per file from the project's imports
   plugins/django/    Django framework plugin (sits on Python): urls.py (path/re_path/include/namespaces), django-ninja
                      (NinjaAPI, Router, add_router, operations, auth, Schema/ModelSchema), DRF (routers, ViewSets,
                      @action, APIView, serializers), models -> tables/columns/relations, ORM reads/writes, settings +
@@ -67,6 +69,7 @@ codegraph/
   plugins/express/   Express / Fastify / Koa / Hono plugin (sits on TS): routes, mounting chains, middleware
   plugins/stubs/     SCIP-indexer recipes for Go and Java (untested stubs)
   indexer.py         detect -> language plugins (+framework hooks) -> framework contribute -> completeness -> store -> entry tagging
+  config.py          project config file (.cg.yaml at the indexed root): loading and validation
   coverage.py        per-language parser mode + file completeness, unsupported source types, scoped completeness of answers
   blindspots.py      index-time detectors for route / handler registrations no plugin models (file:line samples)
   link.py            cross-repo link: backend DB + frontend DB -> combined DB with MATCHES_ROUTE edges
@@ -237,7 +240,9 @@ Error envelopes (`*Error*` models) are compared with every shape, including non-
 
 ## Python / Django plugin
 Parsing uses the stdlib `ast` module (any Python 3 syntax the running interpreter understands); no project environment
-or import of the project is needed. Call resolution: local/imported names (relative imports, `__init__` re-exports,
+or import of the project is needed. Every `.py` file is parsed first; then `roots.py` chooses the source roots (detected,
+or `python.source_roots` from `.cg.yaml` / `--python-root`) and one canonical module name per file, with the other
+importable names kept as aliases ([python.md](python.md)). Call resolution: local/imported names (relative imports, `__init__` re-exports,
 `import a.b as c`), `self`/`cls` methods with MRO, annotated params/returns, constructor results, `super()`, a few
 container generics; otherwise a unique-method-name fallback labelled `heuristic`. `sync_to_async(f)(...)` and similar wrappers
 count as calls to `f`. Django entry kinds: `http_route` (urls/ninja/DRF), `websocket` (Channels), `queue_job` (Celery

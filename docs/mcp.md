@@ -38,9 +38,12 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   arguments re-index every linked repo from its recorded root; `repo` (a name used at link time) picks one; a `root`
   picks the repo whose recorded root contains it, or every repo below it (a parent directory such as the workspace
   root). The link is rebuilt afterwards. A `root` that matches no recorded repo, an unknown `repo`, or a result with
-  0 nodes is refused with an error and the current graph is kept;
+  0 nodes is refused with an error and the current graph is kept. `.cg.yaml` is re-read on every re-index (an invalid
+  file is refused the same way), and Python source roots given with `cg index --python-root` are kept;
 - `coverage(path?, all_files?, json_output?)`: which languages and files the index covers, unsupported source types and
-  blind spots (see [Coverage and completeness](#coverage-and-completeness)); on a combined DB, per linked repo.
+  blind spots (see [Coverage and completeness](#coverage-and-completeness)), and the Python source roots with their
+  origin ([python.md](python.md)); on a combined DB, per linked repo. `json_output=true` adds the roots as
+  `python_source_roots`.
 
 Rust, C and C++ graphs use the same tools. Specs take native forms (`kv_core::store::Store::get`, `ns::Class::method`,
 `mod:crate::module`, a file path, `feature:`/`cfg:`/`define:`/`unsafe:`/`env:` nodes; see [native.md](native.md#query-specs)).

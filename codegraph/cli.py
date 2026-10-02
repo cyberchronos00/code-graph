@@ -32,6 +32,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="codegraph")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("index"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
+    p.add_argument("--python-root", action="append", metavar="DIR",
+                   help="Python source root, relative to ROOT (repeatable); replaces detection and python.source_roots in .cg.yaml")
     p = sub.add_parser("detect"); p.add_argument("root")
     p = sub.add_parser("coverage", help="which source files / languages the index covers: exact, heuristic, skipped (indexer missing) or unsupported")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
@@ -100,7 +102,12 @@ def main(argv=None):
 
     if a.cmd == "index":
         from .indexer import index_project
-        st = index_project(a.root, a.db, a.name, a.scip, gates=a.gates)
+        from .config import ConfigError
+        try:
+            st = index_project(a.root, a.db, a.name, a.scip, gates=a.gates, python_roots=a.python_root)
+        except ConfigError as ex:
+            print(f"cg index: {ex}", file=sys.stderr)
+            return 2
         print(json.dumps(st, indent=2, default=str))
         from .coverage import render
         print(render({"": st.get("coverage")}), file=sys.stderr)  # stdout stays pure JSON

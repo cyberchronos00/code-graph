@@ -22,7 +22,7 @@ For each language the plugin reports what happened to every source file it disco
 | `indexed` | files that are in the graph |
 | `parse_failed` | the parser rejected the file (syntax error, encoding) |
 | `skipped_oversize` | over the plugin's size limit (Python 1.5 MB, C/C++ `CODEGRAPH_MAX_FILE_BYTES`) |
-| `unmapped` | parsed, but not placed in the module table: a Python file in a directory that is not an importable package path (`my-scripts/`) or outside the source roots, two files claiming one module name, a `.rs` file outside every crate's module tree |
+| `unmapped` | parsed, but not placed in the module table: a Python file whose path is not an importable name (`my-scripts/`) or that lies outside the configured source roots ([python.md](python.md)), a `pkg.py` next to a `pkg/` package, a `.rs` file outside every crate's module tree |
 | `excluded` | deliberately left out by the plugin's skip list (Python migrations, PHP `storage/` and `bootstrap/cache/`, generated Dart, directories a plugin does not walk) |
 
 `excluded` files are a choice, so they never make an answer partial; the other three buckets do. The parser mode stays
@@ -34,7 +34,7 @@ coverage proj: not fully covered: python 4 discovered, 2 indexed (exact parser):
   python: 4 files (.py 4) 2 indexed, 1 parse failed, 1 unmapped
     parse failed: app/bad.py
     unmapped: my-scripts/run.py
-    fix: unmapped .py files are in directories that are not importable module paths (a name with '-' or '.') or outside the detected source roots
+    fix: unmapped .py files are in directories that are not importable module paths (a name with '-' or '.'), outside the detected source roots, or claim a module name another file has; list their roots under python.source_roots in .cg.yaml
   qml: 1 files (.qml 1) unsupported
   …
 ```

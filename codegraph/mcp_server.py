@@ -610,7 +610,15 @@ def coverage(path: str | None = None, all_files: bool = False, json_output: bool
     covs = for_graph(st)
     _scope(whole=True, note=False)
     if json_output:
-        return json.dumps(completeness(covs), indent=1)
+        comp = completeness(covs)
+        roots = {r or "": [{k: v for k, v in e.items() if k in ("roots_mode", "source_roots", "roots_warnings", "roots_ambiguous",
+                                                                  "module_name_collisions")}
+                           for e in (c or {}).get("languages", []) if e["language"] == "python" and e.get("source_roots")]
+                 for r, c in covs.items()}
+        roots = {r: v[0] for r, v in roots.items() if v}
+        if roots:
+            comp["python_source_roots"] = next(iter(roots.values())) if len(covs) == 1 else roots
+        return json.dumps(comp, indent=1)
     out = [render(covs, all_files=all_files)]
     if path:
         p = path.strip().removeprefix("./")
@@ -860,15 +868,16 @@ def _pick_repos(meta: dict, root: str | None, repo: str | None) -> tuple[list[tu
                 f"Pass repo=<name>, or a root inside one of those directories")
 
 
-@tool
-def index(root: str | None = None, gates: str | None = None, repo: str | None = None) -> str:
-    """Re-index after editing (static analysis only: never boots the app or touches a database).
-    On a combined graph (backend + frontend): with no arguments every repo is re-indexed from its recorded root and the
-    cross-repo link is rebuilt; repo (a name used at link time) re-indexes just that repo; root is matched to the
-    recorded repo roots (a repo directory, a path inside one, or a parent of several). A root that matches no repo, or
-    a result with 0 nodes, is refused and the graph is left unchanged.
-    On a single-repo graph root defaults to the indexed root; gates is a gate-scenario JSON path (defaults to the
-    server's --gates)."""
+def _flag_roots(db: str) -> list[str] | None:
+    """`cg index --python-root` values recorded in a graph DB, so a re-index keeps them (.cg.yaml is re-read anyway)."""
+    try:
+        return (GraphStore(db).meta().get("stats") or {}).get("python_roots_flag")
+    except Exception:  # noqa: BLE001  (missing / older DB: detection or .cg.yaml applies)
+        return None
+
+
+def _index(root: str | None = None, gates: str | None = None, repo: str | None = None) -> str:
+    """Implementation of index(); see its docstring."""
     from .indexer import index_project
     try:
         meta = _st().meta()
@@ -886,7 +895,7 @@ def index(root: str | None = None, gates: str | None = None, repo: str | None = 
                     tmp = src_db + ".tmp"
                     tmps.append(tmp)
                     g = gates or (STATE["gates"] if r == meta["repos"][0] else None)
-                    st = index_project(r_root, tmp, r, gates=g)
+                    st = index_project(r_root, tmp, r, gates=g, python_roots=_flag_roots(src_db))
                     if not st.get("nodes"):
                         return (f"index refused: re-indexing {r} from {_display(r_root)} produced 0 nodes; "
                                 f"the graph is unchanged (is that the right directory?)")
@@ -907,13 +916,32 @@ def index(root: str | None = None, gates: str | None = None, repo: str | None = 
         return "no project root known; pass root"
     with STATE["lock"]:
         tmp = STATE["db"] + ".tmp"
-        st = index_project(root, tmp, Path(root).name, gates=gates)
+        same_root = meta.get("root") and Path(meta["root"]).resolve() == Path(root).resolve()
+        flag_roots = (meta.get("stats") or {}).get("python_roots_flag") if same_root else None
+        st = index_project(root, tmp, Path(root).name, gates=gates, python_roots=flag_roots)
         if not st.get("nodes"):
             os.remove(tmp)
             return f"index refused: {_display(root)} produced 0 nodes; the graph is unchanged (is that the right directory?)"
         os.replace(tmp, STATE["db"])
     return (f"indexed {_display(root)} -> {_display(STATE['db'])}: {st['nodes']} nodes, {st['edges']} edges in {st['index_seconds']}s; "
             f"gated edges {st.get('gated_edges')}")
+
+
+@tool
+def index(root: str | None = None, gates: str | None = None, repo: str | None = None) -> str:
+    """Re-index after editing (static analysis only: never boots the app or touches a database).
+    On a combined graph (backend + frontend): with no arguments every repo is re-indexed from its recorded root and the
+    cross-repo link is rebuilt; repo (a name used at link time) re-indexes just that repo; root is matched to the
+    recorded repo roots (a repo directory, a path inside one, or a parent of several). A root that matches no repo, or
+    a result with 0 nodes, is refused and the graph is left unchanged.
+    On a single-repo graph root defaults to the indexed root; gates is a gate-scenario JSON path (defaults to the
+    server's --gates). The project config file (.cg.yaml at the root) is read on every
+    re-index; Python source roots given with `cg index --python-root` are kept."""
+    from .config import ConfigError
+    try:
+        return _index(root, gates, repo)
+    except ConfigError as ex:
+        return f"index refused: {ex}; the graph is unchanged"
 
 
 def main(argv=None):

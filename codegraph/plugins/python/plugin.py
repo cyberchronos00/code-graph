@@ -1,9 +1,8 @@
 """Python language plugin (stdlib `ast`, no code execution).
 
 Parses every .py file once and builds:
-  * a module table (dotted names under each source root: the project root, `src/`, and every
-    directory holding a `manage.py`), with import resolution (absolute, relative, `import a.b as c`,
-    re-exports through `__init__`, `from x import *`);
+  * a module table (dotted names under each source root, detected or configured: see `roots.py`), with import
+    resolution (absolute, relative, `import a.b as c`, re-exports through `__init__`, `from x import *`);
   * symbol tables for classes / functions / methods (nested functions and lambdas collapse into their
     enclosing definition) and class bases resolved to local classes or external dotted names
     (`django.db.models.Model`);
@@ -29,9 +28,12 @@ from typing import Any, Callable, Iterator
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.fsutil import keep_file
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
+from .roots import RootPlan, import_names
 
 SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "env", ".env", "__pycache__", "site-packages", ".tox", ".nox",
              "build", "dist", ".mypy_cache", ".eggs", ".pytest_cache", ".ruff_cache", "htmlcov", "static", "media"}
+# directories that never hold project code when deciding whether a repository has Python at all
+DETECT_SKIP = SKIP_DIRS | {"vendor", "target", "out", "Pods", ".next", ".output"}
 MAX_FILE_BYTES = 1_500_000
 # method names too generic for the unique-name fallback
 STOP_METHODS = {"get", "set", "save", "delete", "update", "filter", "all", "items", "keys", "values", "append", "extend",
@@ -112,6 +114,7 @@ class ModInfo:
     funcs: dict = field(default_factory=dict)         # top-level name -> FuncInfo
     vars: dict = field(default_factory=dict)          # module-level name -> [(value ast, line, annotation)]
     all_classes: list = field(default_factory=list)   # incl. nested
+    import_nodes: list = field(default_factory=list)  # every Import / ImportFrom statement (ast.walk order)
 
     @property
     def id(self) -> str:
@@ -244,16 +247,21 @@ class PyProgram:
 
     # ---- loading
     def source_roots(self) -> list[Path]:
-        roots = [self.root]
-        if (self.root / "src").is_dir():
-            roots.append(self.root / "src")
-        for dp, dns, fns in os.walk(self.root):
-            dns[:] = [d for d in dns if d not in SKIP_DIRS and not d.startswith(".")]
-            if "manage.py" in fns and Path(dp) != self.root:
-                roots.append(Path(dp))
-            if Path(dp).relative_to(self.root).parts.__len__() > 3:
-                dns[:] = []
-        return roots
+        """Directories whose contents are importable by top-level name (after load())."""
+        plan = getattr(self, "root_plan", None)
+        if plan is None:
+            return [self.root]
+        return [self.root / r.path if r.path else self.root for r in plan.roots.values()]
+
+    def configured_roots(self) -> tuple[list[str] | None, str]:
+        """(roots, origin): `--python-root` beats `python.source_roots` in .cg.yaml; (None, "detected") otherwise."""
+        opts = self.project.options
+        if opts.get("python_roots"):
+            return list(opts["python_roots"]), "flag"
+        cfg = ((opts.get("config") or {}).get("python") or {}).get("source_roots")
+        if cfg:
+            return list(cfg), "configured"
+        return None, "detected"
 
     def files(self) -> list[str]:
         out = []
@@ -263,15 +271,15 @@ class PyProgram:
                 if fn.endswith(".py"):
                     p = os.path.join(dp, fn)
                     if keep_file(p):
-                        out.append(os.path.relpath(p, self.root))
+                        out.append(os.path.relpath(p, self.root).replace(os.sep, "/"))
         return out
 
     def load(self, skip_migrations=True) -> dict:
-        roots = self.source_roots()
         files = self.files()
         n_skipped = 0
         # per-file outcome for coverage (codegraph/coverage.py): which discovered files did not become graph nodes, and why
         self.file_report = rep = {"seen": files, "parse_failed": [], "skipped_oversize": [], "excluded": [], "unmapped": []}
+        parsed: dict[str, tuple] = {}
         for rel in files:
             parts = Path(rel).parts
             if skip_migrations and "migrations" in parts[:-1]:
@@ -291,29 +299,32 @@ class PyProgram:
                                           "line": getattr(ex, "lineno", None)})
                 rep["parse_failed"].append(rel)
                 continue
-            names = []
-            for r in sorted(roots, key=lambda r: -len(r.parts)):
-                try:
-                    sub = (self.root / rel).relative_to(r)
-                except ValueError:
-                    continue
-                mp = list(sub.with_suffix("").parts)
-                is_pkg = mp[-1] == "__init__"
-                if is_pkg:
-                    mp = mp[:-1]
-                if mp and all(x.isidentifier() for x in mp):
-                    names.append((".".join(mp), is_pkg))
-            if not names:
-                rep["unmapped"].append(rel)  # no importable module path (directory name not an identifier, outside the source roots)
+            parsed[rel] = (tree, [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))])
+        configured, origin = self.configured_roots()
+        # every discovered file shapes the layout (a namespace package may only hold files that failed to parse)
+        plan = RootPlan(self.root, files, import_names(v[1] for v in parsed.values()), configured, origin,
+                        skip_dirs=SKIP_DIRS)
+        self.root_plan = plan
+        names, unmapped = plan.assign()
+        owners: dict = {}
+        for rel in unmapped:
+            if rel in parsed:
+                rep["unmapped"].append(rel)  # no importable module path (directory name not an identifier, outside the source roots, name taken)
+        for rel, (tree, imps) in parsed.items():
+            if rel not in names:
                 continue
-            name, is_pkg = names[0]
-            if name in self.modules:  # two files claim one module name: the later one is the module, the earlier is not in the graph
-                rep["unmapped"].append(self.modules[name].file)
-            m = ModInfo(name=name, file=rel, tree=tree, is_pkg=is_pkg)
+            name, is_pkg, _, root = names[rel]
+            m = ModInfo(name=name, file=rel, tree=tree, is_pkg=is_pkg, import_nodes=imps)
             self.modules[name] = m
             self.by_file[rel] = m
-            for nm, _ in names:
+            self.alias[name] = m
+            if root is not None:
+                owners[root.key] = owners.get(root.key, 0) + 1
+        for rel, (name, _, aliases, _) in names.items():   # other importable names, after every canonical one
+            m = self.by_file.get(rel)
+            for nm in aliases if m else ():
                 self.alias.setdefault(nm, m)
+        self.roots_report = plan.report(owners)
         for m in self.modules.values():
             self._collect(m)
         return {"files": len(files), "parsed": len(self.modules), "skipped": n_skipped, "parse_errors": len(self.parse_errors)}
@@ -321,8 +332,9 @@ class PyProgram:
     def _collect(self, m: ModInfo) -> None:
         for st in m.tree.body:
             self._collect_stmt(m, st, top=True)
-        for st in ast.walk(m.tree):
-            if isinstance(st, (ast.Import, ast.ImportFrom)) and st not in m.tree.body:
+        top = {id(st) for st in m.tree.body}
+        for st in m.import_nodes:
+            if id(st) not in top:
                 self._import(m, st, local_only=True)
 
     def _collect_stmt(self, m: ModInfo, st, top: bool):
@@ -897,9 +909,14 @@ class PythonPlugin(LanguagePlugin):
         self.program: PyProgram | None = None
 
     def detect(self, project: Project) -> bool:
+        """A project marker at the root, or a .py file anywhere outside dependency / build / cache directories."""
         if any(project.exists(m) for m in ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "manage.py", "Pipfile")):
             return True
-        return any(p.suffix == ".py" for p in project.root.glob("*.py")) or any(project.root.glob("*/manage.py"))
+        for dp, dns, fns in os.walk(project.root):
+            if any(fn.endswith(".py") for fn in fns):
+                return True
+            dns[:] = [d for d in dns if d not in DETECT_SKIP and not d.startswith(".")]
+        return False
 
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
         t0 = time.time()
@@ -942,7 +959,7 @@ class PythonPlugin(LanguagePlugin):
         # imports
         n_imp = 0
         for m in prog.modules.values():
-            for st_ in ast.walk(m.tree):
+            for st_ in m.import_nodes:
                 if isinstance(st_, ast.Import):
                     for a in st_.names:
                         tm = prog.module(a.name)
@@ -980,6 +997,14 @@ class PythonPlugin(LanguagePlugin):
                    "methods": sum(1 for f in prog.funcs.values() if f.kind == "method"), "imports": n_imp,
                    "extends": n_ext, "calls": conf_ct, "env_reads": n_env,
                    "parse_error_files": [e["file"] for e in prog.parse_errors[:20]],
+                   "roots_mode": prog.root_plan.mode, "source_roots": prog.roots_report,
+                   **({"roots_warnings": prog.root_plan.warnings} if prog.root_plan.warnings else {}),
+                   **({"roots_ambiguous": {"count": len(prog.root_plan.ambiguous), "samples": prog.root_plan.ambiguous[:5]}}
+                      if prog.root_plan.ambiguous else {}),
+                   **({"module_name_collisions": {"count": prog.root_plan.n_collisions,
+                                                  "path_named": prog.root_plan.n_requalified,
+                                                  "samples": prog.root_plan.collisions[:5]}}
+                      if prog.root_plan.n_collisions else {}),
                    "seconds": round(time.time() - t0, 2)})
         return st
 

@@ -4,14 +4,17 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 
 ## Commands at a glance
 
-- `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE]`: detect languages/frameworks and build the graph.
-  Prints the stats JSON on stdout and a per-language coverage summary on stderr; a missing toolchain skips that
-  language with a note instead of failing the index.
+- `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE] [--python-root DIR]...`: detect languages/frameworks and
+  build the graph. Prints the stats JSON on stdout and a per-language coverage summary on stderr; a missing toolchain
+  skips that language with a note instead of failing the index. Reads `.cg.yaml` at ROOT when present
+  ([configuration.md](configuration.md#project-config-file-cgyaml)); `--python-root` sets the Python source roots for
+  this run ([python.md](python.md)). An invalid `.cg.yaml` exits with status 2 and a message naming the key.
 - `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,
   `heuristic` when the exact-mode indexer is missing, `skipped` when the toolchain is missing, with the install hint),
   file completeness (discovered / indexed / parse failed / over size limit / unmapped / excluded, the first 5 paths
   per bucket or all with `--all-files`), unsupported source types (by extension or `#!` line) and blind spots (route /
-  handler registrations cg does not model, with `file:line`). On a combined graph, one block per linked repo (stored
+  handler registrations cg does not model, with `file:line`). For Python, the source roots with their origin
+  (detected with the reason, or configured) when the layout uses more than the indexed root. On a combined graph, one block per linked repo (stored
   by `link`, so it also works after the source DBs are gone). See [completeness.md](completeness.md).
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
@@ -142,18 +145,20 @@ Generated from `--help`.
 
 ```
 usage: python -m codegraph.cli index [-h] --db DB [--name NAME] [--scip SCIP]
-                       [--gates GATES]
+                       [--gates GATES] [--python-root DIR]
                        root
 
 positional arguments:
   root
 
 options:
-  -h, --help     show this help message and exit
+  -h, --help         show this help message and exit
   --db DB
   --name NAME
   --scip SCIP
-  --gates GATES  gate scenarios JSON (e.g. examples/bookstore.gates.json)
+  --gates GATES      gate scenarios JSON (e.g. examples/bookstore.gates.json)
+  --python-root DIR  Python source root, relative to ROOT (repeatable);
+                     replaces detection and python.source_roots in .cg.yaml
 ```
 
 ### `coverage`

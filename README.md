@@ -94,7 +94,7 @@ cg path page:/reports/:id table:orders --db out/graph.db                  # fron
 cg resolutions timezone --db out/graph.db                                 # where is "timezone" decided?
 cg routes --writes --db out/graph.db                                      # which routes write data, and with which guards?
 cg plan check preorders --plans-dir examples/plans --db out/graph.db      # what does this planned change miss?
-.venv/bin/python -m pytest -q tests/                                      # 154 tests
+.venv/bin/python -m pytest -q tests/                                      # 179 tests
 ```
 
 **The same bookstore in other stacks.** Each sample indexes on its own; PHP is only needed for Laravel and Node only
@@ -324,7 +324,7 @@ or `heuristic` (a labelled name-based fallback). The **mode** column says where 
 | Next.js | exact + resolved | app router (pages, layouts, `route.ts` handlers, dynamic / catch-all segments, route groups, parallel / intercepting routes), pages router + `pages/api`, server actions, `middleware.ts` matchers, `basePath` / rewrites, env incl. `NEXT_PUBLIC_*`, in-repo client → handler links |
 | Express, Fastify, Koa, Hono | exact + resolved | routes, router mounting chains across files (`use`, `register({prefix})`, `route`, `basePath`), route and router-level middleware, Fastify schemas |
 | JavaScript (CommonJS / ESM) | resolved (TS checker with `allowJs`) | the same extractor; resolution follows what the checker infers |
-| Python | resolved (stdlib `ast`, import resolution, type inference) + heuristic fallback | modules, classes, functions, calls |
+| Python | resolved (stdlib `ast`, import resolution, type inference) + heuristic fallback | modules, classes, functions, calls; source roots detected from the layout (`src/`, `lib/`, packaging config, several package roots, namespace packages, nested projects) or set in `.cg.yaml` ([docs/python.md](docs/python.md)) |
 | Django | resolved + heuristic fallback | urls.py (path/re_path/include/namespaces), class/function views, view access checks (`login_required`, permission decorators, access mixins), models → tables/columns/relations, ORM reads/writes, settings/env (os.environ, getenv, django-environ), signals, management commands, admin |
 | django-ninja | resolved | NinjaAPI/Router/`add_router` prefixes, operations with path params, `auth=`, request/response Schema and ModelSchema fields |
 | Django REST Framework | resolved | routers, ViewSets (+ `@action`), APIView/generic views, `permission_classes`, serializer fields |
@@ -450,6 +450,9 @@ code-graph indexes a project with zero configuration. The optional inputs are:
 - **Viz presets** (`serve --presets FILE`): a JSON list of canned queries for the preset menu,
   `{id, label, mode, specs[, sinks]}`.
 - **Plans directory** (`--plans-dir DIR`; MCP server: `--plans DIR`). The default is `plans/`.
+- **Project config file** (`.cg.yaml` at the indexed root, read automatically): `python.source_roots` names the
+  directories Python imports from when you want them fixed instead of detected (`cg index --python-root DIR` for a
+  single run). See [docs/python.md](docs/python.md#configuration).
 
 Everything else (environment variables, screenshot tooling): [docs/configuration.md](docs/configuration.md)
 
@@ -469,6 +472,8 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   resolved type, a unique-method-name fallback fills the gap and is labelled `heuristic`.
 - **String-built names** (dynamic table, column or URL names) become placeholders such as `{param}` or
   `tenant_{store.id}`, or stay unresolved.
+- **Python modules** are named from the detected or configured source roots; files whose path is not an importable
+  name (`my-scripts/run.py`) are listed as `unmapped` by `cg coverage`. See [docs/python.md](docs/python.md).
 - **Python/Dart are parsed, not type-checked.** Calls through untyped parameters, `**kwargs`, dynamic dispatch
   (`getattr`, DI containers, Riverpod/Provider lookups without a type) fall back to `heuristic` or stay unresolved.
   GraphQL APIs (graphene/strawberry) and Django template rendering are not modelled.
@@ -514,6 +519,8 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Tested SCIP recipes for Go and Java.
 - Rust/C/C++: macro-expanded items, function-pointer dataflow, Bazel and Meson autodetection.
 - Route guards: Laravel kernel middleware groups and Django's `MIDDLEWARE` setting shown on each route.
+- More keys in `.cg.yaml`: include / exclude paths, monorepo apps and link pairs, framework presets and extra
+  auth patterns.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.
@@ -529,15 +536,16 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/schema.md](docs/schema.md) | SQLite tables, node kinds, edge kinds, confidence, entry kinds |
 | [docs/native.md](docs/native.md) | Rust, C and C++: install, compile database, modes, facts, entry kinds, query specs, gates, env vars, validation numbers |
 | [docs/ts-frameworks.md](docs/ts-frameworks.md) | NestJS, Next.js and Express-style layers, validation on public projects |
+| [docs/python.md](docs/python.md) | Python source roots: detection, module names, `.cg.yaml` / `--python-root`, coverage output, validation |
 | [docs/value-facts.md](docs/value-facts.md) | request keys, settings, fallback chains, `resolutions` |
 | [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`) |
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
-| [docs/configuration.md](docs/configuration.md) | gates, presets, plans dir, environment variables |
+| [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`), gates, presets, plans dir, environment variables |
 | [docs/completeness.md](docs/completeness.md) | file completeness, unsupported source types, blind-spot detectors, notes on partial answers, the MCP `completeness` object |
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
 | [docs/validation.md](docs/validation.md) | results on public Django and Flutter projects |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 154 tests, adding a plugin |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 179 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
 

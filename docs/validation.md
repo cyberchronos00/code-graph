@@ -30,6 +30,10 @@ Gaps seen:
 - wagtail: `page_viewset_registry` / hook-generated URL lists resolve paths but not always the handler.
 - saleor: one GraphQL endpoint; resolvers/mutations are not routes.
 
+Python source-root detection (`src/` and `lib/` layouts, monorepos, namespace packages) is validated on
+fastapi/full-stack-fastapi-template, opentelemetry-python, ansible, flask, pytest and netbox: see
+[python.md](python.md#validation).
+
 ## Flutter / Dart
 
 | Project | What it exercises | .dart files | Index | Nodes / edges | HTTP call sites (endpoints) | Pages | Parse failures |

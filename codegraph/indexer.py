@@ -66,14 +66,25 @@ def tag_entries(builder: GraphBuilder, skip_gate: str | None = None) -> list[tup
 
 
 def index_project(root: str | Path, db_path: str | Path, name: str | None = None, scip: list[str] | None = None,
-                  gates: str | None = None) -> dict:
+                  gates: str | None = None, python_roots: list[str] | None = None) -> dict:
+    """Index `root` into a new graph DB. The project config file (.cg.yaml at the root) is read automatically;
+    python_roots (`cg index --python-root`) overrides its python.source_roots. Raises config.ConfigError for an
+    invalid config file or root."""
+    from .config import load as load_config, norm_root
     t0 = time.time()
     project = Project(root=Path(root).resolve(), name=name or Path(root).name)
+    project.options["config"] = load_config(project.root)
+    if python_roots:
+        project.options["python_roots"] = list(dict.fromkeys(norm_root(r, "--python-root") for r in python_roots))
     if gates:
         project.options["gates"] = json.loads(Path(gates).read_text())["scenarios"]
     project.detected = detect(project.root)
     builder = GraphBuilder()
     stats = {"detected": project.detected, "plugins": {}}
+    if project.options["config"]:
+        stats["config"] = {k: v for k, v in project.options["config"].items()}
+    if python_roots:
+        stats["python_roots_flag"] = project.options["python_roots"]
     file_reports: dict = {}   # language -> per-file outcome (coverage file completeness)
     frameworks = [f for f in FRAMEWORK_PLUGINS if f.detect(project)]
     for lp in LANGUAGE_PLUGINS:

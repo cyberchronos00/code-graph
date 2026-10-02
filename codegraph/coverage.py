@@ -60,12 +60,14 @@ HINTS = {
             "`pip install tree-sitter tree-sitter-rust`",
     "c_cpp": "exact mode needs scip-clang and a compile_commands.json (docs/native.md); the tree-sitter layer needs "
              "`pip install tree-sitter tree-sitter-c tree-sitter-cpp`",
-    "python": "add a project marker (pyproject.toml, requirements.txt, setup.py or manage.py) at the indexed root",
+    "python": "the .py files are only in directories the Python plugin skips (virtualenvs, build output, static/, media/); "
+              "index the directory that holds your code",
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
     "java": "no native plugin: index with scip-java and pass `--scip index.scip`",
 }
 SKIP_DIRS = {".git", "node_modules", "vendor", "target", "build", "dist", ".dart_tool", "__pycache__", ".venv", "venv",
              ".tox", ".mypy_cache", ".pytest_cache", ".next", ".output", "out", ".gradle", ".idea", "Pods"}
+SHOW_ROOTS = 6      # Python source roots shown by default
 FALLBACK = "use your normal search and file reading for those parts; an empty cg answer there is not proof of absence"
 
 
@@ -209,8 +211,11 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
                 e["paths"] = fc["paths"]
             e["files_complete"] = missing_files(e) == 0
             if not e["files_complete"] and lang == "python" and e.get("unmapped"):
-                e["hint"] = ("unmapped .py files are in directories that are not importable module paths (a name with "
-                             "'-' or '.') or outside the detected source roots")
+                e["hint"] = _python_unmapped_hint(st)
+        if lang == "python" and st:
+            for k in ("roots_mode", "source_roots", "roots_warnings", "roots_ambiguous", "module_name_collisions"):
+                if st.get(k):
+                    e[k] = st[k]
         langs.append(e)
     other: dict = {}
     for ext, lang in UNSUPPORTED.items():
@@ -237,6 +242,51 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
     out = {"languages": langs, "gaps": sum(1 for e in langs if _is_gap(e))}
     if blind_spots:
         out["blind_spots"] = blind_spots
+    return out
+
+
+def _python_unmapped_hint(st: dict) -> str:
+    if st.get("roots_mode") in ("configured", "flag"):
+        where = "python.source_roots in .cg.yaml" if st["roots_mode"] == "configured" else "--python-root"
+        roots = ", ".join(r["path"] for r in st.get("source_roots") or []) or "none"
+        return (f"unmapped .py files are outside the configured source roots ({roots}): add their directories to {where}, "
+                f"or drop the setting to use detection")
+    return ("unmapped .py files are in directories that are not importable module paths (a name with '-' or '.'), "
+            "outside the detected source roots, or claim a module name another file has; list their roots under "
+            "python.source_roots in .cg.yaml")
+
+
+def python_roots_lines(e: dict, all_files: bool = False, indent: str = "  ") -> list[str]:
+    """'python source roots: lib/ (detected: parent of top-level package core, 3 modules); ...' plus warnings and the
+    modules reachable from two roots. Empty for the plain layout (only the indexed root, nothing to warn about)."""
+    roots = e.get("source_roots") or []
+    mode = e.get("roots_mode")
+    plain = mode == "detected" and all(r["path"] == "./" for r in roots)
+    out = []
+    if roots and (all_files or not plain):
+        ranked = sorted(roots, key=lambda r: (-r.get("modules", 0), r["path"]))
+        show = ranked if all_files else ranked[:SHOW_ROOTS]
+        txt = "; ".join(f"{r['path']}{' as ' + r['package'] if r.get('package') else ''} ({r['origin']}: {r['why']}, "
+                        f"{r.get('modules', 0)} module{'s' if r.get('modules', 0) != 1 else ''})" for r in show)
+        more = len(roots) - len(show)
+        out.append(f"{indent}python source roots: {txt}" + (f" … +{more} more (--all-files)" if more > 0 else ""))
+    for w in e.get("roots_warnings") or []:
+        out.append(f"{indent}python warning: {w}")
+    amb = e.get("roots_ambiguous")
+    if amb:
+        s = amb["samples"][0]
+        out.append(f"{indent}python: {amb['count']} module{'s' if amb['count'] != 1 else ''} importable from two roots, named "
+                   f"after the project's imports (e.g. {s['file']} -> {s['chosen']}, not {s['also'][0]})")
+    col = e.get("module_name_collisions")
+    if col:
+        s = col["samples"][0]
+        alt = f"named {s['named']}" if s.get("named") else "not indexed"
+        moved = col.get("path_named", 0)
+        one = col["count"] == 1
+        out.append(f"{indent}python: {col['count']} file{'' if one else 's'} claim{'s' if one else ''} a module name another "
+                   f"file has (e.g. {s['file']}: {s['name']} is {s['with']}; {alt})"
+                   + (f"; {moved} file{' in that package tree is' if moved == 1 else 's in those package trees are'} named "
+                      f"by {'its' if moved == 1 else 'their'} path from the indexed root" if moved else ""))
     return out
 
 
@@ -315,6 +365,9 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
     any_gap = any_bs = False
     for repo, cov in covs.items():
         out.append(summary_line(cov, repo if len(covs) > 1 or repo else None))
+        for e in (cov or {}).get("languages", []):
+            if e["language"] == "python":
+                out += python_roots_lines(e, all_files)
         for e in gaps(cov):
             any_gap = True
             exts = ", ".join(f"{k} {v}" for k, v in sorted(e["by_ext"].items()))

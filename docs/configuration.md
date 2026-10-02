@@ -2,6 +2,25 @@
 
 code-graph indexes a project with zero configuration. The optional inputs are listed here.
 
+## Project config file (`.cg.yaml`)
+
+A `.cg.yaml` (or `.cg.yml`) at the indexed root is read on every index, by the CLI and by the MCP `index` tool, so
+project-specific knowledge is recorded once. Command-line flags take precedence over it.
+
+```yaml
+version: 1
+python:
+  source_roots: [lib, tools/scripts]   # directories Python imports from; replaces detection ("." = the indexed root)
+```
+
+| key | meaning | flag |
+|---|---|---|
+| `version` | file format version, `1` (optional) | |
+| `python.source_roots` | Python source roots, relative to the indexed root ([python.md](python.md)) | `cg index --python-root DIR` (repeatable) |
+
+Invalid files stop the index with a message that names the file and the key. Top-level keys this version does not
+read are kept and listed under `stats.config.ignored_keys`, so one file can serve several cg versions.
+
 ## Gate scenarios (`--gates`)
 A gates file names scenarios and the settings that are true in each, e.g. `examples/bookstore.gates.json`:
 `new_inventory` = `features.new_inventory.enabled`.

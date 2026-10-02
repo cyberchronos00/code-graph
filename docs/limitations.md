@@ -99,6 +99,12 @@ Issues and pull requests that extend it are welcome.
   layouts are force-directed (fcose) or layered (breadthfirst; does not handle module boxes well); serving is local
   (127.0.0.1) and has no auth, so expose it only through an SSH tunnel or use `viz-export`.
 - Python / Django:
+  - source roots are detected from the layout and packaging config, or set in `.cg.yaml`
+    ([python.md](python.md)); `sys.path` changes made at run time (`sys.path.insert(...)` in a launcher) are not
+    evaluated, so a launcher's directory outside `src/`, `lib/`, `python/` or a package parent needs
+    `python.source_roots`. Files whose path is not an importable name (`my-scripts/`, `alembic/versions/1a2b_x.py`)
+    stay `unmapped`. When two package trees claim one module name (`tests` in every project of a monorepo), the
+    renamed tree's absolute imports of that name resolve to the tree that kept it;
   - stdlib `ast` only: no type checker, so calls through untyped parameters, `**kwargs`, decorators that change signatures,
     `getattr`/registries and metaclass magic fall back to a unique-name `heuristic` match or stay unresolved. Functions
     registered through a decorator (`@registry.register`, `@click.command`) or stored in a registry
