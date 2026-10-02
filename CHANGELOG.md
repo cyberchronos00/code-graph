@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
 ### Added
 
 - Completeness reporting: `cg coverage` shows discovered vs indexed files per language and why the rest were not
@@ -130,7 +132,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cyberchronos00/code-graph/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/cyberchronos00/code-graph/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/cyberchronos00/code-graph/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/cyberchronos00/code-graph/releases/tag/v0.1.0
