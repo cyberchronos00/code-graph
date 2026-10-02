@@ -2,8 +2,8 @@
 
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
-Tools: reaches, impact, siblings, writers, routes, node, search, stats, index, downstream, path, api_calls, resolutions,
-channels, tests_covering, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, index, downstream, path, api_calls,
+resolutions, channels, tests_covering, coverage, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -13,15 +13,20 @@ gives the same answer. Paths in replies are repo-relative.
 from __future__ import annotations
 
 import argparse
+import contextvars
 import functools
+import inspect
 import sqlite3
 import json
 import os
 import threading
 from collections import defaultdict
 from pathlib import Path
+from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
+from mcp_types import CallToolResult, TextContent
+from typing_extensions import TypedDict
 
 from .core.store import GraphStore
 from . import query as Q
@@ -62,9 +67,12 @@ server = MCPServer(
         "direct (the test calls or requests it) and transitive (through application code). "
         "When a query finds nothing, the reply says why and which query to run instead. "
         "COVERAGE: `coverage` says which languages / files the index covers (exact, heuristic only, skipped because an "
-        "indexer is missing, or unsupported, e.g. Go/Java/Kotlin/Swift/Ruby/C# files). For anything not covered or only "
-        "heuristic, fall back to your normal search and file reading: an empty cg answer there is not proof of absence; "
-        "empty and unknown-symbol replies end with a coverage note. "
+        "indexer is missing, or unsupported, e.g. Go/Java/Kotlin/Swift/QML/shell files), how many files of each language "
+        "are indexed (parse failures, unmapped files) and the blind spots: route / handler registrations cg does not "
+        "model, with file:line. Partial answers end with a `coverage note:` line, and every reply's structured content "
+        "has a `completeness` object (complete: true/false). For anything not covered, heuristic only or at a blind spot, "
+        "fall back to your normal search and file reading: an empty cg answer there is not proof of absence. "
+        "`callers` lists direct callers (one level); `impact` follows them to entry points. "
         "PLANS: an agreed change scope lives in plans/<name>.yaml (add_nodes / modify / add_edges / forbid / require, "
         "issue links) and overlays the graph without changing it. Workflow: write the plan -> `plan_check` (compact "
         "summary with counts and the top items; details=true for every item with file:line, forbidden paths and open "
@@ -107,7 +115,7 @@ def _display(p) -> str | None:
 
 EMPTY_MARKERS = ("no method matches", "no symbol matches", "not found:", "no node matches", "no matches for",
                  "nothing depends", "no writers recorded", "no table ", "no path", "no forward path",
-                 "has no recorded callers", "no siblings found", "no routes, tables", "no indexed test reaches",
+                 "has no recorded callers", "no callers found in indexed code", "no direct callers", "no siblings found", "no routes, tables", "no indexed test reaches",
                  "nothing matched the spec", "no channel matches", "no broadcast channels")
 
 
@@ -119,21 +127,89 @@ def _coverage_note() -> str:
         return ""
 
 
-def tool(fn):
-    """Register an MCP tool whose text reply goes through _rel_text; empty / unknown-symbol replies get a coverage note."""
-    @functools.wraps(fn)
-    def wrapped(*args, **kwargs):
-        from .plans import PlanError
+class ToolReply(TypedDict):
+    """Structured content of every tool reply: the text reply plus machine-readable completeness."""
+    result: str
+    completeness: dict[str, Any]
+
+
+# scope of the answer a tool is producing, set by the tool while it runs (see _scope); read by the tool() wrapper
+_SCOPE: contextvars.ContextVar = contextvars.ContextVar("cg_answer_scope", default=None)
+
+
+def _scope(ids=None, categories=("route", "handler"), whole: bool = False, note: bool = True, unsupported=None) -> None:
+    """Declare what the current answer is about: node ids (their languages / directories / repos scope the
+    completeness), or the whole index. note=False: structured completeness only, no text note."""
+    _SCOPE.set({"ids": list(ids or []), "categories": categories, "whole": whole, "note": note, "unsupported": unsupported})
+
+
+def _completeness(scope: dict | None) -> dict:
+    from .coverage import completeness_for
+    try:
+        st = _st()
+        if scope is None:
+            return completeness_for(st, whole=True)
+        kw = {} if scope["unsupported"] is None else {"unsupported": scope["unsupported"]}
+        return completeness_for(st, scope["ids"], categories=scope["categories"], whole=scope["whole"] or not scope["ids"], **kw)
+    except Exception:  # noqa: BLE001  (no graph yet, older DB: completeness unknown, never a crash)
+        return {"complete": False, "recorded": False, "languages": {}}
+
+
+def _run(fn, args, kwargs) -> tuple[str, dict]:
+    """Run a tool: text reply (repo-relative paths, coverage notes) + its completeness object."""
+    from .coverage import answer_note
+    from .plans import PlanError
+    token = _SCOPE.set(None)
+    try:
         try:
             txt = fn(*args, **kwargs)
         except PlanError as e:  # missing plan, invalid YAML: a readable reply, not a bare tool error
             txt = f"plan error: {e}"
-        if isinstance(txt, str) and fn.__name__ != "coverage" and not txt.startswith("plan error:") and any(m in txt[:600] for m in EMPTY_MARKERS):
-            cn = _coverage_note()
-            if cn:
-                txt = txt.rstrip() + "\n" + cn
-        return _rel_text(txt)
-    return server.tool()(wrapped)
+        scope = _SCOPE.get()
+    finally:
+        _SCOPE.reset(token)
+    comp = _completeness(scope)
+    if not isinstance(txt, str) or txt.startswith("plan error:"):
+        return _rel_text(txt), comp
+    scoped = ""
+    if scope and scope["note"] and not comp.get("complete") and "coverage note:" not in txt:
+        scoped = answer_note(comp)
+        if scoped:
+            txt = txt.rstrip() + "\n" + scoped
+    if fn.__name__ != "coverage" and any(m in txt[:600] for m in EMPTY_MARKERS):
+        cn = _coverage_note()
+        claims_all = cn.startswith("coverage: every source file")
+        if cn and not ((scoped or "coverage note:" in txt) and claims_all):
+            txt = txt.rstrip() + "\n" + cn
+    return _rel_text(txt), comp
+
+
+def tool(fn):
+    """Register an MCP tool. The text reply goes through _rel_text; empty / unknown-symbol replies get a coverage note,
+    partial answers a scoped `coverage note:` line; the structured content carries {result, completeness}."""
+    @functools.wraps(fn)
+    def wrapped(*args, **kwargs):
+        return _run(fn, args, kwargs)[0]
+
+    @functools.wraps(fn)
+    def served(*args, **kwargs):
+        txt, comp = _run(fn, args, kwargs)
+        return CallToolResult(content=[TextContent(type="text", text=txt)],
+                              structured_content={"result": txt, "completeness": _rel_obj(comp)})
+    served.__signature__ = inspect.signature(fn, eval_str=True).replace(return_annotation=Annotated[CallToolResult, ToolReply])
+    wrapped.completeness = lambda *a, **k: _run(fn, a, k)[1]   # tests / scripts: the completeness of a call
+    server.tool()(served)
+    return wrapped
+
+
+def _rel_obj(o):
+    if isinstance(o, str):
+        return _rel_text(o)
+    if isinstance(o, dict):
+        return {k: _rel_obj(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [_rel_obj(v) for v in o]
+    return o
 
 
 def _st() -> GraphStore:
@@ -211,6 +287,7 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
     st = _st()
     res = Q.reaches(st, targets, min_conf=min_confidence)
     items = [i for i in res["items"] if not i["is_target"]]
+    _scope([x for t in res["targets"].values() for x in t] + [i["id"] for i in items])
     code = [i for i in items if i["kind"] in Q.CODE_KINDS]
     entries = [i for i in items if i["kind"] in Q.ENTRY_NODE_KINDS or (i["kind"] in Q.CODE_KINDS and i.get("entry_kind"))]
     groups = defaultdict(list)
@@ -280,6 +357,7 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60) 
     r = Q.impact(st, method, min_conf=min_confidence)
     if not r["targets"]:
         return f"no method matches {method!r}; try search() with part of the name"
+    _scope(list(r["targets"]) + [c["id"] for c in r["callers"]])
     out = [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
     if not r["callers"] and not r["entry_points"]:
         return "\n".join(out + [Q.explain_no_callers(st, method, r["targets"])])
@@ -317,6 +395,39 @@ def _snapshot_client_lines(route_ids) -> list[str]:
         out.append(f"  {h['method']} {h['path']} -> {h['route'].split(':', 1)[1]}  @{ev}"
                    + (f"  sends {', '.join(h['sends'])}" if h["sends"] else "") + f"  [{h['snapshot']}]")
     return out
+
+
+CALLER_KINDS = ("CALLS", "INSTANTIATES", "IMPLEMENTED_BY", "OVERRIDDEN_BY", "BOUND_TO", "ROUTES_TO", "USES_MIDDLEWARE",
+                "HANDLED_BY", "SCHEDULES", "DISPATCHES", "LISTENED_BY", "RENDERS", "USES_COMPOSABLE", "USES_STORE",
+                "REFERENCES_FN", "AUTHORIZES_CHANNEL")
+
+
+@tool
+def callers(symbol: str, min_confidence: str = "heuristic", limit: int = 60) -> str:
+    """Direct callers of a function / method / class (one level: CALLS, INSTANTIATES, dispatch and framework edges
+    into it), each with the call site file:line and confidence. For the full chain up to entry points use impact()."""
+    st = _st()
+    ids = Q.resolve_targets(st, symbol)
+    if not ids:
+        return f"no symbol matches {symbol!r}; try search() with part of the name"
+    _scope(ids[:5])
+    rank = {"exact": 3, "resolved": 2, "heuristic": 1}
+    rows = [r for r in st.q(
+        f"SELECT src, dst, kind, file, line, confidence FROM edges WHERE dst IN ({','.join('?' * len(ids[:5]))}) "
+        f"AND kind IN ({','.join('?' * len(CALLER_KINDS))}) ORDER BY file, line", tuple(ids[:5]) + CALLER_KINDS)
+            if rank.get(r["confidence"], 1) >= rank.get(min_confidence, 1)]
+    head = f"targets: {', '.join(short(t) for t in ids[:5])}"
+    _scope(ids[:5] + [r["src"] for r in rows])
+    if not rows:
+        return head + f"\nno direct callers of {symbol!r} in indexed code (min_confidence={min_confidence}). try: impact() for " \
+                      f"entry points, reaches() for every dependent over all edge kinds, node() for its other edges"
+    out = [head, f"direct callers: {len({r['src'] for r in rows})} ({len(rows)} sites)"]
+    for r in rows[:limit]:
+        c = "" if r["confidence"] == "exact" else f" ~{r['confidence'][0]}"
+        out.append(f"  {short(r['src'])}  {r['kind']}@{at((r['file'] or '?') + ':' + str(r['line']))}{c}")
+    if len(rows) > limit:
+        out.append(f"  … +{len(rows) - limit} more (raise limit)")
+    return "\n".join(out)
 
 
 @tool
@@ -415,7 +526,9 @@ def tests_covering(target: str, min_confidence: str = "heuristic", paths: bool =
     (test -> route -> controller -> service -> target). target: Class::method | Class | route:VERB /uri | `VERB /path`
     or /path (matched against route URIs) | table.column | any node id. Tests are PHPUnit / Pest (tests/), Vitest / Jest
     / Playwright / Cypress spec files; they never count as callers in the other queries."""
-    return Q.render_tests_covering(Q.tests_covering(_st(), target, min_conf=min_confidence), show_paths=paths)
+    res = Q.tests_covering(_st(), target, min_conf=min_confidence)
+    _scope(res.get("targets") or [])
+    return Q.render_tests_covering(res, show_paths=paths)
 
 
 @tool
@@ -476,22 +589,29 @@ def routes(writes: str | None = None, reaches: list[str] | None = None, missing:
     level names the routes it hides."""
     from . import routes as R
     st = _st()
+    _scope(whole=True, categories=("route",), unsupported=False)
     res = R.routes_report(st, writes=writes, reaches=reaches, missing=missing, unguarded=unguarded,
                           auth_pattern=auth_pattern, min_conf=min_confidence)
     return R.render_routes(res, st, max_items=max_items, paths=paths, compact=True)
 
 
 @tool
-def coverage(path: str | None = None) -> str:
-    """Which languages and files this index covers: exact, heuristic only (an exact-mode indexer such as rust-analyzer
-    or scip-clang is missing), skipped (the language's indexer / toolchain is missing; with the install hint) or
-    unsupported (no plugin, e.g. .go .java .kt .swift .rb .cs). path (optional): a file or directory; says whether cg
-    has it in the graph and which language status applies. Not covered or heuristic means: use your normal search and
-    file reading for that part."""
-    from .coverage import for_graph, render, SUPPORTED, UNSUPPORTED, FALLBACK
+def coverage(path: str | None = None, all_files: bool = False, json_output: bool = False) -> str:
+    """Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
+    exact-mode indexer such as rust-analyzer or scip-clang is missing, skipped when the toolchain is missing, with the
+    install hint) and file completeness (discovered vs indexed, with parse failures, files over the size limit,
+    unmapped files outside the source roots, excluded files); unsupported source types by extension or shebang
+    (.go .java .kt .swift .qml .sh ...); blind spots: route / handler registrations cg does not model, with file:line.
+    path (optional): a file or directory; says whether cg has it in the graph. all_files: list every file per bucket
+    (default: the first 5). json_output: the completeness object as JSON. Not covered, heuristic or a blind spot
+    means: use your normal search and file reading for that part."""
+    from .coverage import for_graph, render, completeness, SUPPORTED, UNSUPPORTED, FALLBACK
     st = _st()
     covs = for_graph(st)
-    out = [render(covs)]
+    _scope(whole=True, note=False)
+    if json_output:
+        return json.dumps(completeness(covs), indent=1)
+    out = [render(covs, all_files=all_files)]
     if path:
         p = path.strip().removeprefix("./")
         ext = os.path.splitext(p)[1].lower()
@@ -664,6 +784,7 @@ def plan_check(name: str, verify: bool = False, details: bool = False, max_items
     P, plan = _plan(name)
     res = P.check(_st(), plan, verify=verify, baseline=P.load_baseline(plan) if verify else None)
     res["file"] = _display(res.get("file"))
+    _scope(list(res.get("modified") or []) + [i["node"] for i in res.get("items") or [] if i.get("node")])
     if not review:
         res["items"] = [i for i in res["items"] if i["severity"] != "review"]
     if not details:

@@ -136,6 +136,7 @@ class CFamilyPlugin(LanguagePlugin):
         except TreeSitterMissing as e:
             return {"status": "error", "reason": str(e)}
         files = list(source_files(self.root))
+        self.file_report = {"seen": files, "skipped_oversize": []}
         is_cpp = any(os.path.splitext(f)[1] in CPP_EXT for f in files)
         self.compdb_path = find_compdb(self.root)
         self.compdb = self._read_compdb(self.compdb_path) if self.compdb_path else {}
@@ -154,6 +155,7 @@ class CFamilyPlugin(LanguagePlugin):
                 continue
             if len(src) > limit:
                 stats["skipped_large_files"] += 1
+                self.file_report["skipped_oversize"].append(rel)
                 continue
             srcs[rel] = src
         annot = annotation_macros(srcs.values()) if os.environ.get("CODEGRAPH_C_MASK_ANNOTATIONS", "1") != "0" else set()

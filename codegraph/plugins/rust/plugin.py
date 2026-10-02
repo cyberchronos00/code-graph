@@ -83,8 +83,11 @@ class RustPlugin(LanguagePlugin):
         self.file_meta: dict[str, dict] = {}
         self._module_trees(pkgs, stats)
         stats["files"] = len(self.files)
-        stats["orphan_rs_files"] = sum(1 for f in _rust_files(root) if f.endswith(".rs") and f not in self.files
-                                       and "/target/" not in f and not f.startswith("target/"))
+        orphans = [f for f in _rust_files(root) if f.endswith(".rs") and f not in self.files
+                   and "/target/" not in f and not f.startswith("target/")]
+        stats["orphan_rs_files"] = len(orphans)
+        # coverage: .rs files outside every crate's module tree are not in the graph
+        self.file_report = {"seen": list(self.files) + orphans, "unmapped": orphans}
         self._indexes()
         self._reexports()
         self._emit_structure(stats)

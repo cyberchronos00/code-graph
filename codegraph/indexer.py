@@ -74,6 +74,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     project.detected = detect(project.root)
     builder = GraphBuilder()
     stats = {"detected": project.detected, "plugins": {}}
+    file_reports: dict = {}   # language -> per-file outcome (coverage file completeness)
     frameworks = [f for f in FRAMEWORK_PLUGINS if f.detect(project)]
     for lp in LANGUAGE_PLUGINS:
         if not lp.detect(project):
@@ -86,6 +87,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
             stats["plugins"][lp.name] = {"status": "skipped", "reason": missing}
             continue
         n0, e0 = len(builder.nodes), len(builder.edges)
+        lp.file_report = None
         try:
             st = lp.index(project, builder, fws)
         except Exception as ex:  # noqa: BLE001
@@ -95,6 +97,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
         stats["plugins"][lp.name] = st
         if isinstance(st, dict) and st.get("status") in ("skipped", "error", "stub"):
             continue
+        if getattr(lp, "file_report", None) is not None:
+            file_reports[lp.name] = lp.file_report
+            lp.file_report = None
         ctx = getattr(lp, "program", None)
         for fw in fws:
             try:
@@ -121,6 +126,14 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
             if nid not in builder.nodes:
                 kind, key = nid.split(":", 1)
                 builder.add_node(kind, key, attrs={"placeholder": True})
+    # completeness: one file scan for coverage + the blind-spot detectors (patterns no plugin models)
+    from .coverage import compute, scan_tree
+    from .blindspots import detect as detect_blind_spots
+    t_cov = time.time()
+    scanned = scan_tree(project.root)
+    progs = {lp.name: lp.program for lp in LANGUAGE_PLUGINS if getattr(lp, "program", None) is not None
+             and lp.name in stats["plugins"] and "status" not in (stats["plugins"][lp.name] or {})}
+    bspots = detect_blind_spots(project.root, scanned.paths, builder, progs)
     t_tag = time.time()
     rows = tag_entries(builder)
     stats["entry_tagging_seconds"] = round(time.time() - t_tag, 2)
@@ -135,9 +148,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     for lp in LANGUAGE_PLUGINS:
         store.db.executemany("INSERT OR REPLACE INTO gate_predicates VALUES (?,?,?,?)", getattr(lp, "gate_predicates", []) or [])
     store.db.commit()
-    from .coverage import compute
     stats["coverage"] = compute(project.root, {k: v for k, v in stats["plugins"].items() if "/" not in k and not k.startswith("scip:")},
-                                scip_imported=bool(scip))
+                                scip_imported=bool(scip), reports=file_reports, scanned=scanned, blind_spots=bspots)
+    stats["completeness_seconds"] = round(t_tag - t_cov, 2)
     stats["nodes"] = len(builder.nodes)
     stats["edges"] = len(builder.edges)
     stats["index_seconds"] = round(time.time() - t0, 2)

@@ -799,6 +799,13 @@ def explain_no_callers(st: GraphStore, spec: str, targets: list[str]) -> str:
         return f"{s} has no recorded callers; it is itself an entry point ({n['entry_kind']}). try: downstream('{s}') for what it reaches."
     refs = st.q("SELECT kind, count(*) c FROM edges WHERE dst=? GROUP BY kind", (t,))
     other = ", ".join(f"{r['kind']}×{r['c']}" for r in refs)
+    from .coverage import answer_note, completeness_for, possibly_more
+    comp = completeness_for(st, targets)
+    more = possibly_more(comp)
+    if more:
+        return (f"{s}: no callers found in indexed code (blind spots: {more})" + (f"; other incoming edges: {other}" if other else "")
+                + f". try: reaches('{s}') for every dependent over all edge kinds; search('{n.get('name') or spec}') for "
+                f"similarly named code.\n" + answer_note(comp))
     return (f"{s} has no recorded callers" + (f" (other incoming edges: {other})" if other else "") +
             ". It may be called dynamically (string callables, container lookups, framework hooks) or be unused. "
             f"try: reaches('{s}') for every dependent over all edge kinds; search('{n.get('name') or spec}') for similarly named code.")

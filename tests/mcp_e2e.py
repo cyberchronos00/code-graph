@@ -6,6 +6,7 @@ graph, list tools, call each one, save the raw outputs to docs/mcp/sample_output
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import sys
@@ -30,6 +31,9 @@ CALLS = [
     ("reaches", {"targets": ["connection:warehouse", "table:warehouse_stock"], "max_per_group": 12}),
     ("reaches", {"targets": ["env:WAREHOUSE_DB_*"], "group_by": "entry_kind"}),
     ("impact", {"method": "StockService::recordSale"}),
+    ("callers", {"symbol": "StockService::reserve"}),
+    ("tests_covering", {"target": "StockService::reserve"}),
+    ("coverage", {}),
     ("siblings", {"symbol": "StockService::reserveLocal", "limit": 6}),
     ("siblings", {"symbol": "StockService::reserve"}),
     ("writers", {"table": "books"}),
@@ -61,7 +65,8 @@ async def run(db: Path, calls=CALLS) -> dict:
             for name, args in calls:
                 t0 = time.time()
                 res = await session.call_tool(name, args)
-                outs[f"{name} {args}"] = (text_of(res), round(time.time() - t0, 2), bool(res.is_error))
+                outs[f"{name} {args}"] = (text_of(res), round(time.time() - t0, 2), bool(res.is_error),
+                                          (res.structured_content or {}).get("completeness"))
     return outs
 
 
@@ -98,9 +103,11 @@ def write_samples(outs: dict, name="sample_outputs.md") -> Path:
     for k, v in outs.items():
         if k.startswith("_"):
             continue
-        txt, secs, err = v
+        txt, secs, err = v[:3]
         txt = stable(txt)
         L += ["", f"## `{k}`  ({len(txt)} chars{', ERROR' if err else ''})", "", "```", txt, "```"]
+        if len(v) > 3 and v[3] is not None:
+            L += ["", f"structured `completeness`: `{json.dumps(v[3], sort_keys=True)}`"]
     body = "\n".join(L) + "\n"
     if not p.exists() or p.read_text() != body:  # never touch the file when nothing changed
         p.write_text(body)
@@ -114,6 +121,8 @@ def check(outs: dict):
     for k, v in outs.items():
         if not k.startswith("_"):
             assert not v[2], f"tool error: {k}: {v[0][:300]}"
+            if len(v) > 3:  # every reply carries machine-readable completeness next to the text
+                assert isinstance(v[3], dict) and "complete" in v[3] and "languages" in v[3], (k, v[3])
     get = lambda pre: next(v[0] for k, v in outs.items() if k.startswith(pre))  # noqa: E731
     r = get("reaches {'targets': ['connection:warehouse'")
     assert "## RUNTIME" in r and "## GATED" in r and "## OPERATOR" in r

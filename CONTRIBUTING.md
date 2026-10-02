@@ -43,9 +43,13 @@ Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, pl
    `codegraph/plugins/stubs/plugins.py` is often enough to start. For a first-class plugin that combines a SCIP
    indexer with a tree-sitter syntax layer, `codegraph/plugins/rust/` and `codegraph/plugins/cfamily/` (on top of
    the shared `codegraph/plugins/native/` helpers) are the templates.
-4. Register the plugin in `LANGUAGE_PLUGINS` / `FRAMEWORK_PLUGINS` in `codegraph/indexer.py` and, if needed, add
+4. **Completeness:** leave a per-file report in `self.file_report` (`seen`, `parse_failed`, `skipped_oversize`,
+   `unmapped`, `excluded`) so `cg coverage` can tell discovered from indexed files, and add a detector to
+   `codegraph/blindspots.py` for registration patterns the plugin does not model (with a positive and a negative
+   fixture), so answers can say where they may be partial ([docs/completeness.md](docs/completeness.md)).
+5. Register the plugin in `LANGUAGE_PLUGINS` / `FRAMEWORK_PLUGINS` in `codegraph/indexer.py` and, if needed, add
    marker files to `codegraph/core/detect.py`.
-5. Add a **small fixture** under `tests/` (a few files, written from scratch) and a test that asserts the exact edges
+6. Add a **small fixture** under `tests/` (a few files, written from scratch) and a test that asserts the exact edges
    you expect, with their `file:line` and confidence.
 
 ## Pull request expectations

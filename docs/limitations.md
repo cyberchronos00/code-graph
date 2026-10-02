@@ -10,6 +10,8 @@ Issues and pull requests that extend it are welcome.
   - seeders as entry points;
   - `Artisan::command` closures;
   - observers fired by model writes (observer nodes exist but aren't propagated from writes).
+- Routes registered from data (`Route::` inside `foreach`, `->each(...)`, `array_map(...)`) are not listed; each such
+  loop is reported as a blind spot (detector `laravel_loop_routes`, see [completeness.md](completeness.md#blind-spots)).
 - Filament resources: all methods of a resource/page class count as admin entry points.
 - Dynamic connection names are normalized (e.g. `tenant_{store.id}`). String-built column/table names are not resolved.
 - Gate scenarios are deterministic but limited:
@@ -53,9 +55,13 @@ Issues and pull requests that extend it are welcome.
     `body_keys` / `query_keys` are stored but not compared;
   - Nest DI tokens are global: per-module provider scoping, `exports` visibility and token collisions are not modelled;
     request-scoped providers are treated as singletons; project-specific decorators (custom job / event systems built on
-    `SetMetadata`, route decorators wrapped by `applyDecorators`) are not entry points;
+    `SetMetadata`, route decorators wrapped by `applyDecorators`) are not entry points. Route decorators wrapped by
+    `applyDecorators` or a decorator factory are reported per use as a blind spot (detector
+    `nest_wrapped_route_decorator`, see [completeness.md](completeness.md#blind-spots));
   - Express-style middleware order is known only within one file; dynamic `require(path)` and routers passed through
     containers are not followed; a router never mounted from an app keeps its local path (`unmounted`, heuristic);
+    routes registered in a loop or with a computed method (`router[r.method](r.path, ...)`) are reported as a blind
+    spot (detector `express_loop_routes`);
   - Next.js: regex `middleware.ts` matchers link every route (heuristic); `pageExtensions`, i18n locales and
     `generateStaticParams` are not applied; MDX/MD-only pages are not modelled; parallel / intercepting routes are best
     effort (an intercepting route gets the URI of the page it intercepts); for pages-router data functions
@@ -94,9 +100,16 @@ Issues and pull requests that extend it are welcome.
   (127.0.0.1) and has no auth, so expose it only through an SSH tunnel or use `viz-export`.
 - Python / Django:
   - stdlib `ast` only: no type checker, so calls through untyped parameters, `**kwargs`, decorators that change signatures,
-    `getattr`/registries and metaclass magic fall back to a unique-name `heuristic` match or stay unresolved;
+    `getattr`/registries and metaclass magic fall back to a unique-name `heuristic` match or stay unresolved. Functions
+    registered through a decorator (`@registry.register`, `@click.command`) or stored in a registry
+    (`registry[key] = fn`) without any caller in the graph are reported as blind spots (detectors
+    `python_decorator_registration`, `python_registry_assignment`);
+  - web frameworks without a plugin (Flask, FastAPI, …): their route decorators are reported as blind spots
+    (detector `python_decorator_routes`) instead of routes;
   - URL confs built in loops/functions (e.g. plugin registries that generate `path()` lists at import time) and views
-    registered through third-party registries (NetBox `register_model_view`, Wagtail hooks/viewsets) are only partly resolved;
+    registered through third-party registries (NetBox `register_model_view`, Wagtail hooks/viewsets) are only partly
+    resolved; the `urlpatterns` entries built that way and `include()` targets cg could not follow are reported as
+    blind spots (detectors `django_dynamic_urlpatterns`, `django_unresolved_include`);
   - GraphQL (graphene, strawberry, ariadne) schemas are not modelled as routes;
   - ORM reads/writes are detected on `Model.objects...`, related managers and instance `.save()/.delete()` when the receiver
     type is known; raw SQL and `QuerySet` values passed through untyped helpers are not;
@@ -141,17 +154,23 @@ Issues and pull requests that extend it are welcome.
 ## Coverage and missing indexers
 
 - **Coverage is per language and per file found on disk.** `cg index` counts source files by extension (vendored,
-  `node_modules`, build and VCS directories are skipped) and records each language as `exact`, `heuristic`, `skipped`
-  or `unsupported`; `cg coverage` and the MCP `coverage` tool print it. Languages without a plugin (Go and Java
-  without a SCIP index, Kotlin, Swift, Ruby, C#, …) are listed with their file counts and are not in the graph.
+  `node_modules`, build and VCS directories are skipped) and records each language's parser mode (`exact`,
+  `heuristic`, `skipped`, `unsupported`) and its file completeness (discovered, indexed, parse failed, over the size
+  limit, unmapped, excluded); `cg coverage` and the MCP `coverage` tool print it. Source types without a plugin (Go and
+  Java without a SCIP index, Kotlin, Swift, QML, shell scripts, …, also extensionless scripts by their `#!` line) are
+  listed with their file counts and are not in the graph. Per-file reports come from the Python, PHP, Dart, Rust and
+  C/C++ plugins; TypeScript / JavaScript report file counts. Details: [completeness.md](completeness.md).
 - **A missing toolchain degrades, it does not fail the index.** Without `php` (or the PHP extractor's `composer
   install`), PHP files are `skipped`; without `node` (or `npm ci` in the TS extractor), TypeScript / Vue files are
   `skipped`; the other languages still index and the reason plus an install hint is recorded. Without rust-analyzer or
   scip-clang, Rust / C / C++ index in `heuristic` mode. A plugin that fails while indexing is recorded as `skipped`
   with its error.
-- **An empty answer is only as complete as the coverage.** Replies that come back empty, or name an unknown symbol,
-  end with a coverage line; for code in a language that is not covered or only heuristic, use normal search and file
-  reading. Code generated at build or run time, and files outside the indexed root, are not counted at all.
+- **Answers say when they are partial.** Route lists, caller lists, `reaches`, `tests` and plan checks add a
+  `coverage note:` when a blind spot or a file that is not indexed could affect them (scoped to the languages and
+  directories of the answer), and MCP replies carry a `completeness` object. Replies that come back empty, or name an
+  unknown symbol, end with a coverage line. Blind-spot detection covers the patterns listed in
+  [completeness.md](completeness.md#blind-spots); code generated at build or run time, and files outside the indexed
+  root, are not counted at all.
 - **Symlinks.** Dangling symlinks (for example ones that point outside the checkout) are skipped with a warning per
   file instead of stopping the language; the TypeScript stats list them as `skipped_dangling_symlinks`, and the
   TypeScript walker does not follow symlinked directories.

@@ -270,21 +270,26 @@ class PyProgram:
         roots = self.source_roots()
         files = self.files()
         n_skipped = 0
+        # per-file outcome for coverage (codegraph/coverage.py): which discovered files did not become graph nodes, and why
+        self.file_report = rep = {"seen": files, "parse_failed": [], "skipped_oversize": [], "excluded": [], "unmapped": []}
         for rel in files:
             parts = Path(rel).parts
             if skip_migrations and "migrations" in parts[:-1]:
                 n_skipped += 1
+                rep["excluded"].append(rel)
                 continue
             p = self.root / rel
             try:
                 if p.stat().st_size > MAX_FILE_BYTES:
                     n_skipped += 1
+                    rep["skipped_oversize"].append(rel)
                     continue
                 src = p.read_text(encoding="utf-8", errors="replace")
                 tree = ast.parse(src, filename=rel)
             except (SyntaxError, ValueError, RecursionError, OSError) as ex:
                 self.parse_errors.append({"file": rel, "error": f"{type(ex).__name__}: {getattr(ex, 'msg', str(ex))}",
                                           "line": getattr(ex, "lineno", None)})
+                rep["parse_failed"].append(rel)
                 continue
             names = []
             for r in sorted(roots, key=lambda r: -len(r.parts)):
@@ -299,8 +304,11 @@ class PyProgram:
                 if mp and all(x.isidentifier() for x in mp):
                     names.append((".".join(mp), is_pkg))
             if not names:
+                rep["unmapped"].append(rel)  # no importable module path (directory name not an identifier, outside the source roots)
                 continue
             name, is_pkg = names[0]
+            if name in self.modules:  # two files claim one module name: the later one is the module, the earlier is not in the graph
+                rep["unmapped"].append(self.modules[name].file)
             m = ModInfo(name=name, file=rel, tree=tree, is_pkg=is_pkg)
             self.modules[name] = m
             self.by_file[rel] = m
@@ -898,6 +906,7 @@ class PythonPlugin(LanguagePlugin):
         prog = PyProgram(project)
         self.program = prog
         st = prog.load(skip_migrations=not project.options.get("python_include_migrations"))
+        self.file_report = prog.file_report
         for fw in frameworks:
             fw.register_hooks(prog)
         b = builder

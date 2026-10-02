@@ -117,6 +117,7 @@ class DjangoPlugin(FrameworkPlugin):
         st["routes"] = n_routes
         st["root_urlconf"] = [m.name for m in roots]
         st["urlconf_unresolved"] = self.urls.unresolved[:30]
+        prog.url_unresolved = self.urls.unresolved  # read by the blind-spot detectors (codegraph/blindspots.py)
         st["urlconf_unincluded"] = orphan_roots[:30]
         st["ninja"] = {"apis": sum(1 for v in self.ninja.objs.values() if v["kind"] == "api"),
                        "routers": sum(1 for v in self.ninja.objs.values() if v["kind"] == "router"),

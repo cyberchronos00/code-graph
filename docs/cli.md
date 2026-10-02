@@ -7,10 +7,12 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE]`: detect languages/frameworks and build the graph.
   Prints the stats JSON on stdout and a per-language coverage summary on stderr; a missing toolchain skips that
   language with a note instead of failing the index.
-- `coverage --db DB [--json]`: which languages and files the index covers: `exact`, `heuristic` (exact-mode indexer
-  missing), `skipped` (toolchain missing, with the install hint) or `unsupported` (file counts by extension). On a
-  combined graph, one block per linked repo (stored by `link`, so it also works after the source DBs are gone). See
-  [limitations.md](limitations.md#coverage-and-missing-indexers).
+- `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,
+  `heuristic` when the exact-mode indexer is missing, `skipped` when the toolchain is missing, with the install hint),
+  file completeness (discovered / indexed / parse failed / over size limit / unmapped / excluded, the first 5 paths
+  per bucket or all with `--all-files`), unsupported source types (by extension or `#!` line) and blind spots (route /
+  handler registrations cg does not model, with `file:line`). On a combined graph, one block per linked repo (stored
+  by `link`, so it also works after the source DBs are gone). See [completeness.md](completeness.md).
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
 - `impact METHOD [--plans-dir DIR]`: reverse walk from a method up to its entry points. With `--plans-dir`, external
@@ -78,6 +80,20 @@ no siblings found for Services\StockService::reserve: its class has no parent cl
 try: siblings('Services\StockService::reserveLocal') (a callee that touches data); siblings('Services\StockService::reserveFromWarehouse') (a callee that touches data); impact('Services\StockService::reserve') for its callers and entry points; downstream('Services\StockService::reserve') for the tables, config and connections it reaches
 ```
 
+## Partial answers
+
+`routes`, `impact`, `reaches` and `tests` say when their answer could be partial: a blind spot (a route or handler
+registration cg does not model) or a file that is not indexed in a language of the answer. Totals then read as indexed
+totals and a `coverage note:` line names the place to check with text search; `--json` output carries the same facts
+in a `completeness` object. Complete answers keep the usual wording. See [completeness.md](completeness.md).
+
+```text
+$ cg routes --db out/shop.db
+all routes: 1 indexed (possibly more: 1 unmodelled route registration)
+…
+coverage note: 1 route registration cg does not model (Django urlpatterns built by a function call, comprehension or loop: shop/urls.py:9). There, use your normal search and file reading (an empty cg answer is not proof of absence).
+```
+
 ## Routes and guards
 
 `routes` joins three facts per route: its guards, what it reaches, and who calls it.
@@ -143,12 +159,14 @@ options:
 ### `coverage`
 
 ```
-usage: python -m codegraph.cli coverage [-h] --db DB [--json]
+usage: python -m codegraph.cli coverage [-h] --db DB [--json] [--all-files]
 
 options:
-  -h, --help  show this help message and exit
+  -h, --help   show this help message and exit
   --db DB
   --json
+  --all-files  list every file per bucket (default: the first 5), excluded
+               files too
 ```
 
 ### `link`

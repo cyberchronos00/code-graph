@@ -186,6 +186,8 @@ class DartPlugin(LanguagePlugin):
         t_ext = time.time() - t0
         prog = DartProgram(project.root, facts)
         prog.load()
+        failed = [x.get("file") if isinstance(x, dict) else str(x) for x in facts.get("failures") or []]
+        self.file_report = {"seen": list(prog.files) + [f for f in failed if f], "parse_failed": [f for f in failed if f]}
         self.program = prog
         prog.models = ModelIndex(prog)
         prog.env_values = load_env_files(project.root, [p.dir for p in prog.pkg_dirs])

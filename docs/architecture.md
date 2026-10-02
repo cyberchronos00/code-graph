@@ -66,7 +66,9 @@ codegraph/
   plugins/nextjs/    Next.js framework plugin (sits on TS): app + pages router, route handlers, server actions, middleware
   plugins/express/   Express / Fastify / Koa / Hono plugin (sits on TS): routes, mounting chains, middleware
   plugins/stubs/     SCIP-indexer recipes for Go and Java (untested stubs)
-  indexer.py         detect -> language plugins (+framework hooks) -> framework contribute -> store -> entry tagging
+  indexer.py         detect -> language plugins (+framework hooks) -> framework contribute -> completeness -> store -> entry tagging
+  coverage.py        per-language parser mode + file completeness, unsupported source types, scoped completeness of answers
+  blindspots.py      index-time detectors for route / handler registrations no plugin models (file:line samples)
   link.py            cross-repo link: backend DB + frontend DB -> combined DB with MATCHES_ROUTE edges
   payload.py         request/response field check for linked calls (client JSON keys vs server schema/shape)
   query.py           reaches / impact / writers / siblings / downstream / path / api_calls
@@ -94,6 +96,10 @@ class FrameworkPlugin(ABC):           # e.g. Laravel on PHP, Nuxt on TypeScript
     def contribute(self, project, builder, lang_ctx) -> dict   # after: framework nodes/edges
 ```
 
+- After `index()`, a language plugin may leave a per-file report in `self.file_report`: `{"seen": [...], "parse_failed":
+  [...], "skipped_oversize": [...], "unmapped": [...], "excluded": [...]}` (repo-relative paths). `coverage.py` buckets
+  every discovered file of the language from it ([completeness.md](completeness.md)); a discovered file missing from
+  `seen` counts as excluded.
 - `GraphBuilder.add_node(kind, key, name, fqn=, file=, line=, end_line=, module=, doc=, lang=, attrs=)` gives the stable
   id `kind:key`. `add_edge(src, dst, kind, file=, line=, confidence=)` records the edge with its evidence.
 - The PHP context (`PhpProgram`) offers hooks so frameworks can add language-level knowledge without forking the resolver:

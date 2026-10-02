@@ -541,6 +541,8 @@ class PhpPlugin(LanguagePlugin):
         t0 = time.time()
         records = self.extract(project)
         t_extract = time.time() - t0
+        self.file_report = {"seen": [r["file"] for r in records if r.get("file")],
+                            "parse_failed": [r["file"] for r in records if r.get("error") and r.get("file")]}
         prog = PhpProgram(project, records, builder)
         self.program = prog
         for fw in frameworks:

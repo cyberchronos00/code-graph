@@ -94,7 +94,7 @@ cg path page:/reports/:id table:orders --db out/graph.db                  # fron
 cg resolutions timezone --db out/graph.db                                 # where is "timezone" decided?
 cg routes --writes --db out/graph.db                                      # which routes write data, and with which guards?
 cg plan check preorders --plans-dir examples/plans --db out/graph.db      # what does this planned change miss?
-.venv/bin/python -m pytest -q tests/                                      # 130 tests
+.venv/bin/python -m pytest -q tests/                                      # 154 tests
 ```
 
 **The same bookstore in other stacks.** Each sample indexes on its own; PHP is only needed for Laravel and Node only
@@ -261,9 +261,11 @@ Full reference: [docs/cli.md](docs/cli.md) · value facts: [docs/value-facts.md]
 
 ### 2. An MCP server for AI agents
 
-The same queries as MCP tools (`reaches`, `impact`, `siblings`, `path`, `downstream`, `routes`, `search`, `api_calls`,
+The same queries as MCP tools (`reaches`, `impact`, `callers`, `siblings`, `path`, `downstream`, `routes`, `search`, `api_calls`,
 `channels`, `tests_covering`, `resolutions`, `plan_check`, `index`, `coverage`, …), so an agent can check the blast radius before it edits. Replies are compact,
-use repo-relative paths, and `plan_check` starts with a summary (`details=true` for the full report). It runs locally
+use repo-relative paths, and `plan_check` starts with a summary (`details=true` for the full report). Every reply also
+carries a machine-readable `completeness` object, so the agent knows when an answer covers the whole repository and
+where to fall back to text search when it does not ([docs/completeness.md](docs/completeness.md)). It runs locally
 over stdio:
 
 ```text
@@ -415,7 +417,9 @@ A workflow that works well:
 
 A ready-to-paste rules snippet is in [docs/mcp.md](docs/mcp.md#suggested-agent-instructions), and the Cursor CLI
 setup (`.cursor/cli.json`, `agent mcp enable`, print mode) is in [docs/mcp.md](docs/mcp.md#cursor-cli). When a
-language is not covered (see `coverage`), empty replies say so and tell the agent to fall back to its normal search.
+language is not covered (see `coverage`), or an answer could miss a route or handler registered in a way cg does not
+model (a blind spot, with its `file:line`), the reply says so and tells the agent to fall back to its normal search
+exactly there.
 To see an agent at work, watch the [agent demo (MP4)](docs/media/cg-agent-demo.mp4).
 
 ## Planned changes
@@ -453,10 +457,14 @@ Everything else (environment variables, screenshot tooling): [docs/configuration
 
 The scope as of v0.3, so you know how far each answer reaches. The full list is in [docs/limitations.md](docs/limitations.md).
 
-- **Coverage.** `cg index` prints which languages it covered (`exact`, `heuristic`, `skipped` when a toolchain
-  such as `php` or `node` is missing, `unsupported` with file counts); `cg coverage` and the MCP `coverage` tool show
-  it later. A missing indexer never fails the whole index, and agents are told to fall back to normal search for code
-  cg does not cover. See [docs/limitations.md](docs/limitations.md#coverage-and-missing-indexers).
+- **Coverage and completeness.** `cg index` records each language's parser mode (`exact`, `heuristic`, `skipped`
+  when a toolchain such as `php` or `node` is missing), how many of its files are indexed (parse failures, files
+  outside the source roots, files over the size limit), unsupported source types (by extension or `#!` line) and blind
+  spots: route and handler registrations cg does not model (a NestJS decorator wrapped by `applyDecorators`, Django
+  URL patterns built by a function, routes registered in a loop, functions registered through a decorator or a
+  registry). Route lists, caller lists and the other impact answers say when they could be partial and where to look;
+  complete answers stay short. A missing indexer never fails the whole index. See
+  [docs/completeness.md](docs/completeness.md).
 - **Static analysis.** Types are flow-insensitive, and generics are outside the current scope. When a receiver has no
   resolved type, a unique-method-name fallback fills the gap and is labelled `heuristic`.
 - **String-built names** (dynamic table, column or URL names) become placeholders such as `{param}` or
@@ -506,6 +514,9 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Tested SCIP recipes for Go and Java.
 - Rust/C/C++: macro-expanded items, function-pointer dataflow, Bazel and Meson autodetection.
 - Route guards: Laravel kernel middleware groups and Django's `MIDDLEWARE` setting shown on each route.
+- Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
+  through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
+  project config file.
 - More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
 
 ## Documentation
@@ -523,9 +534,10 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | gates, presets, plans dir, environment variables |
+| [docs/completeness.md](docs/completeness.md) | file completeness, unsupported source types, blind-spot detectors, notes on partial answers, the MCP `completeness` object |
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
 | [docs/validation.md](docs/validation.md) | results on public Django and Flutter projects |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 130 tests, adding a plugin |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 154 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
 

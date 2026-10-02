@@ -20,13 +20,38 @@ SUPPORTED = {
     "rust": (".rs",),
     "c_cpp": (".c", ".h", ".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".h++", ".ipp", ".inl"),
 }
-# languages without a native plugin (go / java can be imported from a SCIP index)
+# source types without a native plugin (go / java can be imported from a SCIP index). A generic "looks like source" rule:
+# text source extensions of programming / scripting languages, plus a shebang for extensionless scripts (SHEBANGS).
+# Data, markup, config and asset extensions are not listed, so they never count as unsupported source.
 UNSUPPORTED = {
     ".go": "go", ".java": "java", ".kt": "kotlin", ".kts": "kotlin", ".swift": "swift", ".rb": "ruby", ".cs": "csharp",
     ".scala": "scala", ".ex": "elixir", ".exs": "elixir", ".m": "objective-c", ".mm": "objective-c", ".lua": "lua",
-    ".pl": "perl", ".pm": "perl", ".clj": "clojure", ".erl": "erlang", ".hs": "haskell", ".fs": "fsharp", ".groovy": "groovy",
-    ".r": "r", ".jl": "julia", ".zig": "zig", ".sol": "solidity",
+    ".pl": "perl", ".pm": "perl", ".clj": "clojure", ".erl": "erlang", ".hrl": "erlang", ".hs": "haskell", ".fs": "fsharp",
+    ".fsx": "fsharp", ".groovy": "groovy", ".r": "r", ".jl": "julia", ".zig": "zig", ".sol": "solidity",
+    ".qml": "qml", ".sh": "sh", ".bash": "sh", ".zsh": "sh", ".ksh": "sh", ".fish": "fish", ".ps1": "powershell",
+    ".psm1": "powershell", ".bat": "batch", ".cmd": "batch", ".svelte": "svelte", ".astro": "astro",
+    ".coffee": "coffeescript", ".elm": "elm", ".ml": "ocaml", ".mli": "ocaml", ".nim": "nim", ".cr": "crystal",
+    ".rkt": "racket", ".tcl": "tcl", ".vb": "visual-basic", ".cu": "cuda", ".cuh": "cuda", ".gd": "gdscript",
+    ".hx": "haxe", ".pas": "pascal", ".f90": "fortran", ".f95": "fortran", ".adb": "ada", ".ads": "ada", ".vala": "vala",
+    ".purs": "purescript", ".pyx": "cython", ".v": "verilog", ".sv": "systemverilog", ".vhd": "vhdl",
 }
+# interpreter of a `#!` line -> language, for extensionless scripts (bin/deploy, scripts/release) in languages cg has
+# no plugin for. Extensionless launchers of indexed languages (`artisan`, `bin/console`, `manage`) are not counted.
+SHEBANGS = {"sh": "sh", "bash": "sh", "zsh": "sh", "dash": "sh", "ksh": "sh", "ash": "sh", "fish": "fish",
+            "perl": "perl", "ruby": "ruby", "lua": "lua", "pwsh": "powershell", "rscript": "r", "elixir": "elixir",
+            "julia": "julia", "tclsh": "tcl"}
+SHEBANG_EXT = "(shebang)"
+# per-file buckets of a language: discovered = indexed + parse_failed + skipped_oversize + excluded + unmapped
+BUCKETS = ("parse_failed", "skipped_oversize", "unmapped", "excluded")
+BUCKET_TEXT = {"parse_failed": "parse failed", "skipped_oversize": "over size limit",
+               "unmapped": "unmapped (no module path: outside the source roots or not a valid package path)",
+               "excluded": "excluded (skip list: migrations, generated or cache directories)"}
+BUCKET_SHORT = {"parse_failed": "parse failed", "skipped_oversize": "over size limit", "unmapped": "unmapped",
+                "excluded": "excluded"}
+LANG_LABEL = {"php": "PHP", "typescript": "TypeScript / JavaScript", "python": "Python", "dart": "Dart", "rust": "Rust",
+              "c_cpp": "C / C++"}
+MAX_PATHS = 500      # file paths stored per bucket in the index (counts are always exact)
+SHOW_PATHS = 5       # shown per bucket by default (`cg coverage --all-files` / coverage(all_files=true) for all)
 HINTS = {
     "php": "install PHP 8.2+ and run `(cd codegraph/plugins/php/extractor && composer install)`",
     "typescript": "install Node.js 20+ and run `(cd codegraph/plugins/ts/extractor && npm ci)`",
@@ -44,16 +69,100 @@ SKIP_DIRS = {".git", "node_modules", "vendor", "target", "build", "dist", ".dart
 FALLBACK = "use your normal search and file reading for those parts; an empty cg answer there is not proof of absence"
 
 
-def scan(root: str | Path) -> Counter:
-    """Source files by extension under root (generated / dependency directories skipped)."""
-    c: Counter = Counter()
+class Scan:
+    """One walk of the indexed root: file counts by extension, repo-relative paths of supported source files, and
+    extensionless scripts by shebang language."""
+
+    def __init__(self):
+        self.counts: Counter = Counter()
+        self.paths: dict[str, list[str]] = {}
+        self.scripts: Counter = Counter()
+
+    def files(self, exts) -> list[str]:
+        return [f for e in exts for f in self.paths.get(e, [])]
+
+
+_SUPPORTED_EXTS = {e for v in SUPPORTED.values() for e in v}
+
+
+def _shebang(path: str) -> str | None:
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(128)
+    except OSError:
+        return None
+    if not head.startswith(b"#!"):
+        return None
+    words = head[2:].split(b"\n", 1)[0].decode("utf-8", "replace").split()
+    if not words:
+        return None
+    prog = os.path.basename(words[0])
+    if prog == "env":
+        rest = [w for w in words[1:] if not w.startswith("-") and "=" not in w]
+        prog = rest[0] if rest else ""
+    prog = prog.lower()
+    return SHEBANGS.get(prog) or SHEBANGS.get(prog.rstrip("0123456789.")) or None
+
+
+def scan_tree(root: str | Path) -> Scan:
+    """Source files under root (generated / dependency directories skipped)."""
+    sc = Scan()
+    root = str(root)
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if d not in SKIP_DIRS and not d.startswith("._")]
+        rel_dir = os.path.relpath(dp, root)
+        rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/") + "/"
         for fn in fns:
+            if fn.startswith("._"):
+                continue
             ext = os.path.splitext(fn)[1].lower()
-            if ext and not fn.startswith("._") and is_real_file(os.path.join(dp, fn)):
-                c[ext] += 1
-    return c
+            p = os.path.join(dp, fn)
+            if ext:
+                if (ext in _SUPPORTED_EXTS or ext in UNSUPPORTED) and not is_real_file(p):
+                    continue
+                sc.counts[ext] += 1
+                if ext in _SUPPORTED_EXTS:
+                    sc.paths.setdefault(ext, []).append(rel_dir + fn)
+            elif not fn.startswith(".") and is_real_file(p):
+                lang = _shebang(p)
+                if lang:
+                    sc.scripts[lang] += 1
+    return sc
+
+
+def scan(root: str | Path) -> Counter:
+    """Source files by extension under root (generated / dependency directories skipped)."""
+    return scan_tree(root).counts
+
+
+def file_completeness(discovered: list[str], report: dict) -> dict:
+    """Bucket every discovered file of one language from the plugin's per-file report
+    ({seen, parse_failed, skipped_oversize, unmapped, excluded}). A discovered file the plugin never looked at
+    (its own skip list) is `excluded`."""
+    sets = {b: set(report.get(b) or ()) for b in BUCKETS}
+    seen = set(report.get("seen") or ())
+    out = {b: [] for b in BUCKETS}
+    indexed = 0
+    for f in sorted(discovered):
+        for b in ("parse_failed", "skipped_oversize", "unmapped", "excluded"):
+            if f in sets[b]:
+                out[b].append(f)
+                break
+        else:
+            if f in seen:
+                indexed += 1
+            else:
+                out["excluded"].append(f)
+    res = {"discovered": len(discovered), "indexed": indexed}
+    for b in BUCKETS:
+        res[b] = len(out[b])
+    res["paths"] = {b: v[:MAX_PATHS] for b, v in out.items() if v}
+    return res
+
+
+def missing_files(e: dict) -> int:
+    """Discovered files of a language entry that are not in the graph for a reason other than a deliberate exclusion."""
+    return sum(e.get(b, 0) for b in ("parse_failed", "skipped_oversize", "unmapped"))
 
 
 def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
@@ -70,9 +179,13 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
     return "exact", None
 
 
-def compute(root: str | Path, plugins: dict, scip_imported: bool = False) -> dict:
-    """Coverage entry list from the file scan and the per-plugin index stats."""
-    files = scan(root)
+def compute(root: str | Path, plugins: dict, scip_imported: bool = False, reports: dict | None = None,
+            scanned: Scan | None = None, blind_spots: list | None = None) -> dict:
+    """Coverage entry list from the file scan, the per-plugin index stats and per-file reports, plus the blind spots
+    found at index time (codegraph/blindspots.py)."""
+    sc = scanned or scan_tree(root)
+    files = sc.counts
+    reports = reports or {}
     langs = []
     for lang, exts in SUPPORTED.items():
         n = sum(files[e] for e in exts)
@@ -88,6 +201,16 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False) -> dic
             e["hint"] = HINTS.get(lang)
         if status == "not_indexed" and lang == "typescript" and "php" in plugins:
             e["hint"] = "no tsconfig.json / package.json with typescript at the indexed root: index the frontend directory separately"
+        rep = reports.get(lang)
+        if rep is not None and status not in ("skipped", "not_indexed"):
+            fc = file_completeness(sc.files(exts), rep)
+            e.update({k: v for k, v in fc.items() if k != "paths"})
+            if fc["paths"]:
+                e["paths"] = fc["paths"]
+            e["files_complete"] = missing_files(e) == 0
+            if not e["files_complete"] and lang == "python" and e.get("unmapped"):
+                e["hint"] = ("unmapped .py files are in directories that are not importable module paths (a name with "
+                             "'-' or '.') or outside the detected source roots")
         langs.append(e)
     other: dict = {}
     for ext, lang in UNSUPPORTED.items():
@@ -95,6 +218,10 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False) -> dic
             o = other.setdefault(lang, {"language": lang, "files": 0, "status": "unsupported", "by_ext": {}})
             o["files"] += files[ext]
             o["by_ext"][ext] = files[ext]
+    for lang, n in sorted(sc.scripts.items()):
+        o = other.setdefault(lang, {"language": lang, "files": 0, "status": "unsupported", "by_ext": {}})
+        o["files"] += n
+        o["by_ext"][SHEBANG_EXT] = n
     for lang, st in plugins.items():
         if lang in ("go", "java") and lang in other:
             if st.get("status") == "stub":
@@ -107,43 +234,116 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False) -> dic
                 o["status"] = "scip"
             o["hint"] = HINTS.get(o["language"], "no plugin for this language")
         langs.append(o)
-    return {"languages": langs, "gaps": sum(1 for e in langs if e["status"] not in ("exact", "scip"))}
+    out = {"languages": langs, "gaps": sum(1 for e in langs if _is_gap(e))}
+    if blind_spots:
+        out["blind_spots"] = blind_spots
+    return out
+
+
+def _is_gap(e: dict) -> bool:
+    return bool(e.get("files")) and (e["status"] not in ("exact", "scip") or e.get("files_complete") is False)
 
 
 def gaps(cov: dict | None) -> list[dict]:
-    return [e for e in (cov or {}).get("languages", []) if e["status"] not in ("exact", "scip") and e["files"]]
+    return [e for e in (cov or {}).get("languages", []) if _is_gap(e)]
+
+
+def blind_spots(cov: dict | None) -> list[dict]:
+    return list((cov or {}).get("blind_spots") or [])
+
+
+def _entry_text(e: dict) -> str:
+    """'php 18 exact' / 'python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped'."""
+    if e.get("files_complete") is False:
+        parts = [f"{e[b]} {BUCKET_SHORT[b]}" for b in ("parse_failed", "skipped_oversize", "unmapped") if e.get(b)]
+        return (f"{e['language']} {e['files']} discovered, {e['indexed']} indexed ({e['status'].replace('_', ' ')} parser)"
+                + (": " + ", ".join(parts) if parts else ""))
+    return f"{e['language']} {e['files']} {e['status'].replace('_', ' ')}"
 
 
 def summary_line(cov: dict | None, repo: str | None = None) -> str:
-    """One line: 'coverage: php 18 exact; typescript 9 exact | gaps: go 3 unsupported (...)'."""
+    """One line: 'coverage: php 18 exact; typescript 9 exact | not fully covered: go 3 unsupported (...)'."""
     if not cov:
         return "coverage: not recorded for this index (re-index with this version of cg)"
     pre = f"coverage{' ' + repo if repo else ''}: "
-    ok = [f"{e['language']} {e['files']} {e['status']}" for e in cov["languages"] if e["status"] in ("exact", "scip")]
-    bad = [f"{e['language']} {e['files']} {e['status'].replace('_', ' ')}" for e in gaps(cov)]
-    s = pre + ("; ".join(ok) or "no supported source files")
-    if bad:
-        s += " | not fully covered: " + "; ".join(bad)
+    ok = [_entry_text(e) for e in cov["languages"] if e["status"] in ("exact", "scip") and not _is_gap(e)]
+    bad = [_entry_text(e) for e in gaps(cov)]
+    if ok or not bad:
+        s = pre + ("; ".join(ok) or "no supported source files")
+        if bad:
+            s += " | not fully covered: " + "; ".join(bad)
+    else:
+        s = pre + "not fully covered: " + "; ".join(bad)
+    bs = blind_spots(cov)
+    if bs:
+        s += f" | blind spots: {_bs_count(bs)}"
     return s
 
 
-def render(covs: dict[str, dict | None]) -> str:
+def _bs_count(bs: list[dict]) -> str:
+    r = sum(b["count"] for b in bs if b["category"] == "route")
+    h = sum(b["count"] for b in bs if b["category"] != "route")
+    parts = ([f"{r} unmodelled route registration{'s' if r != 1 else ''}"] if r else []) + \
+            ([f"{h} handler{'s' if h != 1 else ''} registered dynamically"] if h else [])
+    return ", ".join(parts)
+
+
+def _paths_lines(e: dict, all_files: bool, indent: str = "    ") -> list[str]:
+    out = []
+    for b in BUCKETS:
+        ps = (e.get("paths") or {}).get(b) or []
+        if not ps or (b == "excluded" and not all_files):
+            continue
+        show = ps if all_files else ps[:SHOW_PATHS]
+        more = e.get(b, len(ps)) - len(show)
+        out.append(f"{indent}{BUCKET_SHORT[b]}: " + ", ".join(show) + (f" … +{more} more (--all-files)" if more > 0 else ""))
+    return out
+
+
+def blind_spot_lines(bs: list[dict], indent: str = "  ", limit: int = 3) -> list[str]:
+    out = []
+    for b in bs:
+        more = b["count"] - min(limit, len(b["samples"]))
+        out.append(f"{indent}{b['count']}× {b['what']} ({b['language']}): " + ", ".join(b["samples"][:limit])
+                   + (f" … +{more}" if more > 0 else ""))
+    return out
+
+
+def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
     """Multi-line report for one or more repos (name -> coverage)."""
     out = []
-    any_gap = False
+    any_gap = any_bs = False
     for repo, cov in covs.items():
         out.append(summary_line(cov, repo if len(covs) > 1 or repo else None))
         for e in gaps(cov):
             any_gap = True
             exts = ", ".join(f"{k} {v}" for k, v in sorted(e["by_ext"].items()))
-            line = f"  {e['language']}: {e['files']} files ({exts}) {e['status'].replace('_', ' ')}"
+            if e.get("files_complete") is False:
+                parts = [f"{e[b]} {BUCKET_SHORT[b]}" for b in BUCKETS if e.get(b)]
+                line = f"  {e['language']}: {e['files']} files ({exts}) {e['indexed']} indexed, " + ", ".join(parts)
+            else:
+                line = f"  {e['language']}: {e['files']} files ({exts}) {e['status'].replace('_', ' ')}"
             if e.get("reason"):
                 line += f": {e['reason']}"
             out.append(line)
+            out += _paths_lines(e, all_files)
             if e.get("hint"):
                 out.append(f"    fix: {e['hint']}")
+        if all_files:
+            for e in (cov or {}).get("languages", []):
+                if not _is_gap(e) and e.get("excluded"):
+                    out.append(f"  {e['language']}: {e['excluded']} excluded")
+                    out += _paths_lines(e, True)
+        bs = blind_spots(cov)
+        if bs:
+            any_bs = True
+            out.append("  blind spots (patterns cg does not model; answers that touch them may be partial):")
+            out += blind_spot_lines(bs, "    ", limit=10 if all_files else 3)
     if any_gap:
         out.append("not covered or heuristic only: " + FALLBACK + ".")
+    elif any_bs:
+        out.append("every source file cg found is indexed; at the blind spots above, use your normal search and file reading "
+                   "(an empty cg answer there is not proof of absence).")
     else:
         out.append("every source file cg found is indexed; edges still carry their own exact / resolved / heuristic label.")
     return "\n".join(out)
@@ -181,10 +381,183 @@ def note(covs: dict[str, dict | None]) -> str:
     unknown = [r for r, c in covs.items() if c is None]
     for r, c in covs.items():
         for e in gaps(c):
-            bad.append(f"{e['language']} ({e['files']} files, {e['status'].replace('_', ' ')}{', ' + r if len(covs) > 1 else ''})")
+            what = (f"{e['indexed']} of {e['files']} files indexed" if e.get("files_complete") is False
+                    else f"{e['files']} files, {e['status'].replace('_', ' ')}")
+            bad.append(f"{e['language']} ({what}{', ' + r if len(covs) > 1 else ''})")
+    bs = [b for c in covs.values() for b in blind_spots(c)]
+    bs_txt = f"; blind spots: {_bs_count(bs)} (see coverage)" if bs else ""
     if bad:
-        return "coverage: not fully covered here: " + "; ".join(bad) + ". If the code you mean is there, " + FALLBACK + "."
+        return "coverage: not fully covered here: " + "; ".join(bad) + bs_txt + ". If the code you mean is there, " + FALLBACK + "."
     if unknown:
         return "coverage: not recorded for this index; if in doubt, " + FALLBACK + "."
     langs = sorted({e["language"] for c in covs.values() for e in (c or {}).get("languages", []) if e["files"]})
+    if bs:
+        return (f"coverage: every source file cg found is indexed ({', '.join(langs)}){bs_txt}; if the code you mean is "
+                f"registered that way, {FALLBACK}.")
     return f"coverage: every source file cg found is indexed ({', '.join(langs)}); code outside these languages or generated at runtime is not in the graph."
+
+
+# ------------------------------------------------------------------------------------------- scoped completeness
+
+NODE_LANG = {"ts": "typescript", "js": "typescript", "php": "php", "python": "python", "dart": "dart", "rust": "rust",
+             "c": "c_cpp", "cpp": "c_cpp"}
+
+
+def _lang_of_file(f: str | None) -> str | None:
+    ext = os.path.splitext(f or "")[1].lower()
+    return next((k for k, v in SUPPORTED.items() if ext in v), None)
+
+
+def _top(f: str | None) -> str:
+    parts = (f or "").split("/")
+    return parts[0] if len(parts) > 1 else ""
+
+
+def scope_of(store, node_ids) -> dict:
+    """Languages, repos and top-level directories of the nodes an answer is about (for a scoped completeness note)."""
+    langs, dirs, repos = set(), set(), set()
+    try:
+        repo_names = set((store.meta() or {}).get("repos") or [])
+    except Exception:  # noqa: BLE001
+        repo_names = set()
+    ids = [i for i in dict.fromkeys(node_ids or []) if i][:400]
+    for k in range(0, len(ids), 200):
+        chunk = ids[k:k + 200]
+        rows = store.q(f"SELECT file, lang FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", tuple(chunk))
+        for r in rows:
+            f = r["file"] or ""
+            if repo_names and f.split("/", 1)[0] in repo_names:
+                repo, f = f.split("/", 1) if "/" in f else (f, "")
+                repos.add(repo)
+            lang = NODE_LANG.get(r["lang"] or "") or _lang_of_file(f)
+            if lang:
+                langs.add(lang)
+            if f:
+                dirs.add(_top(f))
+    return {"languages": langs, "dirs": dirs, "repos": repos}
+
+
+def completeness(covs: dict[str, dict | None], languages=None, dirs=None, repos=None,
+                 categories=("route", "handler"), unsupported: bool | None = None, ids=None) -> dict:
+    """Machine-readable completeness of an answer, scoped to the languages / top-level directories / repos it
+    involves (None = the whole index). {"complete": bool, "languages": {...}, "unsupported": {...},
+    "blind_spots": [...]}. Route blind spots apply to every answer in their language (a route registered anywhere can
+    reach the code); handler blind spots only when the answer involves one of the registered functions (`ids` = the
+    answer's node ids: a target or caller the graph shows without its registration), or, for findings recorded
+    without node ids, within the same top-level directory."""
+    multi = len(covs) > 1
+    whole = languages is None
+    unsupported = whole if unsupported is None else unsupported
+    langs_out, uns_out, bs_out = {}, {}, []
+    known = True
+    for repo, cov in covs.items():
+        if repos and repo not in repos and multi:
+            continue
+        if cov is None:
+            known = False
+            continue
+        for e in cov.get("languages", []):
+            key = f"{repo}/{e['language']}" if multi and repo else e["language"]
+            if e["status"] == "unsupported":
+                if unsupported and e["files"]:
+                    uns_out[key] = e["files"]
+                continue
+            if not whole and e["language"] not in languages:
+                continue
+            if not e.get("files"):
+                continue
+            d = {"mode": e["status"], "discovered": e["files"]}
+            if "indexed" in e:
+                d["indexed"] = e["indexed"]
+                for b in BUCKETS:
+                    if e.get(b):
+                        d[b] = e[b]
+            if e.get("reason"):
+                d["reason"] = e["reason"]
+            d["complete"] = not _is_gap(e)
+            langs_out[key] = d
+        for b in blind_spots(cov):
+            if b["category"] not in categories or (not whole and b["language"] not in languages):
+                continue
+            if b["category"] != "route" and ids is not None and b.get("nodes"):
+                samples = [s for n, s in zip(b["nodes"], b.get("node_samples") or b["samples"]) if n in ids]
+                if not samples:
+                    continue
+            elif b["category"] != "route" and dirs is not None and "" not in dirs:
+                samples = [s for s in b["samples"] if _top(s.rsplit(":", 1)[0]) in dirs or not _top(s.rsplit(":", 1)[0])]
+                if not samples:
+                    continue
+            else:
+                samples = None
+            bs_out.append({"kind": b["kind"], "category": b["category"], "language": b["language"], "what": b["what"],
+                           "count": b["count"] if samples is None else len(samples),
+                           "sample": (samples or b["samples"])[0],
+                           **({"repo": repo} if multi and repo else {})})
+    complete = known and all(v["complete"] for v in langs_out.values()) and not uns_out and not bs_out
+    out = {"complete": complete, "languages": langs_out}
+    if uns_out:
+        out["unsupported"] = uns_out
+    if bs_out:
+        out["blind_spots"] = bs_out
+    if not known:
+        out["recorded"] = False
+    return out
+
+
+def completeness_for(store, node_ids=None, categories=("route", "handler"), whole: bool = False, **kw) -> dict:
+    try:
+        covs = for_graph(store)
+    except Exception:  # noqa: BLE001
+        return {"complete": False, "recorded": False, "languages": {}}
+    if whole or not node_ids:
+        return completeness(covs, categories=categories, **kw)
+    sc = scope_of(store, node_ids)
+    if not sc["languages"]:
+        return completeness(covs, categories=categories, unsupported=False, **kw)
+    return completeness(covs, languages=sc["languages"], dirs=sc["dirs"], repos=sc["repos"] or None,
+                        categories=categories, ids=set(node_ids), **kw)
+
+
+def possibly_more(comp: dict) -> str:
+    """'1 unmodelled route registration, 2 Python files not indexed' for an incomplete answer, '' when complete."""
+    if comp.get("complete"):
+        return ""
+    parts = []
+    r = sum(b["count"] for b in comp.get("blind_spots", []) if b["category"] == "route")
+    h = sum(b["count"] for b in comp.get("blind_spots", []) if b["category"] != "route")
+    if r:
+        parts.append(f"{r} unmodelled route registration{'s' if r != 1 else ''}")
+    if h:
+        parts.append(f"{h} dynamically registered handler{'s' if h != 1 else ''}")
+    for k, v in comp.get("languages", {}).items():
+        if v["complete"]:
+            continue
+        lang = k.rsplit("/", 1)[-1]
+        label = LANG_LABEL.get(lang, lang)
+        miss = sum(v.get(b, 0) for b in ("parse_failed", "skipped_oversize", "unmapped"))
+        if v["mode"] in ("exact", "scip") and miss:
+            parts.append(f"{miss} {label} file{'s' if miss != 1 else ''} not indexed")
+        elif v["mode"] == "heuristic":
+            parts.append(f"{label} heuristic only")
+        else:
+            parts.append(f"{label} {v['mode'].replace('_', ' ')}")
+    if comp.get("unsupported"):
+        parts.append("unsupported: " + ", ".join(f"{k} {v}" for k, v in sorted(comp["unsupported"].items())))
+    if comp.get("recorded") is False:
+        parts.append("coverage not recorded")
+    return ", ".join(parts)
+
+
+def answer_note(comp: dict) -> str:
+    """'coverage note: 1 route registration cg does not model (Django urlpatterns built by ...: shop/urls.py:10); 2 Python
+    files not indexed' for an incomplete answer; '' when the answer is complete (no noise)."""
+    if comp.get("complete"):
+        return ""
+    parts = []
+    for b in comp.get("blind_spots", []):
+        noun = "route registration" if b["category"] == "route" else "handler registration"
+        parts.append(f"{b['count']} {noun}{'s' if b['count'] != 1 else ''} cg does not model ({b['what']}: {b['sample']})")
+    rest = possibly_more({**comp, "blind_spots": []})
+    if rest:
+        parts.append(rest)
+    return "coverage note: " + "; ".join(parts) + ". There, use your normal search and file reading (an empty cg answer is not proof of absence)."

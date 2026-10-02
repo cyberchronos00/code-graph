@@ -35,6 +35,7 @@ def main(argv=None):
     p = sub.add_parser("detect"); p.add_argument("root")
     p = sub.add_parser("coverage", help="which source files / languages the index covers: exact, heuristic, skipped (indexer missing) or unsupported")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("--all-files", action="store_true", help="list every file per bucket (default: the first 5), excluded files too")
     p = sub.add_parser("link", help="combine a backend and a frontend graph and match client HTTP calls to backend routes")
     p.add_argument("--backend", required=True); p.add_argument("--frontend", required=True); p.add_argument("--db", required=True)
     p.add_argument("--backend-name", default="backend"); p.add_argument("--frontend-name", default="frontend")
@@ -111,7 +112,7 @@ def main(argv=None):
             print(f"no graph at {a.db}: run `cg index` first", file=sys.stderr)
             return 2
         covs = for_graph(_GS(a.db))
-        print(json.dumps(covs, indent=2) if a.json else render(covs))
+        print(json.dumps(covs, indent=2) if a.json else render(covs, all_files=a.all_files))
         return
     if a.cmd == "link":
         from .link import link, write_match_report
@@ -148,6 +149,8 @@ def main(argv=None):
         from . import routes as R
         res = R.routes_report(st, writes=a.writes, reaches=a.reaches, missing=a.missing, unguarded=a.unguarded,
                               auth_pattern=a.auth_pattern, min_conf=a.min_confidence)
+        if a.json:
+            res["completeness"] = R.route_completeness(st)
         print(json.dumps(res, indent=1, default=str) if a.json else R.render_routes(res, st, max_items=a.max_items, paths=not a.no_paths))
         return
     if a.cmd == "channels":
@@ -157,7 +160,9 @@ def main(argv=None):
         return
     if a.cmd == "tests":
         res = Q.tests_covering(st, a.spec, min_conf=a.min_confidence)
+        res["completeness"] = _completeness(st, res.get("targets"))
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_tests_covering(res, show_paths=not a.no_paths))
+        _note(res["completeness"], a.json)
         return
     if a.cmd == "search":
         res = Q.search(st, a.name, kind=a.kind, limit=a.limit)
@@ -165,10 +170,13 @@ def main(argv=None):
         return
     if a.cmd == "reaches":
         res = Q.reaches(st, a.specs, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate)
+        res["completeness"] = _completeness(st, [x for t in res["targets"].values() for x in t] + [i["id"] for i in res["items"]])
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_reaches(res, show_paths=not a.no_paths))
+        _note(res["completeness"], a.json)
     elif a.cmd == "impact":
         res = Q.impact(st, a.spec, min_conf=a.min_confidence)
         if a.json:
+            res["completeness"] = _completeness(st, list(res["targets"]) + [c["id"] for c in res["callers"]])
             print(json.dumps(res, indent=1, default=str)); return
         print(f"targets: {res['targets'][:5]}")
         if not res["targets"]:
@@ -194,6 +202,7 @@ def main(argv=None):
                 ev = f"{h['repo']}@{h['commit']}:{h['file']}" + (f":{h['line']}" if h.get("line") else "")
                 print(f"  {h['method']} {h['path']} -> {h['route'].split(':', 1)[1]}  @ {ev}"
                       + (f"  sends {', '.join(h['sends'])}" if h["sends"] else "") + f"  [{h['snapshot']}]")
+        _note(_completeness(st, list(res["targets"]) + [c["id"] for c in res["callers"]]), False)
     elif a.cmd == "writers":
         rows = Q.writers(st, a.spec)
         if a.json:
@@ -237,6 +246,20 @@ def main(argv=None):
         print("edges by kind / confidence:")
         for r in st.q("SELECT kind, confidence, COUNT(*) c FROM edges GROUP BY kind, confidence ORDER BY kind, confidence"):
             print(f"  {r['kind']:22} {r['confidence']:10} {r['c']}")
+
+
+def _completeness(st, ids) -> dict:
+    from .coverage import completeness_for
+    return completeness_for(st, ids or [])
+
+
+def _note(comp: dict, as_json: bool) -> None:
+    """The scoped `coverage note:` line after a partial text answer (nothing for complete answers or --json)."""
+    from .coverage import answer_note
+    if not as_json and not comp.get("complete"):
+        n = answer_note(comp)
+        if n:
+            print(n)
 
 
 def plan_cmd(a) -> int:

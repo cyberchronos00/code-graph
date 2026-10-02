@@ -13,6 +13,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 ## Tools
 
 - `reaches`, `impact`, `siblings`, `writers`, `node`, `stats`;
+- `callers(symbol, min_confidence?, limit?)`: direct callers of a function, method or class (one level, with the call
+  site and confidence); `impact` follows them up to the entry points;
 - `search(name, kind?, limit?)`: nodes by name / FQN substring, plus route middleware, guard, auth and access names
   with the routes that carry them (`search("auth")` finds `auth:api`, `ApiKeyGuard`, `IsAuthenticated`, …);
 - `routes(writes?, reaches?, missing?, unguarded?, auth_pattern?, max_items?, paths?, min_confidence?)`: routes with
@@ -37,8 +39,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   picks the repo whose recorded root contains it, or every repo below it (a parent directory such as the workspace
   root). The link is rebuilt afterwards. A `root` that matches no recorded repo, an unknown `repo`, or a result with
   0 nodes is refused with an error and the current graph is kept;
-- `coverage(path?)`: which languages and files the index covers (see [Coverage](#coverage)); on a combined DB, per
-  linked repo.
+- `coverage(path?, all_files?, json_output?)`: which languages and files the index covers, unsupported source types and
+  blind spots (see [Coverage and completeness](#coverage-and-completeness)); on a combined DB, per linked repo.
 
 Rust, C and C++ graphs use the same tools. Specs take native forms (`kv_core::store::Store::get`, `ns::Class::method`,
 `mod:crate::module`, a file path, `feature:`/`cfg:`/`define:`/`unsafe:`/`env:` nodes; see [native.md](native.md#query-specs)).
@@ -53,16 +55,29 @@ the indexed repo roots are stripped; the home directory shows as `~`), and an em
 next call. `path` and `api_calls` add a line for keys a call site passes that the request never sends
 (`sent but not forwarded`), and `resolutions` lists them in a section of their own.
 
-## Coverage
+## Coverage and completeness
 
-`cg index` records, per language, how the files it found are covered: `exact`, `heuristic` (the exact-mode indexer,
-such as rust-analyzer or scip-clang, is missing; the install hint is stored), `skipped` (the language's toolchain is
-missing, for example `php` or `node`; the rest of the index still builds) or `unsupported` (no plugin: file counts by
-extension such as `.go`, `.java`, `.kt`, `.swift`, `.rb`, `.cs`). The `coverage` tool prints that table; with `path` it
-says whether a file or directory is in the graph. The server instructions carry the same rule, and replies that come
-back empty or name an unknown symbol end with a coverage line. When a language or file is not covered or only
-heuristic, the agent is told to use its normal search and file reading for that part: an empty cg answer there is not
-proof of absence. On the CLI: `cg coverage --db out/graph.db`.
+`cg index` records, per language, the parser mode (`exact`, `heuristic` when the exact-mode indexer such as
+rust-analyzer or scip-clang is missing, `skipped` when the toolchain such as `php` or `node` is missing, `unsupported`
+for source types without a plugin) and the file completeness (discovered, indexed, parse failed, over the size limit,
+unmapped, excluded), plus the blind spots it detected: route and handler registrations cg does not model, with
+`file:line` samples. The `coverage` tool prints that report (`all_files=true` for every path); with `path` it says
+whether a file or directory is in the graph. Details: [completeness.md](completeness.md).
+
+Answers use it in three ways:
+
+- `routes`, `impact`, `callers`, `reaches`, `tests_covering` and `plan_check` end with one `coverage note:` line when
+  a blind spot or a file that is not indexed could affect the answer, scoped to the languages, repos and registered
+  handlers involved (`all routes: 1 indexed (possibly more: 1 unmodelled route registration)`, `no callers found in
+  indexed code (blind spots: …)`). Complete answers keep the usual wording and get no extra line.
+- Replies that come back empty or name an unknown symbol end with a coverage line for the whole index.
+- **Every reply carries a `completeness` object** in its structured content (`{"result": <text>, "completeness":
+  {...}}`, declared in the tool's output schema): `complete`, per-language `mode` / `discovered` / `indexed` /
+  bucket counts, `unsupported` counts on whole-index answers and the `blind_spots` that apply, so an agent can decide
+  when to fall back to text search without parsing prose. `coverage(json_output=true)` returns the same object as text.
+
+The server instructions carry the rule: where an answer is not complete, use normal search and file reading for that
+part (an empty cg answer there is not proof of absence). On the CLI: `cg coverage --db out/graph.db [--all-files]`.
 
 `tests/mcp_e2e.py` runs an SDK client end to end on the sample apps and writes `docs/mcp/sample_outputs.md`.
 
@@ -168,6 +183,6 @@ Before changing code that touches a table, column, DB connection, config key or 
 - for a planned feature, write plans/<name>.yaml, then plan_check(<name>) and resolve every MISSING FROM PLAN item
   (a small fix such as adding a guard needs no plan: edit, re-index, re-check);
 Quote the file:line evidence from the tool output in your summary. Re-run the index tool after editing.
-If coverage() or a reply's coverage note says a language or file is not covered (or heuristic only), use normal search
-and file reading for that part.
+If coverage() or a reply's coverage note says a language or file is not covered (or heuristic only), or names a blind
+spot (a route or handler registration cg does not model), use normal search and file reading for that part.
 ```

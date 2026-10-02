@@ -26,6 +26,7 @@ from collections import defaultdict
 
 from .core.model import PROPAGATING
 from .core.store import GraphStore
+from .coverage import answer_note, completeness_for, possibly_more
 from . import query as Q
 
 # matched against the guard name split into lower-case word tokens joined by "_" (ApiKeyGuard -> api_key_guard,
@@ -257,7 +258,15 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
             "reaches": f"routes reaching {', '.join(res['reaches'])}",
             "writes+reaches": f"routes reaching a write to {res['writes']} and {', '.join(res['reaches'])}"}[res["mode"]]
     items = res["items"]
-    head = f"{what}: {res['matched']} of {res['total_routes']} routes"
+    comp = route_completeness(st) if st is not None else {"complete": True}
+    res["completeness"] = comp
+    more = possibly_more(comp)
+    if not more:
+        head = f"{what}: {res['matched']} of {res['total_routes']} routes"
+    elif res["mode"] == "all":
+        head = f"{what}: {res['matched']} indexed (possibly more: {more})"
+    else:
+        head = f"{what}: {res['matched']} of {res['total_routes']} indexed routes (possibly more: {more})"
     if res["filters"]:
         head += f" | filter: {'; '.join(res['filters'])} -> {len(items)}"
     na = sum(1 for i in items if not i["has_auth"] and not i.get("secret_checked"))
@@ -272,6 +281,8 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
     if not items:
         out.append("")
         out.append(explain_empty(st, res) if st is not None else "no routes match")
+        if more:
+            out.append(answer_note(comp))
         return "\n".join(out)
     for i in items[:max_items]:
         gs = ", ".join(f"{g['name']}{' [auth]' if g['auth'] else (' [secret]' if g.get('secret') else '')}" for g in i["guards"]) or "(none)"
@@ -298,4 +309,12 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
     else:
         out.append(f"guards come from route-level facts ({GUARD_SOURCES}); Laravel kernel middleware and Django's MIDDLEWARE "
                    f"setting apply to every route and are not repeated per route.")
+    if more:
+        out.append(answer_note(comp))
     return "\n".join(out)
+
+
+def route_completeness(st: GraphStore) -> dict:
+    """Completeness of a route list: route blind spots and files not indexed in every language of the index
+    (unsupported languages are listed by `coverage`, not here)."""
+    return completeness_for(st, categories=("route",), whole=True, unsupported=False)
