@@ -31,6 +31,12 @@ String src(AstNode? n, [int max = 160]) {
 
 String typeText(TypeAnnotation? t) => t == null ? '' : t.toSource();
 
+// conditional imports / exports: `import 'stub.dart' if (dart.library.io) 'io.dart'`
+List<Map<String, dynamic>> configs(NodeList<Configuration> cs) => [
+      for (final c in cs)
+        {'name': c.name.toSource(), if (c.value != null) 'value': c.value!.stringValue, 'uri': c.uri.stringValue}
+    ];
+
 Map<String, dynamic>? repr(Expression? e, [int d = 0]) {
   if (e == null) return null;
   if (d > maxDepth) return {'k': 'other', 'v': src(e, 60)};
@@ -507,6 +513,7 @@ Map<String, dynamic> fileFacts(String rel, String content) {
         'show': [for (final c in d.combinators.whereType<ShowCombinator>()) for (final n in c.shownNames) n.name],
         'hide': [for (final c in d.combinators.whereType<HideCombinator>()) for (final n in c.hiddenNames) n.name],
         'l': ln(d),
+        if (d.configurations.isNotEmpty) 'configs': configs(d.configurations),
       });
     } else if (d is ExportDirective) {
       out['exports'].add({
@@ -514,6 +521,7 @@ Map<String, dynamic> fileFacts(String rel, String content) {
         'show': [for (final c in d.combinators.whereType<ShowCombinator>()) for (final n in c.shownNames) n.name],
         'hide': [for (final c in d.combinators.whereType<HideCombinator>()) for (final n in c.hiddenNames) n.name],
         'l': ln(d),
+        if (d.configurations.isNotEmpty) 'configs': configs(d.configurations),
       });
     } else if (d is PartDirective) {
       out['parts'].add(d.uri.stringValue);

@@ -67,6 +67,12 @@ TEST_VISITS (browser test → page). None of them propagate, so tests never coun
 Generated files (only with `--include-generated`; [generated.md](generated.md)): every node from a generated, copied or
 vendored file carries `attrs.generated = {kind: generated | copied | vendored, reason[, copy_of]}`; COPY_OF (a copied
 module → the module of its source file, e.g. a Capacitor `android/.../assets/public/` copy → its `webDir` file).
+Platform-specific code ([platforms.md](platforms.md)): nodes and edges under a platform condition carry
+`attrs.platforms` (the targets they are built for), `platform_expr` (the source condition), `platform_at` and
+`platform_unknown` (targets on which the condition could not be evaluated). An edge copied onto a sibling variant
+(platform files, conditional-import alternatives, per-`cfg` / per-`#if` definitions) has `attrs.platform_variant_of` =
+the variant the call resolved to; a Rust call into an item gated for another target has `attrs.via = cfg-inactive`;
+a Dart conditional import / export is an IMPORTS edge with `attrs.conditional` and `attrs.condition`.
 MAPS_TO_TABLE, HAS_RELATION, CONTAINS, EXTENDS, IMPLEMENTS, USES_TRAIT, INSTANTIATES, INJECTS, REFERENCES (`X::class`), OBSERVED_BY, BINDS, DEFINES.
 
 **Confidence:**

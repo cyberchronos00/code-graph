@@ -531,7 +531,9 @@ class Extractor:
                         nxt = nxt.next_sibling
                     if nxt is not None:
                         pred = a[1:-1] if a.startswith("(") else a
-                        self.f.cfg_regions.append((nxt.start_point[0] + 1, nxt.end_point[0] + 1, pred, x.start_point[0] + 1, owner.key))
+                        # `#[cfg(unix)] Pattern => { ... }`: the attribute is the arm's first child and gates the whole arm
+                        end = x.parent if x.parent is not None and x.parent.type == "match_arm" else nxt
+                        self.f.cfg_regions.append((nxt.start_point[0] + 1, end.end_point[0] + 1, pred, x.start_point[0] + 1, owner.key))
                 continue
             if t == "unsafe_block":
                 self.f.unsafe_blocks.append((x.start_point[0] + 1, owner.key))

@@ -81,6 +81,9 @@ if (noConfig || cfg.allow_js) Object.assign(options, { allowJs: true, checkJs: f
 if (noConfig) Object.assign(options, { jsx: ts.JsxEmit.Preserve, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
   target: ts.ScriptTarget.ESNext, resolveJsonModule: true, esModuleInterop: true, allowSyntheticDefaultImports: true })
 if (options.moduleResolution === ts.ModuleResolutionKind.Classic) options.moduleResolution = ts.ModuleResolutionKind.Bundler
+// React Native / Expo platform files (storage.ios.ts, storage.android.ts): `import './storage'` resolves the way Metro
+// does (the project's own tsconfig moduleSuffixes win); the Python side links the sibling variants
+if (cfg.platform_suffixes && !options.moduleSuffixes) options.moduleSuffixes = cfg.platform_suffixes
 const pathsBase = options.pathsBasePath || options.baseUrl || path.dirname(tsconfigPath)
 
 // symlinks: a link to a file is indexed, a link to a directory is not followed, a dangling link (e.g. to a file

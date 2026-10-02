@@ -138,13 +138,26 @@ def default_gate(st: GraphStore) -> str | None:
     return r[0]["scenario"] if r else None
 
 
+def _px(st: GraphStore, platform: str | None) -> set:
+    """Edge ids that do not exist on `platform` (codegraph/platforms.py), empty without a platform filter."""
+    if not platform:
+        return set()
+    from .platforms import exclusions
+    return exclusions(st, platform)["edges"]
+
+
 def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="heuristic", max_depth=30,
-                    exclude_gate: str | None = None, seed_inst: bool = False) -> dict[str, int]:
+                    exclude_gate: str | None = None, seed_inst: bool = False, platform: str | None = None) -> dict[str, int]:
     """Reverse transitive closure over `kinds`. seed_inst: code that instantiates a targeted class (`new X`) is a
-    dependent too (INSTANTIATES is followed into the targets only, never further up)."""
+    dependent too (INSTANTIATES is followed into the targets only, never further up). platform: only over references
+    that exist on that target (codegraph/platforms.py)."""
     kinds = kinds or PROPAGATING
     if not targets:
         return {}
+    pclause = ""
+    if platform and _px(st, platform):
+        from .platforms import temp_table
+        pclause = f"AND NOT EXISTS (SELECT 1 FROM {temp_table(st, platform)} x WHERE x.id = e.id)"
     st.db.execute("DROP TABLE IF EXISTS temp.t_targets")
     st.db.execute("CREATE TEMP TABLE t_targets(id TEXT PRIMARY KEY)")
     st.db.executemany("INSERT OR IGNORE INTO t_targets VALUES (?)", [(t,) for t in targets])
@@ -155,7 +168,7 @@ def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="he
         SELECT id, 0 FROM t_targets
         UNION
         SELECT e.src, r.depth + 1 FROM edges e JOIN r ON e.dst = r.id
-        WHERE (e.kind IN ({kq}) {inst}) AND e.conf_rank >= ? AND r.depth < ? AND (e.gate IS NULL OR e.gate != ?)
+        WHERE (e.kind IN ({kq}) {inst}) AND e.conf_rank >= ? AND r.depth < ? AND (e.gate IS NULL OR e.gate != ?) {pclause}
     )
     SELECT id, MIN(depth) AS depth FROM r GROUP BY id"""
     rows = st.q(sql, (*kinds, CONFIDENCE_RANK[min_conf], max_depth, exclude_gate or "\x00"))
@@ -163,16 +176,17 @@ def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="he
 
 
 def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="heuristic", exclude_gate: str | None = None,
-                   seed_inst: bool = False) -> dict[str, list[dict]]:
+                   seed_inst: bool = False, platform: str | None = None) -> dict[str, list[dict]]:
     """For each reached node pick an outgoing edge to a node one step closer to a target."""
     kinds = set(kinds or PROPAGATING)
+    px = _px(st, platform)
     best = {}
     ids = list(depth)
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         q = ",".join("?" * len(chunk))
-        for e in st.q(f"SELECT src,dst,kind,file,line,confidence,conf_rank,gate,attrs FROM edges WHERE src IN ({q})", chunk):
-            if e["conf_rank"] < CONFIDENCE_RANK[min_conf]:
+        for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate,attrs FROM edges WHERE src IN ({q})", chunk):
+            if e["conf_rank"] < CONFIDENCE_RANK[min_conf] or (px and e["id"] in px):
                 continue
             if e["kind"] not in kinds and not (seed_inst and e["kind"] == "INSTANTIATES" and depth.get(e["dst"]) == 0):
                 continue
@@ -198,6 +212,10 @@ def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="
             if e["gate"]:
                 hop["gated"] = e["gate"]
                 hop["guard"] = json.loads(e["attrs"] or "{}").get("guard")
+            if e["attrs"] and '"platforms"' in e["attrs"]:
+                a = json.loads(e["attrs"])
+                if "platforms" in a:
+                    hop["platforms"] = a["platforms"]
             path.append(hop)
             x = e["dst"]
             guard += 1
@@ -263,7 +281,42 @@ def path_confidence(path: list[dict]) -> str:
     return min((p["confidence"] for p in path), key=lambda c: CONFIDENCE_RANK[c])
 
 
-def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30, gate: str | None = "auto") -> dict:
+def _platform_entries(st: GraphStore, depth: dict[str, int], platform: str, min_conf: str) -> dict[str, dict[str, tuple[int, str]]]:
+    """entry_info restricted to `platform`: which entry points reach each dependent over references that exist there.
+    Every entry point that reaches a dependent of the targets is itself a dependent, so the walk stays inside `depth`."""
+    px = _px(st, platform)
+    prop, rank = set(PROPAGATING), CONFIDENCE_RANK[min_conf]
+    fwd = defaultdict(list)
+    ids = list(depth)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for e in st.q(f"SELECT id, src, dst, kind, conf_rank FROM edges WHERE src IN ({q})", chunk):
+            if e["kind"] in prop and e["conf_rank"] >= rank and e["id"] not in px and e["dst"] in depth:
+                fwd[e["src"]].append(e["dst"])
+    entries = {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for r in st.q(f"SELECT id, entry_kind FROM nodes WHERE id IN ({q}) AND entry_kind IS NOT NULL", chunk):
+            entries[r["id"]] = r["entry_kind"]
+    out = defaultdict(dict)
+    for en, ek in entries.items():
+        seen, todo = {en}, [en]
+        while todo:
+            x = todo.pop()
+            for y in fwd.get(x, ()):
+                if y not in seen:
+                    seen.add(y)
+                    todo.append(y)
+        for x in seen:
+            c, smp = out[x].get(ek, (0, en))
+            out[x][ek] = (c + 1, smp)
+    return out
+
+
+def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30, gate: str | None = "auto",
+            platform: str | None = None) -> dict:
     """Reverse transitive dependents of the targets.
 
     With a gate scenario (default: the one the DB was indexed with), every dependent also gets
@@ -280,10 +333,13 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
         resolved[s] = t
         targets += t
     si = _has_class_target(targets)
-    depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
-    paths = shortest_paths(st, depth, min_conf=min_conf, seed_inst=si)
+    pf = platform
+    depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, seed_inst=si, platform=pf)
+    paths = shortest_paths(st, depth, min_conf=min_conf, seed_inst=si, platform=pf)
     ids = list(depth)
-    ents = entry_info(st, ids)
+    ents = _platform_entries(st, depth, pf, min_conf) if pf else entry_info(st, ids)
+    if pf and gate:
+        gate = None      # one filter at a time: the platform view replaces the gate scenario split
     live_depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, exclude_gate=gate, seed_inst=si) if gate else depth
     live_ents = entry_info(st, ids, gate=gate) if gate else ents
     live_paths = shortest_paths(st, live_depth, min_conf=min_conf, exclude_gate=gate, seed_inst=si) if gate else paths
@@ -320,7 +376,18 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
                 it["path_confidence"] = path_confidence(it["path"])
         items.append(it)
     items.sort(key=lambda x: (x["class"], x.get("module") or "", x.get("fqn") or x["id"]))
-    return {"targets": resolved, "min_confidence": min_conf, "gate": gate, "items": items}
+    out = {"targets": resolved, "min_confidence": min_conf, "gate": gate, "items": items}
+    if pf:
+        from .platforms import filter_info
+        out["platform"] = filter_info(st, pf)
+        out["platform"]["targets_not_built"] = _not_built(st, targets, pf)
+    return out
+
+
+def _not_built(st: GraphStore, targets: list[str], platform: str) -> list[str]:
+    from .platforms import exclusions
+    x = exclusions(st, platform)["nodes"]
+    return [t for t in targets if t in x]
 
 
 def fmt_path(path: list[dict]) -> str:
@@ -329,12 +396,18 @@ def fmt_path(path: list[dict]) -> str:
     s = path[0]["from"]
     for p in path:
         g = f" GATED:{p['gated']} guard {p.get('guard')}" if p.get("gated") else ""
-        s += f"\n          -{p['kind']}[{p['confidence']} @ {p['at']}{g}]-> {p['to']}"
+        pl = f" only on {', '.join(p['platforms']) or 'no known target'}" if p.get("platforms") is not None else ""
+        s += f"\n          -{p['kind']}[{p['confidence']} @ {p['at']}{g}{pl}]-> {p['to']}"
     return s
 
 
 def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KINDS) -> str:
     out = []
+    if res.get("platform"):
+        from .platforms import render_filter
+        out.append(render_filter(res["platform"]))
+        if res["platform"].get("targets_not_built"):
+            out.append(f"  not built for {res['platform']['platform']}: {', '.join(res['platform']['targets_not_built'][:6])}")
     out.append("targets:")
     for s, t in res["targets"].items():
         out.append(f"  {s} -> {len(t)} node(s): {', '.join(t[:6])}{' ...' if len(t) > 6 else ''}")
@@ -367,7 +440,7 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
                 out.append(f"    {i.get('fqn') or i['id']}  depth={i['depth']} conf={i['path_confidence']}  {ek}"
                            + (f"  [{i['kind']} @ {i.get('file')}]" if i['kind'] in TS_CODE_KINDS or (i.get('file') or '').endswith(('.ts', '.vue')) else "")
                            + (f"  @ {i.get('file')}:{i.get('line')}" if NATIVE_FILE_RE.search(i.get('file') or '') else "")
-                           + generated_label(i))
+                           + generated_label(i) + platform_label(i))
                 if show_paths:
                     out.append(f"        path: {fmt_path(i['path'])}")
     if gated:
@@ -395,7 +468,7 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
             for i in sorted(byk[k], key=lambda x: x["id"]):
                 g = "" if i.get("gate_status", "live") == "live" else f"  [{i['gate_status']}]"
                 nm = (i.get("fqn") or i["name"]) if NATIVE_FILE_RE.search(i.get("file") or "") else i["name"]
-                out.append(f"    {nm}  ({i.get('file')}:{i.get('line')})  depth={i['depth']} conf={i['path_confidence']}{g}{generated_label(i)}")
+                out.append(f"    {nm}  ({i.get('file')}:{i.get('line')})  depth={i['depth']} conf={i['path_confidence']}{g}{generated_label(i)}{platform_label(i)}")
     return "\n".join(out)
 
 
@@ -415,6 +488,9 @@ def with_generated(row: dict) -> dict:
     """A node row without its raw attrs, plus `generated` (the reason) for a node from a generated / copied / vendored
     file (indexed with --include-generated)."""
     raw = row.pop("attrs", None)
+    if raw and '"platforms"' in raw:
+        from .platforms import node_platforms
+        row.update(node_platforms(raw))
     if raw and '"generated"' in raw:
         try:
             g = (json.loads(raw) or {}).get("generated")
@@ -425,6 +501,12 @@ def with_generated(row: dict) -> dict:
             if g.get("copy_of"):
                 row["copy_of"] = g["copy_of"]
     return row
+
+
+def platform_label(n: dict) -> str:
+    """'  [ios, android]' for code that exists only on some targets (codegraph/platforms.py), else ''."""
+    from .platforms import label
+    return label(n)
 
 
 def generated_label(n: dict) -> str:
@@ -444,14 +526,14 @@ def caller_label(c: dict) -> str:
         lab = "  (call through a collection)"
     else:
         lab = ""
-    return lab + generated_label(c)
+    return lab + generated_label(c) + platform_label(c)
 
 
-def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
+def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None = None) -> dict:
     targets = resolve_targets(st, spec)
     si = _has_class_target(targets)
-    depth = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si)
-    paths = shortest_paths(st, depth, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si)
+    depth = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
+    paths = shortest_paths(st, depth, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
     rows = {}
     ids = list(depth)
     for i in range(0, len(ids), 500):
@@ -463,8 +545,13 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
                if n in rows and rows[n]["entry_kind"]]
     callers = [dict(rows[n], depth=d, **_first_hop(paths.get(n))) for n, d in depth.items()
                if n in rows and rows[n]["kind"] in CODE_KINDS + ("http",) and d > 0]
-    return {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
-            "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or ""))}
+    out = {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
+           "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or ""))}
+    if platform:
+        from .platforms import filter_info
+        out["platform"] = filter_info(st, platform)
+        out["platform"]["targets_not_built"] = _not_built(st, targets, platform)
+    return out
 
 
 def writers(st: GraphStore, table: str) -> list[dict]:
@@ -531,7 +618,7 @@ DOWNSTREAM_SINKS = ("table", "column", "connection", "config", "env", "route", "
 
 
 def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, kinds=None, sinks=DOWNSTREAM_SINKS,
-               gate: str | None = "auto") -> dict:
+               gate: str | None = "auto", platform: str | None = None) -> dict:
     """Forward closure: everything the target depends on (e.g. a frontend page -> composables ->
     HTTP endpoints -> backend routes -> controllers/services -> tables). Returns reached sink nodes
     (tables, columns, routes, ...) with one shortest evidence path each. With a gate scenario,
@@ -542,6 +629,7 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
     kinds = kinds or PROPAGATING
     kset = set(kinds)
     rank = CONFIDENCE_RANK[min_conf]
+    px = _px(st, platform)
     prev, depth = {}, {t: 0 for t in targets}
     frontier = list(targets)
     live = set(targets)
@@ -551,8 +639,8 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
         for i in range(0, len(chunk_all), 500):
             chunk = chunk_all[i:i + 500]
             q = ",".join("?" * len(chunk))
-            for e in st.q(f"SELECT src,dst,kind,file,line,confidence,conf_rank,gate FROM edges WHERE src IN ({q})", chunk):
-                if e["kind"] not in kset or e["conf_rank"] < rank:
+            for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate FROM edges WHERE src IN ({q})", chunk):
+                if e["kind"] not in kset or e["conf_rank"] < rank or (px and e["id"] in px):
                     continue
                 d = e["dst"]
                 if d not in depth and depth[e["src"]] < max_depth:
@@ -570,7 +658,9 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
         for i in range(0, len(ids), 500):
             chunk = ids[i:i + 500]
             q = ",".join("?" * len(chunk))
-            for e in st.q(f"SELECT src,dst,kind,conf_rank,gate FROM edges WHERE src IN ({q})", chunk):
+            for e in st.q(f"SELECT id,src,dst,kind,conf_rank,gate FROM edges WHERE src IN ({q})", chunk):
+                if e["id"] in px:
+                    continue
                 if e["kind"] in kset and e["conf_rank"] >= rank and e["gate"] != gate and e["dst"] in depth and e["dst"] not in live:
                     live.add(e["dst"]); changed = True
     out = defaultdict(list)
@@ -603,43 +693,57 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
             touched[t] = {"table": t, "depth": c["depth"], "via": c["id"], "live": c["live"], "path_confidence": c["path_confidence"]}
         elif c["live"]:
             cur["live"] = True
-    return {"targets": targets, "gate": gate, "reached": len(depth), "sinks": dict(out),
-            "tables_touched": sorted(touched.values(), key=lambda x: (x["depth"], x["table"]))}
+    res = {"targets": targets, "gate": gate, "reached": len(depth), "sinks": dict(out),
+           "tables_touched": sorted(touched.values(), key=lambda x: (x["depth"], x["table"]))}
+    if platform:
+        from .platforms import filter_info
+        res["platform"] = filter_info(st, platform)
+        res["platform"]["targets_not_built"] = _not_built(st, targets, platform)
+    return res
 
 
-def path_between(st: GraphStore, src_spec: str, dst_spec: str, min_conf="heuristic", max_depth=30) -> list[dict]:
+def path_between(st: GraphStore, src_spec: str, dst_spec: str, min_conf="heuristic", max_depth=30,
+                 platform: str | None = None) -> list[dict]:
     """Shortest forward dependency path from any node of src_spec to any node of dst_spec.
     A table target with no direct path falls back to its columns (code mostly reaches a table through column
     reads/writes), the same rule the visual view uses."""
     srcs, dsts = resolve_targets(st, src_spec), set(resolve_targets(st, dst_spec))
-    p = _bfs_path(st, srcs, dsts, min_conf, max_depth)
+    if platform:
+        from .platforms import exclusions
+        xn = exclusions(st, platform)["nodes"]
+        srcs, dsts = [s for s in srcs if s not in xn], {d for d in dsts if d not in xn}
+    p = _bfs_path(st, srcs, dsts, min_conf, max_depth, platform)
     if not p:
         cols = set()
         for t in [d for d in dsts if d.startswith("table:")]:
             pre = "column:" + t[6:] + "."
             cols.update(r["id"] for r in st.q("SELECT id FROM nodes WHERE kind='column' AND substr(id, 1, ?) = ?", (len(pre), pre)))
         if cols:
-            p = _bfs_path(st, srcs, cols, min_conf, max_depth)
+            p = _bfs_path(st, srcs, cols, min_conf, max_depth, platform)
     return p
 
 
-def _bfs_path(st: GraphStore, srcs: list[str], dsts: set[str], min_conf: str, max_depth: int) -> list[dict]:
+def _bfs_path(st: GraphStore, srcs: list[str], dsts: set[str], min_conf: str, max_depth: int,
+              platform: str | None = None) -> list[dict]:
     kset, rank = set(PROPAGATING), CONFIDENCE_RANK[min_conf]
+    px = _px(st, platform)
     prev, seen, frontier = {}, set(srcs), list(srcs)
     for _ in range(max_depth):
         nxt = []
         for i in range(0, len(frontier), 500):
             chunk = frontier[i:i + 500]
             q = ",".join("?" * len(chunk))
-            for e in st.q(f"SELECT src,dst,kind,file,line,confidence,conf_rank,gate FROM edges WHERE src IN ({q})", chunk):
-                if e["kind"] in kset and e["conf_rank"] >= rank and e["dst"] not in seen:
+            for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate,attrs FROM edges WHERE src IN ({q})", chunk):
+                if e["kind"] in kset and e["conf_rank"] >= rank and e["dst"] not in seen and not (px and e["id"] in px):
                     seen.add(e["dst"]); prev[e["dst"]] = dict(e); nxt.append(e["dst"])
                     if e["dst"] in dsts:
                         path, x = [], e["dst"]
                         while x in prev:
                             p = prev[x]
+                            pl = json.loads(p["attrs"]).get("platforms") if p["attrs"] and '"platforms"' in p["attrs"] else None
                             path.append({"from": p["src"], "kind": p["kind"], "to": p["dst"], "at": f"{p['file']}:{p['line']}",
-                                         "confidence": p["confidence"], **({"gated": p["gate"]} if p["gate"] else {})})
+                                         "confidence": p["confidence"], **({"gated": p["gate"]} if p["gate"] else {}),
+                                         **({"platforms": pl} if pl is not None else {})})
                             x = p["src"]
                         return path[::-1]
         frontier = nxt
@@ -651,6 +755,9 @@ def _bfs_path(st: GraphStore, srcs: list[str], dsts: set[str], min_conf: str, ma
 def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=("route", "table", "column", "connection", "config", "env", "job", "command", "http",
                                                                                "unsafe", "ffi", "feature", "cfg", "define")) -> str:
     out = [f"targets: {', '.join(res['targets'][:6])}", f"reached nodes: {res['reached']}"]
+    if res.get("platform"):
+        from .platforms import render_filter
+        out.insert(0, render_filter(res["platform"]))
     tt = res.get("tables_touched") or []
     if tt:
         out.append("")
@@ -760,21 +867,29 @@ def short_id(x: str | None) -> str:
 GUARD_KEYS = ("middleware", "guards", "interceptors", "pipes", "auth", "access", "wrapped_by")
 
 
-def search(st: GraphStore, name: str, kind: str | None = None, limit: int = 20) -> dict:
+def search(st: GraphStore, name: str, kind: str | None = None, limit: int = 20, platform: str | None = None) -> dict:
     """Nodes whose name / FQN / id contains `name` (case-insensitive), plus routes whose middleware, guards, auth or
     access checks contain it (those are route attributes and USES_MIDDLEWARE edges, not nodes of their own)."""
-    q = "SELECT id, kind, file, line FROM nodes WHERE (name LIKE ? OR fqn LIKE ? OR id LIKE ?)"
+    q = "SELECT id, kind, file, line, attrs FROM nodes WHERE (name LIKE ? OR fqn LIKE ? OR id LIKE ?)"
     p: list = [f"%{name}%"] * 3
     if kind:
         q += " AND kind=?"
         p.append(kind)
+    xn = set()
+    if platform:
+        from .platforms import exclusions
+        xn = exclusions(st, platform)["nodes"]
     q += " ORDER BY length(id) LIMIT ?"
-    p.append(limit)
-    nodes = [dict(r) for r in st.q(q, p)]
+    p.append(limit + len(xn))
+    rows = st.q(q, p)
+    hidden = sum(1 for r in rows if r["id"] in xn)
+    nodes = [with_generated(dict(r)) for r in rows if r["id"] not in xn][:limit]
     guards: dict[str, list[dict]] = defaultdict(list)
     if kind in (None, "route", "middleware", "guard"):
         low = name.lower()
         for r in st.q("SELECT id, file, line, attrs FROM nodes WHERE kind='route' AND attrs LIKE ?", (f"%{name}%",)):
+            if r["id"] in xn:
+                continue
             a = json.loads(r["attrs"] or "{}")
             for k in GUARD_KEYS:
                 v = a.get(k)
@@ -792,13 +907,23 @@ def search(st: GraphStore, name: str, kind: str | None = None, limit: int = 20) 
             if low in nm.lower() or low in e["dst"].lower():
                 if not any(g["route"] == e["src"] for g in guards.get(nm, [])):
                     guards[nm].append({"route": e["src"], "file": e["file"], "line": e["line"], "via": "USES_MIDDLEWARE"})
-    return {"query": name, "kind": kind, "nodes": nodes, "guards": dict(sorted(guards.items()))}
+    out = {"query": name, "kind": kind, "nodes": nodes, "guards": dict(sorted(guards.items()))}
+    if platform:
+        from .platforms import filter_info
+        out["platform"] = {**filter_info(st, platform), "matches_not_built": hidden}
+    return out
 
 
 def render_search(res: dict, limit_routes: int = 8) -> str:
     out = []
+    if res.get("platform"):
+        from .platforms import render_filter
+        out.append(render_filter(res["platform"]))
+        if res["platform"].get("matches_not_built"):
+            out.append(f"{res['platform']['matches_not_built']} matching symbols are not built for {res['platform']['platform']} "
+                       f"(search without platform lists them)")
     for r in res["nodes"]:
-        out.append(f"{r['kind']:10} {r['id']}  {os.path.basename(r['file'] or '?')}:{r['line']}")
+        out.append(f"{r['kind']:10} {r['id']}  {os.path.basename(r['file'] or '?')}:{r['line']}{platform_label(r)}")
     if res["guards"]:
         if out:
             out.append("")
@@ -807,7 +932,7 @@ def render_search(res: dict, limit_routes: int = 8) -> str:
         for nm, rs in res["guards"].items():
             shown = ", ".join(x["route"].split(":", 1)[1] for x in rs[:limit_routes])
             out.append(f"  {nm}  ({rs[0]['via']}) on {len(rs)} route(s): {shown}{' …' if len(rs) > limit_routes else ''}")
-    if not out:
+    if not res["nodes"] and not res["guards"]:
         out.append(f"no matches for {res['query']!r}" + (f" with kind={res['kind']}" if res.get("kind") else "") +
                    " in node names, FQNs, ids or route middleware / guard / auth names. Try a shorter substring, drop the "
                    "kind filter, or use `routes` to list every route with its guards.")

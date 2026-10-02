@@ -35,6 +35,11 @@ plans:
 viz:
   presets:                             # canned queries for the visual view's preset menu
     - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
+platforms:
+  targets: [ios, android, web]         # the project's build targets (default: detected)
+  paths: {"src/win32/**": [windows]}   # files built only for some targets
+  file_suffixes: true                  # React Native .ios.ts / .android.ts / .native.ts / .web.ts files
+  path_conventions: true               # C / C++ win/ unix/ posix/ directories and *_win.c file names
 ```
 
 | key | meaning | flag |
@@ -52,6 +57,9 @@ viz:
 | `plans.dir` | plans directory used by `plan`, `viz-plan`, `serve`, `impact` and the MCP server | `--plans-dir DIR` / `--plans DIR` |
 | `plans.text_mention_dirs` | directories scanned for text mentions of planned names | |
 | `viz.presets` | preset menu entries for `serve` (`{id, label, mode, specs[, sinks]}`) | `serve --presets FILE` |
+| `platforms.targets` | the targets `--platform` and `cg platforms divergence` work with (windows, linux, macos, ios, android, web); default: Flutter platform folders, Expo `app.json`, React Native, Electron / Tauri, else the desktop targets plus those the conditions name ([platforms.md](platforms.md#targets)) | |
+| `platforms.paths` | glob → targets: files built only for those targets (`unix` and `native` work too) | |
+| `platforms.file_suffixes` / `platforms.path_conventions` | React Native platform files and C / C++ platform directories / file names (default `true`) | |
 
 The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` and the MCP server read the plans
 directory, auth patterns and presets from the graph without repeating the flags.

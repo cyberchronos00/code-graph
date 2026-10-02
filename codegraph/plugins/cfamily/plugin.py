@@ -578,6 +578,20 @@ class CFamilyPlugin(LanguagePlugin):
 
     # ------------------------------------------------------------------ heuristic
     def _heuristic_refs(self, stats):
+        from ...platforms import c_relevant, path_convention
+
+        def _platform_scoped(it) -> bool:
+            if path_convention(it.file):
+                return True
+            f = self.files.get(it.file)
+            return bool(f) and any(a <= it.start and it.end <= z and c_relevant(c) for a, z, c, _l, _b in f.regions)
+
+        def _alternatives(cands):
+            if (1 < len(cands) <= 8 and len({c.key.split("@", 1)[0] for c in cands}) == 1 and len({c.kind for c in cands}) == 1
+                    and all(_platform_scoped(c) for c in cands)):
+                return list(cands)
+            return []
+
         funcs = defaultdict(list)
         methods = defaultdict(list)
         for it in self.items + self.decl_items:
@@ -601,9 +615,13 @@ class CFamilyPlugin(LanguagePlugin):
                 return []
             same = [c for c in cands if c.file == rel]
             if same:
-                return same[:1]
+                return _alternatives(same) or same[:1]
             nonstatic = [c for c in cands if not c.static]
-            return nonstatic if len(nonstatic) == 1 else []
+            if len(nonstatic) == 1:
+                return nonstatic
+            # one symbol defined once per build configuration (#ifdef _WIN32 / #else, src/win/x.c + src/unix/x.c):
+            # every definition is a target (each is tagged with its platforms)
+            return _alternatives(nonstatic)
 
         for rel, f in self.files.items():
             for owner_key, form, txt, name, line, col in f.calls:
@@ -739,6 +757,7 @@ class CFamilyPlugin(LanguagePlugin):
             # preprocessor gates: items overlapping each conditional region
             if not f.regions:
                 continue
+            self._platform_marks(rel, f)
             scoped = [it for it in f.items if it.kind in CODE | TYPES | {"global", "field", "macro"}]
             for start, end, cond, dline, branch in f.regions:
                 macros = [m for m in G.pp_macros(re.sub(r"__has_\w+\s*\([^)]*\)", "", cond)) if m != "__cplusplus" and m not in f.guards]
@@ -755,6 +774,14 @@ class CFamilyPlugin(LanguagePlugin):
                         b.add_edge(self.nid(it), f"define:{m}", "GATED_BY", rel, dline, EXACT, cond=cond,
                                    scope="item" if inside else "block")
                     stats["gated_by_edges"] += 1
+
+    def _platform_marks(self, rel: str, f) -> None:
+        """Platform conditions (codegraph/platforms.py): #if regions over platform macros (_WIN32, __APPLE__, ...)."""
+        from ...platforms import Cond, c_relevant, mark
+        for start, end, cond, dline, branch in f.regions:
+            if c_relevant(cond):
+                txt = f"#{'if' if branch == 'if' else branch} {cond}" if branch in ("if", "elif") else f"#{branch} ({cond})"
+                mark(self.b, rel, start, end, Cond("c", cond, txt[:200]), line=dline)
 
     def _entries(self, stats):
         b = self.b

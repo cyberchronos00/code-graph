@@ -187,6 +187,13 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
             stats["plugins"][f"scip:{s}"] = import_scip(s, builder)
     # generated / copied / vendored files: out of the graph (default) or labelled (attrs.generated)
     stats["generated"] = apply_generated(builder, clf)
+    # platform-specific code: platform tags on nodes / edges, variant implementations linked, divergence
+    from .platforms import apply as apply_platforms
+    t_pl = time.time()
+    pl = apply_platforms(project, builder)
+    if pl:
+        pl["seconds"] = round(time.time() - t_pl, 2)
+        stats["platforms"] = pl
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)
@@ -240,6 +247,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     stats["starters_seconds"] = round(time.time() - t_st, 2)
     stats["coverage"]["setup"] = {"frameworks": sorted(plan["frameworks"]), "presets": plan["presets"],
                                   "config": cfg.get("file")}
+    if pl:       # per-target coverage: what each declared target builds, conditions left unevaluated
+        stats["coverage"]["platforms"] = {k: pl[k] for k in ("targets", "per_target", "unevaluated_conditions",
+                                                             "unevaluated_samples", "conditions") if k in pl}
     stats["completeness_seconds"] = round(t_tag - t_cov, 2)
     stats["scan_seconds"] = scan_seconds
     stats["nodes"] = len(builder.nodes)

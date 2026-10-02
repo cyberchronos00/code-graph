@@ -1,0 +1,6 @@
+{
+  "expo": {
+    "name": "rn-notes",
+    "platforms": ["ios", "android", "web"]
+  }
+}

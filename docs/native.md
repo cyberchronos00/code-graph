@@ -173,8 +173,18 @@ The same `--gates` file format, with native keys (see [`examples/native.gates.js
   "defines_on": ["NDEBUG", "LEVEL=2"], "defines_off": ["RB_THREADSAFE"]}]}
 ```
 
-Edges inside a `#[cfg]` item or statement, or inside a `#if` region, that is false under the scenario get the
-scenario as their gate. `reaches` then reports them under GATED. Unknown atoms stay live (conservative).
+Edges inside a `#[cfg]` item, statement or match arm, or inside a `#if` region, that is false under the scenario get
+the scenario as their gate. `reaches` then reports them under GATED. Unknown atoms stay live (conservative).
+
+## Platform targets
+
+Independently of gate scenarios, every item and reference under a platform `cfg` (`unix`, `windows`, `target_os`,
+`target_family`, ...) or a platform `#if` (`_WIN32`, `__APPLE__`, `__linux__`, `__ANDROID__`, ...) carries the
+targets it is built for, and so do files in `win/`, `unix/`, `posix/`, `darwin/` directories and `*_win.c` /
+`*-unix.c` files. `--platform windows` on `reaches`, `impact`, `downstream` and `path` shows the Windows build;
+`cg platforms divergence` lists functions defined per platform and calls into code that one target does not build.
+In exact mode, rust-analyzer resolves the host's `cfg`; calls into items gated for other targets are added from the
+syntax layer (`via: cfg-inactive`). See [platforms.md](platforms.md).
 
 ## Environment variables
 

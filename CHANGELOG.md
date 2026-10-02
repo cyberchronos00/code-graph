@@ -25,12 +25,24 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `keep` adjust the rules, and `--include-generated` indexes them labelled `attrs.generated` with `COPY_OF` edges from
   copies to their sources, shown as "(generated)" / "(copy of ...)" in `impact`
   ([#8](https://github.com/cyberchronos00/code-graph/issues/8)).
+- Platform-specific code: symbols and references under Rust `#[cfg]` / `cfg!`, C / C++ `#if` platform macros and
+  `win/` / `unix/` paths, Dart `Platform.isX` / `kIsWeb` / conditional imports and React Native `Platform.OS` /
+  `Platform.select` / `.ios.ts` files carry the targets they are built for; variants are linked to each other;
+  `--platform TARGET` on `reaches`, `impact`, `downstream`, `path`, `routes` and `search` (MCP `platform`, with the
+  filter and the unevaluated conditions in every reply); `cg platforms [divergence]` and MCP `platforms` /
+  `platform_divergence` list targets, variants that leave a target uncovered, API differences and references to
+  code not built on a target; per-target coverage; `.cg.yaml` `platforms`
+  ([#7](https://github.com/cyberchronos00/code-graph/issues/7)).
 
 ### Changed
 
 - Coverage counts no longer include generated and copied files, and the `book.g.dart` nodes of `bookstore-flutter`
   are excluded by default (90 / 171 → 87 / 164 nodes / edges)
   ([#8](https://github.com/cyberchronos00/code-graph/issues/8)).
+- Rust exact mode adds calls into items gated for another target (`via: cfg-inactive`), and a `#[cfg]` on a match
+  arm gates the whole arm; C / C++ heuristic calls to a function defined once per `#if` branch link every definition;
+  React Native imports resolve through the platform suffixes
+  ([#7](https://github.com/cyberchronos00/code-graph/issues/7)).
 
 ## [0.4.0] - 2026-10-02
 

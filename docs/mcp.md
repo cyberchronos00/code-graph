@@ -48,6 +48,12 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   blind spots (see [Coverage and completeness](#coverage-and-completeness)), and the Python source roots with their
   origin ([python.md](python.md)); on a combined DB, per linked repo. `json_output=true` adds the roots as
   `python_source_roots`.
+- `platforms()`: the project's targets and where they come from (`.cg.yaml`, Flutter platform folders, Expo
+  `app.json`, React Native, Electron / Tauri, the conditions), conditions found and evaluated, files and symbols per
+  target ([platforms.md](platforms.md));
+- `platform_divergence(target?, kind?, max_items?)`: variants that leave a declared target uncovered, API
+  differences between variants, and calls / imports live on a target where the callee is not built, each with
+  file:line;
 - `starters()`: starter queries derived from the graph, each with the tool call to run: the write route without an
   auth guard that writes the most tables, the most-written and most-read tables, the busiest DB connection and env
   key, the page with the largest backend reach and the most-called functions. Every starter resolves to existing
@@ -57,6 +63,12 @@ Rust, C and C++ graphs use the same tools. Specs take native forms (`kv_core::st
 `mod:crate::module`, a file path, `feature:`/`cfg:`/`define:`/`unsafe:`/`env:` nodes; see [native.md](native.md#query-specs)).
 `reaches` groups results by module (Rust module path or C/C++ directory) and splits them into RUNTIME (`main`,
 `ffi_export`), LIBRARY API (`public_api`) and DEV/BUILD-ONLY (tests, benches, examples, `build.rs`).
+
+`reaches`, `impact`, `downstream`, `path`, `routes` and `search` take `platform` (windows, linux, macos, ios, android,
+web) for one target's build. The reply's first line names the filter, how many symbols and references it left out
+and how many conditions could not be evaluated for that target (their code stays in); the structured content carries
+the same as `platform` (`{platform, excluded_nodes, excluded_edges, unevaluated_conditions}`). Platform-specific
+symbols are labelled with their targets (`[ios, android]`) in every reply. See [platforms.md](platforms.md).
 
 `impact` also lists the external clients recorded in snapshot files in the plans directory (`--plans`) that call an
 affected route, marked `snapshot, not indexed`.

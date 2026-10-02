@@ -43,6 +43,7 @@ SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None:
     "version": None, "python": {"source_roots"}, "exclude": None, "skip_dirs": {"add", "keep"},
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
     "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
+    "platforms": {"targets", "paths", "file_suffixes", "path_conventions"},
 }
 KNOWN_KEYS = set(SCHEMA)
 PYTHON_KEYS = SCHEMA["python"]
@@ -149,6 +150,46 @@ def _viz_presets(v: Any, where: str) -> list[dict]:
     return out
 
 
+def _platform_names(v: Any, where: str, extra: tuple = ()) -> list[str]:
+    from .platforms import KNOWN, norm
+    out = []
+    for i, n in enumerate(_strings(v, where)):
+        p = n.lower() if n.lower() in extra else norm(n)
+        if p is None:
+            raise ConfigError(f"{where}[{i}]: unknown platform {n!r} (known: {', '.join(KNOWN + extra)})")
+        out.append(p)
+    return list(dict.fromkeys(out))
+
+
+def _platforms(pf: dict, fname: str) -> dict:
+    """platforms: targets (the project's build targets), paths (glob -> targets: files built only there),
+    file_suffixes / path_conventions (React Native .ios.ts files, C/C++ win/ unix/ directories; default on)."""
+    out: dict = {}
+    if pf.get("targets") is not None:
+        out["targets"] = _platform_names(pf["targets"], f"{fname}: platforms.targets")
+        if not out["targets"]:
+            raise ConfigError(f"{fname}: platforms.targets: expected at least one target")
+    if pf.get("paths") is not None:
+        if not isinstance(pf["paths"], dict):
+            raise ConfigError(f"{fname}: platforms.paths: expected a mapping of glob -> targets "
+                              f"(e.g. 'src/win/**': [windows])")
+        out["paths"] = {}
+        for g, ts in pf["paths"].items():
+            g = str(g)
+            if ".." in PurePosixPath(g.strip("/")).parts:
+                raise ConfigError(f"{fname}: platforms.paths: {g!r} must stay inside the indexed root (no '..')")
+            names = _platform_names(ts, f"{fname}: platforms.paths[{g!r}]", extra=("unix", "native"))
+            if not names:
+                raise ConfigError(f"{fname}: platforms.paths[{g!r}]: expected at least one target")
+            out["paths"][g] = names
+    for k in ("file_suffixes", "path_conventions"):
+        if pf.get(k) is not None:
+            if not isinstance(pf[k], bool):
+                raise ConfigError(f"{fname}: platforms.{k}: expected true or false, got {pf[k]!r}")
+            out[k] = pf[k]
+    return out
+
+
 def parse(data: Any, fname: str = ".cg.yaml") -> dict:
     """Validated, normalized config from parsed YAML (see load())."""
     if data is None:
@@ -199,6 +240,9 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
             if not isinstance(gen["include"], bool):
                 raise ConfigError(f"{fname}: generated.include: expected true or false, got {gen['include']!r}")
             out["generated"]["include"] = gen["include"]
+    pf = _section(data, "platforms", fname)
+    if pf is not None:
+        out["platforms"] = _platforms(pf, fname)
     fw = _section(data, "frameworks", fname)
     if fw is not None:
         out["frameworks"] = {}
@@ -349,6 +393,17 @@ def effective(root: str | Path, python_roots: list[str] | None = None, gates: st
         row("generated.include", True, "flag --include-generated")
     else:
         row("generated.include", bool(gc.get("include")), f"{fname} generated.include" if "include" in gc else "built-in (excluded, listed by cg coverage)")
+    pc = cfg.get("platforms") or {}
+    if pc.get("targets"):
+        row("platforms.targets", pc["targets"], f"{fname} platforms.targets")
+    else:
+        row("platforms.targets", "detected at index time: Flutter platform folders, Expo app.json, React Native, "
+            "Electron / Tauri, else the desktop targets plus those the conditions name (cg platforms)", "built-in")
+    if pc.get("paths"):
+        row("platforms.paths", [f"{g}: {', '.join(ts)}" for g, ts in pc["paths"].items()], f"{fname} platforms.paths")
+    for k, what in (("file_suffixes", "React Native .ios / .android / .native / .web files"),
+                    ("path_conventions", "C / C++ win/ unix/ posix/ darwin/ directories and _win / _unix file names")):
+        row(f"platforms.{k}", pc.get(k, True), f"{fname} platforms.{k}" if k in pc else f"built-in ({what})")
     row("auth.token_pattern", PR.values("common", "auth", "token_pattern"), "preset common")
     for section in ("auth", "secret"):
         for key in ("guards", "not_auth") if section == "auth" else ("guards",):

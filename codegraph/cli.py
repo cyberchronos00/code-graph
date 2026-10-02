@@ -15,6 +15,8 @@
   python -m codegraph.cli search <name> --db ... [--kind route]
   python -m codegraph.cli channels [PATTERN] --db ...   (who can join, which events publish, which client code listens)
   python -m codegraph.cli tests <spec> --db ...          (tests covering a symbol / route / table: direct + transitive)
+  python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
+  reaches / impact / downstream / path / routes / search take --platform TARGET: only code built for that target
 spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class::method | Class
 """
 from __future__ import annotations
@@ -56,6 +58,13 @@ def main(argv=None):
     p.add_argument("--report", help="write <prefix>.json/.md match report")
     p = sub.add_parser("path"); p.add_argument("src"); p.add_argument("dst"); p.add_argument("--db", required=True)
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
+    p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
+    p = sub.add_parser("platforms", help="platform-specific code: targets, tagged symbols per target, and divergence "
+                                         "(variants missing a target, API differences, references to code missing on a target)")
+    p.add_argument("action", nargs="?", default="summary", choices=["summary", "divergence"])
+    p.add_argument("--db", required=True); p.add_argument("--target", help="divergence: only findings that affect this target")
+    p.add_argument("--kind", choices=["variants", "api_surface", "missing_callee"], help="divergence: one finding kind")
+    p.add_argument("--max-items", type=int, default=40); p.add_argument("--json", action="store_true")
     p = sub.add_parser("resolutions", help="every place a concept (e.g. timezone) is resolved, with fallback chains and divergence")
     p.add_argument("concept"); p.add_argument("--db", required=True); p.add_argument("--within", help="substring filter on the owning function fqn (e.g. Report)")
     p.add_argument("--no-client", action="store_true"); p.add_argument("--json", action="store_true")
@@ -82,9 +91,10 @@ def main(argv=None):
     p.add_argument("--auth-pattern", help="extra regex for guard names that count as auth")
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
     p.add_argument("--max-items", type=int, default=200); p.add_argument("--no-paths", action="store_true"); p.add_argument("--json", action="store_true")
+    p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
     p = sub.add_parser("search", help="nodes by name / FQN substring, plus route middleware / guard / auth names")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("--kind"); p.add_argument("--limit", type=int, default=30)
-    p.add_argument("--json", action="store_true")
+    p.add_argument("--json", action="store_true"); p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
     p = sub.add_parser("channels", help="broadcast channels: who can join (auth callback + checks), which events publish on it, which client code / pages listen")
     p.add_argument("pattern", nargs="?", help="channel pattern or concrete name (orders.{id}, orders.42, orders.*); omit to list all")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-source", action="store_true")
@@ -108,6 +118,8 @@ def main(argv=None):
         p.add_argument("--no-paths", action="store_true")
         p.add_argument("--max-depth", type=int, default=30)
         p.add_argument("--gate", default="auto", help="gate scenario for live/gated split (default: the one indexed; 'none' to disable)")
+        if name in ("reaches", "impact", "downstream"):
+            p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
         if name == "impact":
             p.add_argument("--plans-dir", help="also list external clients from the snapshot files in this directory (e.g. examples/plans)")
     a = ap.parse_args(argv)
@@ -169,7 +181,30 @@ def main(argv=None):
         from .viz.server import serve
         serve(a.db, a.host, a.port, plans=a.plans_dir, presets=a.presets)
         return
+    if getattr(a, "platform", None):
+        from .platforms import resolve_platform
+        try:
+            a.platform = resolve_platform(a.platform)
+        except ValueError as ex:
+            print(f"cg {a.cmd}: {ex}", file=sys.stderr)
+            return 2
     st = GraphStore(a.db)
+    if a.cmd == "platforms":
+        from . import platforms as PF
+        if a.action == "summary":
+            s = PF.summary(st)
+            print(json.dumps(s, indent=1, default=str) if a.json else PF.render_summary(s))
+            return
+        tgt = None
+        if a.target:
+            try:
+                tgt = PF.resolve_platform(a.target)
+            except ValueError as ex:
+                print(f"cg platforms: {ex}", file=sys.stderr)
+                return 2
+        res = PF.divergence(st, kind=a.kind, target=tgt)
+        print(json.dumps(res, indent=1, default=str) if a.json else PF.render_divergence(res, limit=a.max_items))
+        return
     if a.cmd == "resolutions":
         from .concepts import resolutions, render_resolutions
         res = resolutions(st, a.concept, within=a.within, client=not a.no_client)
@@ -178,7 +213,7 @@ def main(argv=None):
     if a.cmd == "routes":
         from . import routes as R
         res = R.routes_report(st, writes=a.writes, reaches=a.reaches, missing=a.missing, unguarded=a.unguarded,
-                              auth_pattern=a.auth_pattern, min_conf=a.min_confidence)
+                              auth_pattern=a.auth_pattern, min_conf=a.min_confidence, platform=a.platform)
         if a.json:
             res["completeness"] = R.route_completeness(st)
         print(json.dumps(res, indent=1, default=str) if a.json else R.render_routes(res, st, max_items=a.max_items, paths=not a.no_paths))
@@ -195,22 +230,31 @@ def main(argv=None):
         _note(res["completeness"], a.json)
         return
     if a.cmd == "search":
-        res = Q.search(st, a.name, kind=a.kind, limit=a.limit)
+        res = Q.search(st, a.name, kind=a.kind, limit=a.limit, platform=a.platform)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_search(res))
         return
     if a.cmd == "reaches":
-        res = Q.reaches(st, a.specs, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate)
+        res = Q.reaches(st, a.specs, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate,
+                        platform=a.platform)
         res["completeness"] = _completeness(st, [x for t in res["targets"].values() for x in t] + [i["id"] for i in res["items"]])
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_reaches(res, show_paths=not a.no_paths))
         _note(res["completeness"], a.json)
     elif a.cmd == "impact":
-        res = Q.impact(st, a.spec, min_conf=a.min_confidence)
+        res = Q.impact(st, a.spec, min_conf=a.min_confidence, platform=a.platform)
         if a.json:
             res["completeness"] = _completeness(st, list(res["targets"]) + [c["id"] for c in res["callers"]])
             print(json.dumps(res, indent=1, default=str)); return
+        if res.get("platform"):
+            from .platforms import render_filter
+            print(render_filter(res["platform"]))
+            if res["platform"].get("targets_not_built"):
+                print(f"not built for {a.platform}: {', '.join(res['platform']['targets_not_built'][:6])}")
         print(f"targets: {res['targets'][:5]}")
         if not res["targets"]:
             print(f"no method matches {a.spec!r}; try `search` with part of the name"); return
+        if a.platform and res["targets"] and set(res["platform"]["targets_not_built"]) == set(res["targets"]):
+            print(f"{a.spec} is not built for {a.platform}: nothing calls it there (`cg platforms divergence --target "
+                  f"{a.platform}` lists references to it that would not build)"); return
         if not res["callers"] and not res["entry_points"]:
             print(Q.explain_no_callers(st, a.spec, res["targets"])); return
         print(f"callers (transitive): {len(res['callers'])}")
@@ -221,7 +265,7 @@ def main(argv=None):
         for e in res["entry_points"]:
             native = Q.NATIVE_FILE_RE.search(e.get("file") or "")
             nm = f"{e.get('fqn') or e['name']}  @ {e['file']}:{e['line']}" if native else e["name"]
-            print(f"  {e['entry_kind']:16} {nm}  conf={e['path_confidence']}{Q.generated_label(e)}")
+            print(f"  {e['entry_kind']:16} {nm}  conf={e['path_confidence']}{Q.generated_label(e)}{Q.platform_label(e)}")
             if not a.no_paths:
                 print(f"        path: {Q.fmt_path(e['path'])}")
         if a.plans_dir:
@@ -255,14 +299,18 @@ def main(argv=None):
             for e in st.q("SELECT kind,src,file,line,confidence FROM edges WHERE dst=? ORDER BY kind,line", (nid,)):
                 print(f"   <- {e['kind']} {e['src']} @{e['file']}:{e['line']} {e['confidence']}")
     elif a.cmd == "path":
-        p = Q.path_between(st, a.src, a.dst, min_conf=a.min_confidence)
-        print(Q.fmt_path(p) if p else Q.explain_no_path(st, a.src, a.dst, a.min_confidence))
+        p = Q.path_between(st, a.src, a.dst, min_conf=a.min_confidence, platform=a.platform)
+        if a.platform:
+            from .platforms import filter_info, render_filter
+            print(render_filter(filter_info(st, a.platform)))
+        print(Q.fmt_path(p) if p else (f"on {a.platform}: " if a.platform else "") + Q.explain_no_path(st, a.src, a.dst, a.min_confidence))
         for n in Q.path_notes(st, p) if p else []:
             print(f"note: {n}")
         if not p:
             raise SystemExit(1)  # scripts can tell "no path" apart from a path
     elif a.cmd == "downstream":
-        res = Q.downstream(st, a.spec, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate)
+        res = Q.downstream(st, a.spec, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate,
+                           platform=a.platform)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_downstream(res, show_paths=not a.no_paths))
     elif a.cmd == "api-calls":
         rows = Q.api_calls(st, a.spec)

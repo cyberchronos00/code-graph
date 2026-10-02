@@ -216,12 +216,16 @@ def _groups_for_writes(st: GraphStore, table: str | None) -> dict[str, dict]:
 
 def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
                   unguarded: bool = False, auth_pattern: str | None = None, min_conf: str = "heuristic",
-                  gate: str | None = "auto") -> dict:
+                  gate: str | None = "auto", platform: str | None = None) -> dict:
     gs = guard_setup(st)
     is_auth = AuthMatcher(auth_pattern, gs["applied"], gs["auth_patterns"], gs["secret_patterns"])
     if gate == "auto":
         gate = Q.default_gate(st)
     routes = {r["id"]: dict(r) for r in st.q("SELECT id, name, file, line, module, attrs FROM nodes WHERE kind='route'")}
+    if platform:
+        from .platforms import exclusions
+        xn = exclusions(st, platform)["nodes"]
+        routes = {k: v for k, v in routes.items() if k not in xn}       # routes not registered on that target
     mw = defaultdict(list)
     for e in st.q("SELECT src, dst, attrs FROM edges WHERE kind='USES_MIDDLEWARE' AND src LIKE 'route:%'"):
         mw[e["src"]].append(dict(e))
@@ -243,12 +247,12 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
     for label, (targets, final) in groups.items():
         if not targets:
             continue
-        depth = Q.reverse_closure(st, targets, kinds=PROPAGATING, min_conf=min_conf)
+        depth = Q.reverse_closure(st, targets, kinds=PROPAGATING, min_conf=min_conf, platform=platform)
         hit = [r for r in depth if r in routes]
         if not hit:
             continue
-        paths = Q.shortest_paths(st, depth, min_conf=min_conf)
-        live = Q.reverse_closure(st, targets, kinds=PROPAGATING, min_conf=min_conf, exclude_gate=gate) if gate else depth
+        paths = Q.shortest_paths(st, depth, min_conf=min_conf, platform=platform)
+        live = Q.reverse_closure(st, targets, kinds=PROPAGATING, min_conf=min_conf, exclude_gate=gate, platform=platform) if gate else depth
         for rid in hit:
             p = list(paths.get(rid) or [])
             end = p[-1]["to"] if p else rid
@@ -285,12 +289,17 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
         # a stricter confidence level silently drops routes whose only chain has a resolved / heuristic hop: name them
         mine = {i["route"] for i in items}
         loose = routes_report(st, writes=writes, reaches=reaches, missing=missing, unguarded=unguarded,
-                              auth_pattern=auth_pattern, min_conf="heuristic", gate=gate)
+                              auth_pattern=auth_pattern, min_conf="heuristic", gate=gate, platform=platform)
         below = [i["name"] for i in loose["items"] if i["route"] not in mine]
     return {"below_confidence": below, "mode": mode, "writes": writes, "reaches": reaches or [], "unresolved": unresolved, "filters": flt,
             "total_routes": len(routes), "matched": total, "items": items, "auth_pattern": is_auth.pattern, "gate": gate, "guard_presets": is_auth.applied,
             "write_tables": sorted({k.split(" ", 1)[1] for k in groups if k.startswith("writes ")}),
-            "min_confidence": min_conf}
+            "min_confidence": min_conf, **({"platform": _pinfo(st, platform)} if platform else {})}
+
+
+def _pinfo(st: GraphStore, platform: str) -> dict:
+    from .platforms import filter_info
+    return filter_info(st, platform)
 
 
 def explain_empty(st: GraphStore, res: dict) -> str:
@@ -345,6 +354,9 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
     ns = sum(1 for i in items if not i["has_auth"] and i.get("secret_checked"))
     out = [head, f"auth guard: {len(items) - na - ns} with, {na} without" + (f", {ns} secret-checked (signature / shared secret, no user auth)" if ns else "")
            + " (auth = a framework preset auth guard or a name matching the auth pattern)"]
+    if res.get("platform"):
+        from .platforms import render_filter
+        out.insert(0, render_filter(res["platform"]))
     by = defaultdict(int)
     for i in items:
         for g in i["guards"]:

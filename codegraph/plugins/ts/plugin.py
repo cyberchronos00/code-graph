@@ -135,6 +135,10 @@ class TypeScriptPlugin(LanguagePlugin):
         ex = [x for x in (rules.exclude_regex(), names_regex(added)) if x]
         if ex:
             ctx.extractor_cfg["exclude_re"] = "|".join(f"(?:{x})" for x in ex)
+        from ...platforms import uses_react_native
+        pcfg = (project.options.get("config") or {}).get("platforms") or {}
+        if pcfg.get("file_suffixes", True) and uses_react_native(project.root):
+            ctx.extractor_cfg["platform_suffixes"] = [".ios", ".android", ".native", ".web", ""]
         gen_files = rules.excluded_files(SUPPORTED["typescript"])   # generated / copied / vendored files the scan found
         if gen_files:
             ctx.extractor_cfg["exclude_files"] = gen_files

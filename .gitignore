@@ -15,3 +15,4 @@ examples/plans/*.baseline.json
 scripts/demo/node_modules/
 codegraph/plugins/dart/extractor/.bin/
 codegraph/plugins/dart/extractor/.dart_tool/
+target/

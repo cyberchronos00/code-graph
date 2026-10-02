@@ -106,10 +106,13 @@ class RustPlugin(LanguagePlugin):
                 mode = "scip"
         if mode == "heuristic":
             self._heuristic_refs(stats)
+        else:
+            self._cfg_inactive_refs(stats)
         self._impls(stats, mode)
         self._facts(stats, mode)
         self._entries(stats)
         self._gating(stats)
+        self._platform_marks()
         out = dict(stats)
         out.update({"mode": mode, "seconds": round(time.time() - t0, 2)})
         if scip_info:
@@ -553,38 +556,81 @@ class RustPlugin(LanguagePlugin):
             return free, HEURISTIC
         return [], HEURISTIC
 
+    def _resolve_call(self, rf: RFile, owner: RItem, form: str, path: str, name: str, stats) -> tuple[list[RItem], str]:
+        """Syntactic call resolution (heuristic mode, and code rust-analyzer does not analyse)."""
+        if form == "path":
+            return self._resolve_path(rf, owner, path)
+        if name in STD_METHODS:
+            stats["heuristic_skipped_std_method"] += 1
+            return None, HEURISTIC
+        cands = [c for c in self.by_name.get(name, []) if c.kind == "method"]
+        traits = {c.parent for c in cands if c.parent and self.by_key.get(c.parent) is not None and self.by_key[c.parent].kind == "trait"}
+        if len(cands) == 1:
+            return cands, HEURISTIC
+        if len(traits) == 1:
+            return [c for c in cands if c.parent in traits][:1], HEURISTIC
+        return [], HEURISTIC
+
+    def _call_edges(self, rf: RFile, owner: RItem, form, path, name, line, col, stats, **attrs) -> bool:
+        if form == "macro":
+            m = [c for c in self.by_name.get(name, []) if c.kind == "macro"]
+            if len(m) == 1:
+                self.b.add_edge(self.nid(owner), self.nid(m[0]), "CALLS", rf.path, line, HEURISTIC, **attrs)
+                return True
+            return False
+        targets, conf = self._resolve_call(rf, owner, form, path, name, stats)
+        if targets is None:
+            return None
+        if not targets:
+            return False
+        line_txt = rf.lines[line - 1] if line - 1 < len(rf.lines) else ""
+        for t in targets:
+            self._ref_edge(self.nid(owner), self.nid(t), rf.path, line, conf, line_txt[col + len(name):].lstrip() or "(", stats, **attrs)
+        return True
+
+    def _cfg_inactive_refs(self, stats):
+        """rust-analyzer analyses the host target: calls inside code compiled only for other targets (and calls to
+        items that exist only there) have no SCIP occurrence. Those call sites are resolved syntactically instead,
+        so `#[cfg(windows)]` code keeps its callees and callers on every target."""
+        pos = getattr(self, "pos_sym", {})
+        for rf in self.files.values():
+            regions = [(a, z) for a, z, _p, _l, _o in rf.cfg_regions]
+            file_cfg = bool(self.file_meta[rf.path]["cfgs"] or rf.inner_cfgs)
+            for owner_key, form, path, name, line, col in rf.calls:
+                if (rf.path, line, col) in pos or form == "macro" or (form == "method" and name in STD_METHODS):
+                    continue
+                owner = self.by_key.get(owner_key)
+                if owner is None:
+                    continue
+                site_cfg = file_cfg or bool(owner.cfgs) or any(a <= line <= z for a, z in regions)
+                if not site_cfg:
+                    targets, _ = self._resolve_call(rf, owner, form, path, name, stats)
+                    if not any(t.cfgs or self.file_meta.get(t.file, {}).get("cfgs") for t in targets or []):
+                        continue
+                if self._call_edges(rf, owner, form, path, name, line, col, stats, via="cfg-inactive"):
+                    stats["cfg_inactive_calls"] += 1
+
+    def _platform_marks(self):
+        """Platform conditions (codegraph/platforms.py): #[cfg] on items, mod declarations, #![cfg] and statements."""
+        from ...platforms import cfg_cond, mark
+        b = self.b
+        for rf in self.files.values():
+            for pred, line in self.file_meta[rf.path]["cfgs"] + rf.inner_cfgs:
+                mark(b, rf.path, 1, 10 ** 9, cfg_cond(pred), line=line)
+            for it in rf.items:
+                for pred, line in it.cfgs:
+                    mark(b, rf.path, it.start, it.end, cfg_cond(pred), line=line)
+            for start, end, pred, aline, _owner in rf.cfg_regions:
+                mark(b, rf.path, start, end, cfg_cond(pred), line=aline, nodes=False)
+
     def _heuristic_refs(self, stats):
         for rf in self.files.values():
             for owner_key, form, path, name, line, col in rf.calls:
                 owner = self.by_key.get(owner_key)
                 if owner is None:
                     continue
-                if form == "macro":
-                    m = [c for c in self.by_name.get(name, []) if c.kind == "macro"]
-                    if len(m) == 1:
-                        self.b.add_edge(self.nid(owner), self.nid(m[0]), "CALLS", rf.path, line, HEURISTIC)
-                    continue
-                if form == "path":
-                    targets, conf = self._resolve_path(rf, owner, path)
-                else:
-                    if name in STD_METHODS:
-                        stats["heuristic_skipped_std_method"] += 1
-                        continue
-                    cands = [c for c in self.by_name.get(name, []) if c.kind == "method"]
-                    traits = {c.parent for c in cands if c.parent and self.by_key.get(c.parent) is not None and self.by_key[c.parent].kind == "trait"}
-                    if len(cands) == 1:
-                        targets, conf = cands, HEURISTIC
-                    elif len(traits) == 1:
-                        tm = [c for c in cands if c.parent in traits]
-                        targets, conf = tm[:1], HEURISTIC
-                    else:
-                        targets, conf = [], HEURISTIC
-                if not targets:
+                if self._call_edges(rf, owner, form, path, name, line, col, stats) is False and form != "macro":
                     stats["heuristic_unresolved_calls"] += 1
-                    continue
-                line_txt = rf.lines[line - 1] if line - 1 < len(rf.lines) else ""
-                for t in targets:
-                    self._ref_edge(self.nid(owner), self.nid(t), rf.path, line, conf, line_txt[col + len(name):].lstrip() or "(", stats)
             for owner_key, name, line, col in rf.type_refs:
                 owner = self.by_key.get(owner_key)
                 if owner is None:

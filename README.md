@@ -172,8 +172,8 @@ The 7 plan gaps are the admin update path, `UpdateBookRequest`, `Book::$fillable
 
 ### 1. A CLI for impact questions
 
-`reaches`, `impact`, `downstream`, `path`, `writers`, `siblings`, `routes`, `search`, `api-calls`, `channels` and `tests`
-all work on one SQLite graph, and across repos once the frontend and backend are linked. Every hop shows its evidence:
+`reaches`, `impact`, `downstream`, `path`, `writers`, `siblings`, `routes`, `search`, `api-calls`, `channels`, `tests`
+and `platforms` all work on one SQLite graph, and across repos once the frontend and backend are linked. Every hop shows its evidence:
 
 ```text
 $ cg path page:/reports/:id table:orders --db out/graph.db
@@ -258,12 +258,27 @@ tests: 2 direct, 0 transitive (of 10 test cases in the graph: phpunit 4, pest 3,
 
 Details: [docs/channels-and-tests.md](docs/channels-and-tests.md).
 
+Code that ships to several targets is tagged per target. `--platform` shows one target's build, and `platforms
+divergence` finds the gaps between per-platform implementations:
+
+```text
+$ cg impact open_logs --platform windows --db out/app.db
+platform: windows (4 nodes and 13 references not built for it left out; 0 conditions could not be evaluated for it, the code under them stays in)
+open_logs is not built for windows: nothing calls it there (...)
+
+$ cg platforms divergence --db out/app.db      # abridged
+== REFERENCED WHERE THE CALLEE IS NOT BUILT: 1
+  function:dirs_demo::main -CALLS-> function:dirs_demo::open_logs  @ src/main.rs:18  missing on: windows, macos  (callee: linux, cfg(target_os = "linux"))
+```
+
+Details: [docs/platforms.md](docs/platforms.md).
+
 Full reference: [docs/cli.md](docs/cli.md) · value facts: [docs/value-facts.md](docs/value-facts.md)
 
 ### 2. An MCP server for AI agents
 
 The same queries as MCP tools (`reaches`, `impact`, `callers`, `siblings`, `path`, `downstream`, `routes`, `search`, `api_calls`,
-`channels`, `tests_covering`, `resolutions`, `plan_check`, `index`, `coverage`, `starters`, …), so an agent can check the blast radius before it edits. Replies are compact,
+`channels`, `tests_covering`, `resolutions`, `plan_check`, `index`, `coverage`, `starters`, `platform_divergence`, …), so an agent can check the blast radius before it edits. Replies are compact,
 use repo-relative paths, and `plan_check` starts with a summary (`details=true` for the full report). Every reply also
 carries a machine-readable `completeness` object, so the agent knows when an answer covers the whole repository and
 where to fall back to text search when it does not ([docs/completeness.md](docs/completeness.md)). It runs locally
@@ -339,6 +354,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | C++ | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | the C facts plus namespaces, classes, overloads, virtual dispatch (overrides and implementations) ([docs/native.md](docs/native.md#c-and-c)) |
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
 | Go, Java | via SCIP (experimental) | definitions and references imported from an existing SCIP index |
+| Platform-specific code | Rust `#[cfg]` / `cfg!`, C / C++ `#if` and platform paths, Dart `Platform.isX` / `kIsWeb` / conditional imports, React Native `Platform.OS` / `Platform.select` / `.ios.ts` files | every symbol and reference carries the targets it is built for; `--platform ios` views one target's build; `cg platforms divergence` lists variants that leave a target uncovered, API differences and calls into code a target does not build ([docs/platforms.md](docs/platforms.md)) |
 | Generated and copied files | detected (`.gitattributes`, generator banners, framework build paths, generator file names, Capacitor / Cordova copy targets, `.openapi-generator/FILES`) | kept out of the graph and listed by `cg coverage` by reason; copies map back to their source; `--include-generated` indexes them labelled `attrs.generated` ([docs/generated.md](docs/generated.md)) |
 
 ## Prerequisites per language
@@ -461,7 +477,7 @@ code-graph indexes a project with zero configuration. The optional inputs are:
   so `routes --unguarded` is accurate out of the box. `cg index` records the detected frameworks and applied presets.
 - **Project config file** (`.cg.yaml` at the indexed root, read automatically) records project knowledge once:
   `exclude` globs, extra `skip_dirs`, `frameworks` to add or remove, `auth` / `secret` patterns for your own guards,
-  `generated` rules, `gates`, `plans` and `viz.presets`, and `python.source_roots`. `cg config show` prints every effective value with
+  `generated` rules, `platforms` targets, `gates`, `plans` and `viz.presets`, and `python.source_roots`. `cg config show` prints every effective value with
   where it comes from, and `cg config validate` checks the file:
 
   ```yaml
@@ -519,8 +535,12 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   gates or flags stored in properties are reported as live, which keeps results conservative.
 - **Rust / C / C++:** exact mode uses rust-analyzer or scip-clang (and, for C/C++, a compile database) and reflects
   one build configuration: inactive `#if` branches and macro-generated items get nodes, and their references come from
-  heuristic mode. Heuristic mode covers about half of the calls in generic or template-heavy code. See
+  heuristic mode; calls into Rust items gated for other targets are added from the syntax layer. Heuristic mode covers about half of the calls in generic or template-heavy code. See
   [docs/limitations.md](docs/limitations.md#rust-c-and-c).
+- **Platform conditions** are evaluated per target from the source text; conditions on feature flags, build macros
+  or API levels count as unknown and keep their code in every target's view (`cg platforms` lists them). Swift `#if
+  os()`, Kotlin Multiplatform `expect` / `actual` and Electron / Tauri IPC come with the Swift and Kotlin plugins. See
+  [docs/platforms.md](docs/platforms.md).
 - **Route guards** come from route definitions and global enhancers (Nest `APP_GUARD` / `useGlobal*`, Express
   `app.use`). Whether a guard counts as auth is decided by the framework preset, then by its name; project guards are
   added with `auth.extra_patterns` in `.cg.yaml` or `--auth-pattern`. Details:
@@ -552,6 +572,8 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.
+- Platform-specific code in Swift and Kotlin Multiplatform, and Electron / Tauri main ↔ renderer IPC as edges
+  between the processes.
 - Web / native bridge links: Capacitor plugins, React Native native modules and Flutter platform channels as
   `BRIDGE_CALLS` edges to the Kotlin and Swift methods they reach, with the Kotlin and Swift plugins
   ([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
@@ -573,12 +595,13 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`, `cg config show`), framework presets, gates, viz presets and starter queries, plans dir, environment variables |
+| [docs/platforms.md](docs/platforms.md) | platform-specific code: targets, recognised conditions and variants, `--platform`, `cg platforms divergence`, `.cg.yaml` `platforms` |
 | [docs/generated.md](docs/generated.md) | generated, copied and vendored files: detection rules, coverage output, `--include-generated`, `COPY_OF`, `.cg.yaml` `generated` |
 | [docs/completeness.md](docs/completeness.md) | file completeness, unsupported source types, blind-spot detectors, notes on partial answers, the MCP `completeness` object |
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
 | [docs/validation.md](docs/validation.md) | results on public projects: Django, Flutter, presets / starter queries / route guards per framework, and generated-file detection |
 | [CHANGELOG.md](CHANGELOG.md) | changes per release, and what is coming in the next one |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 269 tests, adding a plugin |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 281 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
 

@@ -3,7 +3,7 @@
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
 Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, starters, index, downstream, path,
-api_calls, resolutions, channels, tests_covering, coverage, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+api_calls, resolutions, channels, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -26,7 +26,7 @@ from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer
 from mcp_types import CallToolResult, TextContent
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from .core.store import GraphStore
 from . import query as Q
@@ -65,6 +65,12 @@ server = MCPServer(
         "Tests: test code (tests/, *.spec.ts / *.test.ts, e2e specs) is indexed as `test` nodes kept out of every other "
         "query (TEST_* edges never propagate); `tests_covering` lists the tests that exercise a symbol / route / table, "
         "direct (the test calls or requests it) and transitive (through application code). "
+        "Platforms: code under a platform condition (#[cfg(windows)], cfg!, #ifdef _WIN32, Platform.OS / Platform.select, "
+        "Platform.isIOS / kIsWeb, .ios.ts / .android.ts / .native.ts files, Dart conditional imports) is tagged with "
+        "the targets it is built for (`[ios, android]` after a symbol); pass platform=\"ios\" (windows, linux, macos, ios, "
+        "android, web) to reaches / impact / downstream / path / routes / search to see that target's build only. "
+        "`platforms` lists the targets and tagged code, `platform_divergence` the gaps: a target no variant covers, "
+        "API differences between variants, calls into code that is not built on a target. "
         "When a query finds nothing, the reply says why and which query to run instead. "
         "`starters` lists first questions derived from this graph (unguarded write routes, most-reached tables, "
         "most-called functions), each with the call to run. "
@@ -133,10 +139,32 @@ class ToolReply(TypedDict):
     """Structured content of every tool reply: the text reply plus machine-readable completeness."""
     result: str
     completeness: dict[str, Any]
+    platform: NotRequired[dict[str, Any]]     # the --platform filter a reply applied (target, excluded, unevaluated)
 
 
 # scope of the answer a tool is producing, set by the tool while it runs (see _scope); read by the tool() wrapper
 _SCOPE: contextvars.ContextVar = contextvars.ContextVar("cg_answer_scope", default=None)
+# the platform filter the current reply applied (codegraph/platforms.py filter_info), for the structured content
+_PF: contextvars.ContextVar = contextvars.ContextVar("cg_platform_filter", default=None)
+
+
+class PlatformError(ValueError):
+    pass
+
+
+def _platform(st: GraphStore, platform: str | None) -> tuple[str | None, list[str]]:
+    """Resolve a `platform` argument; returns (target, [the reply's filter line]). Records the filter for the
+    structured content. Unknown names raise PlatformError (a readable reply listing the known targets)."""
+    if not platform:
+        return None, []
+    from .platforms import filter_info, render_filter, resolve_platform
+    try:
+        p = resolve_platform(platform)
+    except ValueError as e:
+        raise PlatformError(str(e)) from None
+    info = filter_info(st, p)
+    _PF.set(info)
+    return p, [render_filter(info)]
 
 
 def _scope(ids=None, categories=("route", "handler"), whole: bool = False, note: bool = True, unsupported=None) -> None:
@@ -161,17 +189,22 @@ def _run(fn, args, kwargs) -> tuple[str, dict]:
     """Run a tool: text reply (repo-relative paths, coverage notes) + its completeness object."""
     from .coverage import answer_note
     from .plans import PlanError
-    token = _SCOPE.set(None)
+    token, ptoken = _SCOPE.set(None), _PF.set(None)
     try:
         try:
             txt = fn(*args, **kwargs)
         except PlanError as e:  # missing plan, invalid YAML: a readable reply, not a bare tool error
             txt = f"plan error: {e}"
-        scope = _SCOPE.get()
+        except PlatformError as e:
+            txt = f"platform error: {e}"
+        scope, pf = _SCOPE.get(), _PF.get()
     finally:
         _SCOPE.reset(token)
+        _PF.reset(ptoken)
     comp = _completeness(scope)
-    if not isinstance(txt, str) or txt.startswith("plan error:"):
+    if pf:
+        comp = {**comp, "_platform": pf}
+    if not isinstance(txt, str) or txt.startswith(("plan error:", "platform error:")):
         return _rel_text(txt), comp
     scoped = ""
     if scope and scope["note"] and not comp.get("complete") and "coverage note:" not in txt:
@@ -196,10 +229,12 @@ def tool(fn):
     @functools.wraps(fn)
     def served(*args, **kwargs):
         txt, comp = _run(fn, args, kwargs)
+        pf = comp.pop("_platform", None)
         return CallToolResult(content=[TextContent(type="text", text=txt)],
-                              structured_content={"result": txt, "completeness": _rel_obj(comp)})
+                              structured_content={"result": txt, "completeness": _rel_obj(comp), **({"platform": pf} if pf else {})})
     served.__signature__ = inspect.signature(fn, eval_str=True).replace(return_annotation=Annotated[CallToolResult, ToolReply])
-    wrapped.completeness = lambda *a, **k: _run(fn, a, k)[1]   # tests / scripts: the completeness of a call
+    wrapped.completeness = lambda *a, **k: {k2: v for k2, v in _run(fn, a, k)[1].items() if k2 != "_platform"}
+    wrapped.structured = lambda *a, **k: served(*a, **k).structured_content   # tests / scripts: the full structured reply
     server.tool()(served)
     return wrapped
 
@@ -275,7 +310,7 @@ def _ename(e: dict) -> str:
 
 @tool
 def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str = "module",
-            include_gated: bool = True, max_per_group: int = 25, paths: bool = True) -> str:
+            include_gated: bool = True, max_per_group: int = 25, paths: bool = True, platform: str | None = None) -> str:
     """Reverse transitive dependents of one or more targets (union), e.g.
     ["orders.customer_id", "connection:warehouse", "connection:tenant_*"].
 
@@ -285,9 +320,14 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
     code that only runs while a feature flag is off), NO-ENTRY. Inside each group items are grouped by
     `group_by` = module | entry_kind | class. Each line: symbol, entry kinds, depth, shortest evidence path
     (hops KIND@file:line; ~r = resolved, ~h = heuristic confidence). At most `max_per_group` lines per top-level
-    group (shallowest first). min_confidence: heuristic | resolved | exact."""
+    group (shallowest first). min_confidence: heuristic | resolved | exact.
+    platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
+    condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
+    Dart conditional imports) is left out; the reply's first line names the filter and how many conditions could not
+    be evaluated (those stay in)."""
     st = _st()
-    res = Q.reaches(st, targets, min_conf=min_confidence)
+    pf, pline = _platform(st, platform)
+    res = Q.reaches(st, targets, min_conf=min_confidence, platform=pf)
     items = [i for i in res["items"] if not i["is_target"]]
     _scope([x for t in res["targets"].values() for x in t] + [i["id"] for i in items])
     code = [i for i in items if i["kind"] in Q.CODE_KINDS]
@@ -300,13 +340,15 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
         groups[g].append(i)
     tl = ", ".join(f"{s}→{len(t)}" for s, t in res["targets"].items())
     missing = [s for s, t in res["targets"].items() if not t]
+    if pf and res["platform"].get("targets_not_built"):
+        pline.append(f"not built for {pf}: {', '.join(short(t) for t in res['platform']['targets_not_built'][:6])}")
     if missing and len(missing) == len(res["targets"]):
-        return f"targets: {tl}\nno node matches {', '.join(map(repr, missing))}; try search() with part of the name (spec forms are listed in the server instructions)"
+        return "\n".join(pline + [f"targets: {tl}"]) + f"\nno node matches {', '.join(map(repr, missing))}; try search() with part of the name (spec forms are listed in the server instructions)"
     if not items:
-        return (f"targets: {tl}\nnothing depends on the target(s) over dependency edges (min_confidence={min_confidence}). "
+        return "\n".join(pline) + ("\n" if pline else "") + (f"targets: {tl}\nnothing depends on the target(s) over dependency edges (min_confidence={min_confidence}). "
                 f"try: node() for its direct edges; downstream() for what it reaches; a lower min_confidence")
     live_e = sum(1 for e in entries if e.get("gate_status", "live") == "live")
-    out = [f"targets: {tl} | gate={res.get('gate')} | conf>={min_confidence}",
+    out = pline + [f"targets: {tl} | gate={res.get('gate')} | conf>={min_confidence}",
            f"dependents: {len(code)} code ({', '.join(f'{k.lower()} {len(v)}' for k, v in groups.items())}); "
            f"entry points {len(entries)} ({live_e} live): " + ", ".join(f"{k}×{n}" for k, n in sorted(
                defaultdict(int, {k: sum(1 for e in entries if _ekind(e) == k) for k in {_ekind(e) for e in entries}}).items()))]
@@ -332,7 +374,7 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
         for k in sorted(buckets):
             out.append(f"[{k}]")
             for i in sorted(buckets[k], key=lambda x: (x["depth"], x.get("fqn") or "")):
-                line = f"  {short(i.get('fqn') or i['id'])}  {ek_str(i['entry_kinds'])} d{i['depth']}"
+                line = f"  {short(i.get('fqn') or i['id'])}{Q.platform_label(i)}  {ek_str(i['entry_kinds'])} d{i['depth']}"
                 if gname == "GATED":
                     ev = i.get("gate_evidence") or {}
                     line += f"  {i['gate_status']} guard {at(ev.get('guard') or '')} hop {ev.get('kind')}@{at(ev.get('at') or '')}"
@@ -352,15 +394,23 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
 
 
 @tool
-def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60) -> str:
+def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, platform: str | None = None) -> str:
     """Reverse callers of a method (Class::method, short or FQN) up to entry points, with the shortest call path
-    from each entry point."""
+    from each entry point.
+    platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
+    condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
+    Dart conditional imports) is left out; the reply's first line names the filter and how many conditions could not
+    be evaluated (those stay in)."""
     st = _st()
-    r = Q.impact(st, method, min_conf=min_confidence)
+    pf, pline = _platform(st, platform)
+    r = Q.impact(st, method, min_conf=min_confidence, platform=pf)
     if not r["targets"]:
         return f"no method matches {method!r}; try search() with part of the name"
     _scope(list(r["targets"]) + [c["id"] for c in r["callers"]])
-    out = [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
+    if pf and set(r["platform"]["targets_not_built"]) == set(r["targets"]):
+        return "\n".join(pline + [f"{method} is not built for {pf}: nothing calls it there; platform_divergence(target='{pf}') "
+                                   f"lists references to it that would not build"])
+    out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
     if not r["callers"] and not r["entry_points"]:
         return "\n".join(out + [Q.explain_no_callers(st, method, r["targets"])])
     byk = defaultdict(list)
@@ -373,7 +423,7 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60) 
             if n >= max_items:
                 break
             n += 1
-            out.append(f"  {_ename(e)}  {fmt_path(e['path'])}")
+            out.append(f"  {_ename(e)}{Q.platform_label(e)}  {fmt_path(e['path'])}")
     mods = defaultdict(int)
     for c in r["callers"]:
         mods[c.get("module") or "?"] += 1
@@ -577,18 +627,24 @@ def node(id_or_symbol: str) -> str:
 
 
 @tool
-def search(name: str, kind: str | None = None, limit: int = 20) -> str:
+def search(name: str, kind: str | None = None, limit: int = 20, platform: str | None = None) -> str:
     """Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
     (class, method, route, command, table, column, connection, config, env, job, admin...). Also matches route
     middleware, guards, auth and access checks (e.g. "auth" finds `auth:api`, `ApiKeyGuard`, `IsAuthenticated`) and
-    lists the routes that carry them."""
-    return Q.render_search(Q.search(_st(), name, kind=kind, limit=limit))
+    lists the routes that carry them. Platform-specific symbols carry their targets, e.g. `[ios, android]`.
+    platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
+    condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
+    Dart conditional imports) is left out; the reply's first line names the filter and how many conditions could not
+    be evaluated (those stay in)."""
+    st = _st()
+    pf, _ = _platform(st, platform)
+    return Q.render_search(Q.search(st, name, kind=kind, limit=limit, platform=pf))
 
 
 @tool
 def routes(writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
            unguarded: bool = False, auth_pattern: str | None = None, max_items: int = 40, paths: bool = True,
-           min_confidence: str = "heuristic") -> str:
+           min_confidence: str = "heuristic", platform: str | None = None) -> str:
     """Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
     DB write) or writes="<table>", reaches=[specs] (routes that reach any of these nodes: table, column, connection,
     method, env key...). Optional filters: missing="<name>" keeps routes with no guard whose name contains it (e.g.
@@ -597,12 +653,17 @@ def routes(writes: str | None = None, reaches: list[str] | None = None, missing:
     combined graph. Guards come from Laravel middleware, Nest guards/interceptors, Express/Koa/Fastify/Hono
     middleware, Next.js middleware.ts / handler wrappers, django-ninja auth= and Django/DRF view access checks.
     min_confidence: keep the default (heuristic) for reviews: every edge still shows its own label, and a stricter
-    level names the routes it hides."""
+    level names the routes it hides.
+    platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
+    condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
+    Dart conditional imports) is left out; the reply's first line names the filter and how many conditions could not
+    be evaluated (those stay in)."""
     from . import routes as R
     st = _st()
+    pf, _ = _platform(st, platform)
     _scope(whole=True, categories=("route",), unsupported=False)
     res = R.routes_report(st, writes=writes, reaches=reaches, missing=missing, unguarded=unguarded,
-                          auth_pattern=auth_pattern, min_conf=min_confidence)
+                          auth_pattern=auth_pattern, min_conf=min_confidence, platform=pf)
     return R.render_routes(res, st, max_items=max_items, paths=paths, compact=True)
 
 
@@ -694,16 +755,22 @@ def stats() -> str:
 
 
 @tool
-def downstream(target: str, max_per_kind: int = 25, paths: bool = True, min_confidence: str = "heuristic") -> str:
+def downstream(target: str, max_per_kind: int = 25, paths: bool = True, min_confidence: str = "heuristic",
+               platform: str | None = None) -> str:
     """Forward dependencies of a node: what it ends up calling/reading. On a combined graph a frontend page goes
     page -> composables/components -> HTTP endpoints -> backend routes -> controllers/services -> tables.
     Lists backend routes, tables touched (directly or via columns), columns, connections, config/env keys, each
-    with one shortest evidence path. target: page:/reports/:id | app/pages/x.vue | Class::method | ..."""
+    with one shortest evidence path. target: page:/reports/:id | app/pages/x.vue | Class::method | ...
+    platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
+    condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
+    Dart conditional imports) is left out; the reply's first line names the filter and how many conditions could not
+    be evaluated (those stay in)."""
     st = _st()
-    r = Q.downstream(st, target, min_conf=min_confidence)
+    pf, pline = _platform(st, platform)
+    r = Q.downstream(st, target, min_conf=min_confidence, platform=pf)
     if not r["targets"]:
         return f"no node matches {target!r}; try search()"
-    out = [f"targets: {', '.join(short(t) for t in r['targets'][:4])} | reached {r['reached']} nodes | gate={r.get('gate')}"]
+    out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:4])} | reached {r['reached']} nodes | gate={r.get('gate')}"]
     if not r["sinks"]:
         out.append(f"no routes, tables, columns, connections, config/env keys or jobs reachable from {target}: it calls nothing "
                    f"that touches data or crosses a boundary (or only through edges below min_confidence={min_confidence}). "
@@ -727,18 +794,58 @@ def downstream(target: str, max_per_kind: int = 25, paths: bool = True, min_conf
 
 
 @tool
-def path(source: str, target: str, min_confidence: str = "heuristic") -> str:
+def path(source: str, target: str, min_confidence: str = "heuristic", platform: str | None = None) -> str:
     """Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
-    SalesReportService::report), one hop per line with file:line and confidence."""
+    SalesReportService::report), one hop per line with file:line and confidence.
+    platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
+    condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
+    Dart conditional imports) is left out; the reply's first line names the filter and how many conditions could not
+    be evaluated (those stay in)."""
     st = _st()
-    p = Q.path_between(st, source, target, min_conf=min_confidence)
+    pf, pline = _platform(st, platform)
+    p = Q.path_between(st, source, target, min_conf=min_confidence, platform=pf)
     if not p:
-        return Q.explain_no_path(st, source, target, min_confidence)
-    out = [short(p[0]["from"])]
+        return "\n".join(pline + [(f"on {pf}: " if pf else "") + Q.explain_no_path(st, source, target, min_confidence)])
+    out = pline + [short(p[0]["from"])]
     for h in p:
-        out.append(f"  -{h['kind']}[{h['confidence']} @ {h['at']}]-> {short(h['to'])}")
+        pl = f" only on {', '.join(h['platforms']) or 'no known target'}" if h.get("platforms") is not None else ""
+        out.append(f"  -{h['kind']}[{h['confidence']} @ {h['at']}{pl}]-> {short(h['to'])}")
     out += [f"note: {n}" for n in Q.path_notes(st, p)]
     return "\n".join(out)
+
+
+@tool
+def platforms() -> str:
+    """Platform-specific code in this graph: the targets (declared in .cg.yaml platforms.targets, or detected from
+    Flutter platform folders, Expo app.json, React Native, Electron / Tauri, or the conditions themselves), how many
+    conditions (#[cfg], cfg!, #if, Platform.OS / Platform.select, Platform.isX / kIsWeb, .ios.ts / .android.ts /
+    .native.ts files, Dart conditional imports) were found and evaluated, and files / symbols per target. Pass
+    `platform` to reaches / impact / downstream / path / routes / search to see one target's build."""
+    from .platforms import render_summary, summary
+    _scope(whole=True, note=False)
+    return render_summary(summary(_st()))
+
+
+@tool
+def platform_divergence(target: str | None = None, kind: str | None = None, max_items: int = 40) -> str:
+    """Where per-platform implementations diverge: VARIANTS (a symbol implemented per platform, by platform files,
+    conditional imports or #[cfg] / #if alternatives, with the declared targets no variant covers), API SURFACE (a
+    variant lacks a public symbol its siblings define) and REFERENCED WHERE THE CALLEE IS NOT BUILT (a call or
+    import that is live on a target where the callee does not exist: a build or runtime failure there). Each finding
+    has file:line evidence. target: only findings that affect this target. kind: variants | api_surface |
+    missing_callee."""
+    from .platforms import divergence, render_divergence, resolve_platform
+    st = _st()
+    _scope(whole=True, note=False)
+    t = None
+    if target:
+        try:
+            t = resolve_platform(target)
+        except ValueError as e:
+            raise PlatformError(str(e)) from None
+    if kind and kind not in ("variants", "api_surface", "missing_callee"):
+        return f"unknown kind {kind!r}: use variants, api_surface or missing_callee"
+    return render_divergence(divergence(st, kind=kind, target=t), limit=max_items)
 
 
 @tool

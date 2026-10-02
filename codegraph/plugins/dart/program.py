@@ -372,8 +372,15 @@ class DartProgram:
         uri = imp.get("uri") or ""
         tgt = self._rel_uri(frm, uri)
         lib = self.libs.get(tgt) if tgt else None
-        return {"lib": lib, "uri": uri, "prefix": imp.get("prefix"), "show": imp.get("show") or [], "hide": imp.get("hide") or [],
-                "ext": lib is None, "l": imp.get("l"), "file": frm}
+        out = {"lib": lib, "uri": uri, "prefix": imp.get("prefix"), "show": imp.get("show") or [], "hide": imp.get("hide") or [],
+               "ext": lib is None, "l": imp.get("l"), "file": frm}
+        if imp.get("configs"):      # conditional import / export: per-platform alternatives of `lib`
+            out["configs"] = []
+            for c in imp["configs"]:
+                t = self._rel_uri(frm, c.get("uri") or "")
+                out["configs"].append({"name": c.get("name"), "value": c.get("value"), "uri": c.get("uri"),
+                                       "lib": self.libs.get(t) if t else None})
+        return out
 
     def lib_of(self, rel: str) -> DLib:
         return self.libs[self.part_owner.get(rel, rel)] if self.part_owner.get(rel, rel) in self.libs else self.libs[rel]

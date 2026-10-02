@@ -52,6 +52,10 @@ class GraphBuilder:
         # set by a language plugin while emitting edges for a reference that is dead under a gate
         # scenario: {"gate": name, "guard": "file:line", "guard_call": "..."}
         self.current_gate: dict | None = None
+        # platform conditions recorded by the language plugins (codegraph/platforms.py mark()) and Dart conditional
+        # imports / exports ({file, line, default, configs: [(name, value, file)]}); applied after all plugins ran
+        self.platform_marks: list[dict] = []
+        self.platform_imports: list[dict] = []
 
     def add_node(self, kind: str, key: str, name: str | None = None, **kw) -> str:
         nid = node_id(kind, key)

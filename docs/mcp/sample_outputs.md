@@ -20,6 +20,8 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `stats`: Index metadata and node/edge counts by kind.
 - `downstream`: Forward dependencies of a node: what it ends up calling/reading. On a combined graph a frontend page goes
 - `path`: Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
+- `platforms`: Platform-specific code in this graph: the targets (declared in .cg.yaml platforms.targets, or detected from
+- `platform_divergence`: Where per-platform implementations diverge: VARIANTS (a symbol implemented per platform, by platform files,
 - `api_calls`: Frontend HTTP calls (method + path template) with call sites, request keys and the matched backend
 - `plan_list`: List planned-change files (plans/*.yaml): name, status, title, counts, schema errors.
 - `plan_load`: Show one plan (name or path): planned nodes (+), modified targets with intent (~), planned edges, forbidden

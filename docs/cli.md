@@ -53,12 +53,19 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   [channels-and-tests.md](channels-and-tests.md#broadcast-channels).
 - `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
   [channels-and-tests.md](channels-and-tests.md#tests).
+- `platforms [summary|divergence] [--target T] [--kind K]`: platform-specific code: the project's targets and where
+  they come from, conditions and tagged symbols per target; `divergence` lists variants that leave a target
+  uncovered, API differences between variants, and references to code that is not built on a target. See
+  [platforms.md](platforms.md).
 - `resolutions CONCEPT [--within S]`: where a value is resolved, its fallback chains, and whether the client sends it.
 - `plan {list,load,validate,check,baseline} NAME [--verify] [--summary]`: the planned-change layer. `--summary` prints
   counts per section and check plus the top `--max-items` items (default 5).
 - `serve`, `viz-export`, `viz-plan`: the visual view (local server or self-contained HTML).
 
-Most query commands take `--json`, `--min-confidence resolved` (or `exact`) and `--max-depth`.
+Most query commands take `--json`, `--min-confidence resolved` (or `exact`) and `--max-depth`. `reaches`, `impact`,
+`downstream`, `path`, `routes` and `search` take `--platform TARGET` (windows, linux, macos, ios, android, web) for one
+target's build: code under a platform condition that is false there is left out, and the answer's first line names
+the filter and how many conditions could not be evaluated ([platforms.md](platforms.md#filtering-queries---platform)).
 
 ## Query targets (specs)
 
@@ -254,6 +261,7 @@ options:
 usage: python -m codegraph.cli reaches [-h] --db DB [--json]
                          [--min-confidence {heuristic,resolved,exact}]
                          [--no-paths] [--max-depth MAX_DEPTH] [--gate GATE]
+                         [--platform PLATFORM]
                          specs [specs ...]
 
 positional arguments:
@@ -268,6 +276,8 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                         indexed; 'none' to disable)
+  --platform PLATFORM   only code built for this target (windows, linux,
+                        macos, ios, android, web; see docs/platforms.md)
 ```
 
 ### `impact`
@@ -276,7 +286,7 @@ options:
 usage: python -m codegraph.cli impact [-h] --db DB [--json]
                         [--min-confidence {heuristic,resolved,exact}]
                         [--no-paths] [--max-depth MAX_DEPTH] [--gate GATE]
-                        [--plans-dir PLANS_DIR]
+                        [--platform PLATFORM] [--plans-dir PLANS_DIR]
                         spec
 
 positional arguments:
@@ -291,6 +301,8 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                         indexed; 'none' to disable)
+  --platform PLATFORM   only code built for this target (windows, linux,
+                        macos, ios, android, web; see docs/platforms.md)
   --plans-dir PLANS_DIR
                         also list external clients from the snapshot files in
                         this directory (e.g. examples/plans)
@@ -302,6 +314,7 @@ options:
 usage: python -m codegraph.cli downstream [-h] --db DB [--json]
                             [--min-confidence {heuristic,resolved,exact}]
                             [--no-paths] [--max-depth MAX_DEPTH] [--gate GATE]
+                            [--platform PLATFORM]
                             spec
 
 positional arguments:
@@ -316,6 +329,8 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                         indexed; 'none' to disable)
+  --platform PLATFORM   only code built for this target (windows, linux,
+                        macos, ios, android, web; see docs/platforms.md)
 ```
 
 ### `path`
@@ -323,6 +338,7 @@ options:
 ```
 usage: python -m codegraph.cli path [-h] --db DB
                       [--min-confidence {heuristic,resolved,exact}]
+                      [--platform PLATFORM]
                       src dst
 
 positional arguments:
@@ -333,6 +349,8 @@ options:
   -h, --help            show this help message and exit
   --db DB
   --min-confidence {heuristic,resolved,exact}
+  --platform PLATFORM   only code built for this target (windows, linux,
+                        macos, ios, android, web; see docs/platforms.md)
 ```
 
 ### `writers`
@@ -387,6 +405,7 @@ usage: python -m codegraph.cli routes [-h] --db DB [--writes [TABLE]]
                         [--unguarded] [--auth-pattern AUTH_PATTERN]
                         [--min-confidence {heuristic,resolved,exact}]
                         [--max-items MAX_ITEMS] [--no-paths] [--json]
+                        [--platform PLATFORM]
 
 options:
   -h, --help            show this help message and exit
@@ -406,23 +425,28 @@ options:
   --max-items MAX_ITEMS
   --no-paths
   --json
+  --platform PLATFORM   only code built for this target (windows, linux,
+                        macos, ios, android, web; see docs/platforms.md)
 ```
 
 ### `search`
 
 ```
 usage: python -m codegraph.cli search [-h] --db DB [--kind KIND] [--limit LIMIT] [--json]
+                        [--platform PLATFORM]
                         name
 
 positional arguments:
   name
 
 options:
-  -h, --help     show this help message and exit
+  -h, --help           show this help message and exit
   --db DB
   --kind KIND
   --limit LIMIT
   --json
+  --platform PLATFORM  only code built for this target (windows, linux, macos,
+                       ios, android, web; see docs/platforms.md)
 ```
 
 ### `node`
@@ -522,6 +546,29 @@ options:
   --no-paths
   --min-confidence {heuristic,resolved,exact}
 ```
+
+### `platforms`
+
+```
+usage: python -m codegraph.cli platforms [-h] --db DB [--target TARGET]
+                           [--kind {variants,api_surface,missing_callee}]
+                           [--max-items MAX_ITEMS] [--json]
+                           [{summary,divergence}]
+
+positional arguments:
+  {summary,divergence}
+
+options:
+  -h, --help            show this help message and exit
+  --db DB
+  --target TARGET       divergence: only findings that affect this target
+  --kind {variants,api_surface,missing_callee}
+                        divergence: one finding kind
+  --max-items MAX_ITEMS
+  --json
+```
+
+See [platforms.md](platforms.md).
 
 ### `resolutions`
 

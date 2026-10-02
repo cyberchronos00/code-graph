@@ -178,6 +178,22 @@ class DartPlugin(LanguagePlugin):
             cache_file.write_text(json.dumps(facts))
         return facts, status
 
+    @staticmethod
+    def _conditional(b: GraphBuilder, imp: dict, how: str) -> None:
+        """Conditional import / export: IMPORTS edges to each alternative library (attrs.condition) and the group for
+        the platform tags (codegraph/platforms.py: the default library and each `if (dart.library.x)` one)."""
+        if not imp.get("configs"):
+            return
+        for c in imp["configs"]:
+            if c["lib"] is not None:
+                b.add_edge(f"module:{imp['file']}", c["lib"].id, "IMPORTS", imp["file"], imp.get("l"), EXACT, conditional=True,
+                           condition=c["name"] + ("" if c.get("value") in (None, "true") else f" == {c['value']!r}"),
+                           **({"via": "export"} if how == "export" else {}))
+        b.platform_imports.append({"file": imp["file"], "line": imp.get("l"), "how": how,
+                                   "default": imp["lib"].file if imp["lib"] is not None else None,
+                                   "configs": [(c["name"], c.get("value"), c["lib"].file if c["lib"] is not None else None)
+                                               for c in imp["configs"]]})
+
     # ------------------------------------------------------------------ index
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
         t0 = time.time()
@@ -232,8 +248,18 @@ class DartPlugin(LanguagePlugin):
         n_imp = 0
         for lib in prog.libs.values():
             for imp in lib.imports:
+                cond = {"conditional": True} if imp.get("configs") else {}
                 if imp["lib"] is not None:
-                    b.add_edge(f"module:{imp['file']}", imp["lib"].id, "IMPORTS", imp["file"], imp.get("l"), EXACT); n_imp += 1
+                    b.add_edge(f"module:{imp['file']}", imp["lib"].id, "IMPORTS", imp["file"], imp.get("l"), EXACT, **cond); n_imp += 1
+                self._conditional(b, imp, "import")
+            for ex in lib.exports:
+                if ex.get("configs"):
+                    if ex["lib"] is not None:
+                        b.add_edge(f"module:{ex['file']}", ex["lib"].id, "IMPORTS", ex["file"], ex.get("l"), EXACT,
+                                   conditional=True, via="export")
+                    self._conditional(b, ex, "export")
+                elif ex["lib"] is not None:     # re-exported unconditionally (lib/x.dart: export 'src/x.dart'): built everywhere
+                    b.platform_imports.append({"plain": ex["lib"].file})
             for p in lib.parts:
                 b.add_edge(lib.id, f"module:{p}", "CONTAINS", lib.file, 1, EXACT, via="part")
         # ---- inheritance / dispatch

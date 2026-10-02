@@ -410,6 +410,20 @@ def setup_line(setup: dict) -> str:
             f" | config: {setup.get('config') or 'no .cg.yaml'}")
 
 
+def platform_lines(pc: dict | None) -> list[str]:
+    """Per-target coverage of platform-specific code (codegraph/platforms.py): files and symbols each target builds."""
+    if not pc or not pc.get("targets"):
+        return []
+    pt = pc.get("per_target") or {}
+    parts = [f"{p} {pt[p]['files']} files / {pt[p]['symbols']} symbols ({pt[p]['platform_specific_symbols']} specific)"
+             for p in pc["targets"] if p in pt]
+    out = [f"  platforms: {'; '.join(parts)}"]
+    if pc.get("unevaluated_conditions"):
+        out.append(f"    {pc['unevaluated_conditions']} of {pc.get('conditions', '?')} platform conditions could not be "
+                   f"evaluated and count for every target (e.g. {(pc.get('unevaluated_samples') or ['?'])[0]})")
+    return out
+
+
 def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
     """Multi-line report for one or more repos (name -> coverage)."""
     out = []
@@ -443,6 +457,7 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
                 if not _is_gap(e) and e.get("excluded"):
                     out.append(f"  {e['language']}: {e['excluded']} excluded")
                     out += _paths_lines(e, True)
+        out += platform_lines((cov or {}).get("platforms"))
         bs = blind_spots(cov)
         if bs:
             any_bs = True
