@@ -99,7 +99,9 @@ MCP: `channels(pattern?, source?)`.
 - Python: pytest and unittest. Test files follow pytest's rules: `test_*.py` / `*_test.py`, Django's `tests.py`,
   `conftest.py`, everything under `tests/` / `test/` and the configured `testpaths`, plus `pytest_plugins` modules.
   An application package named in `testpaths` (`testpaths = ["app"]`) contributes only the files pytest collects in
-  it (and its `conftest.py` / `tests/` directories), so its modules stay application code.
+  it (and its `conftest.py` / `tests/` directories), so its modules stay application code. A `tests.py` that
+  application code imports and that defines no test case (a plugin's `tests.py` helper module) is application code
+  too, so its calls count as callers; a Django app's `tests.py` with its `TestCase` classes stays test code.
   `python_files`, `python_classes`, `python_functions` and `testpaths` are read from `pytest.ini`, `pyproject.toml`
   (`[tool.pytest.ini_options]`), `tox.ini` or `setup.cfg` at the root or a nested project root. Test cases are pytest
   `test_*` functions and the methods of `Test*` classes (inherited ones too), and the `test*` methods of

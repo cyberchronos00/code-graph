@@ -4,7 +4,7 @@ Discovery (defaults follow pytest; a pytest config at the indexed root or a nest
   * test files: `python_files` (default `test_*.py`, `*_test.py`), Django / unittest `tests.py`, `conftest.py`,
     every file under a `tests/` or `test/` directory or a configured `testpaths` directory (an application package
     named in `testpaths` contributes only its matching files), and modules named in `pytest_plugins`. A module under `tests/` that application code imports (a library's own test utilities) stays
-    application code;
+    application code, and so does an imported `tests.py` that defines no test case;
   * every node the Python plugin declared in test code gets `attrs.test = True`, so `isolate_tests()`
     (codegraph/tests_index.py) turns its calls, references and collection calls into TEST_* edges.
 
@@ -129,9 +129,12 @@ class Discovery:
         return False
 
     def collects(self, rel: str) -> bool:
+        return self.matches_files(rel) or rel.rsplit("/", 1)[-1] in EXTRA_FILES
+
+    def matches_files(self, rel: str) -> bool:
+        """`python_files` match (not counting the Django / unittest `tests.py` name)."""
         base = rel.rsplit("/", 1)[-1]
-        return any(fnmatch.fnmatchcase(base, p) or ("/" in p and fnmatch.fnmatchcase(rel, p)) for p in self.files) \
-            or base in EXTRA_FILES
+        return any(fnmatch.fnmatchcase(base, p) or ("/" in p and fnmatch.fnmatchcase(rel, p)) for p in self.files)
 
     def is_test_function(self, name: str) -> bool:
         return self._name_match(name, self.functions)
@@ -293,6 +296,8 @@ class PyTests:
                 self.test_files[rel] = "conftest"
             elif d.collects(rel):
                 self.test_files[rel] = "pattern"
+                if not d.matches_files(rel) and not self.defines_tests(m, d):
+                    weak.add(rel)       # a module named tests.py without test cases (application code if imported)
             elif any(rel.startswith(t + "/") for t in tp_dirs):
                 self.test_files[rel] = "testpaths"
             elif any(p in TEST_DIRS and "/".join(parts[:i + 1]) in holding for i, p in enumerate(parts[:-1])):
@@ -306,8 +311,8 @@ class PyTests:
                     pm = prog.module(name)
                     if pm is not None and pm.file not in self.test_files:
                         self.test_files[pm.file] = "pytest_plugins"
-        # a library's own test utilities (django/test/, a package's testing helpers under test/) imported by application
-        # code stay application code
+        # a library's own test utilities (django/test/, a package's testing helpers under test/), and a `tests.py`
+        # module without test cases, imported by application code stay application code
         if weak:
             imps = defaultdict(set)
             for e in self.b.edges.values():
@@ -326,6 +331,12 @@ class PyTests:
                         del self.test_files[rel]
                         app.add(mid)
                         changed = True
+
+    def defines_tests(self, m, disc: Discovery) -> bool:
+        """The module holds a test case: a top-level test function, a `Test*` class or a TestCase subclass."""
+        if any(disc.is_test_function(n) for n in m.funcs):
+            return True
+        return any(disc.is_test_class(c.name) or self.is_unittest_class(c) for c in m.classes.values())
 
     # ------------------------------------------------------------------ marking
     def mark(self) -> int:

@@ -29,6 +29,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Python: a module named `tests.py` that application code imports and that defines no test case is application code,
+  so its calls count as callers in `impact` and its functions are no longer test code. A Django app's `tests.py` with
+  test cases stays test code ([#49](https://github.com/cyberchronos00/code-graph/issues/49)).
 - Python files that use Python 3.14's unparenthesized `except A, B:` are parsed on older interpreters too (re-parsed
   with the parentheses added) instead of counting as parse failures
   ([#16](https://github.com/cyberchronos00/code-graph/issues/16)).
