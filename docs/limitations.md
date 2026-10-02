@@ -175,7 +175,7 @@ Issues and pull requests that extend it are welcome.
   `node_modules`, build and VCS directories are skipped) and records each language's parser mode (`exact`,
   `heuristic`, `skipped`, `unsupported`) and its file completeness (discovered, indexed, parse failed, over the size
   limit, unmapped, excluded); `cg coverage` and the MCP `coverage` tool print it. Source types without a plugin (Go and
-  Java without a SCIP index, Kotlin, Swift, QML, shell scripts, …, also extensionless scripts by their `#!` line) are
+  Java without a SCIP index, Swift, QML, shell scripts, …, also extensionless scripts by their `#!` line) are
   listed with their file counts and are not in the graph. Per-file reports come from the Python, PHP, Dart, Rust and
   C/C++ plugins; TypeScript / JavaScript report file counts. Details: [completeness.md](completeness.md).
 - **A missing toolchain degrades, it does not fail the index.** Without `php` (or the PHP extractor's `composer
@@ -244,8 +244,8 @@ Issues and pull requests that extend it are welcome.
 - **Variant grouping** links platform files (`x.ios.ts` / `x.android.ts` / `x.ts`), conditional-import alternatives,
   Rust / C definitions repeated per `cfg` / `#if` branch and items of per-platform sibling modules. Variants behind a
   runtime factory or dependency injection are separate symbols.
-- **Not yet covered:** Swift (`#if os(iOS)`), Kotlin Multiplatform `expect` / `actual`, and Electron / Tauri
-  main ↔ renderer IPC, which follow the Swift and Kotlin plugins.
+- **Not yet covered:** Swift (`#if os(iOS)`) and Electron / Tauri main ↔ renderer IPC. Kotlin Multiplatform source
+  sets and `expect` / `actual` come from the Kotlin plugin ([kotlin.md](kotlin.md)).
 - **C heuristic mode:** a function after a region tree-sitter cannot parse (heavy macro use) can be missing from the
   graph, so its platform variant is missing too; exact mode with a compile database has every definition.
 

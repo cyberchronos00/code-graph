@@ -69,7 +69,7 @@ other tools; see [Prerequisites per language](#prerequisites-per-language).
 
 ```bash
 git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph
-python3 -m venv .venv && .venv/bin/pip install "mcp>=2.2" pyyaml pytest protobuf tree-sitter tree-sitter-rust tree-sitter-c tree-sitter-cpp
+python3 -m venv .venv && .venv/bin/pip install "mcp>=2.2" pyyaml pytest protobuf tree-sitter tree-sitter-rust tree-sitter-c tree-sitter-cpp tree-sitter-kotlin
 (cd codegraph/plugins/php/extractor && composer install)
 (cd codegraph/plugins/ts/extractor && npm ci)
 cg() { .venv/bin/python -m codegraph.cli "$@"; }    # shorthand used below
@@ -115,7 +115,7 @@ cg reaches kv_core::store::Store::get --db out/kv.db     # dyn/generic dispatch,
 cg downstream kv::main --db out/kv.db                     # env keys, unsafe, features and cfgs the binary touches
 ```
 
-`examples/bookstore-express` (Express), `examples/bookstore-flutter` (Flutter, links to the Django sample),
+`examples/bookstore-express` (Express), `examples/bookstore-flutter` (Flutter, links to the Django sample), `examples/bookstore-android` (Kotlin / Compose, links to the Django sample),
 `examples/c-ringbuf` (C) and `examples/cpp-eventbus` (C++) work the same way. Rust, C and C++ index in exact mode when
 rust-analyzer or scip-clang is installed, and in a labelled `heuristic` mode otherwise; C/C++ setup, including the
 compile database, is in [docs/native.md](docs/native.md#c-and-c).
@@ -350,6 +350,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Dart | resolved (package:analyzer parse, declared types) + heuristic fallback | libraries/parts, classes, methods, functions, calls with import resolution |
 | Flutter | resolved + heuristic fallback | widgets/State, bloc/cubit events → handlers → states → UI, Navigator/go_router/auto_route pages, HTTP calls (package:http, Dio, dart:io, Retrofit/Chopper), WebSockets, json_serializable/freezed and hand-written JSON keys |
 | Rust | **exact** with rust-analyzer (SCIP); **heuristic** without | crates, modules, `pub` API, traits → impls (dyn/generic dispatch), bins, tests, benches, examples, `build.rs`, FFI, `unsafe`, `#[cfg(feature)]` gates, env keys, `#[tokio::main]`, axum/actix routes ([docs/native.md](docs/native.md)) |
+| Kotlin | **heuristic** (tree-sitter-kotlin) | classes, objects, functions / extension functions, calls by name; Ktor and Spring routes with guards, Retrofit / Ktor client / OkHttp endpoints, Compose Navigation pages, AndroidManifest components and deep links, workers, KMP source sets and `expect` / `actual` ([docs/kotlin.md](docs/kotlin.md)) |
 | C | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | translation units, includes, `main` and test entry points, exported API, `#if` gates, `getenv` keys, macros ([docs/native.md](docs/native.md#c-and-c)) |
 | C++ | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | the C facts plus namespaces, classes, overloads, virtual dispatch (overrides and implementations) ([docs/native.md](docs/native.md#c-and-c)) |
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
@@ -370,6 +371,7 @@ Python 3.11+ (tested with 3.13) runs the indexer, CLI and MCP server for every s
 | Dart / Flutter | Dart SDK 3.x (tested 3.13); the target project needs no `pub get` | `dart` on PATH or `$DART`; the extractor's packages are fetched on first use |
 | Rust | tree-sitter packages; rust-analyzer for exact mode (any 2024+ release) | `.venv/bin/pip install tree-sitter tree-sitter-rust`, `rustup component add rust-analyzer` |
 | C / C++ | tree-sitter packages; scip-clang 0.4+ and a `compile_commands.json` for exact mode | `.venv/bin/pip install tree-sitter tree-sitter-c tree-sitter-cpp`; scip-clang and compile database: [docs/native.md](docs/native.md#c-and-c) |
+| Kotlin | tree-sitter packages | `.venv/bin/pip install tree-sitter tree-sitter-kotlin` |
 | Go, Java | an existing SCIP index | `cg index <root> --scip index.scip` |
 
 ## How it works

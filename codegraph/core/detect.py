@@ -16,6 +16,7 @@ MARKERS = {
     "python": ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "manage.py", "Pipfile"],
     "dart": ["pubspec.yaml"],
     "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
+    "kotlin": ["settings.gradle.kts", "build.gradle.kts"],
 }
 
 

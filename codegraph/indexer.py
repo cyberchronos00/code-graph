@@ -24,8 +24,10 @@ from .plugins.flutter.plugin import FlutterPlugin
 from .plugins.nest.plugin import NestPlugin
 from .plugins.nextjs.plugin import NextPlugin
 from .plugins.express.plugin import ExpressPlugin
+from .plugins.kotlin.plugin import KotlinPlugin
 
-LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), *SCIP_PLUGINS]
+LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), KotlinPlugin(),
+                    *SCIP_PLUGINS]
 FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin()]
 
 

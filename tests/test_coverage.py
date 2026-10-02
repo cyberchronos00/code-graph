@@ -66,8 +66,9 @@ def test_unsupported_languages_are_counted(tmp_path):
     cov = json.loads(r.stdout)["coverage"]
     assert lang(cov, "php")["status"] == "exact"
     got = {e["language"]: (e["status"], e["files"]) for e in cov["languages"] if e["status"] == "unsupported"}
-    assert got == {"go": ("unsupported", 2), "kotlin": ("unsupported", 1), "swift": ("unsupported", 1),
+    assert got == {"go": ("unsupported", 2), "swift": ("unsupported", 1),
                    "ruby": ("unsupported", 1), "csharp": ("unsupported", 1), "java": ("unsupported", 1)}
+    assert (lang(cov, "kotlin")["status"], lang(cov, "kotlin")["files"]) == ("heuristic", 1)   # Kotlin plugin (#9)
     assert "scip-go" in lang(cov, "go")["hint"]
     from codegraph import mcp_server as M
     old = dict(M.STATE)
@@ -78,7 +79,7 @@ def test_unsupported_languages_are_counted(tmp_path):
         assert "not proof of absence" in txt
         assert "in the graph" in M.coverage("app/Services/StockService.php")
         miss = M.impact("PaymentGateway::charge")
-        assert miss.startswith("no method matches") and "not fully covered here: go (2 files, unsupported)" in miss
+        assert miss.startswith("no method matches") and "not fully covered here: " in miss and "go (2 files, unsupported)" in miss
         assert "normal search and file reading" in miss
         assert "not fully covered" in M.stats()
     finally:

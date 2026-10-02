@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Kotlin support (heuristic tree-sitter layer, `pip install tree-sitter-kotlin`): classes, objects, interfaces,
+  top-level / extension functions and methods with name-based call resolution; Ktor (`routing` / `route` /
+  `authenticate`) and Spring (`@RestController`, `@GetMapping` ..., `@PreAuthorize` / `@Secured`) routes and guards,
+  `@Scheduled` and message listeners; Retrofit, Ktor client and OkHttp endpoints for `cg link`; Compose Navigation
+  pages and `navigate(...)`; AndroidManifest components and deep links, WorkManager workers; KMP source sets as platform
+  conditions and `expect` → `actual`. `cg coverage` reports Kotlin as heuristic. New sample `examples/bookstore-android`
+  links to the Django sample.
 - Framework presets and a fuller project config: each detected language and framework applies a curated preset
   (auth and secret guards for Laravel, Django, DRF, django-ninja, NestJS, Next.js, Express-style servers and Nuxt;
   shared skip lists used by every plugin and the coverage scan), recorded in the index stats; `.cg.yaml` adds

@@ -1,0 +1,11 @@
+name: kotlin
+kind: language
+docs: docs/kotlin.md
+# Gradle build output (KSP / kapt sources under build/generated), Gradle and IDE state, Kotlin/Native and JS caches
+skip_dirs: [build, .gradle, .idea, .kotlin, .cxx, .externalNativeBuild, node_modules]
+auth:
+  guards:
+    - {name: authenticate, source: "Ktor authenticate(\"name\") { } blocks, https://ktor.io/docs/server-auth.html"}
+    - {name: PreAuthorize, source: "Spring Security method security, https://docs.spring.io/spring-security/reference/servlet/authorization/method-security.html"}
+    - {name: Secured, source: "Spring Security @Secured"}
+    - {name: RolesAllowed, source: "Jakarta @RolesAllowed (Spring Security jsr250)"}

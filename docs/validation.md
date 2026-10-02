@@ -218,3 +218,17 @@ What the findings are, from spot checks:
 
 Index time on netbox (no platform-specific code), best of three alternating runs on a shared box: 43.2 s before and
 42.7 s after (spread 42.7–45.4 s); nodes and edges are identical (38028 / 140181).
+
+## Kotlin
+
+Heuristic mode (tree-sitter-kotlin 1.1.0), shallow clones, `cg index` on the default branch:
+
+| Repository | Kotlin files | Declarations | Calls resolved / unresolved | Framework facts | Index time |
+|---|---|---|---|---|---|
+| android/nowinandroid | 350 | 1,219 | 1,608 / 5,696 | 4 Retrofit endpoints, 3 activities, 1 service, 2 workers, 2 deep links | 0.8 s |
+| ktorio/ktor-samples | 204 | 570 | 652 / 5,635 | 77 Ktor routes, 115 Ktor client endpoints, 10 KMP source-set files | 0.4 s |
+| spring-petclinic/spring-petclinic-kotlin | 40 | 139 | 112 / 548 | 19 Spring routes | 0.1 s |
+| touchlab/KaMPKit | 38 | 114 | 167 / 562 | 2 `expect` → `actual` links, 5 KMP source-set files, 1 activity | 0.1 s |
+
+Unresolved calls are mostly library and standard-library calls (Compose, coroutines, collections), which have no
+node in the graph. An exact-mode comparison (scip-java) is on the roadmap in [kotlin.md](kotlin.md).
