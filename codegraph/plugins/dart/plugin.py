@@ -192,7 +192,8 @@ class DartPlugin(LanguagePlugin):
             return {"status": "skipped", "reason": str(ex)[:300]}
         t_ext = time.time() - t0
         if rules.exclude:     # .cg.yaml exclude globs: dropped from the extractor's output before the graph is built
-            facts = dict(facts, files=[f for f in facts.get("files") or [] if not rules.excluded(f.get("file") or "")])
+            # (generated files stay: *.g.dart holds the exact JSON keys; their nodes leave the graph in the final pass)
+            facts = dict(facts, files=[f for f in facts.get("files") or [] if not rules.excluded(f.get("file") or "", generated=False)])
         prog = DartProgram(project.root, facts)
         prog.load()
         failed = [x.get("file") if isinstance(x, dict) else str(x) for x in facts.get("failures") or []]

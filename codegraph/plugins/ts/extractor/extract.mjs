@@ -25,7 +25,9 @@ const SKIP_FILE = /(\.test|\.spec)\.(ts|js|mts)$|\/node_modules\/|\/\.nuxt\//
 const SKIP_REL = cfg.skip_re ? new RegExp(cfg.skip_re) : null
 // the project's .cg.yaml exclude globs and skip_dirs.add names: never indexed, test code included
 const EXCLUDE_REL = cfg.exclude_re ? new RegExp(cfg.exclude_re) : null
-const excludedRel = r => !!(EXCLUDE_REL && EXCLUDE_REL.test(r))
+// generated / copied / vendored files the Python-side scan classified (codegraph/core/generated.py)
+const EXCLUDE_FILES = new Set(cfg.exclude_files || [])
+const excludedRel = r => !!(EXCLUDE_REL && EXCLUDE_REL.test(r)) || EXCLUDE_FILES.has(r)
 const SRC_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/
 // test code (Vitest / Jest / Playwright / Cypress): indexed as test nodes unless cfg.index_tests === false; kept out of
 // the application graph by the indexer (TEST_* edges)

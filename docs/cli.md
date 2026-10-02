@@ -4,12 +4,14 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 
 ## Commands at a glance
 
-- `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE] [--python-root DIR]...`: detect languages/frameworks and
+- `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE] [--python-root DIR]... [--include-generated]`: detect languages/frameworks and
   build the graph. Prints the stats JSON on stdout (including the detected frameworks and applied presets in
   `presets`, and the starter queries in `starters`) and a per-language coverage summary on stderr; a missing toolchain
   skips that language with a note instead of failing the index. Reads `.cg.yaml` at ROOT when present
   ([configuration.md](configuration.md#project-config-file-cgyaml)); `--python-root` sets the Python source roots for
-  this run ([python.md](python.md)). An invalid `.cg.yaml` exits with status 2 and a message naming the key.
+  this run ([python.md](python.md)). Generated, copied and vendored files (build output, generated clients, Capacitor /
+  Cordova web copies) stay out of the graph and are listed by `coverage`; `--include-generated` indexes them, labelled
+  `attrs.generated` ([generated.md](generated.md)). An invalid `.cg.yaml` exits with status 2 and a message naming the key.
 - `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,
   `heuristic` when the exact-mode indexer is missing, `skipped` when the toolchain is missing, with the install hint),
   file completeness (discovered / indexed / parse failed / over size limit / unmapped / excluded, the first 5 paths
@@ -160,19 +162,24 @@ Generated from `--help`.
 ```
 usage: python -m codegraph.cli index [-h] --db DB [--name NAME] [--scip SCIP]
                        [--gates GATES] [--python-root DIR]
+                       [--include-generated]
                        root
 
 positional arguments:
   root
 
 options:
-  -h, --help         show this help message and exit
+  -h, --help           show this help message and exit
   --db DB
   --name NAME
   --scip SCIP
-  --gates GATES      gate scenarios JSON (e.g. examples/bookstore.gates.json)
-  --python-root DIR  Python source root, relative to ROOT (repeatable);
-                     replaces detection and python.source_roots in .cg.yaml
+  --gates GATES        gate scenarios JSON (e.g.
+                       examples/bookstore.gates.json)
+  --python-root DIR    Python source root, relative to ROOT (repeatable);
+                       replaces detection and python.source_roots in .cg.yaml
+  --include-generated  also index generated, copied and vendored files
+                       (labelled attrs.generated); default: excluded and
+                       listed by `cg coverage`
 ```
 
 ### `config`
@@ -180,7 +187,7 @@ options:
 ```
 usage: python -m codegraph.cli config [-h] [--python-root DIR] [--gates GATES]
                         [--auth-pattern AUTH_PATTERN] [--plans-dir PLANS_DIR]
-                        [--presets PRESETS] [--json]
+                        [--presets PRESETS] [--include-generated] [--json]
                         {show,validate} [root]
 
 positional arguments:
@@ -196,6 +203,7 @@ options:
   --plans-dir PLANS_DIR
                         as for plan / serve
   --presets PRESETS     as for serve
+  --include-generated   as for index
   --json                the effective configuration as JSON
 ```
 

@@ -16,6 +16,11 @@ exclude: ["legacy/**", "*.generated.ts"]  # paths no plugin indexes and the cove
 skip_dirs:
   add: [fixtures_big]                  # more directory names to skip everywhere
   keep: [static]                       # directory names skipped by default that hold project code here
+generated:
+  paths: ["src/api/generated/**"]      # generated files detection misses (kept out of the graph, listed by coverage)
+  vendored: ["third_party/**"]         # vendored copies of other projects
+  keep: ["src/schema.gen.ts"]          # hand-maintained files a detection rule would classify
+  include: false                       # true: index them, labelled attrs.generated
 frameworks:
   add: [nest]                          # turn on a framework layer or preset detection did not pick
   remove: [flutter]                    # turn off one that was detected
@@ -38,6 +43,8 @@ viz:
 | `python.source_roots` | Python source roots, relative to the indexed root ([python.md](python.md)) | `cg index --python-root DIR` (repeatable) |
 | `exclude` | gitignore-style globs (`legacy/**`, `*.generated.ts`, `/tools`), applied by every language plugin and by the coverage scan | |
 | `skip_dirs.add` / `skip_dirs.keep` | directory names to add to, or take out of, the shared skip lists | |
+| `generated.paths` / `generated.vendored` / `generated.keep` | globs of generated / vendored files detection misses, and of hand-maintained files it should leave alone ([generated.md](generated.md)) | |
+| `generated.include` | index generated, copied and vendored files, labelled `attrs.generated` (default: kept out of the graph and listed by `cg coverage`) | `cg index --include-generated` |
 | `frameworks.add` / `frameworks.remove` | framework layers and presets to turn on or off (`laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `express`; aliases such as `nestjs`, `next`, `fastify`, `drf` work too) | |
 | `auth.extra_patterns` | regexes on guard names that count as auth in `routes` | `--auth-pattern` |
 | `secret.extra_patterns` | regexes on guard names that count as a secret or signature check | |

@@ -291,8 +291,8 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         q = ",".join("?" * len(chunk))
-        for r in st.q(f"SELECT id,kind,name,fqn,file,line,module,entry_kind FROM nodes WHERE id IN ({q})", chunk):
-            nodes[r["id"]] = dict(r)
+        for r in st.q(f"SELECT id,kind,name,fqn,file,line,module,entry_kind,attrs FROM nodes WHERE id IN ({q})", chunk):
+            nodes[r["id"]] = with_generated(dict(r))
     items = []
     for nid, d in depth.items():
         n = nodes.get(nid, {"id": nid, "kind": nid.split(":")[0]})
@@ -366,7 +366,8 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
                 ek = ", ".join(f"{k}({v})" for k, v in sorted(i["entry_kinds"].items()))
                 out.append(f"    {i.get('fqn') or i['id']}  depth={i['depth']} conf={i['path_confidence']}  {ek}"
                            + (f"  [{i['kind']} @ {i.get('file')}]" if i['kind'] in TS_CODE_KINDS or (i.get('file') or '').endswith(('.ts', '.vue')) else "")
-                           + (f"  @ {i.get('file')}:{i.get('line')}" if NATIVE_FILE_RE.search(i.get('file') or '') else ""))
+                           + (f"  @ {i.get('file')}:{i.get('line')}" if NATIVE_FILE_RE.search(i.get('file') or '') else "")
+                           + generated_label(i))
                 if show_paths:
                     out.append(f"        path: {fmt_path(i['path'])}")
     if gated:
@@ -394,7 +395,7 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
             for i in sorted(byk[k], key=lambda x: x["id"]):
                 g = "" if i.get("gate_status", "live") == "live" else f"  [{i['gate_status']}]"
                 nm = (i.get("fqn") or i["name"]) if NATIVE_FILE_RE.search(i.get("file") or "") else i["name"]
-                out.append(f"    {nm}  ({i.get('file')}:{i.get('line')})  depth={i['depth']} conf={i['path_confidence']}{g}")
+                out.append(f"    {nm}  ({i.get('file')}:{i.get('line')})  depth={i['depth']} conf={i['path_confidence']}{g}{generated_label(i)}")
     return "\n".join(out)
 
 
@@ -410,13 +411,40 @@ def _first_hop(path: list[dict] | None) -> dict:
     return {"edge": h["kind"], **({"how": h["how"]} if h.get("how") else {}), **({"via": h["via"]} if h.get("via") else {})}
 
 
+def with_generated(row: dict) -> dict:
+    """A node row without its raw attrs, plus `generated` (the reason) for a node from a generated / copied / vendored
+    file (indexed with --include-generated)."""
+    raw = row.pop("attrs", None)
+    if raw and '"generated"' in raw:
+        try:
+            g = (json.loads(raw) or {}).get("generated")
+        except ValueError:
+            g = None
+        if g:
+            row["generated"] = g.get("reason") or g.get("kind") or "generated"
+            if g.get("copy_of"):
+                row["copy_of"] = g["copy_of"]
+    return row
+
+
+def generated_label(n: dict) -> str:
+    """'  [generated: protoc output (Python)]' / '  [copied: copy of dist/ ..., source dist/app.js]' or ''."""
+    g = n.get("generated")
+    if not g:
+        return ""
+    return f"  [generated: {g}" + (f", source {n['copy_of']}" if n.get("copy_of") else "") + "]"
+
+
 def caller_label(c: dict) -> str:
-    """'' for a call; '  (ref: collection)' when the caller holds a reference to the function instead of calling it."""
+    """'' for a call; '  (ref: collection)' when the caller holds a reference to the function instead of calling it;
+    plus the generated-file label of a caller in a generated file."""
     if c.get("edge") == "REFERENCES_FN":
-        return f"  (ref: {c['how']})" if c.get("how") else "  (ref)"
-    if c.get("via") == "collection":
-        return "  (call through a collection)"
-    return ""
+        lab = f"  (ref: {c['how']})" if c.get("how") else "  (ref)"
+    elif c.get("via") == "collection":
+        lab = "  (call through a collection)"
+    else:
+        lab = ""
+    return lab + generated_label(c)
 
 
 def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
@@ -429,8 +457,8 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         q = ",".join("?" * len(chunk))
-        for r in st.q(f"SELECT id,kind,name,fqn,file,line,module,entry_kind FROM nodes WHERE id IN ({q})", chunk):
-            rows[r["id"]] = dict(r)
+        for r in st.q(f"SELECT id,kind,name,fqn,file,line,module,entry_kind,attrs FROM nodes WHERE id IN ({q})", chunk):
+            rows[r["id"]] = with_generated(dict(r))
     entries = [dict(rows[n], depth=d, path=paths[n], path_confidence=path_confidence(paths[n])) for n, d in depth.items()
                if n in rows and rows[n]["entry_kind"]]
     callers = [dict(rows[n], depth=d, **_first_hop(paths.get(n))) for n, d in depth.items()

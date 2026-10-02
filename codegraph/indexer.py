@@ -98,9 +98,11 @@ def setup(project: Project) -> dict:
 
 
 def index_project(root: str | Path, db_path: str | Path, name: str | None = None, scip: list[str] | None = None,
-                  gates: str | None = None, python_roots: list[str] | None = None) -> dict:
+                  gates: str | None = None, python_roots: list[str] | None = None, include_generated: bool = False) -> dict:
     """Index `root` into a new graph DB. The project config file (.cg.yaml at the root) is read automatically;
-    python_roots (`cg index --python-root`) overrides its python.source_roots and `gates` its gates. Raises
+    python_roots (`cg index --python-root`) overrides its python.source_roots and `gates` its gates. Generated, copied
+    and vendored files (codegraph/core/generated.py) stay out of the graph unless include_generated
+    (`--include-generated`, .cg.yaml generated.include) indexes them with attrs.generated. Raises
     config.ConfigError for an invalid config file or root."""
     from .config import ConfigError, load as load_config, norm_root, resolve_path
     t0 = time.time()
@@ -116,12 +118,25 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if gates:
         project.options["gates"] = json.loads(Path(gates).read_text())["scenarios"]
     project.detected = detect(project.root)
+    # one file scan up front: coverage counts + the generated / copied / vendored classification every walk consults
+    from .core.generated import Classifier, apply as apply_generated
+    from .core.paths import rules as path_rules
+    from .coverage import scan_tree
+    t_scan = time.time()
+    clf = Classifier(project.root, cfg, include=include_generated)
+    scanned = scan_tree(project.root, path_rules(project, "common", "scan_skip_dirs", generated=False), classifier=clf)
+    project.options["generated"] = clf
+    if clf.include:
+        project.options["dart_keep_generated"] = True
+    scan_seconds = round(time.time() - t_scan, 2)
     builder = GraphBuilder()
     stats = {"detected": project.detected, "plugins": {}}
     if cfg:
         stats["config"] = {k: v for k, v in cfg.items()}
     if python_roots:
         stats["python_roots_flag"] = project.options["python_roots"]
+    if include_generated:
+        stats["include_generated_flag"] = True
     if gates_from:
         stats["gates_from"] = gates_from
     plan = setup(project)
@@ -170,6 +185,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
         from .plugins.scip.importer import import_scip
         for s in scip:
             stats["plugins"][f"scip:{s}"] = import_scip(s, builder)
+    # generated / copied / vendored files: out of the graph (default) or labelled (attrs.generated)
+    stats["generated"] = apply_generated(builder, clf)
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)
@@ -183,11 +200,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
                 kind, key = nid.split(":", 1)
                 builder.add_node(kind, key, attrs={"placeholder": True})
     # completeness: one file scan for coverage + the blind-spot detectors (patterns no plugin models)
-    from .coverage import compute, scan_tree
+    from .coverage import compute
     from .blindspots import detect as detect_blind_spots
     t_cov = time.time()
-    from .core.paths import rules as path_rules
-    scanned = scan_tree(project.root, path_rules(project, "common", "scan_skip_dirs"))
     progs = {lp.name: lp.program for lp in LANGUAGE_PLUGINS if getattr(lp, "program", None) is not None
              and lp.name in stats["plugins"] and "status" not in (stats["plugins"][lp.name] or {})}
     bspots = detect_blind_spots(project.root, scanned.paths, builder, progs)
@@ -208,6 +223,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     store.db.commit()
     stats["coverage"] = compute(project.root, {k: v for k, v in stats["plugins"].items() if "/" not in k and not k.startswith("scip:")},
                                 scip_imported=bool(scip), reports=file_reports, scanned=scanned, blind_spots=bspots)
+    gsum = clf.summary()
+    if gsum["files"] or gsum.get("build_dirs"):
+        stats["coverage"]["generated"] = gsum
     # starter queries for the visual view / MCP, derived from this graph (each resolves to existing nodes)
     from .starters import generate as gen_starters
     t_st = time.time()
@@ -223,6 +241,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     stats["coverage"]["setup"] = {"frameworks": sorted(plan["frameworks"]), "presets": plan["presets"],
                                   "config": cfg.get("file")}
     stats["completeness_seconds"] = round(t_tag - t_cov, 2)
+    stats["scan_seconds"] = scan_seconds
     stats["nodes"] = len(builder.nodes)
     stats["edges"] = len(builder.edges)
     stats["index_seconds"] = round(time.time() - t0, 2)

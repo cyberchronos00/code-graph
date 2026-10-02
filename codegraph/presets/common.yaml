@@ -19,3 +19,47 @@ skip_dirs: [.git, node_modules, __pycache__]
 # the coverage scan (`cg coverage`: which source files exist) also skips these dependency / build / IDE directories
 scan_skip_dirs: [vendor, target, build, dist, .dart_tool, .venv, venv, .tox, .mypy_cache, .pytest_cache, .next, .output,
                  out, .gradle, .idea, Pods]
+# generated files (codegraph/core/generated.py): kept out of the graph by default and listed by `cg coverage`
+generated:
+  # framework build output directories (names at any depth) -> reason
+  build_dirs:
+    .nuxt: Nuxt build output (.nuxt/)
+    .output: Nitro / Nuxt build output (.output/)
+    .next: Next.js build output (.next/)
+    .svelte-kit: SvelteKit build output (.svelte-kit/)
+    .docusaurus: Docusaurus build output (.docusaurus/)
+    dist: build output (dist/)
+    build: build output (build/)
+  # paths written by tools (gitignore-style globs) -> reason
+  paths:
+    "**/Flutter/ephemeral/**": Flutter tool output (ephemeral/)
+    "**/flutter/ephemeral/**": Flutter tool output (ephemeral/)
+  # file names written by code generators (globs on the file name) -> generator
+  files:
+    "*.g.dart": build_runner output (*.g.dart)
+    "*.freezed.dart": freezed output (*.freezed.dart)
+    "*.gr.dart": auto_route output (*.gr.dart)
+    "*.mocks.dart": mockito output (*.mocks.dart)
+    "*.config.dart": injectable output (*.config.dart)
+    "generated_plugin_registrant.*": Flutter plugin registrant
+    "GeneratedPluginRegistrant.*": Flutter plugin registrant
+    "*.pb.dart": protoc output (Dart)
+    "*.pbenum.dart": protoc output (Dart)
+    "*.pbjson.dart": protoc output (Dart)
+    "*.pbgrpc.dart": protoc output (Dart)
+    "*.pbserver.dart": protoc output (Dart)
+    "*_pb2.py": protoc output (Python)
+    "*_pb2_grpc.py": protoc output (Python)
+    "*.pb.go": protoc output (Go)
+    "*_grpc.pb.go": protoc output (Go)
+    "*_pb.ts": protoc output (TypeScript)
+    "*_pb.js": protoc output (JavaScript)
+    "*_grpc_pb.ts": protoc output (TypeScript)
+    "*_grpc_pb.js": protoc output (JavaScript)
+    "*.pb.swift": protoc output (Swift)
+    "*.grpc.swift": protoc output (Swift)
+    "*.pb.cc": protoc output (C++)
+    "*.pb.h": protoc output (C++)
+    "*.grpc.pb.cc": protoc output (C++)
+    "*.grpc.pb.h": protoc output (C++)
+    "*.pb.rs": protoc output (Rust)

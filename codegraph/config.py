@@ -9,6 +9,11 @@ Records project-specific knowledge once, for the CLI, the MCP server and the vis
     skip_dirs:
       add: [fixtures_big]                    # more directory names to skip everywhere
       keep: [static]                         # directory names skipped by default that hold project code here
+    generated:
+      paths: ["src/api/generated/**"]        # generated files detection misses (kept out of the graph, listed by coverage)
+      vendored: ["third_party/**"]           # vendored copies of other projects
+      keep: ["src/schema.gen.ts"]            # hand-maintained files detection would classify
+      include: false                         # true: index them, labelled attrs.generated (cg index --include-generated)
     frameworks:
       add: [nest]                            # force a framework detection missed (plugin or preset name)
       remove: [flutter]                      # drop one that was detected
@@ -37,7 +42,7 @@ CONFIG_NAMES = (".cg.yaml", ".cg.yml")
 SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None: a scalar or list value)
     "version": None, "python": {"source_roots"}, "exclude": None, "skip_dirs": {"add", "keep"},
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
-    "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"},
+    "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
 }
 KNOWN_KEYS = set(SCHEMA)
 PYTHON_KEYS = SCHEMA["python"]
@@ -180,6 +185,20 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
                 if bad:
                     raise ConfigError(f"{fname}: skip_dirs.{k}: {bad[0]!r} is not a directory name (use exclude for paths and globs)")
                 out["skip_dirs"][k] = names
+    gen = _section(data, "generated", fname)
+    if gen is not None:
+        out["generated"] = {}
+        for k in ("paths", "vendored", "keep"):
+            if gen.get(k) is not None:
+                globs = _strings(gen[k], f"{fname}: generated.{k}")
+                for i, g in enumerate(globs):
+                    if ".." in PurePosixPath(g.strip("/")).parts:
+                        raise ConfigError(f"{fname}: generated.{k}[{i}]: {g!r} must stay inside the indexed root (no '..')")
+                out["generated"][k] = globs
+        if gen.get("include") is not None:
+            if not isinstance(gen["include"], bool):
+                raise ConfigError(f"{fname}: generated.include: expected true or false, got {gen['include']!r}")
+            out["generated"]["include"] = gen["include"]
     fw = _section(data, "frameworks", fname)
     if fw is not None:
         out["frameworks"] = {}
@@ -274,7 +293,8 @@ def configured_plans_dir(st) -> Path | None:
 
 # ------------------------------------------------------------------------------------------- cg config show
 def effective(root: str | Path, python_roots: list[str] | None = None, gates: str | None = None,
-              auth_pattern: str | None = None, plans_dir: str | None = None, presets_file: str | None = None) -> dict:
+              auth_pattern: str | None = None, plans_dir: str | None = None, presets_file: str | None = None,
+              include_generated: bool = False) -> dict:
     """Effective configuration of `root` without indexing it: every value with its source (`detected`, `built-in`,
     `preset <name>`, the config file name, `flag --x`). Raises ConfigError for an invalid config file."""
     from . import presets as PR
@@ -317,6 +337,18 @@ def effective(root: str | Path, python_roots: list[str] | None = None, gates: st
         row("skip_dirs", sd["add"], f"{fname} skip_dirs.add")
     if sd.get("keep"):
         row("skip_dirs kept", sd["keep"], f"{fname} skip_dirs.keep")
+    gc = cfg.get("generated") or {}
+    row("generated (build dirs)", sorted(PR.values("common", "generated", "build_dirs", default={}) or {}), "preset common")
+    row("generated (file names)", sorted(PR.values("common", "generated", "files", default={}) or {}), "preset common")
+    row("generated (detected)", ".gitattributes linguist-generated / linguist-vendored, generator header banners, "
+        "Capacitor / Cordova copy targets, .openapi-generator/FILES", "built-in")
+    for k in ("paths", "vendored", "keep"):
+        if gc.get(k):
+            row(f"generated.{k}", gc[k], f"{fname} generated.{k}")
+    if include_generated:
+        row("generated.include", True, "flag --include-generated")
+    else:
+        row("generated.include", bool(gc.get("include")), f"{fname} generated.include" if "include" in gc else "built-in (excluded, listed by cg coverage)")
     row("auth.token_pattern", PR.values("common", "auth", "token_pattern"), "preset common")
     for section in ("auth", "secret"):
         for key in ("guards", "not_auth") if section == "auth" else ("guards",):

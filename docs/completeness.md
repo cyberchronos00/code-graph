@@ -25,7 +25,9 @@ For each language the plugin reports what happened to every source file it disco
 | `unmapped` | parsed, but not placed in the module table: a Python file whose path is not an importable name (`my-scripts/`) or that lies outside the configured source roots ([python.md](python.md)), a `pkg.py` next to a `pkg/` package, a `.rs` file outside every crate's module tree |
 | `excluded` | deliberately left out by the plugin's skip list (Python migrations, PHP `storage/` and `bootstrap/cache/`, generated Dart, directories a plugin does not walk) |
 
-`excluded` files are a choice, so they never make an answer partial; the other three buckets do. The parser mode stays
+`excluded` files are a choice, so they never make an answer partial; the other three buckets do. Generated, copied and
+vendored files are not `discovered` at all: they are listed on their own (`generated: N files excluded`, grouped by
+reason), see [generated.md](generated.md). The parser mode stays
 what it was (`exact`, `resolved`, `heuristic`, `scip`, `skipped`), so a language can be `exact` and still incomplete:
 
 ```console

@@ -35,6 +35,7 @@ from typing import Any
 from ... import presets
 from ...core.model import CONFIDENCE_RANK
 from ...core.paths import names_regex, rules as path_rules
+from ...coverage import SUPPORTED
 from ...core import fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
@@ -134,6 +135,9 @@ class TypeScriptPlugin(LanguagePlugin):
         ex = [x for x in (rules.exclude_regex(), names_regex(added)) if x]
         if ex:
             ctx.extractor_cfg["exclude_re"] = "|".join(f"(?:{x})" for x in ex)
+        gen_files = rules.excluded_files(SUPPORTED["typescript"])   # generated / copied / vendored files the scan found
+        if gen_files:
+            ctx.extractor_cfg["exclude_files"] = gen_files
         self.program = ctx
         t0 = time.time()
         cache_file, cache_status = None, "disabled"

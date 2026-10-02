@@ -269,8 +269,8 @@ def _ekind(e: dict) -> str:
 def _ename(e: dict) -> str:
     """Entry display name: native code entries (main, exported fns, tests) use the qualified name + file:line."""
     if e["kind"] in Q.CODE_KINDS and Q.NATIVE_FILE_RE.search(e.get("file") or ""):
-        return f"{short(e.get('fqn') or e['id'])} @{at((e.get('file') or '?') + ':' + str(e.get('line')))}"
-    return e["name"]
+        return f"{short(e.get('fqn') or e['id'])} @{at((e.get('file') or '?') + ':' + str(e.get('line')))}" + Q.generated_label(e)
+    return e["name"] + Q.generated_label(e)
 
 
 @tool
@@ -378,6 +378,10 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60) 
     for c in r["callers"]:
         mods[c.get("module") or "?"] += 1
     out.append("\ncallers by module: " + ", ".join(f"{m}×{c}" for m, c in sorted(mods.items(), key=lambda x: -x[1])))
+    gen = [c for c in r["callers"] if c.get("generated")]
+    if gen:    # indexed with --include-generated: callers in files a generator writes
+        out.append(f"in generated / copied files ({len(gen)}): " + ", ".join(f"{short(c['id'])} [{c['generated']}]" for c in gen[:8])
+                   + (f" …+{len(gen) - 8}" if len(gen) > 8 else ""))
     refs = [c for c in r["callers"] if c.get("edge") == "REFERENCES_FN"]
     if refs:   # code that holds the function as a value (dispatch table, callback, decorator) rather than calling it
         out.append(f"by reference ({len(refs)}): " + ", ".join(f"{short(c['id'])} ({c.get('how') or 'ref'})" for c in refs[:12])
@@ -637,8 +641,21 @@ def coverage(path: str | None = None, all_files: bool = False, json_output: bool
             for e in (c or {}).get("languages", []):
                 if e["language"] == lang:
                     status = e["status"]
+        gen = None
+        for c in covs.values():
+            g = (c or {}).get("generated") or {}
+            for reason, ps in (g.get("paths") or {}).items():
+                if p in ps or any(x.startswith(p.rstrip("/") + "/") for x in ps):
+                    gen = gen or reason
+            for cp in g.get("copies") or []:
+                if p == cp["target"] or p.startswith(cp["target"] + "/"):
+                    gen = gen or (f"copy of {cp['source']}/" if cp.get("source") else "copied web assets")
         if hit:
-            out.append(f"{path}: in the graph ({hit[0]['file']})" + (f"; {lang} {status}" if lang and status else ""))
+            out.append(f"{path}: in the graph ({hit[0]['file']})" + (f"; {lang} {status}" if lang and status else "")
+                       + (f"; generated ({gen}), labelled attrs.generated" if gen else ""))
+        elif gen:
+            out.append(f"{path}: NOT in the graph: generated / copied file ({gen}), kept out of the graph by default; "
+                       f"edit its source instead, or re-index with `cg index --include-generated` to see it.")
         else:
             why = (f"{lang} files are {status.replace('_', ' ')} in this index" if lang and status else
                    f"{lang} is not supported by cg" if lang else "no node of this graph comes from that path")
@@ -901,6 +918,14 @@ def _flag_roots(db: str) -> list[str] | None:
         return None
 
 
+def _flag_generated(db: str) -> bool:
+    """`cg index --include-generated` recorded in a graph DB, so a re-index keeps it."""
+    try:
+        return bool((GraphStore(db).meta().get("stats") or {}).get("include_generated_flag"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _index(root: str | None = None, gates: str | None = None, repo: str | None = None) -> str:
     """Implementation of index(); see its docstring."""
     from .indexer import index_project
@@ -920,7 +945,8 @@ def _index(root: str | None = None, gates: str | None = None, repo: str | None =
                     tmp = src_db + ".tmp"
                     tmps.append(tmp)
                     g = gates or (STATE["gates"] if r == meta["repos"][0] else None)
-                    st = index_project(r_root, tmp, r, gates=g, python_roots=_flag_roots(src_db))
+                    st = index_project(r_root, tmp, r, gates=g, python_roots=_flag_roots(src_db),
+                                       include_generated=_flag_generated(src_db))
                     if not st.get("nodes"):
                         return (f"index refused: re-indexing {r} from {_display(r_root)} produced 0 nodes; "
                                 f"the graph is unchanged (is that the right directory?)")
@@ -943,7 +969,8 @@ def _index(root: str | None = None, gates: str | None = None, repo: str | None =
         tmp = STATE["db"] + ".tmp"
         same_root = meta.get("root") and Path(meta["root"]).resolve() == Path(root).resolve()
         flag_roots = (meta.get("stats") or {}).get("python_roots_flag") if same_root else None
-        st = index_project(root, tmp, Path(root).name, gates=gates, python_roots=flag_roots)
+        flag_gen = bool((meta.get("stats") or {}).get("include_generated_flag")) if same_root else False
+        st = index_project(root, tmp, Path(root).name, gates=gates, python_roots=flag_roots, include_generated=flag_gen)
         if not st.get("nodes"):
             os.remove(tmp)
             return f"index refused: {_display(root)} produced 0 nodes; the graph is unchanged (is that the right directory?)"
@@ -961,7 +988,9 @@ def index(root: str | None = None, gates: str | None = None, repo: str | None = 
     a result with 0 nodes, is refused and the graph is left unchanged.
     On a single-repo graph root defaults to the indexed root; gates is a gate-scenario JSON path (defaults to the
     server's --gates). The project config file (.cg.yaml at the root) is read on every
-    re-index; Python source roots given with `cg index --python-root` are kept."""
+    re-index; Python source roots given with `cg index --python-root` and `--include-generated` are kept.
+    Generated, copied and vendored files stay out of the graph (the coverage tool lists them) unless the graph was
+    indexed with --include-generated or .cg.yaml sets generated.include."""
     from .config import ConfigError
     try:
         return _index(root, gates, repo)

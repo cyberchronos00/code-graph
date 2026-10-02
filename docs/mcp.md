@@ -42,7 +42,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   picks the repo whose recorded root contains it, or every repo below it (a parent directory such as the workspace
   root). The link is rebuilt afterwards. A `root` that matches no recorded repo, an unknown `repo`, or a result with
   0 nodes is refused with an error and the current graph is kept. `.cg.yaml` is re-read on every re-index (an invalid
-  file is refused the same way), and Python source roots given with `cg index --python-root` are kept;
+  file is refused the same way), and Python source roots given with `cg index --python-root` and
+  `--include-generated` are kept;
 - `coverage(path?, all_files?, json_output?)`: which languages and files the index covers, unsupported source types and
   blind spots (see [Coverage and completeness](#coverage-and-completeness)), and the Python source roots with their
   origin ([python.md](python.md)); on a combined DB, per linked repo. `json_output=true` adds the roots as
@@ -72,7 +73,9 @@ rust-analyzer or scip-clang is missing, `skipped` when the toolchain such as `ph
 for source types without a plugin) and the file completeness (discovered, indexed, parse failed, over the size limit,
 unmapped, excluded), plus the blind spots it detected: route and handler registrations cg does not model, with
 `file:line` samples. The `coverage` tool prints that report (`all_files=true` for every path); with `path` it says
-whether a file or directory is in the graph. Details: [completeness.md](completeness.md).
+whether a file or directory is in the graph, and for a generated or copied file names the reason (edit its source
+instead). Generated, copied and vendored files are listed by reason ([generated.md](generated.md)). Details:
+[completeness.md](completeness.md).
 
 Answers use it in three ways:
 

@@ -17,6 +17,20 @@ commands, output and the graph schema; such changes are listed under **Changed**
   show|validate` lists every effective value with its source; `routes` names the rule behind each auth guard; starter
   queries derived from the graph (`cg starters`, MCP `starters`, the visual view's preset menu)
   ([#6](https://github.com/cyberchronos00/code-graph/issues/6)).
+- Generated, copied and vendored files are detected and kept out of the graph by default: `.gitattributes`
+  `linguist-generated` / `linguist-vendored`, Capacitor `webDir` copies under `android/` and `ios/` (each mapped to
+  its source file), Cordova `platforms/*/www`, `.openapi-generator/FILES`, `.nuxt` / `.next` / `.svelte-kit` build
+  output, Flutter plugin registrants and `ephemeral/`, `*.g.dart` / `*.pb.go` / `*_pb2.py`-style names and "generated
+  by ... do not edit" header banners; `cg coverage` lists them by reason, `.cg.yaml` `generated.paths` / `vendored` /
+  `keep` adjust the rules, and `--include-generated` indexes them labelled `attrs.generated` with `COPY_OF` edges from
+  copies to their sources, shown as "(generated)" / "(copy of ...)" in `impact`
+  ([#8](https://github.com/cyberchronos00/code-graph/issues/8)).
+
+### Changed
+
+- Coverage counts no longer include generated and copied files, and the `book.g.dart` nodes of `bookstore-flutter`
+  are excluded by default (90 / 171 → 87 / 164 nodes / edges)
+  ([#8](https://github.com/cyberchronos00/code-graph/issues/8)).
 
 ## [0.4.0] - 2026-10-02
 

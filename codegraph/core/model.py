@@ -87,6 +87,8 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     "SUBSCRIBES_CHANNEL": (True, "client code subscribes to a channel (Echo.private / channel / join, pusher.subscribe, useEcho)"),
     "MATCHES_CHANNEL": (True, "client channel subscription matched to a backend channel pattern (cross-repo link)"),
     "LISTENS_FOR": (False, "client channel subscription listens for a backend broadcast event (.listen('Name'))"),
+    # generated / copied files (codegraph/core/generated.py), only with --include-generated
+    "COPY_OF": (False, "copied file (Capacitor / Cordova web assets in a native project) -> the source file it is copied from"),
     # test code (tests/, *.spec.ts, ...). Never propagating: tests do not change blast radius, caller counts or entry
     # tagging; the `tests` query walks these on purpose
     "TEST_CALLS": (False, "test code calls / dispatches to code (attrs.orig = the original edge kind)"),

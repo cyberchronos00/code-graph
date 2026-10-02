@@ -189,6 +189,15 @@ Issues and pull requests that extend it are welcome.
   unknown symbol, end with a coverage line. Blind-spot detection covers the patterns listed in
   [completeness.md](completeness.md#blind-spots); code generated at build or run time, and files outside the indexed
   root, are not counted at all.
+- **Generated and copied files** are recognised by `.gitattributes`, generator banners in the leading comment block,
+  framework build paths, generator file names, Capacitor / Cordova copy targets and `.openapi-generator/FILES`
+  ([generated.md](generated.md)). Generated code without any of these (a hand-rolled generator with no banner) is
+  indexed as source until `generated.paths` in `.cg.yaml` names it. A Capacitor `webDir` counts as build output when
+  its `.gitignore` lists it or `angular.json` builds into it; a hand-written `webDir` stays source. `dist/` and
+  `build/` are listed as build output directories without counting their files. Copies map back to their source per
+  file; source maps of minified bundles are not read.
+  Web / native bridge calls (Capacitor plugins, React Native modules, Flutter platform channels) are not linked to
+  the native side yet ([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
 - **Symlinks.** Dangling symlinks (for example ones that point outside the checkout) are skipped with a warning per
   file instead of stopping the language; the TypeScript stats list them as `skipped_dangling_symlinks`, and the
   TypeScript walker does not follow symlinked directories.

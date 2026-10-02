@@ -339,6 +339,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | C++ | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | the C facts plus namespaces, classes, overloads, virtual dispatch (overrides and implementations) ([docs/native.md](docs/native.md#c-and-c)) |
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
 | Go, Java | via SCIP (experimental) | definitions and references imported from an existing SCIP index |
+| Generated and copied files | detected (`.gitattributes`, generator banners, framework build paths, generator file names, Capacitor / Cordova copy targets, `.openapi-generator/FILES`) | kept out of the graph and listed by `cg coverage` by reason; copies map back to their source; `--include-generated` indexes them labelled `attrs.generated` ([docs/generated.md](docs/generated.md)) |
 
 ## Prerequisites per language
 
@@ -460,7 +461,7 @@ code-graph indexes a project with zero configuration. The optional inputs are:
   so `routes --unguarded` is accurate out of the box. `cg index` records the detected frameworks and applied presets.
 - **Project config file** (`.cg.yaml` at the indexed root, read automatically) records project knowledge once:
   `exclude` globs, extra `skip_dirs`, `frameworks` to add or remove, `auth` / `secret` patterns for your own guards,
-  `gates`, `plans` and `viz.presets`, and `python.source_roots`. `cg config show` prints every effective value with
+  `generated` rules, `gates`, `plans` and `viz.presets`, and `python.source_roots`. `cg config show` prints every effective value with
   where it comes from, and `cg config validate` checks the file:
 
   ```yaml
@@ -484,6 +485,10 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   registry). Route lists, caller lists and the other impact answers say when they could be partial and where to look;
   complete answers stay short. A missing indexer never fails the whole index. See
   [docs/completeness.md](docs/completeness.md).
+- **Generated and copied files** (build output, generated clients, Capacitor / Cordova web copies) stay out of the
+  graph and are listed by `cg coverage`; `--include-generated` indexes them, labelled. Generated code without a
+  marker, path rule or `.gitattributes` entry is indexed as source; `generated.paths` in `.cg.yaml` names it. See
+  [docs/generated.md](docs/generated.md).
 - **Static analysis.** Types are flow-insensitive, and generics are outside the current scope. When a receiver has no
   resolved type, a unique-method-name fallback fills the gap and is labelled `heuristic`.
 - **String-built names** (dynamic table, column or URL names) become placeholders such as `{param}` or
@@ -547,6 +552,9 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.
+- Web / native bridge links: Capacitor plugins, React Native native modules and Flutter platform channels as
+  `BRIDGE_CALLS` edges to the Kotlin and Swift methods they reach, with the Kotlin and Swift plugins
+  ([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
 - More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
 
 ## Documentation
@@ -565,11 +573,12 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`, `cg config show`), framework presets, gates, viz presets and starter queries, plans dir, environment variables |
+| [docs/generated.md](docs/generated.md) | generated, copied and vendored files: detection rules, coverage output, `--include-generated`, `COPY_OF`, `.cg.yaml` `generated` |
 | [docs/completeness.md](docs/completeness.md) | file completeness, unsupported source types, blind-spot detectors, notes on partial answers, the MCP `completeness` object |
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
-| [docs/validation.md](docs/validation.md) | results on public projects: Django, Flutter, and presets / starter queries / route guards per framework |
+| [docs/validation.md](docs/validation.md) | results on public projects: Django, Flutter, presets / starter queries / route guards per framework, and generated-file detection |
 | [CHANGELOG.md](CHANGELOG.md) | changes per release, and what is coming in the next one |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 214 tests, adding a plugin |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 269 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
 

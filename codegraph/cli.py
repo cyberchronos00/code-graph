@@ -34,6 +34,8 @@ def main(argv=None):
     p = sub.add_parser("index"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
     p.add_argument("--python-root", action="append", metavar="DIR",
                    help="Python source root, relative to ROOT (repeatable); replaces detection and python.source_roots in .cg.yaml")
+    p.add_argument("--include-generated", action="store_true",
+                   help="also index generated, copied and vendored files (labelled attrs.generated); default: excluded and listed by `cg coverage`")
     p = sub.add_parser("detect"); p.add_argument("root")
     p = sub.add_parser("config", help="project config: `show` the effective configuration and where each value comes from, "
                                       "`validate` a .cg.yaml")
@@ -41,6 +43,7 @@ def main(argv=None):
     p.add_argument("--python-root", action="append", metavar="DIR", help="as for index")
     p.add_argument("--gates", help="as for index"); p.add_argument("--auth-pattern", help="as for routes")
     p.add_argument("--plans-dir", help="as for plan / serve"); p.add_argument("--presets", help="as for serve")
+    p.add_argument("--include-generated", action="store_true", help="as for index")
     p.add_argument("--json", action="store_true", help="the effective configuration as JSON")
     p = sub.add_parser("starters", help="starter queries derived from the graph (unguarded write routes, most-reached tables, ...)")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
@@ -113,7 +116,8 @@ def main(argv=None):
         from .indexer import index_project
         from .config import ConfigError
         try:
-            st = index_project(a.root, a.db, a.name, a.scip, gates=a.gates, python_roots=a.python_root)
+            st = index_project(a.root, a.db, a.name, a.scip, gates=a.gates, python_roots=a.python_root,
+                               include_generated=a.include_generated)
         except ConfigError as ex:
             print(f"cg index: {ex}", file=sys.stderr)
             return 2
@@ -217,7 +221,7 @@ def main(argv=None):
         for e in res["entry_points"]:
             native = Q.NATIVE_FILE_RE.search(e.get("file") or "")
             nm = f"{e.get('fqn') or e['name']}  @ {e['file']}:{e['line']}" if native else e["name"]
-            print(f"  {e['entry_kind']:16} {nm}  conf={e['path_confidence']}")
+            print(f"  {e['entry_kind']:16} {nm}  conf={e['path_confidence']}{Q.generated_label(e)}")
             if not a.no_paths:
                 print(f"        path: {Q.fmt_path(e['path'])}")
         if a.plans_dir:
@@ -306,7 +310,7 @@ def config_cmd(a) -> int:
             print(f"warning: {w}")
         return 0
     try:
-        eff = effective(a.root, a.python_root, a.gates, a.auth_pattern, a.plans_dir, a.presets)
+        eff = effective(a.root, a.python_root, a.gates, a.auth_pattern, a.plans_dir, a.presets, a.include_generated)
     except ConfigError as ex:
         print(f"cg config: {ex}", file=sys.stderr)
         return 2

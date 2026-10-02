@@ -64,6 +64,9 @@ Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (eve
 Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind; Python test → fixture and
 fixture → fixture with `via` = fixture / autouse fixture and `attrs.fixture`), TEST_HTTP (test → route),
 TEST_VISITS (browser test → page). None of them propagate, so tests never count as callers.
+Generated files (only with `--include-generated`; [generated.md](generated.md)): every node from a generated, copied or
+vendored file carries `attrs.generated = {kind: generated | copied | vendored, reason[, copy_of]}`; COPY_OF (a copied
+module → the module of its source file, e.g. a Capacitor `android/.../assets/public/` copy → its `webDir` file).
 MAPS_TO_TABLE, HAS_RELATION, CONTAINS, EXTENDS, IMPLEMENTS, USES_TRAIT, INSTANTIATES, INJECTS, REFERENCES (`X::class`), OBSERVED_BY, BINDS, DEFINES.
 
 **Confidence:**

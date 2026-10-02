@@ -107,9 +107,10 @@ def _shebang(path: str) -> str | None:
     return SHEBANGS.get(prog) or SHEBANGS.get(prog.rstrip("0123456789.")) or None
 
 
-def scan_tree(root: str | Path, rules=None) -> Scan:
+def scan_tree(root: str | Path, rules=None, classifier=None) -> Scan:
     """Source files under root (generated / dependency directories skipped; `rules`: the project's PathRules,
-    default the built-in scan list)."""
+    default the built-in scan list). `classifier` (codegraph/core/generated.py) classifies every source file seen; the
+    files it marks are left out of the counts unless the index includes generated files."""
     from .core.paths import PathRules
     rules = rules or PathRules(SKIP_DIRS)
     sc = Scan()
@@ -117,8 +118,17 @@ def scan_tree(root: str | Path, rules=None) -> Scan:
     for dp, dns, fns in os.walk(root):
         rd = os.path.relpath(dp, root)
         rd = "" if rd == "." else rd.replace(os.sep, "/")
-        dns[:] = [d for d in dns if not rules.skip(rd, d) and not d.startswith("._")]
+        if classifier is not None:
+            classifier.visit_dir(rd, dp, dns, fns)
         rel_dir = rd + "/" if rd else ""
+        keep = []
+        for d in dns:
+            if rules.skip(rd, d) or d.startswith("._"):
+                if classifier is not None:
+                    classifier.skipped_dir(rel_dir + d, d)
+            else:
+                keep.append(d)
+        dns[:] = keep
         for fn in fns:
             if fn.startswith("._") or (rules.exclude and rules.excluded(rel_dir + fn)):
                 continue
@@ -126,6 +136,9 @@ def scan_tree(root: str | Path, rules=None) -> Scan:
             p = os.path.join(dp, fn)
             if ext:
                 if (ext in _SUPPORTED_EXTS or ext in UNSUPPORTED) and not is_real_file(p):
+                    continue
+                if classifier is not None and (ext in _SUPPORTED_EXTS or ext in UNSUPPORTED) \
+                        and classifier.scan(rel_dir + fn, p) is not None and not classifier.include:
                     continue
                 sc.counts[ext] += 1
                 if ext in _SUPPORTED_EXTS:
@@ -355,6 +368,9 @@ def summary_line(cov: dict | None, repo: str | None = None) -> str:
     bs = blind_spots(cov)
     if bs:
         s += f" | blind spots: {_bs_count(bs)}"
+    g = cov.get("generated") or {}
+    if g.get("files"):
+        s += f" | generated: {g['files']} file{'s' if g['files'] != 1 else ''} {g.get('mode', 'excluded')}"
     return s
 
 
@@ -402,6 +418,8 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
         out.append(summary_line(cov, repo if len(covs) > 1 or repo else None))
         if (cov or {}).get("setup"):
             out.append(setup_line(cov["setup"]))
+        from .core.generated import detail_lines as generated_lines
+        out += generated_lines((cov or {}).get("generated"), all_files)
         for e in (cov or {}).get("languages", []):
             if e["language"] == "python":
                 out += python_roots_lines(e, all_files)
