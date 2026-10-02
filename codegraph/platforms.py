@@ -34,6 +34,10 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
+from . import presets
+
+# dependency / VCS directories every walk skips (codegraph/presets/common.yaml skip_dirs)
+COMMON_SKIP = presets.skip_dirs("common")
 
 KNOWN = ("windows", "linux", "macos", "ios", "android", "web")
 DESKTOP = ("windows", "linux", "macos")
@@ -258,7 +262,7 @@ def path_convention(rel: str) -> tuple[str, str] | None:
 
 def uses_react_native(root: Path) -> bool:
     for pj in [root / "package.json", *root.glob("*/package.json"), *root.glob("*/*/package.json")]:
-        if "node_modules" in pj.parts or not pj.is_file():
+        if not COMMON_SKIP.isdisjoint(pj.parts) or not pj.is_file():
             continue
         try:
             d = json.loads(pj.read_text(encoding="utf-8", errors="replace"))
@@ -286,7 +290,7 @@ def declared_targets(root: Path, cfg: dict, marks: list, langs: set[str]) -> tup
             if (pub.parent / d).is_dir():
                 src.setdefault(norm(d), f"Flutter folder {(pub.parent / d).relative_to(root).as_posix()}/")
     for app in [root / "app.json", *root.glob("*/app.json"), *root.glob("*/*/app.json")]:
-        if "node_modules" in app.parts or not app.is_file():
+        if not COMMON_SKIP.isdisjoint(app.parts) or not app.is_file():
             continue
         try:
             ex = (json.loads(app.read_text(encoding="utf-8", errors="replace")) or {}).get("expo")

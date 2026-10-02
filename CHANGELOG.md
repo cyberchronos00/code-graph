@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- `.cg.yaml` `apps` for monorepos: one `cg index <root>` indexes each app (`<db>.<app>.db`) and links each frontend /
+  backend pair (`<db>.<frontend>+<backend>.db`, `links` per frontend, default every backend), with the same graphs
+  as indexing and linking the apps one by one; `--no-apps` indexes the root as one project. `.cg.yaml` `include`
+  indexes directories a built-in skip leaves out (a skipped directory name such as `build/` or
+  `node_modules/@acme/sdk`, generated files). The TypeScript and Dart extractors take their directory skip lists from
+  the presets with the index config instead of built-in copies, so `skip_dirs.keep` (also for hidden directories)
+  and `include` reach them. `cg config show` lists `include`, the apps and their link pairs
+  ([#17](https://github.com/cyberchronos00/code-graph/issues/17)).
 - FastAPI / Starlette and Flask routes: app, router and blueprint objects, `include_router` / `mount` /
   `register_blueprint` prefix chains across files (prefixes from constants and settings attributes), verb and `route`
   decorators, `add_api_route` / `add_url_rule` (incl. `MethodView.as_view()`), Starlette route lists, websockets and

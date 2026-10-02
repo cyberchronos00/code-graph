@@ -37,6 +37,8 @@ def main(argv=None):
     p = sub.add_parser("index"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
     p.add_argument("--python-root", action="append", metavar="DIR",
                    help="Python source root, relative to ROOT (repeatable); replaces detection and python.source_roots in .cg.yaml")
+    p.add_argument("--no-apps", action="store_true",
+                   help="index ROOT as one project although its .cg.yaml lists monorepo apps")
     p.add_argument("--include-generated", action="store_true",
                    help="also index generated, copied and vendored files (labelled attrs.generated); default: excluded and listed by `cg coverage`")
     p = sub.add_parser("detect"); p.add_argument("root")
@@ -46,6 +48,8 @@ def main(argv=None):
     p.add_argument("--python-root", action="append", metavar="DIR", help="as for index")
     p.add_argument("--gates", help="as for index"); p.add_argument("--auth-pattern", help="as for routes")
     p.add_argument("--plans-dir", help="as for plan / serve"); p.add_argument("--presets", help="as for serve")
+    p.add_argument("--no-apps", action="store_true",
+                   help="index ROOT as one project although its .cg.yaml lists monorepo apps")
     p.add_argument("--include-generated", action="store_true", help="as for index")
     p.add_argument("--json", action="store_true", help="the effective configuration as JSON")
     p = sub.add_parser("starters", help="starter queries derived from the graph (unguarded write routes, most-reached tables, ...)")
@@ -127,8 +131,16 @@ def main(argv=None):
 
     if a.cmd == "index":
         from .indexer import index_project
-        from .config import ConfigError
+        from .config import ConfigError, load as load_config
         try:
+            cfg = load_config(a.root) if not a.no_apps else {}
+            if cfg.get("apps"):        # monorepo: index each app, link each frontend / backend pair
+                from .apps import index_apps, render as render_apps
+                summary = index_apps(a.root, a.db, cfg, a.scip, python_roots=a.python_root,
+                                     include_generated=a.include_generated)
+                print(json.dumps({k: v for k, v in summary.items()}, indent=2, default=str))
+                print(render_apps(summary), file=sys.stderr)
+                return
             st = index_project(a.root, a.db, a.name, a.scip, gates=a.gates, python_roots=a.python_root,
                                include_generated=a.include_generated)
         except ConfigError as ex:

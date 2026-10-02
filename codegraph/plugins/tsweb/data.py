@@ -25,6 +25,10 @@ from pathlib import Path
 
 from ...core.plugin import GraphBuilder, Project
 from .common import fw_facts, last_name, obj, plural, ref_nodes, snake, sval, svals
+from ... import presets
+
+# dependency / VCS directories every walk skips (codegraph/presets/common.yaml skip_dirs)
+COMMON_SKIP = presets.skip_dirs("common")
 
 PUBLIC_ENV = re.compile(r"^(NEXT_PUBLIC_|VITE_|NUXT_PUBLIC_|REACT_APP_|EXPO_PUBLIC_|PUBLIC_)")
 READ_OPS = {"findUnique", "findUniqueOrThrow", "findFirst", "findFirstOrThrow", "findMany", "count", "aggregate", "groupBy",
@@ -62,7 +66,7 @@ def parse_prisma(root: Path) -> dict:
     for pat in ("schema.prisma", "prisma/schema.prisma", "prisma/*.prisma", "prisma/schema/*.prisma", "src/prisma/*.prisma"):
         files += sorted(root.glob(pat))
     if not files:
-        files = [p for p in sorted(root.rglob("*.prisma")) if "node_modules" not in p.parts][:20]
+        files = [p for p in sorted(root.rglob("*.prisma")) if COMMON_SKIP.isdisjoint(p.parts)][:20]
     for f in dict.fromkeys(files):
         try:
             txt = f.read_text()

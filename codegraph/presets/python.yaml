@@ -6,3 +6,5 @@ skip_dirs: [venv, .venv, env, .env, site-packages, .tox, .nox, build, dist, .myp
             .ruff_cache, htmlcov, static, media]
 # also skipped when deciding whether a repository holds Python at all (vendored / other-stack build output)
 detect_skip_dirs: [vendor, target, out, Pods, .next, .output]
+# test directories: skipped when scanning imports to detect a web framework (test fixtures quote `from flask import ...`)
+test_dirs: [tests, test, testing]

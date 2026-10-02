@@ -13,6 +13,7 @@ version: 1
 python:
   source_roots: [lib, tools/scripts]   # directories Python imports from; replaces detection ("." = the indexed root)
 exclude: ["legacy/**", "*.generated.ts"]  # paths no plugin indexes and the coverage scan leaves out
+include: [src/generated, build/api]   # directories indexed although a built-in skip leaves them out
 skip_dirs:
   add: [fixtures_big]                  # more directory names to skip everywhere
   keep: [static]                       # directory names skipped by default that hold project code here
@@ -35,6 +36,9 @@ plans:
 viz:
   presets:                             # canned queries for the visual view's preset menu
     - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
+apps:                                  # monorepo: one `cg index <root>` indexes each app and links each pair
+  - {name: api, root: apps/api, role: backend}
+  - {name: web, root: apps/web, role: frontend, links: [api]}   # the backends it calls (default: every backend)
 platforms:
   targets: [ios, android, web]         # the project's build targets (default: detected)
   paths: {"src/win32/**": [windows]}   # files built only for some targets
@@ -47,7 +51,9 @@ platforms:
 | `version` | file format version, `1` (optional) | |
 | `python.source_roots` | Python source roots, relative to the indexed root ([python.md](python.md)) | `cg index --python-root DIR` (repeatable) |
 | `exclude` | gitignore-style globs (`legacy/**`, `*.generated.ts`, `/tools`), applied by every language plugin and by the coverage scan | |
-| `skip_dirs.add` / `skip_dirs.keep` | directory names to add to, or take out of, the shared skip lists | |
+| `skip_dirs.add` / `skip_dirs.keep` | directory names to add to, or take out of, the shared skip lists (every walk: the language plugins, the TypeScript and Dart extractors, the coverage scan; `keep` also lets a walk into a hidden directory such as `.storybook`) | |
+| `include` | directories (relative to the indexed root) that are indexed although a built-in skip covers them: a skipped directory name (`build/`, `dist/`, `node_modules/@acme/sdk`) or generated files. Only the path down to them is walked, not the rest of the skipped directory; `exclude` globs still apply inside them | |
+| `apps` | monorepo apps `{name, root, role: backend \| frontend, links}` ([below](#monorepo-apps)) | `cg index --no-apps` indexes the root as one project |
 | `generated.paths` / `generated.vendored` / `generated.keep` | globs of generated / vendored files detection misses, and of hand-maintained files it should leave alone ([generated.md](generated.md)) | |
 | `generated.include` | index generated, copied and vendored files, labelled `attrs.generated` (default: kept out of the graph and listed by `cg coverage`) | `cg index --include-generated` |
 | `frameworks.add` / `frameworks.remove` | framework layers and presets to turn on or off (`laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `express`; aliases such as `nestjs`, `next`, `fastify`, `drf` work too) | |
@@ -63,6 +69,48 @@ platforms:
 
 The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` and the MCP server read the plans
 directory, auth patterns and presets from the graph without repeating the flags.
+
+### Skip lists
+
+Every directory skip list lives in the presets (`codegraph/presets/*.yaml`): `common.skip_dirs` for every walk, each
+language's `skip_dirs`, the TypeScript test walk's `test_walk_skip_dirs`, the directories whose files a tsconfig pulls
+in as resolution input only (`typescript.source_skip_dirs`: `node_modules`, `.nuxt`), and the C / C++ build-tree
+prefixes. The TypeScript and Dart extractors receive the lists with the index config and keep none of their own, so
+`skip_dirs.add` / `keep` and `include` reach them like every other walk. `cg config show` lists the effective lists.
+
+### Monorepo apps
+
+```yaml
+apps:
+  - {name: api, root: apps/api, role: backend}
+  - {name: ml, root: services/ml, role: backend}
+  - {name: web, root: apps/web, role: frontend, links: [api]}
+  - {name: mobile, root: apps/mobile, role: frontend}       # no links: every backend (api and ml)
+```
+
+`cg index <root> --db out/mono.db` then indexes each app into `out/mono.<app>.db` and links each frontend / backend
+pair into `out/mono.<frontend>+<backend>.db`: the same graphs as `cg index <app root>` and `cg link` one by one. In
+the links the app names are the repo names (files read `api/src/...`). `out/mono.db` is the combined graph of the
+first pair in the file (without a frontend: the first app's graph). Each app reads its own `.cg.yaml` at the app root,
+as a separate checkout would; the root file's `apps` decides what is indexed. The command prints a summary per app
+and per pair to stderr and the same as JSON to stdout. On a directory holding copies of the bundled sample apps, with
+`api` (`bookstore-django`) as the backend and the four clients as frontends:
+
+```text
+apps of bookstores (.cg.yaml): 5 indexed, 4 linked in 1.96 s
+  api              backend  bookstore-django             207 nodes, 341 edges, 0.13 s -> bookstore.api.db
+  web              frontend bookstore-web                31 nodes, 41 edges, 1.68 s -> bookstore.web.db
+  flutter          frontend bookstore-flutter            87 nodes, 164 edges, 0.04 s -> bookstore.flutter.db
+  android          frontend bookstore-android            44 nodes, 47 edges, 0.02 s -> bookstore.android.db
+  ios              frontend bookstore-ios                34 nodes, 34 edges, 0.02 s -> bookstore.ios.db
+  web -> api: 0/6 endpoints, 0/5 call sites matched -> bookstore.web+api.db
+  flutter -> api: 6/7 endpoints, 6/7 call sites matched -> bookstore.flutter+api.db
+  android -> api: 3/3 endpoints, 3/3 call sites matched -> bookstore.android+api.db
+  ios -> api: 3/3 endpoints, 3/3 call sites matched -> bookstore.ios+api.db
+  bookstore.db: combined graph web + api
+```
+
+(`bookstore-web` calls the Laravel sample API, so nothing of it matches the Django routes.)
 
 ### Checking a config file
 

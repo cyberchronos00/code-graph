@@ -20,14 +20,35 @@ const rel = p => path.relative(ROOT, p).split(path.sep).join('/')
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options'])
 const FETCH_FNS = new Set(['$fetch', 'useFetch', 'useLazyFetch', 'ofetch', 'fetch'])
 const I18N_FNS = new Set(['t', '$t', 'te', '$te', 'tm', 'rt'])
-const SKIP_FILE = /(\.test|\.spec)\.(ts|js|mts)$|\/node_modules\/|\/\.nuxt\//
+const SKIP_FILE = /(\.test|\.spec)\.(ts|js|mts)$/
+// directory rules from the presets and .cg.yaml (codegraph/core/paths.py PathRules.extractor_cfg): names the walks
+// skip, names kept (hidden directories are skipped unless kept), `include` directories walked although a skip rule
+// covers them, and the directories whose files the tsconfig pulls in as resolution input only (node_modules, .nuxt)
+const SKIP_NAMES = new Set(cfg.skip_names || [])
+const KEEP_NAMES = new Set(cfg.keep_names || [])
+const TEST_SKIP_NAMES = new Set([...SKIP_NAMES, ...(cfg.test_skip_names || [])])
+const INCLUDE = (cfg.include || []).map(i => i.replace(/^\/+|\/+$/g, '')).filter(Boolean)
+const included = r => INCLUDE.some(i => r === i || r.startsWith(i + '/'))
+const onIncludePath = r => included(r) || INCLUDE.some(i => i.startsWith(r + '/'))
+const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const SOURCE_SKIP_RE = (cfg.source_skip_names || []).length ? new RegExp('(^|/)(' + cfg.source_skip_names.map(esc).join('|') + ')/') : null
+// a file below a directory the walks skip by name (dist/, coverage/, node_modules/, .nuxt/ ...) is not project
+// source, also when the tsconfig lists it, unless it is inside an `include` directory
+const belowSkipped = r => !included(r) && r.split('/').slice(0, -1).some(x => SKIP_NAMES.has(x))
+const sourceSkipped = r => belowSkipped(r) || (!!(SOURCE_SKIP_RE && SOURCE_SKIP_RE.test(r)) && !included(r))
+// a directory entry of a walk: skipped by name / as hidden, unless it is on the way to an `include` directory;
+// `forced`: the parent is skipped by itself and only walked to reach an include directory
+const skipDir = (name, r, names, forced) => !onIncludePath(r) && (forced || names.has(name) || (name.startsWith('.') && !KEEP_NAMES.has(name)))
+const forcedBelow = (name, r, names, forced) => !included(r) && (forced || names.has(name) || (name.startsWith('.') && !KEEP_NAMES.has(name)))
 // framework plugins may exclude more (tests, build output) by a regex over the repo-relative path
 const SKIP_REL = cfg.skip_re ? new RegExp(cfg.skip_re) : null
 // the project's .cg.yaml exclude globs and skip_dirs.add names: never indexed, test code included
 const EXCLUDE_REL = cfg.exclude_re ? new RegExp(cfg.exclude_re) : null
 // generated / copied / vendored files the Python-side scan classified (codegraph/core/generated.py)
 const EXCLUDE_FILES = new Set(cfg.exclude_files || [])
-const excludedRel = r => !!(EXCLUDE_REL && EXCLUDE_REL.test(r)) || EXCLUDE_FILES.has(r)
+// directories the generated-file classifier excludes as a whole (not inside an `include` directory)
+const GENERATED_REL = cfg.generated_re ? new RegExp(cfg.generated_re) : null
+const excludedRel = r => !!(EXCLUDE_REL && EXCLUDE_REL.test(r)) || (!included(r.replace(/\/$/, '')) && (!!(GENERATED_REL && GENERATED_REL.test(r)) || EXCLUDE_FILES.has(r)))
 const SRC_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/
 // test code (Vitest / Jest / Playwright / Cypress): indexed as test nodes unless cfg.index_tests === false; kept out of
 // the application graph by the indexer (TEST_* edges)
@@ -35,7 +56,6 @@ const INDEX_TESTS = cfg.index_tests !== false
 const TEST_FILE_RE = /\.(test|spec|e2e-spec|e2e|cy)\.(t|j)sx?$/
 const TEST_DIR_RE = /(^|\/)(__tests__|e2e|tests?|cypress|playwright)\//
 const TEST_ROOTS = ['e2e', 'test', 'tests', 'cypress', 'playwright', 'src/test', 'src/tests', 'src/e2e']
-const TEST_WALK_SKIP = new Set(['node_modules', 'dist', 'build', 'coverage', 'playwright-report', 'test-results', 'fixtures', '__fixtures__', '__snapshots__'])
 const isTestRel = r => TEST_FILE_RE.test(r) || /(^|\/)__tests__\//.test(r) || TEST_ROOTS.some(d => r.startsWith(d + '/'))
 
 // ---------- file kinds (from the framework plugin: [[prefix, kind], ...]) ----------
@@ -96,14 +116,14 @@ function fileEntry(e, p) {
     skippedLinks.push(rel(p)); process.stderr.write(`codegraph: skipping ${rel(p)}: dangling symlink\n`); return false
   }
 }
-function walkDir(d, out) {
+function walkDir(d, out, forced = false) {
   let ents = []
   try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch (err) { process.stderr.write(`codegraph: skipping ${d}: ${err.code || err}\n`); return out }
   for (const e of ents) {
-    if (e.name === 'node_modules' || e.name.startsWith('.')) continue
-    const p = path.join(d, e.name)
-    if ((SKIP_REL && SKIP_REL.test(rel(p))) || excludedRel(rel(p)) || (e.isDirectory() && excludedRel(rel(p) + '/'))) continue
-    if (e.isDirectory()) walkDir(p, out)
+    const p = path.join(d, e.name), r = rel(p)
+    if (e.isDirectory() ? skipDir(e.name, r, SKIP_NAMES, forced) : (forced && !included(r))) continue
+    if ((SKIP_REL && SKIP_REL.test(r)) || excludedRel(r) || (e.isDirectory() && excludedRel(r + '/'))) continue
+    if (e.isDirectory()) walkDir(p, out, forcedBelow(e.name, r, SKIP_NAMES, forced))
     else if (fileEntry(e, p)) out.push(p)
   }
   return out
@@ -112,7 +132,7 @@ let srcDirs = (cfg.src_dirs || ['app']).map(d => path.resolve(ROOT, d)).filter(f
 // none of the conventional dirs holds code the tsconfig includes: use the top dirs of the tsconfig's own files
 {
   const inside = f => srcDirs.some(d => f.startsWith(d + path.sep))
-  const own = (parsed.fileNames || []).filter(f => !f.includes('/node_modules/') && !f.endsWith('.d.ts'))
+  const own = (parsed.fileNames || []).filter(f => !sourceSkipped(path.relative(ROOT, f).split(path.sep).join('/')) && !f.endsWith('.d.ts'))
   if (own.length && !own.some(inside)) {
     const tops = new Set(own.map(f => { const r = path.relative(ROOT, f).split(path.sep); return r.length > 1 ? r.slice(0, Math.min(r.length - 1, 3)).join(path.sep) : '.' }))
     const dirs = [...tops].sort((a, b) => a.length - b.length).filter((d, i, all) => !all.slice(0, i).some(p => p === '.' || d.startsWith(p + path.sep)))
@@ -120,17 +140,22 @@ let srcDirs = (cfg.src_dirs || ['app']).map(d => path.resolve(ROOT, d)).filter(f
     process.stderr.write(`codegraph: source dirs from tsconfig: ${dirs.join(', ')}\n`)
   }
 }
+// .cg.yaml include directories are source dirs too (generated sources a project wants in the graph)
+for (const i of INCLUDE) {
+  const p = path.resolve(ROOT, i)
+  if (fs.existsSync(p) && fs.statSync(p).isDirectory() && !srcDirs.some(d => p === d || p.startsWith(d + path.sep))) srcDirs.push(p)
+}
 const allFiles = srcDirs.flatMap(d => walkDir(d, []))
 // test files: spec/test files anywhere in the source dirs, plus top-level test trees (e2e/, tests/, ...)
 const testFiles = new Set()
-function walkTests(d, all) {
+function walkTests(d, all, forced = false) {
   let ents = []
   try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
   for (const e of ents) {
-    if (e.name.startsWith('.') || TEST_WALK_SKIP.has(e.name)) continue
-    const p = path.join(d, e.name)
-    if (excludedRel(rel(p)) || (e.isDirectory() && excludedRel(rel(p) + '/'))) continue
-    if (e.isDirectory()) walkTests(p, all)
+    const p = path.join(d, e.name), r = rel(p)
+    if (e.isDirectory() ? skipDir(e.name, r, TEST_SKIP_NAMES, forced) : (forced && !included(r))) continue
+    if (excludedRel(r) || (e.isDirectory() && excludedRel(r + '/'))) continue
+    if (e.isDirectory()) walkTests(p, all, forcedBelow(e.name, r, TEST_SKIP_NAMES, forced))
     else if (SRC_EXT.test(e.name) && (e.isFile() || (e.isSymbolicLink() && !skippedLinks.includes(rel(p)) && fileEntry(e, p))) && !e.name.endsWith('.d.ts') && (all || isTestRel(rel(p)))) testFiles.add(p)
   }
 }
@@ -283,6 +308,11 @@ const SKIP_ROOT = /(\.test|\.spec)\.(ts|tsx|js|jsx|mts)$/
 let configFiles = parsed.fileNames
 // files outside the config's include list but inside the source dirs (JS projects, partial includes)
 if (noConfig || cfg.walk_src) configFiles = [...new Set([...configFiles, ...allFiles.filter(f => SRC_EXT.test(f) && !f.endsWith('.d.ts'))])]
+// .cg.yaml include directories and kept hidden directories (skip_dirs.keep: [.storybook]): their files are roots
+// even when the tsconfig leaves them out (node_modules, build/, and dot-directories its wildcards never match)
+const keptHidden = r => r.split('/').slice(0, -1).some(x => x.startsWith('.') && KEEP_NAMES.has(x))
+if (INCLUDE.length || KEEP_NAMES.size) configFiles = [...new Set([...configFiles, ...allFiles.filter(f => SRC_EXT.test(f) && !f.endsWith('.d.ts') && (included(rel(f)) || keptHidden(rel(f))))])]
+configFiles = configFiles.filter(f => f.endsWith('.d.ts') || !belowSkipped(rel(f)))   // declarations stay resolution input
 const extraFiles = (cfg.extra_files || []).map(f => path.resolve(ROOT, f)).filter(f => fs.existsSync(f))
 if (extraFiles.some(f => /\.(c|m)?jsx?$/.test(f))) options.allowJs = true
 const rootNames = [...new Set([...configFiles.filter(f => !SKIP_ROOT.test(f) && !(SKIP_REL && SKIP_REL.test(rel(f))) && !excludedRel(rel(f))), ...extraFiles, ...testFiles]), ...virtual.keys()]
@@ -298,7 +328,7 @@ const projectSf = sf => {
   let v = projectSfMemo.get(fn)
   if (v !== undefined) return v
   const real = fn.endsWith('.vue.ts') ? fn.slice(0, -3) : fn
-  v = testFiles.has(real) || (!fn.includes('/node_modules/') && !fn.includes('/.nuxt/') && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))) && !excludedRel(rel(real)))
+  v = testFiles.has(real) || (!sourceSkipped(rel(real)) && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))) && !excludedRel(rel(real)))
   projectSfMemo.set(fn, v)
   return v
 }

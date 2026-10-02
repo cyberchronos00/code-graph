@@ -85,6 +85,10 @@ cg link --backend out/api.db --frontend out/web.db \
         --backend-name bookstore-api --frontend-name bookstore-web --db out/graph.db > out/link.stats.json
 ```
 
+A monorepo lists its apps once in `.cg.yaml` (`apps: [{name: api, root: apps/api, role: backend}, {name: web, root:
+apps/web, role: frontend}]`), and `cg index <root> --db out/mono.db` indexes and links them in one command
+([docs/configuration.md](docs/configuration.md#monorepo-apps)).
+
 **Ask it something:**
 
 ```bash
@@ -482,7 +486,8 @@ code-graph indexes a project with zero configuration. The optional inputs are:
   Django, DRF, django-ninja, NestJS, Next.js, Express / Fastify / Koa / Hono, Nuxt) and every language its skip lists,
   so `routes --unguarded` is accurate out of the box. `cg index` records the detected frameworks and applied presets.
 - **Project config file** (`.cg.yaml` at the indexed root, read automatically) records project knowledge once:
-  `exclude` globs, extra `skip_dirs`, `frameworks` to add or remove, `auth` / `secret` patterns for your own guards,
+  `exclude` globs, `include` directories, extra or kept `skip_dirs`, monorepo `apps` (indexed and linked in one
+  command), `frameworks` to add or remove, `auth` / `secret` patterns for your own guards,
   `generated` rules, `platforms` targets, `gates`, `plans` and `viz.presets`, and `python.source_roots`. `cg config show` prints every effective value with
   where it comes from, and `cg config validate` checks the file:
 
@@ -534,7 +539,8 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   defaults, `.env`, `.env.example`, `||` defaults in code); values set only at deploy time stay an unknown origin.
   A Nuxt checkout without `.nuxt` is indexed with generated stand-ins for its own auto-imports and components.
 - **TS frameworks:** `link` compares method and path for Nest/Express routes. Nest providers are global (one module
-  scope). Express middleware order is tracked within one file. Monorepo roots are indexed per app. Details:
+  scope). Express middleware order is tracked within one file. Monorepos list their apps in `.cg.yaml` `apps`
+  ([docs/configuration.md](docs/configuration.md#monorepo-apps)). Details:
   [docs/ts-frameworks.md](docs/ts-frameworks.md#limitations).
 - **Gate scenarios** cover one scenario per index and flags read through settings accessors. Paths behind middleware
   gates or flags stored in properties are reported as live, which keeps results conservative.
@@ -572,8 +578,6 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Rust/C/C++: macro-expanded items, function-pointer dataflow, Bazel and Meson autodetection.
 - Route guards: Laravel kernel middleware groups and controller-constructor middleware, Django's `MIDDLEWARE`
   setting and DRF `DEFAULT_PERMISSION_CLASSES` shown on each route.
-- More keys in `.cg.yaml`: monorepo apps and link pairs, and `include` paths for the TypeScript and Dart
-  extractors' built-in skips.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.

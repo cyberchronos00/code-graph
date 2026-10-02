@@ -4,7 +4,7 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 
 ## Commands at a glance
 
-- `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE] [--python-root DIR]... [--include-generated]`: detect languages/frameworks and
+- `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE] [--python-root DIR]... [--no-apps] [--include-generated]`: detect languages/frameworks and
   build the graph. Prints the stats JSON on stdout (including the detected frameworks and applied presets in
   `presets`, and the starter queries in `starters`, with `starters_skipped` naming any that did not finish within
   their 20 s budget) and a per-language coverage summary on stderr; a missing toolchain
@@ -13,6 +13,8 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   this run ([python.md](python.md)). Generated, copied and vendored files (build output, generated clients, Capacitor /
   Cordova web copies) stay out of the graph and are listed by `coverage`; `--include-generated` indexes them, labelled
   `attrs.generated` ([generated.md](generated.md)). An invalid `.cg.yaml` exits with status 2 and a message naming the key.
+  When `.cg.yaml` lists monorepo `apps`, one run indexes each app and links each frontend / backend pair
+  ([configuration.md](configuration.md#monorepo-apps)); `--no-apps` indexes ROOT as one project.
 - `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,
   `heuristic` when the exact-mode indexer is missing, `skipped` when the toolchain is missing, with the install hint),
   file completeness (discovered / indexed / parse failed / over size limit / unmapped / excluded, the first 5 paths
@@ -179,7 +181,7 @@ Generated from `--help`.
 
 ```
 usage: python -m codegraph.cli index [-h] --db DB [--name NAME] [--scip SCIP]
-                       [--gates GATES] [--python-root DIR]
+                       [--gates GATES] [--python-root DIR] [--no-apps]
                        [--include-generated]
                        root
 
@@ -195,6 +197,8 @@ options:
                        examples/bookstore.gates.json)
   --python-root DIR    Python source root, relative to ROOT (repeatable);
                        replaces detection and python.source_roots in .cg.yaml
+  --no-apps            index ROOT as one project although its .cg.yaml lists
+                       monorepo apps
   --include-generated  also index generated, copied and vendored files
                        (labelled attrs.generated); default: excluded and
                        listed by `cg coverage`

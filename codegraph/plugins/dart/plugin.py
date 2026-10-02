@@ -32,8 +32,8 @@ from .program import Ctx, DartProgram, DClass, DFunc, root_name, split_type, wal
 EXTRACTOR_DIR = Path(__file__).parent / "extractor"
 EXTRACTOR = EXTRACTOR_DIR / "bin" / "extract.dart"
 BIN = EXTRACTOR_DIR / ".bin" / "extract"
-# pub / build output, CocoaPods, FVM, IDE state (codegraph/presets/dart.yaml; the compiled extractor skips the same
-# names and receives the project's .cg.yaml skip_dirs.add through its config)
+# pub / build output, CocoaPods, FVM, IDE state (codegraph/presets/dart.yaml), for the facts-cache walk; the extractor
+# gets the same rules (PathRules.extractor_cfg) through its config
 SKIP_DIRS = presets.skip_dirs("dart")
 
 
@@ -79,7 +79,7 @@ def write_extractor_stamp() -> None:
     _stamp_path().write_text(extractor_stamp() + "\n")
 
 
-def facts_fingerprint(root: Path, cfg: dict) -> str:
+def facts_fingerprint(root: Path, cfg: dict, rules=None) -> str:
     """Cache key for extractor facts: cache version + extractor code + deps lock + config + (path, size, content hash)
     of every .dart / .yaml / .env* file. Content, not mtime: a same-size edit with a restored mtime is a miss."""
     h = hashlib.sha256(f"cg-cache-v{fsutil.CACHE_VERSION}\n".encode())
@@ -87,7 +87,9 @@ def facts_fingerprint(root: Path, cfg: dict) -> str:
         h.update(f.read_bytes() if f.exists() else b"")
     h.update(json.dumps(cfg, sort_keys=True).encode())
     for dp, dns, fns in os.walk(root):
-        dns[:] = sorted(d for d in dns if d not in SKIP_DIRS and not d.startswith("."))
+        rd = os.path.relpath(dp, root).replace(os.sep, "/")
+        rd = "" if rd == "." else rd
+        dns[:] = rules.prune(rd, dns, dot=True) if rules is not None else sorted(d for d in dns if d not in SKIP_DIRS and not d.startswith("."))
         for fn in sorted(fns):
             if fn.endswith((".dart", ".yaml")) or fn.startswith(".env"):
                 p = os.path.join(dp, fn)
@@ -149,10 +151,10 @@ class DartPlugin(LanguagePlugin):
         write_extractor_stamp()
         return str(BIN)
 
-    def run_extractor(self, project: Project, cfg: dict) -> tuple[dict, str]:
+    def run_extractor(self, project: Project, cfg: dict, rules=None) -> tuple[dict, str]:
         cache_file, status = None, "disabled"
         if not os.environ.get("CODEGRAPH_NO_CACHE"):
-            fp = facts_fingerprint(project.root, cfg)
+            fp = facts_fingerprint(project.root, cfg, rules)
             cdir = Path(os.environ.get("CODEGRAPH_CACHE", Path.home() / ".cache" / "codegraph")) / "dart"
             rkey = hashlib.sha256(str(Path(project.root).resolve()).encode()).hexdigest()[:12]
             cache_file = cdir / f"{rkey}-{fp}.json"
@@ -197,13 +199,14 @@ class DartPlugin(LanguagePlugin):
     # ------------------------------------------------------------------ index
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
         t0 = time.time()
+        # the walk's directory rules (common + dart preset skip_dirs, .cg.yaml skip_dirs.add / keep, include); the
+        # extractor keeps no skip list of its own
         rules = path_rules(project, "dart")
-        added = set((project.options.get("config") or {}).get("skip_dirs", {}).get("add") or [])
-        cfg = {"skip_dirs": sorted(set(project.options.get("dart_skip_dirs") or []) | added),
+        cfg = {**rules.extractor_cfg(project.options.get("dart_skip_dirs") or []),
                "skip_suffixes": list(presets.values("dart", "generated_suffixes", default=[]))
                if not project.options.get("dart_keep_generated") else []}
         try:
-            facts, cache = self.run_extractor(project, cfg)
+            facts, cache = self.run_extractor(project, cfg, rules)
         except (FileNotFoundError, RuntimeError, subprocess.CalledProcessError) as ex:
             return {"status": "skipped", "reason": str(ex)[:300]}
         t_ext = time.time() - t0

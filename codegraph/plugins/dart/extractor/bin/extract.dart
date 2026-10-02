@@ -670,20 +670,30 @@ void main(List<String> argv) {
   final cfgPath = argv[argv.indexOf('--config') + 1];
   final cfg = jsonDecode(File(cfgPath).readAsStringSync()) as Map<String, dynamic>;
   final root = Directory(cfg['root'] as String);
-  final skip = {...(cfg['skip_dirs'] as List? ?? []).cast<String>(), '.dart_tool', '.git', 'build', '.pub-cache', '.fvm', 'node_modules', 'Pods', '.symlinks'};
+  // directory rules from the presets and .cg.yaml (codegraph/core/paths.py PathRules.extractor_cfg): names to skip,
+  // names kept (hidden directories are skipped unless kept), include directories walked although a rule covers them
+  final skip = {...(cfg['skip_names'] as List? ?? []).cast<String>(), ...(cfg['skip_dirs'] as List? ?? []).cast<String>()};
+  final keep = {...(cfg['keep_names'] as List? ?? []).cast<String>()};
+  final include = (cfg['include'] as List? ?? []).cast<String>().map((i) => i.replaceAll(RegExp(r'^/+|/+$'), '')).where((i) => i.isNotEmpty).toList();
+  bool included(String r) => include.any((i) => r == i || r.startsWith('$i/'));
+  bool onIncludePath(String r) => included(r) || include.any((i) => i.startsWith('$r/'));
+  bool skippedName(String name) => skip.contains(name) || (name.startsWith('.') && !keep.contains(name));
   final skipSuffix = (cfg['skip_suffixes'] as List? ?? ['.freezed.dart', '.mocks.dart']).cast<String>();
   final files = <Map<String, dynamic>>[];
   final failures = <Map<String, dynamic>>[];
   var skipped = 0;
   final rootPath = root.absolute.path;
-  void walk(Directory d) {
+  // forced: `d` is skipped by itself and only walked to reach an include directory
+  void walk(Directory d, [bool forced = false]) {
     final ents = d.listSync(followLinks: false)..sort((a, b) => a.path.compareTo(b.path));
     for (final e in ents) {
       final name = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
+      final rel = e.absolute.path.substring(rootPath.length).replaceFirst(RegExp(r'^/'), '').replaceFirst(RegExp(r'/$'), '');
       if (e is Directory) {
-        if (!skip.contains(name) && !name.startsWith('.')) walk(e);
+        final own = forced || skippedName(name);
+        if (onIncludePath(rel) || !own) walk(e, own && !included(rel));
       } else if (e is File && name.endsWith('.dart')) {
-        final rel = e.absolute.path.substring(rootPath.length).replaceFirst(RegExp(r'^/'), '');
+        if (forced && !included(rel)) continue;
         if (skipSuffix.any((s) => name.endsWith(s))) {
           skipped++;
           continue;

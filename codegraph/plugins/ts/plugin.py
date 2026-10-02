@@ -128,13 +128,20 @@ class TypeScriptPlugin(LanguagePlugin):
                              "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]}
         for fw in frameworks:
             fw.register_hooks(ctx)
-        # .cg.yaml exclude globs and skip_dirs.add names (keep only affects the Python-side walks: the extractor's
-        # dependency / build skips are conventions of the TS toolchain)
+        # the walks' directory rules (codegraph/presets: common + typescript skip_dirs, the test walk's
+        # test_walk_skip_dirs, the tsconfig files that are resolution input only), adjusted by .cg.yaml skip_dirs.add /
+        # keep and include; exclude globs and skip_dirs.add names also drop files the tsconfig itself lists
         rules = path_rules(project, "typescript")
+        ctx.extractor_cfg.update(rules.extractor_cfg())
+        keep = set(rules.keep)
+        ctx.extractor_cfg["test_skip_names"] = sorted(set(presets.values("typescript", "test_walk_skip_dirs", default=[])) - keep)
+        ctx.extractor_cfg["source_skip_names"] = sorted(set(presets.values("typescript", "source_skip_dirs", default=[])) - keep)
         added = set((project.options.get("config") or {}).get("skip_dirs", {}).get("add") or [])
-        ex = [x for x in (rules.exclude_regex(), names_regex(added)) if x]
+        ex = [x for x in (rules.user_exclude_regex(), names_regex(added)) if x]
         if ex:
             ctx.extractor_cfg["exclude_re"] = "|".join(f"(?:{x})" for x in ex)
+        if rules.generated_regex():
+            ctx.extractor_cfg["generated_re"] = rules.generated_regex()
         from ...platforms import uses_react_native
         pcfg = (project.options.get("config") or {}).get("platforms") or {}
         if pcfg.get("file_suffixes", True) and uses_react_native(project.root):

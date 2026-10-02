@@ -165,6 +165,21 @@ secret:
   extra_patterns: ["WebhookGuard$"]                        # cal.com apps/api/v2
 ```
 
+## Monorepo apps
+
+One `cg index <root>` with `.cg.yaml` `apps` (the file was written for the run and removed afterwards), compared
+with indexing each app and linking each pair one by one: every per-app and per-pair graph has the same nodes and
+edges.
+
+| repo | apps | one command | per app (nodes / edges) | links (endpoints matched) |
+|---|---|---|---|---|
+| immich | server, ml (`machine-learning`), web, mobile | 20.6 s | server 8,028 / 36,234; ml 727 / 1,956; web 2,351 / 3,670; mobile 7,443 / 22,990 | web → server 0/0, mobile → server 0/0 (both call through generated SDKs that are not in the checkout) |
+| cal.com | api-v2 (`apps/api/v2`), web (`apps/web`) | 18.5 s | api-v2 3,813 / 12,304; web 5,689 / 12,571 | web → api-v2 0/28 (the web app calls its own Next `/api` routes) |
+| bundled samples | api (`bookstore-django`), web, flutter, android, ios | 2.0 s | api 207 / 341 | flutter 6/7, android 3/3, ios 3/3, web 0/6 (it targets the Laravel sample) |
+
+Taking the extractor skip lists from the presets changed no graph: immich server / web / mobile, cal.com `apps/web`,
+elk, social-app and nestjs-boilerplate index to the same nodes and edges as before.
+
 ## Generated and copied files
 
 `cg index <repo>` with no flags and no `.cg.yaml` (default: generated, copied and vendored files excluded), then again

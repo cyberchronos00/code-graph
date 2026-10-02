@@ -26,6 +26,8 @@ from collections import defaultdict
 
 from ...core.model import EXACT, RESOLVED
 from ...core.plugin import FrameworkPlugin, GraphBuilder, Project
+from ...core.paths import rules as path_rules
+from ... import presets
 from ..python.plugin import ClassInfo, Ctx, FuncInfo, PyProgram, dotted, kwarg, walk_body
 from .values import UNKNOWN, str_value
 
@@ -39,9 +41,7 @@ DEP_FUNCS = {"Depends", "Security"}
 SKIP_DECOS = {"staticmethod", "classmethod", "property", "wraps", "cache", "lru_cache"}
 MANIFESTS = ("requirements.txt", "requirements.in", "requirements/base.txt", "requirements/prod.txt", "pyproject.toml",
              "setup.py", "setup.cfg", "Pipfile")
-TEST_DIRS = {"tests", "test", "testing"}
 TEST_FILE = re.compile(r"(test_.*|.*_test|conftest)\.py$")
-SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "env", "__pycache__", "site-packages", "dist", "build", ".tox"}
 
 
 def _mentions(project: Project, pkgs: tuple[str, ...]) -> bool:
@@ -49,10 +49,12 @@ def _mentions(project: Project, pkgs: tuple[str, ...]) -> bool:
     dep = re.compile(r"(?im)^\s*[\"']?(" + "|".join(pkgs) + r")\b|[\"'](" + "|".join(pkgs) + r")[\[<>=~!\"' ]")
     imp = re.compile(r"(?m)^\s*(from|import)\s+(" + "|".join(pkgs) + r")\b")
     root = project.root
+    rules = path_rules(project, "python")
+    test_dirs = set(presets.values("python", "test_dirs", default=[]))
     for pat in ("", "*/", "*/*/"):
         for name in MANIFESTS:
             for p in root.glob(pat + name):
-                if any(part in SKIP_DIRS for part in p.relative_to(root).parts):
+                if any(part in rules.names for part in p.relative_to(root).parts[:-1]):
                     continue
                 try:
                     if dep.search(p.read_text(errors="replace")):
@@ -69,7 +71,8 @@ def _mentions(project: Project, pkgs: tuple[str, ...]) -> bool:
             continue
         for p in entries:
             if p.is_dir():
-                if p.name not in SKIP_DIRS and p.name not in TEST_DIRS and not p.name.startswith("."):
+                r = p.relative_to(root).as_posix()
+                if not rules.skip(r.rpartition("/")[0], p.name, dot=True) and (p.name not in test_dirs or rules.on_include_path(r)):
                     stack.append(p)
             elif p.suffix == ".py" and not TEST_FILE.match(p.name):   # test fixtures quote `from flask import ...`
                 n += 1

@@ -66,7 +66,8 @@ Issues and pull requests that extend it are welcome.
     `generateStaticParams` are not applied; MDX/MD-only pages are not modelled; parallel / intercepting routes are best
     effort (an intercepting route gets the URI of the page it intercepts); for pages-router data functions
     (`getServerSideProps` etc.) only the CALLS made inside them are recorded;
-  - monorepo roots are not split automatically: index each app (`apps/api`, `apps/web`) separately and `link` them;
+  - monorepo roots are not split automatically: list the apps in `.cg.yaml` `apps`
+    ([configuration.md](configuration.md#monorepo-apps)), or index each app separately and `link` them;
   - JavaScript without types resolves only what the checker can infer (CommonJS exports, object literals);
   - calls through generated API clients, or bases configured outside the repo, have an unknown origin, so they always
     match `heuristic`.

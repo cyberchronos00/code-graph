@@ -35,6 +35,7 @@ CPP_EXT = {".cc", ".cpp", ".cxx", ".c++", ".cp", ".C"}
 HDR_EXT = {".h", ".hh", ".hpp", ".hxx", ".h++", ".ipp", ".inl", ".tcc", ".ixx", ".cuh"}
 # vendored third-party trees, test frameworks, build output (codegraph/presets/c_cpp.yaml; .cg.yaml skip_dirs adjusts them)
 SKIP_DIRS = presets.skip_dirs("c_cpp")
+SKIP_PREFIXES = tuple(presets.values("c_cpp", "skip_dir_prefixes", default=[]))
 CODE = {"function", "method"}
 TYPES = {"class", "struct", "union", "enum", "typedef"}
 VALUES = {"global", "enumerator", "macro"}
@@ -63,8 +64,8 @@ def source_files(root: Path, limit: int | None = None, project=None):
     for dp, dn, fn in os.walk(root):
         rel_dir = Path(dp).relative_to(root).as_posix()
         rd = "" if rel_dir == "." else rel_dir
-        dn[:] = [d for d in rules.prune(rd, dn, dot=True) if not d.startswith(("build", "cmake-build"))
-                 and not (Path(dp) / d / "CMakeCache.txt").exists()]
+        dn[:] = [d for d in rules.prune(rd, dn, dot=True) if rules.on_include_path(f"{rd}/{d}" if rd else d)
+                 or not (d.startswith(SKIP_PREFIXES) or (Path(dp) / d / "CMakeCache.txt").exists())]
         for f in sorted(fn):
             ext = os.path.splitext(f)[1]
             rel = f if rel_dir == "." else f"{rel_dir}/{f}"

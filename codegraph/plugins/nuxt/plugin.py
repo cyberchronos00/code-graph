@@ -26,6 +26,9 @@ from pathlib import Path
 from ... import presets
 from ...core.plugin import FrameworkPlugin, GraphBuilder, Project
 
+# dependency / VCS directories every walk skips (codegraph/presets/common.yaml skip_dirs)
+COMMON_SKIP = presets.skip_dirs("common")
+
 DIR_KINDS = [("pages/", "page"), ("layouts/", "layout"), ("components/", "component"), ("composables/", "composable"),
              ("stores/", "store"), ("utils/", "util"), ("middleware/", "middleware"), ("plugins/", "plugin"),
              ("app.vue", "app"), ("error.vue", "app")]
@@ -178,7 +181,7 @@ def generate_types(root: Path, src_dir: str) -> tuple[Path, dict]:
     cbase = src / "components"
     if cbase.is_dir():
         for f in sorted(cbase.rglob("*")):
-            if f.is_file() and f.suffix in (".vue", ".tsx", ".jsx") and "node_modules" not in f.parts:
+            if f.is_file() and f.suffix in (".vue", ".tsx", ".jsx") and COMMON_SKIP.isdisjoint(f.parts):
                 name = _component_name(list(f.relative_to(cbase).parts))
                 comps.append(f'  {name}: typeof import("{f}")[\'default\']')
                 comps.append(f'  Lazy{name}: LazyComponent<typeof import("{f}")[\'default\']>')

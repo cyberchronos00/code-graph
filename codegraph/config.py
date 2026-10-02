@@ -6,6 +6,8 @@ Records project-specific knowledge once, for the CLI, the MCP server and the vis
     python:
       source_roots: [lib, tools/scripts]     # replace source-root detection (paths relative to the indexed root)
     exclude: ["legacy/**", "*.generated.ts"] # paths never indexed, by any language plugin or the coverage scan
+    include: [src/generated, build/api]      # directories indexed although a built-in skip (directory name, generated
+                                             # files) would leave them out; exclude globs still apply inside them
     skip_dirs:
       add: [fixtures_big]                    # more directory names to skip everywhere
       keep: [static]                         # directory names skipped by default that hold project code here
@@ -28,6 +30,9 @@ Records project-specific knowledge once, for the CLI, the MCP server and the vis
     viz:
       presets:                               # canned queries in the visual view's preset menu
         - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
+    apps:                                    # monorepo: `cg index <root>` indexes each app and links each pair
+      - {name: api, root: apps/api, role: backend}
+      - {name: web, root: apps/web, role: frontend, links: [api]}   # links: backends it calls (default: all)
 
 Command-line flags take precedence over the file. Top-level keys this version does not read are kept and reported
 in the index stats (and as a warning by `cg config validate`), so a file written for a newer cg still indexes."""
@@ -43,8 +48,10 @@ SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None:
     "version": None, "python": {"source_roots"}, "exclude": None, "skip_dirs": {"add", "keep"},
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
     "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
-    "platforms": {"targets", "paths", "file_suffixes", "path_conventions"},
+    "platforms": {"targets", "paths", "file_suffixes", "path_conventions"}, "include": None, "apps": None,
 }
+APP_KEYS = ("name", "root", "role", "links")
+APP_ROLES = ("backend", "frontend")
 KNOWN_KEYS = set(SCHEMA)
 PYTHON_KEYS = SCHEMA["python"]
 VIZ_MODES = ("reaches", "impact", "downstream", "path", "plan")
@@ -216,6 +223,13 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
             if ".." in PurePosixPath(g.strip("/")).parts:
                 raise ConfigError(f"{fname}: exclude[{i}]: {g!r} must stay inside the indexed root (no '..')")
         out["exclude"] = globs
+    if data.get("include") is not None:
+        out["include"] = list(dict.fromkeys(norm_root(d, f"{fname}: include[{i}]")
+                                            for i, d in enumerate(_strings(data["include"], f"{fname}: include"))))
+        if "" in out["include"]:
+            raise ConfigError(f"{fname}: include: '.' is the indexed root itself; name the directories to include")
+    if data.get("apps") is not None:
+        out["apps"] = _apps(data["apps"], fname)
     sd = _section(data, "skip_dirs", fname)
     if sd is not None:
         out["skip_dirs"] = {}
@@ -273,6 +287,56 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
     ignored = sorted(str(k) for k in set(data) - KNOWN_KEYS)
     if ignored:
         out["ignored_keys"] = ignored
+    return out
+
+
+def _apps(v: Any, fname: str) -> list[dict]:
+    """apps as a list of {name, root, role, links} (or a mapping name -> {root, role, links}), validated: unique names,
+    roots inside the indexed root, role backend / frontend, links naming backend apps. A frontend without `links`
+    links to every backend."""
+    if isinstance(v, dict):
+        v = [dict(x or {}, name=k) if isinstance(x, dict) or x is None else x for k, x in v.items()]
+    if not isinstance(v, list) or not v:
+        raise ConfigError(f"{fname}: apps: expected a non-empty list of apps ({{name, root, role, links}})")
+    apps, names = [], set()
+    for i, a in enumerate(v):
+        where = f"{fname}: apps[{i}]"
+        if not isinstance(a, dict):
+            raise ConfigError(f"{where}: expected a mapping with keys {', '.join(APP_KEYS)}")
+        bad = sorted(set(a) - set(APP_KEYS))
+        if bad:
+            raise ConfigError(f"{where}: unknown key {bad[0]!r} (keys: {', '.join(APP_KEYS)})")
+        name = a.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][\w.-]*", name or ""):
+            raise ConfigError(f"{where}.name: expected a name of letters, digits, '.', '-' or '_', got {name!r}")
+        if name in names:
+            raise ConfigError(f"{where}.name: {name!r} is used by two apps")
+        names.add(name)
+        root = norm_root(a.get("root") if a.get("root") is not None else name, f"{where}.root")
+        role = a.get("role", "backend")
+        if role not in APP_ROLES:
+            raise ConfigError(f"{where}.role: expected backend or frontend, got {role!r}")
+        links = _strings(a["links"], f"{where}.links") if a.get("links") is not None else None
+        if links is not None and role != "frontend":
+            raise ConfigError(f"{where}.links: only a frontend app links to backends")
+        apps.append({"name": name, "root": root, "role": role, **({"links": links} if links is not None else {})})
+    backends = {a["name"] for a in apps if a["role"] == "backend"}
+    for i, a in enumerate(apps):
+        for n in a.get("links") or []:
+            if n not in backends:
+                raise ConfigError(f"{fname}: apps[{i}].links: {n!r} is not a backend app"
+                                  + (f" (backends: {', '.join(sorted(backends))})" if backends else ""))
+    return apps
+
+
+def app_pairs(apps: list[dict]) -> list[tuple[dict, dict]]:
+    """(frontend, backend) link pairs in config order."""
+    by = {a["name"]: a for a in apps}
+    backends = [a for a in apps if a["role"] == "backend"]
+    out = []
+    for a in apps:
+        if a["role"] == "frontend":
+            out += [(a, by[n]) for n in a["links"]] if "links" in a else [(a, b) for b in backends]
     return out
 
 
@@ -376,6 +440,10 @@ def effective(root: str | Path, python_roots: list[str] | None = None, gates: st
         sp = PR.values(p, "skip_paths", default=None)
         if sp:
             row("skip_paths", sorted(n for n in sp if n not in sd.get("keep", [])), f"preset {p} (root-relative)")
+    if cfg.get("include"):
+        row("include", cfg["include"], f"{fname} include")
+    else:
+        row("include", [], "none")
     row("skip_dirs (coverage scan)", sorted(PR.values("common", "scan_skip_dirs", default=[])), "preset common")
     if sd.get("add"):
         row("skip_dirs", sd["add"], f"{fname} skip_dirs.add")
@@ -433,6 +501,14 @@ def effective(root: str | Path, python_roots: list[str] | None = None, gates: st
     elif (cfg.get("viz") or {}).get("presets"):
         row("viz.presets", [p["id"] for p in cfg["viz"]["presets"]], f"{fname} viz.presets")
     row("viz.presets (starters)", "derived from the graph at index time (cg starters)", "built-in")
+    if cfg.get("apps"):
+        for a in cfg["apps"]:
+            row("apps", f"{a['name']}: {a['root'] or '.'} ({a['role']})", f"{fname} apps")
+        for f, b in app_pairs(cfg["apps"]):
+            row("apps (link pairs)", f"{f['name']} -> {b['name']}",
+                f"{fname} apps[{f['name']}].links" if "links" in f else "built-in (a frontend links to every backend)")
+    else:
+        row("apps", "none: the root is indexed as one project", "none")
     if cfg.get("ignored_keys"):
         row("ignored keys", cfg["ignored_keys"], f"{fname} (not read by this cg version)")
     return {"root": str(root), "config": cfg, "rows": rows, "warnings": unknown_key_warnings(cfg)}
