@@ -24,6 +24,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
   ([#13](https://github.com/cyberchronos00/code-graph/issues/13)).
 - `cg coverage` and the MCP `coverage` tool list Python source roots with their origin and module counts, and flag
   missing configured roots and files outside every root ([#13](https://github.com/cyberchronos00/code-graph/issues/13)).
+- Python entry points and function references: `__main__` blocks, `__main__.py` and packaging entry points
+  (PEP 621, Poetry, flit, setup.cfg, setup.py) as `script` entry nodes; MCP tools and click / typer / Flask CLI
+  commands as entry points; functions used in dispatch tables, as callbacks or through decorators get `REFERENCES_FN`
+  edges, and calls through dispatch tables resolve, so `impact` reaches them
+  ([#14](https://github.com/cyberchronos00/code-graph/issues/14)).
 
 ### Changed
 

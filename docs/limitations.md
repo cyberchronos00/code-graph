@@ -106,10 +106,17 @@ Issues and pull requests that extend it are welcome.
     stay `unmapped`. When two package trees claim one module name (`tests` in every project of a monorepo), the
     renamed tree's absolute imports of that name resolve to the tree that kept it;
   - stdlib `ast` only: no type checker, so calls through untyped parameters, `**kwargs`, decorators that change signatures,
-    `getattr`/registries and metaclass magic fall back to a unique-name `heuristic` match or stay unresolved. Functions
-    registered through a decorator (`@registry.register`, `@click.command`) or stored in a registry
-    (`registry[key] = fn`) without any caller in the graph are reported as blind spots (detectors
-    `python_decorator_registration`, `python_registry_assignment`);
+    `getattr` and metaclass magic fall back to a unique-name `heuristic` match or stay unresolved. Dispatch tables,
+    plugin lists, callbacks and registering decorators become function references and calls through the collection
+    ([python.md](python.md#entry-points-and-function-references)); a table filled in a loop or by another function
+    (`for name in NAMES: TABLE[name] = make(name)`) and calls through `getattr(obj, name)` are not followed.
+    Functions registered through a decorator (`@registry.register`) or stored in a registry (`registry[key] = fn`)
+    whose caller cg does not see are reported as blind spots (detectors `python_decorator_registration`,
+    `python_registry_assignment`);
+  - entry points: `__main__` blocks, `pkg/__main__.py`, packaging entry points and MCP / click / typer / Flask CLI
+    registrations are modelled; module-level code that runs on import (`app = create_app()` in `wsgi.py`) is not an
+    entry point, and console scripts declared only in a `setup.py` built at run time (entry points computed by code)
+    are not read;
   - web frameworks without a plugin (Flask, FastAPI, …): their route decorators are reported as blind spots
     (detector `python_decorator_routes`) instead of routes;
   - URL confs built in loops/functions (e.g. plugin registries that generate `path()` lists at import time) and views

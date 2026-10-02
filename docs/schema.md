@@ -25,8 +25,11 @@ Rust / C / C++ (lang='rust', 'c', 'cpp'; see [native.md](native.md)): crate, mod
 variant / enumerator, const, static, global, macro, ffi (extern block declaration), plus fact nodes `feature:<pkg>/<f>`,
 `cfg:<atom>`, `define:<MACRO>`, `unsafe:<crate>` and `env:<KEY>`. **module** is the Rust module path or the C/C++
 directory, and `reaches` groups by it.
-Python (lang='python'): module, class, function, method, field (model/schema fields), plus Django route, table, column,
-config (`settings.X`), env, job (Celery task), listener (signal receiver), command (management command), admin, event (signal).
+Python (lang='python'): module, class, function, method, field (model/schema fields), script (an entry point:
+`script:<module>` for an `if __name__ == "__main__":` block or a `pkg/__main__.py`, `script:<group>:<name>` for a
+packaging entry point such as a console script; attrs `via`, `group`, `script`, `target`, `declared_in`), plus Django
+route, table, column, config (`settings.X`), env, job (Celery task), listener (signal receiver), command (management
+command), admin, event (signal). See [python.md](python.md#entry-points-and-function-references).
 Dart (lang='dart'): module (library), class (incl. enums, mixins, extensions), method, function, http (client endpoint, incl.
 `WS` for WebSockets), page (Navigator/go_router/auto_route routes, `page:dart:<package>:<path>`), env (`String.fromEnvironment`, dotenv).
 TS server frameworks (NestJS, Next.js, Express-style; see [ts-frameworks.md](ts-frameworks.md)) reuse the backend kinds:
@@ -48,7 +51,9 @@ Native: USES_TYPE✓, ACCESSES_FIELD✓ (field or enum variant), USES_VALUE✓ (
 REFERENCES_FN✓ (function taken as a value: callbacks, dispatch tables, serde/clap attributes), USES_UNSAFE✓,
 GATED_BY✓ (→ feature/cfg/define), INCLUDES✓ (file → header); IMPLEMENTED_BY / OVERRIDDEN_BY also carry trait and
 virtual dispatch (`attrs.dispatch`), and IMPLEMENTS links a Rust type to its trait.
-Python/Django: USES_SCHEMA (handler → ninja Schema / DRF serializer, attrs.role request|response).
+Python/Django: REFERENCES_FN✓ (function taken as a value; `attrs.how` = collection, callback, assignment, decorator or
+entry point), CALLS through a dispatch table or plugin list (`attrs.via` = collection) and decorator applications
+(`attrs.via` = decorator), USES_SCHEMA (handler → ninja Schema / DRF serializer, attrs.role request|response).
 Dart/Flutter: EMITS_STATE (bloc → state), HANDLES_STATE (UI → state check), NAVIGATES_TO (UI → page), PARSES_JSON (→ model).
 Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (event → channel; attrs `name`, `visibility`,
 `site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs
@@ -63,11 +68,12 @@ MAPS_TO_TABLE, HAS_RELATION, CONTAINS, EXTENDS, IMPLEMENTS, USES_TRAIT, INSTANTI
 - `heuristic`: a unique-method-name fallback, or a column-name literal.
 
 **Entry kinds:**
-- Runtime: `http_route`, `channel_auth` (a broadcast channel's authorization callback), `websocket` (Django Channels routes), `scheduled`, `queue_job` (Laravel jobs, Celery tasks), `listener` (Laravel listeners, Django signal receivers), `message_handler` (Nest microservice / WebSocket / gRPC handlers).
-- Operator: `artisan_command`, `management_command` (Django `manage.py <name>`), `cli_command` (nest-commander), `admin_panel` (Filament, Django admin).
+- Runtime: `http_route`, `channel_auth` (a broadcast channel's authorization callback), `websocket` (Django Channels routes), `scheduled`, `queue_job` (Laravel jobs, Celery tasks), `listener` (Laravel listeners, Django signal receivers), `message_handler` (Nest microservice / WebSocket / gRPC handlers, MCP server tools / resources / prompts in Python).
+- Operator: `artisan_command`, `management_command` (Django `manage.py <name>`), `cli_command` (nest-commander, click / typer / Flask CLI commands), `admin_panel` (Filament, Django admin).
 - `observer`.
-- Native runtime: `main` (bin targets, `#[tokio::main]`, C/C++ `main`), `ffi_export` (`#[no_mangle]`).
-- Library API: `public_api` (pub items of a Rust lib crate, exported C/C++ functions). `reaches` shows a LIBRARY API group.
+- Program entry: `main` (Rust bin targets, `#[tokio::main]`, C/C++ `main`; Python `__main__` blocks, `pkg/__main__.py`,
+  console and GUI scripts), `ffi_export` (`#[no_mangle]`).
+- Library API: `public_api` (pub items of a Rust lib crate, exported C/C++ functions, Python plugin entry-point groups such as `pytest11`). `reaches` shows a LIBRARY API group.
 - Dev/build: `test`, `bench`, `example`, `build_script`. `reaches` shows a DEV/BUILD-ONLY group.
 - UI (TS/Nuxt/Next, Flutter): `ui_page` (Nuxt and Next pages, Flutter routes), `ui_global` (app.vue, layouts, plugins, `*.global.ts` middleware, Flutter `main`). `reaches` shows a UI group.
 

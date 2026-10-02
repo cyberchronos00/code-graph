@@ -324,7 +324,7 @@ or `heuristic` (a labelled name-based fallback). The **mode** column says where 
 | Next.js | exact + resolved | app router (pages, layouts, `route.ts` handlers, dynamic / catch-all segments, route groups, parallel / intercepting routes), pages router + `pages/api`, server actions, `middleware.ts` matchers, `basePath` / rewrites, env incl. `NEXT_PUBLIC_*`, in-repo client → handler links |
 | Express, Fastify, Koa, Hono | exact + resolved | routes, router mounting chains across files (`use`, `register({prefix})`, `route`, `basePath`), route and router-level middleware, Fastify schemas |
 | JavaScript (CommonJS / ESM) | resolved (TS checker with `allowJs`) | the same extractor; resolution follows what the checker infers |
-| Python | resolved (stdlib `ast`, import resolution, type inference) + heuristic fallback | modules, classes, functions, calls; source roots detected from the layout (`src/`, `lib/`, packaging config, several package roots, namespace packages, nested projects) or set in `.cg.yaml` ([docs/python.md](docs/python.md)) |
+| Python | resolved (stdlib `ast`, import resolution, type inference) + heuristic fallback | modules, classes, functions, calls; source roots detected from the layout (`src/`, `lib/`, packaging config, several package roots, namespace packages, nested projects) or set in `.cg.yaml`; entry points (`__main__` blocks, `python -m pkg`, console scripts and plugin entry points from `pyproject.toml` / Poetry / `setup.cfg` / `setup.py`, MCP tools, click / typer commands); functions used as values (dispatch tables, plugin lists, callbacks, registering decorators) and calls through them ([docs/python.md](docs/python.md)) |
 | Django | resolved + heuristic fallback | urls.py (path/re_path/include/namespaces), class/function views, view access checks (`login_required`, permission decorators, access mixins), models → tables/columns/relations, ORM reads/writes, settings/env (os.environ, getenv, django-environ), signals, management commands, admin |
 | django-ninja | resolved | NinjaAPI/Router/`add_router` prefixes, operations with path params, `auth=`, request/response Schema and ModelSchema fields |
 | Django REST Framework | resolved | routers, ViewSets (+ `@action`), APIView/generic views, `permission_classes`, serializer fields |
@@ -476,6 +476,8 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   name (`my-scripts/run.py`) are listed as `unmapped` by `cg coverage`. See [docs/python.md](docs/python.md).
 - **Python/Dart are parsed, not type-checked.** Calls through untyped parameters, `**kwargs`, dynamic dispatch
   (`getattr`, DI containers, Riverpod/Provider lookups without a type) fall back to `heuristic` or stay unresolved.
+  Python dispatch tables, plugin lists, callbacks and registering decorators are followed as function references
+  ([docs/python.md](docs/python.md#entry-points-and-function-references)).
   GraphQL APIs (graphene/strawberry) and Django template rendering are not modelled.
 - **Next to index:** seeders, `Artisan::command` closures, observers fired by model writes, Nuxt server routes, and
   navigation edges (`NuxtLink`, `navigateTo`).
@@ -536,7 +538,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/schema.md](docs/schema.md) | SQLite tables, node kinds, edge kinds, confidence, entry kinds |
 | [docs/native.md](docs/native.md) | Rust, C and C++: install, compile database, modes, facts, entry kinds, query specs, gates, env vars, validation numbers |
 | [docs/ts-frameworks.md](docs/ts-frameworks.md) | NestJS, Next.js and Express-style layers, validation on public projects |
-| [docs/python.md](docs/python.md) | Python source roots: detection, module names, `.cg.yaml` / `--python-root`, coverage output, validation |
+| [docs/python.md](docs/python.md) | Python source roots (detection, module names, `.cg.yaml` / `--python-root`, coverage output), entry points and function references, validation |
 | [docs/value-facts.md](docs/value-facts.md) | request keys, settings, fallback chains, `resolutions` |
 | [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`) |
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |

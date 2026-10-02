@@ -376,6 +376,10 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60) 
     for c in r["callers"]:
         mods[c.get("module") or "?"] += 1
     out.append("\ncallers by module: " + ", ".join(f"{m}×{c}" for m, c in sorted(mods.items(), key=lambda x: -x[1])))
+    refs = [c for c in r["callers"] if c.get("edge") == "REFERENCES_FN"]
+    if refs:   # code that holds the function as a value (dispatch table, callback, decorator) rather than calling it
+        out.append(f"by reference ({len(refs)}): " + ", ".join(f"{short(c['id'])} ({c.get('how') or 'ref'})" for c in refs[:12])
+                   + (f" …+{len(refs) - 12}" if len(refs) > 12 else ""))
     out += _snapshot_client_lines([e["id"] for e in r["entry_points"] if e["id"].startswith("route:")])
     return "\n".join(out)
 
@@ -424,7 +428,8 @@ def callers(symbol: str, min_confidence: str = "heuristic", limit: int = 60) -> 
     out = [head, f"direct callers: {len({r['src'] for r in rows})} ({len(rows)} sites)"]
     for r in rows[:limit]:
         c = "" if r["confidence"] == "exact" else f" ~{r['confidence'][0]}"
-        out.append(f"  {short(r['src'])}  {r['kind']}@{at((r['file'] or '?') + ':' + str(r['line']))}{c}")
+        k = "ref" if r["kind"] == "REFERENCES_FN" else r["kind"]
+        out.append(f"  {short(r['src'])}  {k}@{at((r['file'] or '?') + ':' + str(r['line']))}{c}")
     if len(rows) > limit:
         out.append(f"  … +{len(rows) - limit} more (raise limit)")
     return "\n".join(out)

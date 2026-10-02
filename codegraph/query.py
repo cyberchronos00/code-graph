@@ -53,6 +53,11 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
                        AND (fqn=? OR fqn LIKE ?)""", (spec, "%#" + spec))
         if rows:
             return [r["id"] for r in rows]
+        # a dotted suffix of a Python fqn: `PyProgram.load`, `plugin.PyProgram.load`, `checks.validate` in a package
+        rows = st.q("""SELECT id FROM nodes WHERE lang='python' AND kind IN ('function','method','class')
+                       AND fqn LIKE ? ESCAPE '\\'""", ("%." + spec.replace("_", "\\_"),))
+        if rows:
+            return [r["id"] for r in rows]
         rows = st.q("SELECT id FROM nodes WHERE id=?", (f"column:{spec}",))
         if rows:
             return [rows[0]["id"]]
@@ -186,6 +191,10 @@ def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="
         while depth.get(x, 0) > 0 and x in best and guard < 60:
             e = best[x]
             hop = {"from": e["src"], "kind": e["kind"], "to": e["dst"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"]}
+            if e["kind"] == "REFERENCES_FN" and e["attrs"]:
+                hop["how"] = json.loads(e["attrs"]).get("how")
+            elif e["kind"] == "CALLS" and e["attrs"] and '"collection"' in e["attrs"]:
+                hop["via"] = json.loads(e["attrs"]).get("via")
             if e["gate"]:
                 hop["gated"] = e["gate"]
                 hop["guard"] = json.loads(e["attrs"] or "{}").get("guard")
@@ -393,6 +402,23 @@ def _has_class_target(targets: list[str]) -> bool:
     return any(t.split(":", 1)[0] in CLASS_KINDS for t in targets)
 
 
+def _first_hop(path: list[dict] | None) -> dict:
+    """How a caller reaches the next node towards the target: `edge` kind, plus `how` for a function reference."""
+    if not path:
+        return {}
+    h = path[0]
+    return {"edge": h["kind"], **({"how": h["how"]} if h.get("how") else {}), **({"via": h["via"]} if h.get("via") else {})}
+
+
+def caller_label(c: dict) -> str:
+    """'' for a call; '  (ref: collection)' when the caller holds a reference to the function instead of calling it."""
+    if c.get("edge") == "REFERENCES_FN":
+        return f"  (ref: {c['how']})" if c.get("how") else "  (ref)"
+    if c.get("via") == "collection":
+        return "  (call through a collection)"
+    return ""
+
+
 def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
     targets = resolve_targets(st, spec)
     si = _has_class_target(targets)
@@ -407,7 +433,8 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic") -> dict:
             rows[r["id"]] = dict(r)
     entries = [dict(rows[n], depth=d, path=paths[n], path_confidence=path_confidence(paths[n])) for n, d in depth.items()
                if n in rows and rows[n]["entry_kind"]]
-    callers = [dict(rows[n], depth=d) for n, d in depth.items() if n in rows and rows[n]["kind"] in CODE_KINDS + ("http",) and d > 0]
+    callers = [dict(rows[n], depth=d, **_first_hop(paths.get(n))) for n, d in depth.items()
+               if n in rows and rows[n]["kind"] in CODE_KINDS + ("http",) and d > 0]
     return {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
             "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or ""))}
 

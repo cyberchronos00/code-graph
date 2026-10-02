@@ -14,7 +14,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 
 - `reaches`, `impact`, `siblings`, `writers`, `node`, `stats`;
 - `callers(symbol, min_confidence?, limit?)`: direct callers of a function, method or class (one level, with the call
-  site and confidence); `impact` follows them up to the entry points;
+  site and confidence; `ref@file:line` for code that takes the function as a value, such as a dispatch table or a
+  callback); `impact` follows them up to the entry points and lists those references in a `by reference` line;
 - `search(name, kind?, limit?)`: nodes by name / FQN substring, plus route middleware, guard, auth and access names
   with the routes that carry them (`search("auth")` finds `auth:api`, `ApiKeyGuard`, `IsAuthenticated`, …);
 - `routes(writes?, reaches?, missing?, unguarded?, auth_pattern?, max_items?, paths?, min_confidence?)`: routes with

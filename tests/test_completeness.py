@@ -157,8 +157,10 @@ def test_django_dynamic_urlpatterns_partial_routes_and_impact(tmp_path):
     assert "all routes: 1 indexed (possibly more: 1 unmodelled route registration)" in txt
     assert "coverage note: 1 route registration cg does not model (Django urlpatterns built by a function call" in txt
     out = cg("impact", "shop.views.list_orders", "--db", db).stdout
-    assert "no callers found in indexed code (blind spots: 1 unmodelled route registration)" in out
-    assert "shop/urls.py:9" in out
+    # the view is passed to path() inside api_routes: a function reference keeps it in impact, and the unmodelled
+    # registration (urlpatterns built by a call) is still named
+    assert "d=1 [shop] shop.urls.api_routes  (ref: callback)" in out and "entry points: 0" in out
+    assert "1 route registration cg does not model" in out and "shop/urls.py:9" in out
     filt = R.render_routes(R.routes_report(st, writes="*"), st)
     assert "0 of 1 indexed routes (possibly more: 1 unmodelled route registration)" in filt
 

@@ -80,6 +80,90 @@ the Python plugin records `roots_mode` (`detected`, `configured`, `flag`), `sour
 `modules`, and `package` for a mapped directory), `roots_warnings`, `roots_ambiguous` and `module_name_collisions`;
 MCP `coverage(json_output=true)` adds them as `python_source_roots`.
 
+## Entry points and function references
+
+A Python function is often reached without a direct call: it is listed in a dispatch table, passed as a callback,
+registered by a decorator, run from a `__main__` block, or named in packaging metadata. cg records these, so `impact`
+reaches the code that runs it.
+
+**Function references.** A function used as a value gets a `REFERENCES_FN` edge from the function (or module, or
+class) that mentions it, with `how`:
+
+| `how` | example |
+|---|---|
+| `collection` | `CHECKS = (check_size, check_owner)`, `HANDLERS = {"create": on_create}`, `registry.append(fn)`, `.add`, `.insert`, `.extend`, `.setdefault` |
+| `callback` | `executor.submit(job)`, `sorted(items, key=by_name)`, `Thread(target=worker)`, `signal.connect(receiver)` |
+| `assignment` | `handler = on_create`, `self.hook = fallback` |
+| `decorator` | `@retry` on a local decorator `retry`: the decorator references the function it wraps |
+
+Properties are attribute reads, not references. A call through the table (`for check in CHECKS: check(item)`,
+`HANDLERS[kind](e)`, `self.plugins[name].run()`) becomes a `CALLS` edge with `via="collection"` to each function the
+table can hold, at `resolved` confidence; it replaces the unique-name guess cg made before. A local decorator also
+gets `CALLS owner -> decorator` with `via="decorator"`. Function-local imports (`from . import routes as R` inside a
+def) resolve per function.
+
+**Entry points.** cg adds `script` nodes for code that a command line starts:
+
+| source | node | entry kind | label |
+|---|---|---|---|
+| `if __name__ == "__main__":` block | `script:<module>` | `main` | `python -m pkg.mod` or `python file.py` |
+| `pkg/__main__.py` (whole module body) | `script:pkg.__main__` | `main` | `python -m pkg` |
+| `[project.scripts]` / `[project.gui-scripts]`, `[tool.poetry.scripts]`, `[tool.flit.scripts]`, setup.cfg `[options.entry_points] console_scripts`, setup.py literal `entry_points` | `script:console_scripts:<name>` | `main` | `console script <name>` / `GUI script <name>` |
+| other entry-point groups (`[project.entry-points.<group>]`, Poetry plugins, setup.cfg / setup.py groups) | `script:<group>:<name>` | `public_api` | `<group> <name>` |
+
+A target `pkg.mod:func` gets `CALLS via="entry_point"` to the function; `pkg.mod:Class` references the class's methods;
+a module target references its public functions; a typer or click object runs its registered commands. Targets cg
+cannot find are counted in `entry_points_unresolved`, with samples.
+
+Functions registered with a framework are entry points themselves: MCP tools, resources and prompts (`FastMCP`,
+`@mcp.tool()`, `mcp.tool()(fn)`, `add_tool`) get `message_handler`; click, asyncclick, rich-click, cloup and typer
+commands and callbacks, and Flask `@app.cli.command()` get `cli_command`. A local wrapper that registers the function
+it decorates passes the entry on to every function it wraps. An external decorator that registers with a receiver
+(`@app.route`, `@bus.subscribe`, ...) gives a `heuristic` reference from the module, marked `registry="external"`.
+References into views that Django already wires through `urls.py` are dropped in favour of the route edges.
+
+```console
+$ cg impact checks.check_size --db out/checks.db
+targets: ['function:checks.check_size']
+callers (transitive): 5
+  d=1 [module] checks  (ref: collection)
+  d=1 [function] checks.validate  (call through a collection)
+  d=2 [function] checks.main
+  d=3 [script] console script checks
+  d=3 [script] python checks.py
+entry points: 2
+  main             console script checks  conf=resolved
+        path: script:console_scripts:checks
+          -CALLS[exact @ pyproject.toml:6]-> function:checks.main
+          -CALLS[exact @ checks.py:13]-> function:checks.validate
+          -CALLS[resolved @ checks.py:10]-> function:checks.check_size
+  main             python checks.py  conf=resolved
+  ...
+```
+
+The Python plugin stats record `references`, `decorator_calls`, `script_entries`, `registrations`,
+`entry_points_unresolved` and `references_superseded`.
+
+Not modelled: module-level code that runs on import is not an entry point of its own; property reads are not `CALLS`;
+`getattr(obj, name)()` with a computed name and functions registered by external libraries without a receiver stay
+unresolved. Test code still counts as an ordinary caller until tests are marked for Python.
+
+Measured on the same shallow clones as below, before and after:
+
+| Project | REFERENCES_FN edges | CALLS edges | script nodes | entry points added |
+|---|---|---|---|---|
+| pallets/flask | 0 -> 163 | 1,396 -> 1,538 | 0 -> 3 | 12 `cli_command`, 3 `main` |
+| pytest-dev/pytest | 0 -> 386 | 14,589 -> 14,789 | 0 -> 12 | 12 `main` (8 `__main__` blocks, 2 `__main__.py`, 2 console scripts) |
+| ansible/ansible | 0 -> 1,035 | 21,772 -> 22,247 | 0 -> 234 | 234 `main` |
+| open-telemetry/opentelemetry-python | 0 -> 363 | 11,627 -> 11,723 | 0 -> 64 | 12 `main`, 52 `public_api` (entry-point groups) |
+| netbox-community/netbox | 0 -> 192 | 20,439 -> 20,744 | 0 -> 8 | 8 `main`; Django routes and entry points unchanged |
+| fastapi/full-stack-fastapi-template | 0 -> 29 | 180 -> 182 | 0 -> 3 | 3 typer `cli_command`, 3 `main` |
+
+Calls through a collection: pytest 10, ansible 79, opentelemetry-python 25, netbox 260. Django-derived edges are
+identical before and after (27,897 in netbox). In opentelemetry-python the function-local import fix moved
+`_create_otlp_grpc_*_exporter` from the HTTP exporter class to the gRPC one. The Python plugin takes about 5-10% longer
+(ansible 11.5 s -> 12.4 s, netbox 13.9 s -> 14.8 s, best of three on a shared machine).
+
 ## Validation
 
 Measured on shallow clones of public projects (default branch, October 2026), before and after source-root detection:

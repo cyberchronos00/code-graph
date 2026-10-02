@@ -67,8 +67,8 @@ registration) or a caller chain that runs through it (an entry point is missing 
 | `express_loop_routes` | route | Express / Fastify / Koa / Hono routes registered in a loop or callback over a list, or with a computed method (`router[m.method](...)`) | [TS frameworks](limitations.md) (dynamic registration) |
 | `laravel_loop_routes` | route | `Route::` calls inside `foreach` / `for` / `while`, `->each(...)` / `->map(...)` or `array_map(...)` | [Laravel](limitations.md) (routes built from data) |
 | `python_decorator_routes` | route | a function with a route decorator (`@app.route`, `@router.get`) that no plugin turned into a route | [Python / Django](limitations.md) (frameworks without a plugin) |
-| `python_decorator_registration` | handler | a function registered through a decorator (`@registry.register`, `@click.command`, `@app.task`) with no entry point and no incoming edge | [Python / Django](limitations.md) (registries) |
-| `python_registry_assignment` | handler | `registry[key] = fn` where `fn` has no caller in the graph | [Python / Django](limitations.md) (registries) |
+| `python_decorator_registration` | handler | a function registered through a decorator (`@registry.register`, `@app.task`) with no entry point and no caller besides the decorator's own reference (click / typer / MCP registrations are entry points) | [Python / Django](limitations.md) (registries) |
+| `python_registry_assignment` | handler | `registry[key] = fn` where `fn` has no caller in the graph (a call through the registry, `registry[key](...)`, counts) | [Python / Django](limitations.md) (registries) |
 
 Detectors look at what the graph already models: a decorated Python function that a plugin made an entry point (a
 django-ninja operation, a Celery task the Django plugin knows) or that has callers is not reported. Each detector has a

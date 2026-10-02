@@ -342,10 +342,11 @@ def _deco_name(text: str) -> tuple[str, bool]:
 
 def python_registrations(builder) -> list[dict]:
     """Python functions registered through a decorator (`@app.route`, `@registry.register`, `@click.command`) that no
-    plugin turned into an entry point or an incoming edge: they look unused / uncalled in the graph."""
+    plugin turned into an entry point or a caller: the graph holds the decorator's reference (REFERENCES_FN, how =
+    decorator) but not who invokes the registered function."""
     incoming = set()
     for e in builder.edges.values():
-        if e.kind != "CONTAINS":
+        if e.kind != "CONTAINS" and not (e.kind == "REFERENCES_FN" and (e.attrs or {}).get("how") == "decorator"):
             incoming.add(e.dst)
     routes, regs, decos = [], [], {}
     local_fns = {(n.file, n.name): n.id for n in builder.nodes.values() if n.lang == "python" and n.kind == "function"}
@@ -371,10 +372,11 @@ def python_registrations(builder) -> list[dict]:
 
 def python_registry_assignments(prog, builder) -> dict | None:
     """`registry[key] = fn` (module level or inside a function) where fn is a function of the same module that
-    has no caller in the graph: dispatch through the registry is not followed."""
+    has no caller in the graph: no call through the registry was found (a module-level reference alone does not
+    count; `REGISTRY[key](...)` in indexed code becomes CALLS via collection)."""
     incoming = set()
     for e in builder.edges.values():
-        if e.kind != "CONTAINS":
+        if e.kind != "CONTAINS" and not (e.kind == "REFERENCES_FN" and e.src.startswith("module:")):
             incoming.add(e.dst)
     hits = []
     for m in prog.modules.values():

@@ -18,7 +18,9 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   by `link`, so it also works after the source DBs are gone). See [completeness.md](completeness.md).
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
-- `impact METHOD [--plans-dir DIR]`: reverse walk from a method up to its entry points. With `--plans-dir`, external
+- `impact METHOD [--plans-dir DIR]`: reverse walk from a method up to its entry points. A caller that holds the
+  function as a value instead of calling it is marked `(ref: collection | callback | assignment | decorator)`, and a
+  call through a dispatch table or plugin list `(call through a collection)`. With `--plans-dir`, external
   clients recorded in snapshot files there (`snapshot_version` + `calls`) that call an affected route are listed too.
 - `downstream SPEC`: forward dependencies (page → composables → HTTP → routes → services → tables).
 - `path SRC DST`: one shortest evidence chain. A `table:` target with no direct table edge on the way falls back to

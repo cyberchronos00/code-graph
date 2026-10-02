@@ -193,7 +193,7 @@ def main(argv=None):
         print(f"callers (transitive): {len(res['callers'])}")
         for c in res["callers"]:
             loc = f"  @ {c['file']}:{c['line']}" if Q.NATIVE_FILE_RE.search(c.get("file") or "") else ""
-            print(f"  d={c['depth']} [{c['module'] or c['kind']}] {c['fqn']}{loc}")
+            print(f"  d={c['depth']} [{c['module'] or c['kind']}] {c['fqn']}{loc}{Q.caller_label(c)}")
         print(f"entry points: {len(res['entry_points'])}")
         for e in res["entry_points"]:
             native = Q.NATIVE_FILE_RE.search(e.get("file") or "")

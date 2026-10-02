@@ -11,7 +11,10 @@ Parses every .py file once and builds:
     `attr_rules` / `call_rules` (e.g. Django `Model.objects.filter()` -> queryset of Model);
   * edges: IMPORTS, CALLS (exact: direct names / self / class instantiation; resolved: inferred
     receiver type; heuristic: unique method name), INSTANTIATES, EXTENDS, CONTAINS, READS_ENV
-    (os.environ / os.getenv / django-environ / python-decouple).
+    (os.environ / os.getenv / django-environ / python-decouple), REFERENCES_FN (functions used as values) and
+    CALLS via="collection" (calls through dispatch tables);
+  * `script` entry nodes for `__main__` blocks, `pkg/__main__.py` and packaging entry points, plus MCP / click /
+    typer registrations (see `refs.py`).
 
 Framework plugins (Django) get the `PyProgram` as their context and walk function bodies with
 `prog.infer()` / `prog.resolve_call()`.
@@ -698,6 +701,10 @@ class PyProgram:
                 lv.setdefault(sub.target.id, []).append((sub.value, sub.annotation, "assign"))
             elif isinstance(sub, (ast.For, ast.AsyncFor, ast.comprehension)) and isinstance(sub.target, ast.Name):
                 lv.setdefault(sub.target.id, []).append((sub.iter, None, "iter"))
+            elif isinstance(sub, (ast.For, ast.AsyncFor, ast.comprehension)) and isinstance(sub.target, ast.Tuple):
+                for i, el in enumerate(sub.target.elts):   # for name, fn in TABLE / TABLE.items()
+                    if isinstance(el, ast.Name):
+                        lv.setdefault(el.id, []).append((sub.iter, None, f"iterunpack{i}"))
             elif isinstance(sub, (ast.With, ast.AsyncWith)):
                 for it in sub.items:
                     if isinstance(it.optional_vars, ast.Name):
@@ -706,6 +713,37 @@ class PyProgram:
                 lv.setdefault(sub.target.id, []).append((sub.value, None, "assign"))
         self._var_cache[key] = lv
         return lv
+
+    def func_imports(self, f: FuncInfo) -> dict:
+        """Names bound by import statements inside a def (incl. its nested defs): local name -> import tuple."""
+        cached = getattr(f, "_imports", None)
+        if cached is not None:
+            return cached
+        out: dict = {}
+        m = f.module
+        local = getattr(m, "_local_imports", None)
+        if local is None:
+            top = {id(st) for st in m.tree.body}
+            local = m._local_imports = [st for st in m.import_nodes if id(st) not in top]
+        lo, hi = f.node.lineno, getattr(f.node, "end_lineno", None) or f.node.lineno
+        for sub in local:
+            if not lo <= sub.lineno <= hi:
+                continue
+            if isinstance(sub, ast.Import):
+                for a in sub.names:
+                    if a.asname:
+                        out[a.asname] = ("mod", a.name)
+                    else:
+                        out.setdefault(a.name.split(".")[0], ("modprefix", a.name.split(".")[0]))
+            elif isinstance(sub, ast.ImportFrom):
+                base = self._abs_from(f.module, sub.module, sub.level)
+                if base is None:
+                    continue
+                for a in sub.names:
+                    if a.name != "*":
+                        out[a.asname or a.name] = ("sym", base, a.name)
+        f._imports = out
+        return out
 
     def infer(self, e, ctx: "Ctx"):
         if e is None or self._infer_depth > 40:
@@ -735,7 +773,7 @@ class PyProgram:
                             t = None
                             if ann is not None:
                                 t = self.ann_type(ctx.mod, ann)
-                            if t is None and val is not None:
+                            if t is None and val is not None and not kind.startswith("iterunpack"):
                                 t = self.infer(val, ctx)
                                 if t is not None and kind == "iter":
                                     t = t[1] if t[0] == "list" else self.iter_type(t)
@@ -746,8 +784,13 @@ class PyProgram:
                     finally:
                         ctx.visiting.discard(key)
                     return None
+                li = self.func_imports(ctx.func)
+                if n in li:   # `from . import routes as R` inside this def: the def's own binding, not another def's
+                    return self._resolve_import(li[n])
             if ctx.cls is not None and ctx.func is None and n in ctx.cls.attrs:
                 return self.class_attr(ctx.cls, n)
+            if ctx.cls is not None and ctx.func is None and n in ctx.cls.methods:   # class body: `TABLE = {"go": start}`
+                return ("func", ctx.cls.methods[n])
             r = self.resolve_name(ctx.mod, n)
             if r and r[0] == "var":
                 vt = self.var_type(r[1], r[2])
@@ -857,6 +900,10 @@ class PyProgram:
             if t[0] == "type":
                 return [(t[1], EXACT, "instantiate")]
             return []
+        if isinstance(fn, (ast.Name, ast.Attribute, ast.Subscript, ast.Call)):
+            out = self.dispatch_targets(fn, ctx)
+            if out:
+                return out
         if isinstance(fn, ast.Attribute):
             cands = self.method_index.get(fn.attr) or []
             if len(cands) == 1 and fn.attr not in STOP_METHODS and not fn.attr.startswith("__"):
@@ -864,6 +911,181 @@ class PyProgram:
                 if vt is None:
                     return [(cands[0], HEURISTIC, "unique-method-name")]
         return []
+
+    # ---- calls through a collection (dispatch tables, plugin lists, callback registries)
+    def dispatch_targets(self, fn, ctx: "Ctx") -> list:
+        """Callee drawn from a collection of known functions / classes / instances: `for check in CHECKS: check(x)`,
+        `HANDLERS[kind](x)`, `HANDLERS.get(kind)(x)`, `for p in PLUGINS: p.index()`. -> [(target, RESOLVED, "collection")]"""
+        out, seen = [], set()
+
+        def add(tgt):
+            if tgt is not None and id(tgt) not in seen:
+                seen.add(id(tgt))
+                out.append((tgt, RESOLVED, "collection"))
+        if isinstance(fn, ast.Attribute):
+            if isinstance(fn.value, ast.Name) and fn.value.id in ("self", "cls"):
+                return []
+            for e, ectx in self.drawn_from(fn.value, ctx):
+                t = self.infer(e, ectx)
+                if t and t[0] in ("inst", "type"):
+                    add(self.find_method(t[1], fn.attr))
+            return out
+        from .refs import is_property
+        for e, ectx in self.drawn_from(fn, ctx):
+            t = self.infer(e, ectx)
+            if t and t[0] in ("func", "bound") and not (t[0] == "bound" and is_property(t[1])):
+                add(t[1])
+            elif t and t[0] == "type":
+                add(t[1])
+        return out
+
+    def drawn_from(self, e, ctx: "Ctx", depth=0) -> list:
+        """Element expressions `e` may hold when it is taken out of a collection: a loop variable over it, an item
+        lookup (`T[k]`, `T.get(k)`) or a local assigned from one. [] when `e` is not drawn from a known collection."""
+        if depth > 4:
+            return []
+        if isinstance(e, ast.Subscript) and not isinstance(e.slice, ast.Slice):
+            return self.elements(e.value, ctx, "values")
+        if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and e.func.attr in ("get", "pop", "setdefault") \
+                and e.args:
+            out = self.elements(e.func.value, ctx, "values")
+            if out and len(e.args) > 1:
+                out = out + [(e.args[1], ctx)]
+            return out
+        if not isinstance(e, ast.Name) or ctx.func is None:
+            return []
+        lv = self.local_vars(ctx)
+        out = []
+        for val, _ann, kind in lv.get(e.id, ()):
+            if val is None:
+                continue
+            if kind == "iter":
+                out += self.elements(val, ctx, "iter")
+            elif kind.startswith("iterunpack"):
+                i = int(kind[10:])
+                if isinstance(val, ast.Call) and isinstance(val.func, ast.Attribute) and val.func.attr == "items" \
+                        and not val.args:
+                    out += self.elements(val.func.value, ctx, "keys" if i == 0 else "values")
+                    continue
+                for x, xctx in self.elements(val, ctx, "iter"):
+                    if isinstance(x, (ast.Tuple, ast.List)) and i < len(x.elts):
+                        out.append((x.elts[i], xctx))
+            elif kind == "assign":
+                out += self.drawn_from(val, ctx, depth + 1)
+        return out
+
+    def elements(self, e, ctx: "Ctx", mode="iter", depth=0) -> list:
+        """(expr, ctx) for each element of collection `e`: list / tuple / set / dict literals (mode iter|keys -> dict
+        keys, values -> dict values) behind names, module constants, class attributes, `*spread`, `+`,
+        list()/tuple()/sorted() and filtering comprehensions; module-level `.append()` / `.extend()` / `[k] = v`
+        / `.update()` / `.add()` count too."""
+        if e is None or depth > 6:
+            return []
+        if isinstance(e, (ast.List, ast.Tuple, ast.Set)):
+            out = []
+            for x in e.elts:
+                if isinstance(x, ast.Starred):
+                    out += self.elements(x.value, ctx, mode, depth + 1)
+                else:
+                    out.append((x, ctx))
+            return out
+        if isinstance(e, ast.Dict):
+            out = []
+            for k, v in zip(e.keys, e.values):
+                if k is None:   # {**OTHER}
+                    out += self.elements(v, ctx, mode, depth + 1)
+                else:
+                    out.append((v if mode == "values" else k, ctx))
+            return out
+        if isinstance(e, ast.BinOp) and isinstance(e.op, (ast.Add, ast.BitOr)):
+            return self.elements(e.left, ctx, mode, depth + 1) + self.elements(e.right, ctx, mode, depth + 1)
+        if isinstance(e, ast.IfExp):
+            return self.elements(e.body, ctx, mode, depth + 1) + self.elements(e.orelse, ctx, mode, depth + 1)
+        if isinstance(e, (ast.ListComp, ast.GeneratorExp, ast.SetComp)) and len(e.generators) == 1 \
+                and isinstance(e.elt, ast.Name) and isinstance(e.generators[0].target, ast.Name) \
+                and e.generators[0].target.id == e.elt.id:
+            return self.elements(e.generators[0].iter, ctx, mode, depth + 1)
+        if isinstance(e, ast.Call):
+            fn = e.func
+            if isinstance(fn, ast.Name) and fn.id in ("list", "tuple", "set", "frozenset", "sorted", "reversed") and e.args:
+                return self.elements(e.args[0], ctx, mode, depth + 1)
+            if isinstance(fn, ast.Name) and fn.id == "dict" and e.args:
+                return self.elements(e.args[0], ctx, mode, depth + 1)
+            if isinstance(fn, ast.Attribute) and fn.attr in ("values", "keys") and not e.args:
+                return self.elements(fn.value, ctx, "values" if fn.attr == "values" else "keys", depth + 1)
+            if dotted(fn) in ("itertools.chain", "chain"):
+                return [x for a in e.args for x in self.elements(a, ctx, mode, depth + 1)]
+            return []
+        if isinstance(e, ast.Name):
+            if ctx.func is not None:
+                lv = self.local_vars(ctx)
+                if e.id in lv:
+                    out = []
+                    for val, _ann, kind in lv[e.id]:
+                        if kind == "assign" and val is not None:
+                            out += self.elements(val, ctx, mode, depth + 1)
+                    return out
+            r = self.resolve_name(ctx.mod, e.id)
+            if r and r[0] == "var":
+                return self.module_elements(r[1], r[2], mode, depth)
+            return []
+        if isinstance(e, ast.Attribute):
+            base = self.infer(e.value, ctx)
+            if base and base[0] == "mod":
+                if e.attr in base[1].vars:
+                    return self.module_elements(base[1], e.attr, mode, depth)
+                r = self.lookup(base[1].name, e.attr)
+                if r and r[0] == "var":
+                    return self.module_elements(r[1], r[2], mode, depth)
+            elif base and base[0] in ("inst", "type"):
+                c = base[1]
+                for k in [c] + [b[1] for b in self.mro(c) if b[0] == "type"]:
+                    if e.attr in k.attrs and k.attrs[e.attr][0] is not None:
+                        return self.elements(k.attrs[e.attr][0], Ctx(k.module, None, k), mode, depth + 1)
+            return []
+        return []
+
+    def module_elements(self, m: ModInfo, name: str, mode: str, depth: int) -> list:
+        mctx = Ctx(m, None, None)
+        out = []
+        for val, _line, _ann in m.vars.get(name, ()):
+            out += self.elements(val, mctx, mode, depth + 1)
+        for val, how in self.mutations(m).get(name, ()):
+            if how == "item":
+                out += [(val, mctx)] if mode == "values" else []
+            elif how == "one":
+                out.append((val, mctx))
+            else:
+                out += self.elements(val, mctx, mode, depth + 1)
+        return out
+
+    def mutations(self, m: ModInfo) -> dict:
+        """Module-level `NAME.append(x)` / `.add(x)` / `.extend(xs)` / `.update({...})` / `NAME[k] = x`."""
+        cached = getattr(m, "_mutations", None)
+        if cached is not None:
+            return cached
+        out: dict = {}
+        stack = list(m.tree.body)
+        while stack:
+            st = stack.pop()
+            if isinstance(st, (ast.If, ast.Try, ast.With, ast.For)):
+                stack.extend(x for x in ast.iter_child_nodes(st) if isinstance(x, ast.stmt))
+                for h in getattr(st, "handlers", ()):
+                    stack.extend(h.body)
+                continue
+            if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call) and isinstance(st.value.func, ast.Attribute) \
+                    and isinstance(st.value.func.value, ast.Name) and st.value.args and st.value.func.value.id in m.vars:
+                nm, attr = st.value.func.value.id, st.value.func.attr
+                if attr in ("append", "add"):
+                    out.setdefault(nm, []).append((st.value.args[0], "one"))
+                elif attr in ("extend", "update"):
+                    out.setdefault(nm, []).append((st.value.args[0], "many"))
+            elif isinstance(st, ast.Assign):
+                for t in st.targets:
+                    if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id in m.vars:
+                        out.setdefault(t.value.id, []).append((st.value, "item"))
+        m._mutations = out
+        return out
 
     def subclasses(self, c: ClassInfo) -> list[ClassInfo]:
         if not hasattr(self, "_subs"):
@@ -977,25 +1199,31 @@ class PythonPlugin(LanguagePlugin):
         # calls + env reads
         conf_ct = {EXACT: 0, RESOLVED: 0, HEURISTIC: 0}
         n_env = 0
+        from .refs import RefPass
+        rp = RefPass(prog, b, Ctx)
         for f in list(prog.funcs.values()):
             ctx = Ctx(f.module, f, f.cls)
-            for sub in walk_body(f.node):
-                if isinstance(sub, ast.Call):
-                    for tgt, conf, via in prog.resolve_call(sub, ctx):
-                        if isinstance(tgt, ClassInfo):
-                            b.add_edge(f.id, tgt.id, "INSTANTIATES", f.file, sub.lineno, conf)
-                            init = prog.find_method(tgt, "__init__")
-                            if init:
-                                b.add_edge(f.id, init.id, "CALLS", f.file, sub.lineno, conf, via="constructor")
-                        else:
-                            b.add_edge(f.id, tgt.id, "CALLS", f.file, sub.lineno, conf, **({"via": via} if via else {}))
-                        conf_ct[conf] += 1
+            # one walk per def: function references (refs.py) + its calls, in walk_body order
+            calls: list = []
+            body = {id(x) for x in f.node.body}
+            rp.scan(f.id, [(c, f.node, id(c) in body) for c in ast.iter_child_nodes(f.node)], ctx, f.file, False, calls)
+            for sub in calls:
+                for tgt, conf, via in prog.resolve_call(sub, ctx):
+                    if isinstance(tgt, ClassInfo):
+                        b.add_edge(f.id, tgt.id, "INSTANTIATES", f.file, sub.lineno, conf)
+                        init = prog.find_method(tgt, "__init__")
+                        if init:
+                            b.add_edge(f.id, init.id, "CALLS", f.file, sub.lineno, conf, via="constructor")
+                    else:
+                        b.add_edge(f.id, tgt.id, "CALLS", f.file, sub.lineno, conf, **({"via": via} if via else {}))
+                    conf_ct[conf] += 1
             n_env += self.env_reads(prog, b, f.id, f.node, ctx)
         for m in prog.modules.values():
             n_env += self.env_reads(prog, b, m.id, m.tree, Ctx(m, None, None), top_only=True)
+        refs = self.references_and_entries(prog, b, conf_ct, rp)
         st.update({"classes": len(prog.classes), "functions": sum(1 for f in prog.funcs.values() if f.kind == "function"),
                    "methods": sum(1 for f in prog.funcs.values() if f.kind == "method"), "imports": n_imp,
-                   "extends": n_ext, "calls": conf_ct, "env_reads": n_env,
+                   "extends": n_ext, "calls": conf_ct, "env_reads": n_env, **refs,
                    "parse_error_files": [e["file"] for e in prog.parse_errors[:20]],
                    "roots_mode": prog.root_plan.mode, "source_roots": prog.roots_report,
                    **({"roots_warnings": prog.root_plan.warnings} if prog.root_plan.warnings else {}),
@@ -1007,6 +1235,150 @@ class PythonPlugin(LanguagePlugin):
                       if prog.root_plan.n_collisions else {}),
                    "seconds": round(time.time() - t0, 2)})
         return st
+
+    def after_frameworks(self, b, st: dict) -> None:
+        """A function a framework plugin wired up (Django route -> view, signal -> receiver, task) keeps that precise
+        edge; the module-level reference to it (`path("x/", views.x)`, `@router.get(...)`) is the same registration
+        seen syntactically and is dropped."""
+        code = {"function", "method", "module", "class", "script", "field"}
+        wired = set()
+        for e in b.edges.values():
+            if e.kind in ("CONTAINS", "REFERENCES_FN"):
+                continue
+            n = b.nodes.get(e.src)
+            if n is not None and n.lang == "python" and n.kind not in code:
+                wired.add(e.dst)
+        drop = [k for k, e in b.edges.items() if e.kind == "REFERENCES_FN" and e.src.startswith("module:") and e.dst in wired]
+        for k in drop:
+            del b.edges[k]
+        if drop:
+            st["references_superseded"] = len(drop)
+
+    @staticmethod
+    def _call_edges(prog: PyProgram, b, src: str, file: str, stmts, ctx: Ctx, conf_ct: dict) -> None:
+        """CALLS / INSTANTIATES from `src` for the calls in module-level statements (a script body)."""
+        for st in stmts:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            for sub in ast.walk(st):
+                if not isinstance(sub, ast.Call):
+                    continue
+                for tgt, conf, via in prog.resolve_call(sub, ctx):
+                    if isinstance(tgt, ClassInfo):
+                        b.add_edge(src, tgt.id, "INSTANTIATES", file, sub.lineno, conf)
+                        init = prog.find_method(tgt, "__init__")
+                        if init:
+                            b.add_edge(src, init.id, "CALLS", file, sub.lineno, conf, via="constructor")
+                    else:
+                        b.add_edge(src, tgt.id, "CALLS", file, sub.lineno, conf, **({"via": via} if via else {}))
+                    conf_ct[conf] += 1
+
+    def references_and_entries(self, prog: PyProgram, b, conf_ct: dict, rp) -> dict:
+        """Function references (REFERENCES_FN), decorator calls, `__main__` blocks / `__main__.py` / packaging entry
+        points as `script` entry nodes, framework registrations (MCP tools, click / typer commands). See refs.py."""
+        from .refs import is_main_guard, packaging_entry_points
+        for m in prog.modules.values():
+            mctx = Ctx(m, None, None)
+            body = list(m.tree.body)
+            if m.name == "__main__" or m.name.endswith(".__main__"):
+                pkg = m.name.rpartition(".")[0]
+                label = f"python -m {pkg}" if pkg else f"python {m.file}"
+                sid = b.add_node("script", m.name, name=label, fqn=label,
+                                 file=m.file, line=1, module=module_of(m.file), lang="python", entry_kind="main",
+                                 attrs={"via": "__main__.py", "module": m.name})
+                b.add_edge(m.id, sid, "CONTAINS", m.file, 1, EXACT)
+                self._call_edges(prog, b, sid, m.file, body, mctx, conf_ct)
+                rp.scan(sid, [(st, m.tree) for st in body], mctx, m.file, True)
+                rp.object_calls(sid, body, mctx, m.file)
+                rp.stats["main_blocks"] += 1
+                continue
+            mains = [st for st in body if isinstance(st, ast.If) and is_main_guard(st.test)]
+            rest = [st for st in body if not any(st is x for x in mains)] + [x for st in mains for x in st.orelse]
+            rp.scan(m.id, [(st, m.tree) for st in rest], mctx, m.file, True)
+            for st in mains:
+                name = f"python -m {m.name}" if "." in m.name else f"python {m.file}"
+                sid = b.add_node("script", m.name, name=name, fqn=name, file=m.file, line=st.lineno,
+                                 module=module_of(m.file), lang="python", entry_kind="main",
+                                 attrs={"via": "__main__ block", "module": m.name})
+                b.add_edge(m.id, sid, "CONTAINS", m.file, st.lineno, EXACT)
+                self._call_edges(prog, b, sid, m.file, st.body, mctx, conf_ct)
+                rp.scan(sid, [(x, st) for x in st.body], mctx, m.file, True)
+                rp.object_calls(sid, st.body, mctx, m.file)
+                rp.stats["main_blocks"] += 1
+        # packaging entry points (console / GUI scripts, plugin groups), resolved through the source roots
+        plan = prog.root_plan
+        try:
+            projects = [""] + plan._nested_projects()
+        except Exception:  # noqa: BLE001
+            projects = [""]
+        for ep in packaging_entry_points(prog.root, projects):
+            self._entry_point(prog, b, rp, ep)
+        rp.finish()
+        st = rp.stats
+        out = {"references": st["references"], "decorator_calls": st["decorator_calls"],
+               "script_entries": {"main_blocks": st["main_blocks"], "packaging": st["entry_points"]}}
+        if st["registrations"]:
+            out["registrations"] = st["registrations"]
+        if st["entry_points_unresolved"]:
+            out["entry_points_unresolved"] = {"count": len(st["entry_points_unresolved"]),
+                                              "samples": st["entry_points_unresolved"][:5]}
+        return out
+
+    @staticmethod
+    def _entry_point(prog: PyProgram, b, rp, ep: dict) -> None:
+        from .refs import SCRIPT_GROUPS
+        group, name = ep["group"], ep["name"]
+        target = ep["target"].split("[", 1)[0].strip()
+        modname, _, attr = target.partition(":")
+        m = prog.module(modname.strip())
+        if m is None:
+            rp.stats["entry_points_unresolved"].append(f"{ep['declared_in']}: {name} = {ep['target']}")
+            return
+        obj = ("mod", m)
+        for i, part in enumerate(p for p in attr.strip().split(".") if p):
+            obj = prog.lookup(m.name, part) if i == 0 else prog.member(obj, part)
+            if obj is None:
+                break
+        if obj is None:
+            rp.stats["entry_points_unresolved"].append(f"{ep['declared_in']}: {name} = {ep['target']}")
+            return
+        key = f"{group}:{name}"
+        if f"script:{key}" in b.nodes and ep["project"]:
+            key = f"{group}:{ep['project']}/{name}"
+        is_script = group in SCRIPT_GROUPS
+        label = f"{SCRIPT_GROUPS[group]} {name}" if is_script else f"{group} entry point {name}"
+        sid = b.add_node("script", key, name=label, fqn=label, file=ep["file"], line=ep["line"], module=module_of(ep["file"]),
+                         lang="python", entry_kind="main" if is_script else "public_api",
+                         attrs={"via": "packaging entry point", "group": group, "script": name, "target": ep["target"],
+                                "declared_in": ep["declared_in"]})
+        rp.stats["entry_points"] += 1
+        f, ln = ep["file"], ep["line"]
+        if obj[0] in ("func", "bound"):
+            b.add_edge(sid, obj[1].id, "CALLS", f, ln, EXACT, via="entry_point")
+            n = b.nodes.get(obj[1].id)
+            if n is not None:
+                if n.attrs is None:
+                    n.attrs = {}
+                n.attrs.setdefault("scripts", [])
+                if name not in n.attrs["scripts"]:
+                    n.attrs["scripts"].append(name)
+        elif obj[0] == "type":
+            c = obj[1]
+            b.add_edge(sid, c.id, "INSTANTIATES", f, ln, EXACT)
+            init = prog.find_method(c, "__init__")
+            if init:
+                b.add_edge(sid, init.id, "CALLS", f, ln, EXACT, via="entry_point")
+            for mn, mf in sorted(c.methods.items()):
+                if not mn.startswith("_"):
+                    rp.ref(sid, mf, "entry point", f, ln)
+        elif obj[0] == "mod":
+            for fn_name, fn in sorted(obj[1].funcs.items()):
+                if not fn_name.startswith("_"):
+                    rp.ref(sid, fn, "entry point", f, ln)
+        elif obj[0] == "var":
+            for fn in rp.var_regs.get((obj[1].name, obj[2]), []):
+                rp.ref(sid, fn, "entry point", f, ln, via="registered command")
+            b.nodes[sid].attrs["target_kind"] = "object"
 
     @staticmethod
     def env_key(prog: PyProgram, call: ast.Call, ctx: Ctx) -> tuple[str, str] | None:

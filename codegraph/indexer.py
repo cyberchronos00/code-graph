@@ -118,6 +118,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
             except Exception as ex:  # noqa: BLE001
                 stats["plugins"][f"{lp.name}/{fw.name}"] = {"status": "skipped", "reason": f"{type(ex).__name__}: {str(ex)[:300]}",
                                                             "at": _crash_site(ex)}
+        if fws and hasattr(lp, "after_frameworks"):
+            lp.after_frameworks(builder, st)
     for fw in frameworks:
         if f"{fw.language}/{fw.name}" not in stats["plugins"]:
             stats["plugins"][f"{fw.language}/{fw.name}"] = {"status": "detected; language plugin not active"}
