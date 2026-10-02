@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections import defaultdict
 
 from .core.model import (CONFIDENCE_RANK, DEV_ENTRY_KINDS, LIBRARY_ENTRY_KINDS, OPERATOR_ENTRY_KINDS, PROPAGATING,
@@ -204,23 +205,150 @@ def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="
         path, x, guard = [], n, 0
         while depth.get(x, 0) > 0 and x in best and guard < 60:
             e = best[x]
-            hop = {"from": e["src"], "kind": e["kind"], "to": e["dst"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"]}
-            if e["kind"] == "REFERENCES_FN" and e["attrs"]:
-                hop["how"] = json.loads(e["attrs"]).get("how")
-            elif e["kind"] == "CALLS" and e["attrs"] and '"collection"' in e["attrs"]:
-                hop["via"] = json.loads(e["attrs"]).get("via")
-            if e["gate"]:
-                hop["gated"] = e["gate"]
-                hop["guard"] = json.loads(e["attrs"] or "{}").get("guard")
-            if e["attrs"] and '"platforms"' in e["attrs"]:
-                a = json.loads(e["attrs"])
-                if "platforms" in a:
-                    hop["platforms"] = a["platforms"]
-            path.append(hop)
+            path.append(_hop_of(e))
             x = e["dst"]
             guard += 1
         paths[n] = path
     return paths
+
+
+class Deadline(Exception):
+    """A traversal ran past its deadline (time.time() value), e.g. a starter query over its time budget."""
+
+
+class GroupClosures:
+    """Reverse closures of many target groups in one pass: what reverse_closure + shortest_paths give for each group
+    separately, from a single read of the edge table and one multi-source breadth-first walk (a bitmask of groups
+    per node and level). `within`: entry nodes (e.g. routes); the walk stays on nodes they reach, which holds every
+    node of every shortest path from them, so depths and paths of those nodes equal the per-group answers."""
+
+    def __init__(self, st: GraphStore, groups: list[list[str]], kinds=None, min_conf="heuristic", max_depth=30,
+                 exclude_gate: str | None = None, platform: str | None = None, within: list[str] | None = None,
+                 deadline: float | None = None):
+        kinds = list(kinds or PROPAGATING)
+        self.st, self.deadline = st, deadline
+        px = _px(st, platform)
+        rev: dict[str, list] = defaultdict(list)
+        fwd: dict[str, list] = defaultdict(list)
+        kq = ",".join("?" * len(kinds))
+        for eid, src, dst, kind, rank, gate in st.db.execute(
+                f"SELECT id, src, dst, kind, conf_rank, gate FROM edges WHERE kind IN ({kq}) AND conf_rank >= ?",
+                (*kinds, CONFIDENCE_RANK[min_conf])):
+            if px and eid in px:
+                continue
+            rev[dst].append((src, gate))
+            fwd[src].append((kind, eid, dst, rank, gate))
+        for v in fwd.values():
+            v.sort(key=lambda e: (e[0], e[1]))     # the (src, kind, id) order of the edge index, for equal ties
+        self.fwd = fwd
+        self._check()
+        scope = None
+        if within is not None:
+            scope, todo = set(within), list(within)
+            while todo:
+                for e in fwd.get(todo.pop(), ()):
+                    if e[2] not in scope:
+                        scope.add(e[2])
+                        todo.append(e[2])
+            self._check()
+        self.levels = self._walk(rev, groups, max_depth, None, scope)
+        self.live = self._walk(rev, groups, max_depth, exclude_gate, scope) if exclude_gate else None
+
+    def _check(self):
+        if self.deadline is not None and time.time() > self.deadline:
+            raise Deadline()
+
+    def _walk(self, rev, groups, max_depth, exclude_gate, scope) -> dict[str, list[tuple[int, int]]]:
+        """node -> [(depth, groups first reached at that depth as a bitmask)]."""
+        frontier: dict[str, int] = {}
+        for i, ts in enumerate(groups):
+            for t in ts:
+                if scope is None or t in scope:
+                    frontier[t] = frontier.get(t, 0) | (1 << i)
+        seen = dict(frontier)
+        levels = {t: [(0, m)] for t, m in frontier.items()}
+        d = 0
+        while frontier and d < max_depth:
+            self._check()
+            nxt: dict[str, int] = {}
+            for x, m in frontier.items():
+                for src, gate in rev.get(x, ()):
+                    if exclude_gate is not None and gate == exclude_gate:
+                        continue
+                    if scope is not None and src not in scope:
+                        continue
+                    new = m & ~seen.get(src, 0)
+                    if new:
+                        seen[src] = seen.get(src, 0) | new
+                        nxt[src] = nxt.get(src, 0) | new
+            d += 1
+            for x, m in nxt.items():
+                levels.setdefault(x, []).append((d, m))
+            frontier = nxt
+        return levels
+
+    @staticmethod
+    def _depth(levels, node: str, bit: int) -> int | None:
+        for d, m in levels.get(node, ()):
+            if m & bit:
+                return d
+        return None
+
+    def depth(self, node: str, group: int) -> int | None:
+        return self._depth(self.levels, node, 1 << group)
+
+    def reached(self, node: str, group: int, live: bool = False) -> bool:
+        lv = self.live if live and self.live is not None else self.levels
+        return self._depth(lv, node, 1 << group) is not None
+
+    def groups_of(self, node: str) -> int:
+        m = 0
+        for _, b in self.levels.get(node, ()):
+            m |= b
+        return m
+
+    def path_edges(self, node: str, group: int) -> list[int]:
+        """Edge ids of the path shortest_paths picks from `node` to the group (stronger confidence, then live edges)."""
+        bit, out, x, guard = 1 << group, [], node, 0
+        dx = self._depth(self.levels, x, bit) or 0
+        while dx > 0 and guard < 60:
+            best = None
+            for kind, eid, dst, rank, gate in self.fwd.get(x, ()):
+                if self._depth(self.levels, dst, bit) == dx - 1:
+                    r = (rank, gate is None)
+                    if best is None or r > best[0]:
+                        best = (r, eid, dst)
+            if best is None:
+                break
+            out.append(best[1])
+            x, dx, guard = best[2], dx - 1, guard + 1
+        return out
+
+    def hops(self, ids: list[int]) -> dict[int, dict]:
+        """Edge id -> path hop as shortest_paths renders it."""
+        out = {}
+        ids = list(dict.fromkeys(ids))
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            for e in self.st.q(f"SELECT id,src,dst,kind,file,line,confidence,gate,attrs FROM edges WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                out[e["id"]] = _hop_of(e)
+        return out
+
+
+def _hop_of(e) -> dict:
+    hop = {"from": e["src"], "kind": e["kind"], "to": e["dst"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"]}
+    if e["kind"] == "REFERENCES_FN" and e["attrs"]:
+        hop["how"] = json.loads(e["attrs"]).get("how")
+    elif e["kind"] == "CALLS" and e["attrs"] and '"collection"' in e["attrs"]:
+        hop["via"] = json.loads(e["attrs"]).get("via")
+    if e["gate"]:
+        hop["gated"] = e["gate"]
+        hop["guard"] = json.loads(e["attrs"] or "{}").get("guard")
+    if e["attrs"] and '"platforms"' in e["attrs"]:
+        a = json.loads(e["attrs"])
+        if "platforms" in a:
+            hop["platforms"] = a["platforms"]
+    return hop
 
 
 def entry_info(st: GraphStore, ids: list[str], gate: str | None = None) -> dict[str, dict[str, tuple[int, str]]]:

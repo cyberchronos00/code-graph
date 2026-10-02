@@ -109,7 +109,7 @@ plugin knows the check, e.g. Laravel broadcast channel callbacks). Index time in
 | koel/koel | 295d8c1 | laravel | php, typescript, laravel | 5 / 5 | 191 / 166 / 23 | preset laravel 161, name pattern 8, framework 2 | 12.22 s | 0.08 s |
 | laravelio/laravel.io | 24be489 | laravel | php, typescript, laravel | 6 / 6 | 64 / 0 / 64 | – | 2.55 s | 0.01 s |
 | netbox-community/netbox | 251458b | django, djangorestframework | python, django, djangorestframework | 6 / 6 | 956 / 92 / 864 | name pattern 105, preset django 31, preset djangorestframework 2 | 34.78 s | 1.2 s |
-| saleor/saleor | 8385ca6 | django | python, django | 6 / 6 | 9 / 0 / 9 | – | 141.56 s | 62.98 s |
+| saleor/saleor | 8385ca6 | django | python, django | 6 / 6 | 9 / 0 / 9 | – | 68.31 s | 0.37 s |
 | immich-app/immich `server/` | c5e06dc | nest, express | typescript, nest, express | 4 / 4 | 295 / 295 / 0 | name pattern 295, preset nest 295 | 12.3 s | 0.28 s |
 | immich-app/immich `mobile/` | c5e06dc | flutter | python, dart | 3 / 3 | – | – | 3.79 s | 0.07 s |
 | calcom/cal.com `apps/api/v2` | 54343aa | nest | typescript, nest | 3 / 3 | 162 / 140 / 22 | name pattern 217 | 7.76 s | 0.01 s |
@@ -125,8 +125,18 @@ saleor sets `testpaths = ["saleor"]`, its application package. Since
 [#18](https://github.com/cyberchronos00/code-graph/issues/18) only the files pytest collects there (plus `conftest.py`
 and `tests/` directories) are test code: test modules 2,866 -> 1,718, `CALLS` edges 0 -> 11,848 (`TEST_CALLS`
 58,676 -> 42,370), the same 12,866 test cases, and 6 starters instead of 1. `impact
-saleor.order.utils.invalidate_order_prices` now lists 1,152 application callers (before: none, only tests). The
-starters take 63 s there, almost all of it in the unguarded-write-routes report over the now connected call graph.
+saleor.order.utils.invalidate_order_prices` now lists 1,152 application callers (before: none, only tests). On
+the now connected call graph the starters took 63 s at first, almost all of it in the unguarded-write-routes report
+(one reverse closure per written table, 95 tables). Since
+[#25](https://github.com/cyberchronos00/code-graph/issues/25) the route report walks the graph once for all write
+targets, limited to what the routes reach, with the same output (`cg routes --writes --unguarded` and the 6 starters
+are identical), and the starters keep to a 20 s budget (`starters_skipped` names any left out). Index time, best of
+three on the same box:
+
+| Project | Before #25: index / starters | After #25: index / starters |
+|---|---|---|
+| saleor | 124.41 s / 57.47 s | 68.31 s / 0.37 s |
+| netbox | 29.96 s / 0.98 s | 27.91 s / 0.27 s |
 
 Every starter resolved on every project. Index time on netbox, best of three on the same box: 34.1 s before (v0.4.0)
 and 33.5 s after, with 1.1 s of that spent on the starters; the shared skip lists and presets add no measurable cost.

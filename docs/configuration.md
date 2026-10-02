@@ -176,7 +176,9 @@ The preset menu in the visual view is built from, in order:
 3. **starter queries** derived from the graph at index time: a write route without an auth guard, the most-written
    and most-read tables, the busiest connection and env key, the page with the largest backend reach and the
    most-called functions. Each one resolves to existing nodes; `cg starters --db DB` and the MCP `starters` tool list
-   them with the matching command.
+   them with the matching command. Together they take at most 20 s at index time (well under a second on most
+   projects); a starter that does not finish within that budget is left out and named in the stats
+   (`starters_skipped`).
 
 A presets file:
 

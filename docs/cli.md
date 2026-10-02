@@ -6,7 +6,8 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 
 - `index ROOT --db DB [--name N] [--gates FILE] [--scip FILE] [--python-root DIR]... [--include-generated]`: detect languages/frameworks and
   build the graph. Prints the stats JSON on stdout (including the detected frameworks and applied presets in
-  `presets`, and the starter queries in `starters`) and a per-language coverage summary on stderr; a missing toolchain
+  `presets`, and the starter queries in `starters`, with `starters_skipped` naming any that did not finish within
+  their 20 s budget) and a per-language coverage summary on stderr; a missing toolchain
   skips that language with a note instead of failing the index. Reads `.cg.yaml` at ROOT when present
   ([configuration.md](configuration.md#project-config-file-cgyaml)); `--python-root` sets the Python source roots for
   this run ([python.md](python.md)). Generated, copied and vendored files (build output, generated clients, Capacitor /

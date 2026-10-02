@@ -216,7 +216,8 @@ def _groups_for_writes(st: GraphStore, table: str | None) -> dict[str, dict]:
 
 def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
                   unguarded: bool = False, auth_pattern: str | None = None, min_conf: str = "heuristic",
-                  gate: str | None = "auto", platform: str | None = None) -> dict:
+                  gate: str | None = "auto", platform: str | None = None, deadline: float | None = None) -> dict:
+    """deadline: a time.time() value; past it the traversal stops with query.Deadline (starters' time budget)."""
     gs = guard_setup(st)
     is_auth = AuthMatcher(auth_pattern, gs["applied"], gs["auth_patterns"], gs["secret_patterns"])
     if gate == "auto":
@@ -244,23 +245,25 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
                 unresolved.append(spec)
             groups[f"reaches {spec}"] = (ids, {})
     reached: dict[str, list[dict]] = defaultdict(list)
-    for label, (targets, final) in groups.items():
-        if not targets:
-            continue
-        depth = Q.reverse_closure(st, targets, kinds=PROPAGATING, min_conf=min_conf, platform=platform)
-        hit = [r for r in depth if r in routes]
-        if not hit:
-            continue
-        paths = Q.shortest_paths(st, depth, min_conf=min_conf, platform=platform)
-        live = Q.reverse_closure(st, targets, kinds=PROPAGATING, min_conf=min_conf, exclude_gate=gate, platform=platform) if gate else depth
-        for rid in hit:
-            p = list(paths.get(rid) or [])
+    labels = [k for k, (targets, _) in groups.items() if targets]
+    if labels and routes:
+        # one walk for all groups, restricted to what the routes reach: scales with the routes' reach, not with
+        # routes x write targets (one reverse closure per table)
+        gc = Q.GroupClosures(st, [groups[k][0] for k in labels], kinds=PROPAGATING, min_conf=min_conf,
+                             exclude_gate=gate, platform=platform, within=list(routes), deadline=deadline)
+        pairs = [(rid, i) for rid in routes for i in range(len(labels)) if gc.groups_of(rid) >> i & 1]
+        pairs.sort(key=lambda x: x[1])
+        pe = {pr: gc.path_edges(*pr) for pr in pairs}
+        hops = gc.hops([e for v in pe.values() for e in v])
+        for rid, i in pairs:
+            label, final = labels[i], groups[labels[i]][1]
+            p = [hops[e] for e in pe[(rid, i)]]
             end = p[-1]["to"] if p else rid
             w = final.get(end)
             if w:
                 p.append({"from": w["src"], "kind": w["kind"], "to": w["dst"], "at": f"{w['file']}:{w['line']}", "confidence": w["confidence"]})
-            reached[rid].append({"what": label, "via": Q.short_id(w["src"]) if w else None, "depth": depth[rid], "path": p, "path_confidence": Q.path_confidence(p),
-                                 "gated_only": rid not in live})
+            reached[rid].append({"what": label, "via": Q.short_id(w["src"]) if w else None, "depth": gc.depth(rid, i), "path": p, "path_confidence": Q.path_confidence(p),
+                                 "gated_only": bool(gate) and not gc.reached(rid, i, live=True)})
     items = []
     for rid, n in routes.items():
         if mode != "all" and rid not in reached:

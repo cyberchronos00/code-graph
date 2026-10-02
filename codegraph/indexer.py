@@ -246,7 +246,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     store.set_meta(project=project.name, root=str(project.root), stats=stats)    # presets / config for the route guards
     gst = GraphStore(db_path)
     try:
-        stats["starters"] = gen_starters(gst)
+        rep: dict = {}
+        stats["starters"] = gen_starters(gst, report=rep)
+        if rep.get("skipped"):
+            stats["starters_skipped"] = rep["skipped"]     # over the time budget
     except Exception as ex:  # noqa: BLE001  (never fails an index)
         stats["starters"], stats["starters_error"] = [], f"{type(ex).__name__}: {str(ex)[:200]}"
     finally:

@@ -61,6 +61,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Starter queries and `cg routes --writes` stay fast on large connected graphs: the route report walks the graph
+  once for all write targets (a single multi-target traversal limited to what the routes reach) instead of one
+  recursive query per table, with the same output. saleor: starters 57.5 s → 0.4 s, index 124.4 s → 68.3 s. The starters
+  keep to their 20 s budget: one that does not finish in time is left out and listed in `starters_skipped`
+  ([#25](https://github.com/cyberchronos00/code-graph/issues/25)).
 - The test suite skips the tests that index PHP code when the PHP extractor's Composer dependencies are not
   installed (as it already did for the TypeScript extractor), so a fresh checkout reports skips instead of failures
   ([#10](https://github.com/cyberchronos00/code-graph/issues/10)).
