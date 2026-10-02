@@ -10,20 +10,19 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Rust / C / C++: processes indexing the same project at the same time all get the exact layer. One rust-analyzer /
+  scip-clang run per cache key (a per-key lock; the other processes wait and read the cached SCIP file), private
+  temporary output files and an atomically written rust-analyzer config. Before, all but one concurrent run could fall
+  back to the heuristic layer. `cg coverage` names the reason when an installed exact indexer fails
+  ([#24](https://github.com/cyberchronos00/code-graph/issues/24)).
 - Query specs accept `file#name` for TypeScript / JavaScript / Vue symbols (`src/app.ts#listOrders`,
   `app.ts#listOrders`, `src/svc.ts#OrderService.create`), with the file part matched exactly or as a path suffix, in
   every query that resolves specs (`impact`, `tests`, `reaches`, `downstream`, `path`, the MCP tools)
   ([#28](https://github.com/cyberchronos00/code-graph/issues/28)).
-
-### Fixed
-
 - `cg index` stats: `generated.files` counts every file the classifier labelled, the same number `cg coverage`
   lists, with `by_language`, `by_reason` and `by_kind`. The old count (files whose nodes the final pass removed) is
   `files_with_dropped_nodes` (`files_with_nodes` with `--include-generated`)
   ([#27](https://github.com/cyberchronos00/code-graph/issues/27)).
-
-### Fixed
-
 - `impact` keeps the override relation apart from the callers: a base method is listed as `overrides:` instead of
   as a caller of its override, and `impact` on an abstract or base method lists the code that calls its overrides
   (`via override`). The MCP structured content carries the relation as `overrides`

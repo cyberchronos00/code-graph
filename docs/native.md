@@ -32,6 +32,10 @@ The tools are looked up in `PATH`, then `~/.cargo/bin` (rust-analyzer) and `~/.l
 lookup with `CODEGRAPH_RUST_ANALYZER=/path` or `CODEGRAPH_SCIP_CLANG=/path`. SCIP output is cached under
 `~/.cache/codegraph/scip/`, keyed by the cache version, the indexer version and the content hash of every source file (and of
 `compile_commands.json` for C/C++), so a re-index with no changes takes seconds and any content change re-runs the indexer.
+Processes that index the same project at the same time (parallel CI jobs, test workers, an MCP `index` next to a CLI
+run) share one indexer run: the first takes a per-key lock and runs rust-analyzer / scip-clang, the others wait and
+read its cached output, so every run gets the exact layer. When an exact indexer is installed but its run fails,
+`cg coverage` says so (`exact indexer run failed (exit N: <last stderr line>); heuristic layer used`).
 
 ## Rust
 

@@ -200,6 +200,11 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
         return "skipped", st.get("reason")
     mode = st.get("mode")
     if lang in ("rust", "c_cpp") and mode and mode != "scip":
+        sc = st.get("scip") if isinstance(st.get("scip"), dict) else {}
+        if sc.get("error"):     # the exact indexer is installed but its run failed: say why the heuristic layer was used
+            last = next((x.strip() for x in reversed(sc.get("stderr_tail") or []) if x.strip()), "")
+            return "heuristic", (f"exact indexer run failed ({sc['error']}" + (f": {last[:160]}" if last else "")
+                                 + "); heuristic layer used")
         return "heuristic", None
     if lang == "swift" and mode == "heuristic":
         return "heuristic", ("tree-sitter syntax layer with name-based call resolution (no compiler index; works "

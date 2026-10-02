@@ -14,6 +14,7 @@ set CODEGRAPH_RUST_BUILD_SCRIPTS=1 to enable both (more macro-generated code get
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -365,8 +366,10 @@ class RustPlugin(LanguagePlugin):
         unsafe_ok = os.environ.get("CODEGRAPH_RUST_BUILD_SCRIPTS") == "1"
         cfg = {"cargo": {"buildScripts": {"enable": unsafe_ok}, "features": "all"},
                "procMacro": {"enable": unsafe_ok}}
-        cfg_path = runner.cache_dir() / f"ra-config-{int(unsafe_ok)}.json"
-        cfg_path.write_text(json.dumps(cfg))
+        cfg_text = json.dumps(cfg, sort_keys=True)
+        # named by content and written atomically: a concurrent run never reads a half-written config
+        cfg_path = runner.cache_dir() / f"ra-config-{hashlib.sha256(cfg_text.encode()).hexdigest()[:12]}.json"
+        runner.write_atomic(cfg_path, cfg_text)
         ver = runner.tool_version(ra)
         files = list(_rust_files(self.root, getattr(self, "rules", None)))
         key = runner.fingerprint(self.root, files, f"{ver}|{json.dumps(cfg, sort_keys=True)}")
