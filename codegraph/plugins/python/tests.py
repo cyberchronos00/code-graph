@@ -2,8 +2,8 @@
 
 Discovery (defaults follow pytest; a pytest config at the indexed root or a nested project root overrides them):
   * test files: `python_files` (default `test_*.py`, `*_test.py`), Django / unittest `tests.py`, `conftest.py`,
-    every file under a `tests/` or `test/` directory or a configured `testpaths` directory, and modules named in
-    `pytest_plugins`. A module under `tests/` that application code imports (a library's own test utilities) stays
+    every file under a `tests/` or `test/` directory or a configured `testpaths` directory (an application package
+    named in `testpaths` contributes only its matching files), and modules named in `pytest_plugins`. A module under `tests/` that application code imports (a library's own test utilities) stays
     application code;
   * every node the Python plugin declared in test code gets `attrs.test = True`, so `isolate_tests()`
     (codegraph/tests_index.py) turns its calls, references and collection calls into TEST_* edges.
@@ -256,6 +256,14 @@ class PyTests:
                 return d
         return self.discs[-1]
 
+    def whole_test_dir(self, d: str) -> bool:
+        """A `testpaths` directory is test code as a whole when it is a test directory (`tests/`, `testing/`, ...) or
+        not an importable package. An application package named in `testpaths` (`testpaths = ["app"]`) is only
+        searched: pytest collects the files in it that match `python_files`, so its other modules stay application
+        code."""
+        name = d.rsplit("/", 1)[-1].lower()
+        return name in TEST_DIRS or name.startswith("test") or f"{d}/__init__.py" not in self.prog.by_file
+
     def classify(self) -> None:
         prog = self.prog
         self.discs = self.discoveries()
@@ -265,7 +273,8 @@ class PyTests:
             for tp in d.testpaths:
                 full = f"{d.base}/{tp}" if d.base else tp
                 for x in sorted(prog.root_plan.dirs | {full}) if any(ch in tp for ch in "*?[") else [full]:
-                    if fnmatch.fnmatchcase(x, full) and x not in roots and not any(r.startswith(x + "/") for r in roots):
+                    if fnmatch.fnmatchcase(x, full) and x not in roots and not any(r.startswith(x + "/") for r in roots) \
+                            and self.whole_test_dir(x):
                         tp_dirs.append(x)
         # a tests/ or test/ directory counts when some test file or conftest.py lives below it (a `test/` package of
         # Jinja test plugins inside an application package does not)

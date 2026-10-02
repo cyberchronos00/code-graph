@@ -61,6 +61,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- A pytest `testpaths` entry that names the application package (`testpaths = ["app"]`, as in saleor) no longer
+  turns the whole package into test code: only the files pytest collects there, `conftest.py` and `tests/`
+  directories are tests, so `impact`, `reaches` and the starter queries work on such projects again
+  ([#18](https://github.com/cyberchronos00/code-graph/issues/18)).
 - Indexing several projects in one process (the MCP `index` tool called again, scripts) gives the same graph as a
   fresh run: every run uses its own plugin instances, so the PHP gate predicates of one project no longer land in the
   next project's graph, and the Express route-key and Rust trait-method caches are rebuilt per project

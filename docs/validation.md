@@ -109,7 +109,7 @@ plugin knows the check, e.g. Laravel broadcast channel callbacks). Index time in
 | koel/koel | 295d8c1 | laravel | php, typescript, laravel | 5 / 5 | 191 / 166 / 23 | preset laravel 161, name pattern 8, framework 2 | 12.22 s | 0.08 s |
 | laravelio/laravel.io | 24be489 | laravel | php, typescript, laravel | 6 / 6 | 64 / 0 / 64 | – | 2.55 s | 0.01 s |
 | netbox-community/netbox | 251458b | django, djangorestframework | python, django, djangorestframework | 6 / 6 | 956 / 92 / 864 | name pattern 105, preset django 31, preset djangorestframework 2 | 34.78 s | 1.2 s |
-| saleor/saleor | 8385ca6 | django | python, django | 1 / 1 | 9 / 0 / 9 | – | 83.65 s | 0.17 s |
+| saleor/saleor | 8385ca6 | django | python, django | 6 / 6 | 9 / 0 / 9 | – | 141.56 s | 62.98 s |
 | immich-app/immich `server/` | c5e06dc | nest, express | typescript, nest, express | 4 / 4 | 297 / 295 / 2 | name pattern 295, preset nest 295 | 13.67 s | 0.16 s |
 | immich-app/immich `mobile/` | c5e06dc | flutter | python, dart | 3 / 3 | – | – | 3.79 s | 0.07 s |
 | calcom/cal.com `apps/api/v2` | 54343aa | nest | typescript, nest | 3 / 3 | 162 / 140 / 22 | name pattern 217 | 7.76 s | 0.01 s |
@@ -120,6 +120,13 @@ plugin knows the check, e.g. Laravel broadcast channel callbacks). Index time in
 | BurntSushi/ripgrep | 3fce3b5 | – | rust | 3 / 3 | – | – | 27.59 s | 0.05 s |
 | redis/redis | b540ca4 | – | python, c_cpp | 3 / 3 | – | – | 5.53 s | 0.09 s |
 | pallets/flask | d73fa1c | – | python | 3 / 3 | – | – | 0.74 s | 0.01 s |
+
+saleor sets `testpaths = ["saleor"]`, its application package. Since
+[#18](https://github.com/cyberchronos00/code-graph/issues/18) only the files pytest collects there (plus `conftest.py`
+and `tests/` directories) are test code: test modules 2,866 -> 1,718, `CALLS` edges 0 -> 11,848 (`TEST_CALLS`
+58,676 -> 42,370), the same 12,866 test cases, and 6 starters instead of 1. `impact
+saleor.order.utils.invalidate_order_prices` now lists 1,152 application callers (before: none, only tests). The
+starters take 63 s there, almost all of it in the unguarded-write-routes report over the now connected call graph.
 
 Every starter resolved on every project. Index time on netbox, best of three on the same box: 34.1 s before (v0.4.0)
 and 33.5 s after, with 1.1 s of that spent on the starters; the shared skip lists and presets add no measurable cost.

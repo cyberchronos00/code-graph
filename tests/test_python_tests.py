@@ -601,6 +601,52 @@ def test_pytest_config_testpaths_and_library_test_utils(tmp_path):
     assert [c["fqn"] for c in Q.impact(st, "lib.test.support.make_fixture")["callers"]] == ["lib.core.run"]
 
 
+def test_testpaths_naming_the_application_package_keeps_app_code(tmp_path):
+    st = build(tmp_path, "pkgtp", {
+        "pyproject.toml": '''
+            [project]
+            name = "app"
+
+            [tool.pytest.ini_options]
+            testpaths = ["app"]
+            ''',
+        "app/__init__.py": "",
+        "app/orders/__init__.py": "",
+        "app/orders/models.py": '''
+            def total(items):
+                return sum(items)
+            ''',
+        "app/orders/service.py": '''
+            from app.orders.models import total
+
+            def checkout(items):
+                return total(items)
+            ''',
+        "app/conftest.py": '''
+            import pytest
+
+            @pytest.fixture
+            def items():
+                return [1, 2]
+            ''',
+        "app/orders/tests/__init__.py": "",
+        "app/orders/tests/utils.py": "def make():\n    return [3]\n",
+        "app/orders/tests/test_orders.py": '''
+            from app.orders.service import checkout
+
+            def test_checkout(items):
+                assert checkout(items) == 3
+            ''',
+    })
+    test_code = {r["file"] for r in st.q("SELECT file FROM nodes WHERE kind='module' AND json_extract(attrs, '$.test')")}
+    assert test_code == {"app/conftest.py", "app/orders/tests/__init__.py", "app/orders/tests/utils.py",
+                         "app/orders/tests/test_orders.py"}
+    assert [c["fqn"] for c in Q.impact(st, "app.orders.models.total")["callers"]] == ["app.orders.service.checkout"]
+    assert edges(st, "CALLS", src="function:app.orders.service.checkout")
+    assert names(Q.tests_covering(st, "app.orders.service.checkout"), "direct") == ["test_checkout"]
+    assert names(Q.tests_covering(st, "app.orders.models.total"), "transitive") == ["test_checkout"]
+
+
 def test_pytest_plugins_modules_provide_fixtures(tmp_path):
     st = build(tmp_path, "plug", {
         "app/__init__.py": "",
