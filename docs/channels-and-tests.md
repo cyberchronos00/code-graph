@@ -116,7 +116,9 @@ MCP: `channels(pattern?, source?)`.
   `from helpers import build` in a test resolves to the helper next to it.
 
 Each test case is a `test:` node with entry kind `test`. Edges made by test code are rewritten to non-propagating kinds,
-so tests never count as callers and never widen `reaches`, `impact`, `writers`, `routes` or entry tagging:
+so tests never count as callers and never widen `reaches`, `impact`, `writers`, `routes` or entry tagging. Apps,
+routers and controllers that a TypeScript test builds for itself (`const app = express(); app.get(...)` in a
+`*.spec.ts`, under `test/` or `__tests__/`) stay test code and never become `route:` nodes:
 
 - `TEST_CALLS` / `TEST_USES`: test code calls, instantiates or touches application code (`attrs.orig` keeps the
   original edge kind).

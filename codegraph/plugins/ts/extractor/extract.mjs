@@ -964,7 +964,10 @@ function requestKeys(e, depth = 0) {
 const keysOut = r => ({ keys: [...r.keys].sort(), conditional: [...r.conditional].filter(k => !r.keys.has(k)).sort(), opaque: r.opaque || undefined, forwarded: r.forwarded || undefined, forwarded_index: r.forwarded ? r.forwarded_index : undefined })
 
 // ---------- framework facts helpers (import sources etc.) ----------
-const FWX = { ts, checker, program, sourceFiles, rel, realFile, lineOf, declId, declToNode, resolveSymbol, evalStr, render, unwrap, projectSf, fileNode }
+// test code (spec files, test trees) stays in the graph as tests, but its routers, controllers and handlers are test
+// setups, never application routes: framework facts come from application files only
+const appSourceFiles = sourceFiles.filter(sf => !testFiles.has(realFile(sf)))
+const FWX = { ts, checker, program, sourceFiles: appSourceFiles, rel, realFile, lineOf, declId, declToNode, resolveSymbol, evalStr, render, unwrap, projectSf, fileNode }
 let fwFacts = null
 const tFw0 = Date.now()
 fwFacts = collectFrameworkFacts(FWX)

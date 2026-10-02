@@ -61,6 +61,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Routers, apps and controllers built inside TypeScript test files (`*.spec.ts`, `*.test.ts`, `test/`,
+  `__tests__/`) no longer become application routes for the Express / Koa / Fastify / Hono, NestJS and Next.js
+  layers; the files stay indexed as tests (immich `server/`: 295 routes, all guarded, instead of 297 with 2 test
+  routes) ([#19](https://github.com/cyberchronos00/code-graph/issues/19)).
 - A pytest `testpaths` entry that names the application package (`testpaths = ["app"]`, as in saleor) no longer
   turns the whole package into test code: only the files pytest collects there, `conftest.py` and `tests/`
   directories are tests, so `impact`, `reaches` and the starter queries work on such projects again

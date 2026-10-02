@@ -30,7 +30,8 @@ def build() -> dict:
     d = Path(tempfile.mkdtemp(prefix="codegraph-tsfw-"))
     for name, root in (("nest", EX / "bookstore-nest"), ("next", EX / "bookstore-next"), ("express", EX / "bookstore-express"),
                        ("web", WEB), ("fastify", FX / "fastify-api"), ("koa", FX / "koa-api"), ("hono", FX / "hono-api"),
-                       ("nest_uri", FX / "nest-uri"), ("next_base", FX / "next-basepath")):
+                       ("nest_uri", FX / "nest-uri"), ("next_base", FX / "next-basepath"),
+                       ("express_tests", FX / "express-tests")):
         _S[name + "_stats"] = index_project(root, d / f"{name}.db", root.name)
         _S[name] = d / f"{name}.db"
     _S["web_nest"] = link(str(d / "nest.db"), str(d / "web.db"), str(d / "web_nest.db"), backend_name="bookstore-nest", frontend_name="bookstore-web")
@@ -253,6 +254,17 @@ def test_koa_router_prefix_and_hono_base_path():
     assert routes("koa") == {"route:GET /shelves": "function:src/app.ts#listShelves",
                              "route:PUT /shelves/{id}": "function:src/app.ts#router.put('/:id')"}
     assert set(routes("hono")) == {"route:GET /api/authors/{id}", "route:POST /api/authors", "route:GET /api/health"}
+
+
+def test_routes_built_in_test_files_are_not_application_routes():
+    # test/app.spec.ts and src/__tests__/orders.test.ts build their own express() apps and routers
+    assert routes("express_tests") == {"route:GET /orders": "function:src/app.ts#listOrders",
+                                       "route:POST /orders": "function:src/app.ts#app.post('/orders')"}
+    con = db("express_tests")
+    # the test files stay in the graph as test code
+    test_files = {r[0] for r in con.execute("SELECT DISTINCT file FROM nodes WHERE kind='test'")}
+    assert test_files == {"test/app.spec.ts", "src/__tests__/orders.test.ts"}
+    assert not con.execute("SELECT 1 FROM nodes WHERE kind='route' AND (file LIKE 'test/%' OR file LIKE '%__tests__%')").fetchone()
 
 
 def test_link_next_frontend_to_express_backend_via_ky():
