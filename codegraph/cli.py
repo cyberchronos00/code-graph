@@ -18,6 +18,7 @@
   python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
   reaches / impact / downstream / path / routes / search take --platform TARGET: only code built for that target
 spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class::method | Class
+  | src/app.ts#listOrders (TS / JS symbol in one file; path suffix ok)
 """
 from __future__ import annotations
 

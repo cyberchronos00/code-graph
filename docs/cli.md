@@ -81,6 +81,12 @@ the filter and how many conditions could not be evaluated ([platforms.md](platfo
 - `Class::method`, `Class`, short or FQN: code symbols (suffix match).
 - `page:/reports/:id`: a Nuxt page by its route path. `app/pages/x.vue`, `app/composables/useX.ts`: a TS module or Vue
   SFC by file (repo-relative, suffix match). `useX`, `useX.fn`, `fn`: a TS composable, store or function.
+- `src/app.ts#listOrders`, `app.ts#listOrders`, `src/svc.ts#OrderService.create`: a TypeScript / JavaScript / Vue
+  symbol in one file, for a name declared in several files. The file part matches the node's file exactly or as a
+  path suffix; the name part is the declared name (`Class.method` for a member; a bare member name such as
+  `svc.ts#create` works when the file declares nothing else under that name). A name declared twice in one file
+  selects both (`codec.ts#decode`; `codec.ts#decode~2` is the second one). The full id
+  (`function:src/app.ts#listOrders`) works too.
 - `http:GET /v1/{store}/…` and `route:GET /v1/{store}/…`: a client endpoint / a backend route (`*` glob).
 - `channel:orders.{order}`, `channel_sub:orders.{id}`: a backend broadcast channel / a client subscription.
 - `test:tests/Feature/OrderTest.php::…`: a test case (see `cg tests`).

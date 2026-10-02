@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Query specs accept `file#name` for TypeScript / JavaScript / Vue symbols (`src/app.ts#listOrders`,
+  `app.ts#listOrders`, `src/svc.ts#OrderService.create`), with the file part matched exactly or as a path suffix, in
+  every query that resolves specs (`impact`, `tests`, `reaches`, `downstream`, `path`, the MCP tools)
+  ([#28](https://github.com/cyberchronos00/code-graph/issues/28)).
+
+### Fixed
+
 - `cg index` stats: `generated.files` counts every file the classifier labelled, the same number `cg coverage`
   lists, with `by_language`, `by_reason` and `by_kind`. The old count (files whose nodes the final pass removed) is
   `files_with_dropped_nodes` (`files_with_nodes` with `--include-generated`)

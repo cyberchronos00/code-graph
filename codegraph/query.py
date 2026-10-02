@@ -35,6 +35,9 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
         return [r["id"] for r in rows]
     if st.q("SELECT 1 FROM nodes WHERE id=? LIMIT 1", (spec,)):  # an exact node id (e.g. method:App\X::y)
         return [spec]
+    fn = _file_name_targets(st, spec)
+    if fn is not None:
+        return fn
     if re.search(r"\.(vue|ts|tsx|js|mjs|py|dart)$", spec) and "::" not in spec:
         rows = st.q("SELECT id FROM nodes WHERE kind IN ('page','component','layout','app','module') AND (file=? OR file LIKE ?)",
                     (spec, "%/" + spec))
@@ -83,6 +86,34 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
         # an event / job class also selects its dispatch node (event:X, job:X): `impact OrderShipped` follows dispatches
         out += [x["id"] for x in st.q("SELECT id FROM nodes WHERE id IN (?, ?)", ("event:" + r["fqn"], "job:" + r["fqn"]))]
     return out
+
+
+FILE_NAME_RE = re.compile(r"(?P<file>[^#:]+\.(?:vue|ts|tsx|mts|cts|js|jsx|mjs|cjs|svelte))#(?P<name>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:~\d+)?)")
+FILE_NAME_KINDS = ("function", "method", "class", "composable", "store", "type", "interface", "enum")
+
+
+def _like(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _file_name_targets(st: GraphStore, spec: str) -> list[str] | None:
+    """`file#name` for TypeScript / JavaScript / Vue nodes (ids `kind:file#name`): the file part matches the node's
+    file exactly or as a path suffix (`app.ts#listOrders`, `src/app.ts#listOrders`), the name part the declared name,
+    `Class.method` included; a bare member name (`svc.ts#create`) matches `Class.create` in that file when nothing
+    is declared under the name itself. None when the spec is not of that form or nothing matches (the other forms
+    are tried then)."""
+    m = FILE_NAME_RE.fullmatch(spec)
+    if not m:
+        return None
+    f, name = m["file"].removeprefix("./"), m["name"]
+    rows = st.q("""SELECT id, substr(id, instr(id, '#') + 1) AS key FROM nodes
+                   WHERE instr(id, '#') > 0 AND (file = ? OR file LIKE ? ESCAPE '\\') ORDER BY file, line""",
+                (f, "%/" + _like(f)))
+    # `name~2`: a second declaration of the name in that file, `name@line`: a per-branch platform variant
+    keys = [(r["id"], r["key"] if "~" in name else re.sub(r"(~\d+|@\d+)$", "", r["key"])) for r in rows]
+    hit = [i for i, k in keys if k == name] or [i for i, k in keys if k.endswith("." + name)]
+    code = [i for i in hit if i.split(":", 1)[0] in FILE_NAME_KINDS]   # the declaration, not its listener / route node
+    return code or hit or None
 
 
 NATIVE_LANGS = ("rust", "c", "cpp")
