@@ -24,6 +24,7 @@ from codegraph.core.paths import PathRules, glob_regex  # noqa: E402
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph.indexer import FRAMEWORK_PLUGINS, LANGUAGE_PLUGINS, index_project  # noqa: E402
 from codegraph.viz.server import menu  # noqa: E402
+from sample import needs_php  # noqa: E402
 
 EXAMPLES = ROOT / "examples"
 
@@ -326,7 +327,7 @@ def test_framework_preset_guards():
     assert m.why("passport.authenticate('jwt')") == "preset express" and m.why("CustomThrottlerGuard") is None
 
 
-@pytest.mark.parametrize("example", ["bookstore-api", "bookstore-django", "bookstore-nest", "bookstore-web", "rust-kvstore"])
+@pytest.mark.parametrize("example", [pytest.param("bookstore-api", marks=needs_php), "bookstore-django", "bookstore-nest", "bookstore-web", "rust-kvstore"])
 def test_starters_resolve_on_the_examples(tmp_path, example):
     if example in ("bookstore-nest", "bookstore-web") and not shutil.which("node"):
         pytest.skip("node not installed")

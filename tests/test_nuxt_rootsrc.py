@@ -18,7 +18,7 @@ from codegraph import query as Q, coverage as C  # noqa: E402
 from codegraph.link import match_endpoint  # noqa: E402
 from codegraph.plugins.nuxt.plugin import find_src_dir, nuxt_route, _component_name  # noqa: E402
 from codegraph.plugins.ts.baseurl import ConfigValues, base_path, parse_env, runtime_config_defaults  # noqa: E402
-from sample import EXTRACTOR_DEPS  # noqa: E402
+from sample import EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 FX = ROOT / "tests" / "nuxt_rootsrc_fixture"
 API = ROOT / "tests" / "broadcast_fixture" / "api"
@@ -117,6 +117,7 @@ def test_dangling_symlinks_are_skipped_not_fatal():
 
 
 @needs_ts
+@needs_php
 def test_base_urls_from_runtime_config_and_env():
     eps = {r[0]: json.loads(r[1]) for r in q("SELECT id, attrs FROM nodes WHERE kind='http'")}
     assert set(eps) == {"http:GET /api/boards/{id}/tasks", "http:PATCH /api/tasks/{id}/move",
@@ -139,6 +140,7 @@ def test_base_urls_from_runtime_config_and_env():
 
 
 @needs_ts
+@needs_php
 def test_api_calls_globs():
     st = GraphStore(built()["combined"])
     ids = lambda f: [r["endpoint"] for r in Q.api_calls(st, f)]
@@ -153,6 +155,7 @@ def test_api_calls_globs():
 
 
 @needs_ts
+@needs_php
 def test_coverage_on_linked_db_after_sources_are_gone():
     d = Path(tempfile.mkdtemp(prefix="codegraph-cov-"))
     shutil.copy(built()["combined"], d / "combined.db")

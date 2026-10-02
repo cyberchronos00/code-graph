@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
-from sample import API, WEB, GATES, EXTRACTOR_DEPS  # noqa: E402
+from sample import API, WEB, GATES, EXTRACTOR_DEPS, needs_php  # noqa: E402
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph import mcp_server as M  # noqa: E402
 
@@ -60,6 +60,7 @@ def guard_delete_route(d: Path):
                                 "    });\n"))
 
 
+@needs_php
 def test_backend_root_reindexes_backend_slot_only(copy):
     web_before = (copy / "web.db").read_bytes()
     n_web = web_nodes(copy)
@@ -73,6 +74,7 @@ def test_backend_root_reindexes_backend_slot_only(copy):
     assert st["bookstore-web_id_collisions"] == 0 and st["call_sites_matched"] > 0
 
 
+@needs_php
 def test_path_inside_a_repo_picks_that_repo(copy):
     out = M.index(root=str(copy / "bookstore-api" / "routes"))
     assert out.startswith("re-indexed bookstore-api (") and out.count("re-indexed") == 1, out
@@ -80,6 +82,7 @@ def test_path_inside_a_repo_picks_that_repo(copy):
     assert out.startswith("re-indexed bookstore-web (") and out.count("re-indexed") == 1, out
 
 
+@needs_php
 def test_parent_root_and_no_args_reindex_every_repo(copy):
     for out in (M.index(root=str(copy)), M.index()):
         assert "re-indexed bookstore-api" in out and "re-indexed bookstore-web" in out, out
@@ -107,6 +110,7 @@ def test_refusals_leave_the_graph_unchanged(copy):
         shutil.rmtree(elsewhere, ignore_errors=True)
 
 
+@needs_php
 def test_single_repo_graph_refuses_empty_root(tmp_path, monkeypatch):
     from codegraph.indexer import index_project
     shutil.copytree(API, tmp_path / "api")
@@ -122,6 +126,7 @@ def test_single_repo_graph_refuses_empty_root(tmp_path, monkeypatch):
     assert M.index().startswith("indexed ")
 
 
+@needs_php
 def test_impact_lists_snapshot_clients(monkeypatch):
     """impact shows external (not indexed) callers from the client snapshot next to the plans, like plan_check does."""
     from sample import build, PLANS

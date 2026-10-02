@@ -19,7 +19,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
-from sample import build, PLANS, GATES, EXTRACTOR_DEPS  # noqa: E402
+from sample import build, PLANS, GATES, EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 CALLS = [
     ("stats", {}),
@@ -160,6 +160,7 @@ def run_all() -> dict:
     return outs
 
 
+@needs_php
 def test_mcp_e2e():
     import pytest
     if not EXTRACTOR_DEPS.exists():

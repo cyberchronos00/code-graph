@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from codegraph import plans as P  # noqa: E402
 from codegraph.core.store import GraphStore  # noqa: E402
-from sample import build, PLANS  # noqa: E402
+from sample import build, PLANS, needs_php  # noqa: E402
 
 BROKEN = ROOT / "tests" / "broken_plans"
 
@@ -76,6 +76,7 @@ def test_malformed_items_are_errors_not_crashes(dbs, tmp_path):
         M.STATE.update(old)
 
 
+@needs_php
 def test_validate_resolution(dbs):
     before, _ = dbs
     v = P.validate(before, plan())
@@ -90,6 +91,7 @@ def test_validate_resolution(dbs):
 
 
 # ---------------------------------------------------------------- plan-mode checks
+@needs_php
 def test_completeness_finds_omitted_siblings(dbs):
     before, _ = dbs
     r = P.check(before, plan())
@@ -111,6 +113,7 @@ def test_completeness_finds_omitted_siblings(dbs):
     assert not r["ok"]
 
 
+@needs_php
 def test_conflicts_requirements_findings(dbs):
     before, _ = dbs
     r = P.check(before, plan())
@@ -136,6 +139,7 @@ def test_deterministic(dbs):
 
 
 # ---------------------------------------------------------------- verify mode
+@needs_php
 def test_verify_mode(dbs):
     before, after = dbs
     pl = plan()
@@ -158,6 +162,7 @@ def test_verify_mode(dbs):
 
 
 # ---------------------------------------------------------------- CLI + MCP + view
+@needs_php
 def test_cli(dbs, capsys):
     from codegraph.cli import main
     before, _ = dbs
@@ -169,6 +174,7 @@ def test_cli(dbs, capsys):
     assert main(["plan", "validate", "preorders", "--plans-dir", str(PLANS), "--db", dbpath(before)]) == 0
 
 
+@needs_php
 def test_mcp_plan_tools(dbs):
     from mcp.client.session import ClientSession
     from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -200,6 +206,7 @@ def test_mcp_plan_tools(dbs):
     assert "4 VERIFY" in out["plan_check_verify"][0] and "REVIEW (" in out["plan_check_verify"][0]
 
 
+@needs_php
 def test_overlay_view(dbs, tmp_path):
     from codegraph.viz import graph as G
     from codegraph.viz.server import export_plan_html

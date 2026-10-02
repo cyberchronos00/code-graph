@@ -61,6 +61,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- The test suite skips the tests that index PHP code when the PHP extractor's Composer dependencies are not
+  installed (as it already did for the TypeScript extractor), so a fresh checkout reports skips instead of failures
+  ([#10](https://github.com/cyberchronos00/code-graph/issues/10)).
 - Python calls through a collection follow copies and helper-built collections: elements of `copy.copy()` /
   `copy.deepcopy()` / `.copy()`, of the value a project function returns and of a constant key of a returned dict
   or tuple (`plan = setup(); for p in plan["plugins"]: p.index()`) keep their types, so `impact` and `tests` reach the

@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
-from sample import build, PLANS, EXTRACTOR_DEPS  # noqa: E402
+from sample import build, PLANS, EXTRACTOR_DEPS, needs_php  # noqa: E402
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph import query as Q, routes as R, plans as P  # noqa: E402
 from codegraph.concepts import resolutions, render_resolutions  # noqa: E402
@@ -44,6 +44,7 @@ def guards(item):
 
 # ------------------------------------------------------------------ routes
 @needs_ts
+@needs_php
 def test_routes_reaching_writes_bookstore():
     st = db("combined")
     res = R.routes_report(st, writes="*")
@@ -62,6 +63,7 @@ def test_routes_reaching_writes_bookstore():
 
 
 @needs_ts
+@needs_php
 def test_routes_names_routes_hidden_by_min_confidence():
     st = db("api")
     strict = R.routes_report(st, writes="*", unguarded=True, min_conf="exact")
@@ -72,6 +74,7 @@ def test_routes_names_routes_hidden_by_min_confidence():
     assert "hidden by min_confidence=exact" in txt.splitlines()[2] and next(iter(hidden)) in txt
 
 
+@needs_php
 def test_routes_reaching_connection_and_gated_only():
     st = db("combined")
     r = by_route(R.routes_report(st, reaches=["connection:warehouse"]))
@@ -122,6 +125,7 @@ def test_django_view_access_facts():
     assert not r["GET /stats/"]["has_auth"] and not r["ANY /reset/"]["has_auth"]  # csrf_exempt is no access check
 
 
+@needs_php
 def test_routes_empty_result_explains():
     st = db("api")
     res = R.routes_report(st, writes="no_such_table")
@@ -131,6 +135,7 @@ def test_routes_empty_result_explains():
 
 
 # ------------------------------------------------------------------ search
+@needs_php
 def test_search_matches_route_guards():
     st = db("api")
     res = Q.search(st, "auth")
@@ -141,6 +146,7 @@ def test_search_matches_route_guards():
 
 
 # ------------------------------------------------------------------ empty results explain why
+@needs_php
 def test_siblings_empty_explains_and_suggests():
     st = db("api")
     res = Q.siblings(st, "StockService::reserve")
@@ -148,6 +154,7 @@ def test_siblings_empty_explains_and_suggests():
     assert "no siblings found" in txt and "reserveLocal" in txt and "reserveFromWarehouse" in txt and "impact(" in txt
 
 
+@needs_php
 def test_writers_impact_path_empty_explain():
     st = db("api")
     assert "similar: books" in Q.explain_no_writers(st, "book")
@@ -171,6 +178,7 @@ def test_cli_path_exit_code_and_message():
 
 # ------------------------------------------------------------------ plan check compact
 @needs_ts
+@needs_php
 def test_plan_check_summary_is_compact():
     st = db("combined")
     plan = P.load_plan("preorders", str(PLANS))
@@ -183,6 +191,7 @@ def test_plan_check_summary_is_compact():
 
 # ------------------------------------------------------------------ sent but not forwarded
 @needs_ts
+@needs_php
 def test_forwarding_gap_date_from():
     st = db("combined")
     gaps = Q.forwarding_gaps(st)

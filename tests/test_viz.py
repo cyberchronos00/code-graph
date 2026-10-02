@@ -14,9 +14,10 @@ sys.path.insert(0, str(ROOT))
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph.viz import graph as G  # noqa: E402
 from codegraph.viz.server import App, make_handler, export_html  # noqa: E402
-from sample import build, EXTRACTOR_DEPS, PLANS  # noqa: E402
+from sample import build, EXTRACTOR_DEPS, PLANS, needs_php  # noqa: E402
 
 
+@needs_php
 def test_subgraph_is_union_of_evidence_paths():
     st = GraphStore(build()["api"])
     g = G.build(st, "downstream", ["ReportController::top"], sinks=["table", "column"])
@@ -30,6 +31,7 @@ def test_subgraph_is_union_of_evidence_paths():
     assert [e["kind"] for e in p["edges"]][:2] == ["CALLS", "CALLS"] and p["meta"]["targets"][0].startswith("column:orders.")
 
 
+@needs_php
 def test_reaches_view_runtime_operator_gated():
     g = G.build(GraphStore(build()["api"]), "reaches", ["connection:warehouse", "table:warehouse_stock"])
     assert {n["entry_kind"] for n in g["nodes"]} >= {"http_route", "artisan_command"}
@@ -39,6 +41,7 @@ def test_reaches_view_runtime_operator_gated():
 
 
 @pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@needs_php
 def test_server_and_static_export(tmp_path):
     db = str(build()["combined"])
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(App(db, plans=str(PLANS))))

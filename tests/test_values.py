@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph.concepts import resolutions, render_resolutions  # noqa: E402
-from sample import build, EXTRACTOR_DEPS  # noqa: E402
+from sample import build, EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 BUILD = "method:App\\Services\\SalesReportService::build"
 RESOLVE = "method:App\\Http\\Controllers\\ReportController::resolveTimezone"
@@ -32,12 +32,14 @@ def edges(kind, src=None, dst=None):
     return [(s, d, json.loads(a or "{}")) for s, d, a in c.execute(q, args)]
 
 
+@needs_php
 def test_settings_are_nodes_with_read_edges_and_literal_default():
     (s, d, a), = edges("READS_SETTING", src=BUILD)
     assert d == "setting:reports.timezone" and a["default"] == "UTC" and a["owner"] == ["Store"]
     assert edges("READS_SETTING", src=RESOLVE, dst="setting:locale.timezone")[0][2]["default"] == ""
 
 
+@needs_php
 def test_request_keys_formrequest_rules_and_flow_through_two_helper_levels():
     v = {d: a for _, d, a in edges("VALIDATES", src="method:App\\Http\\Requests\\SalesReportRequest::rules")}
     assert set(v) == {"request_key:category_id", "request_key:timezone"} and v["request_key:timezone"]["rule"][-1] == "max:64"
@@ -48,6 +50,7 @@ def test_request_keys_formrequest_rules_and_flow_through_two_helper_levels():
     assert edges("READS_INPUT", src="method:App\\Http\\Controllers\\ReportController::summary", dst="request_key:category_id")[0][2]["default"] == 0
 
 
+@needs_php
 def test_resolution_nodes_and_fallback_edges():
     rb = sqlite3.connect(build()["api"]).execute("SELECT id, attrs FROM nodes WHERE kind='resolution'").fetchall()
     sig = {json.loads(a)["fn"]: json.loads(a)["signature"] for _, a in rb}
@@ -58,6 +61,7 @@ def test_resolution_nodes_and_fallback_edges():
     assert order[:2] == ["request_key:timezone", "column:orders.customer_timezone"]
 
 
+@needs_php
 def test_concept_query_surfaces_divergence_backend_only():
     r = resolutions(GraphStore(build()["api"]), "timezone", client=False)
     fn_of = {s["id"]: s["fn"] for s in r["backend_sites"]}
@@ -69,6 +73,7 @@ def test_concept_query_surfaces_divergence_backend_only():
 
 
 @pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@needs_php
 def test_concept_query_client_side_never_sends_and_falls_back():
     r = resolutions(GraphStore(build()["combined"]), "timezone")
     top = [e for e in r["client"] if e["endpoint"].endswith("admin/reports/top")][0]

@@ -14,7 +14,7 @@ from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph import query as Q, realtime as RT, routes as R  # noqa: E402
 from codegraph.plugins.php.strings import channel_match, same_shape  # noqa: E402
 from codegraph.tests_index import page_pattern  # noqa: E402
-from sample import EXTRACTOR_DEPS  # noqa: E402
+from sample import EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 FIX = ROOT / "tests" / "broadcast_fixture"
 _S: dict = {}
@@ -63,6 +63,7 @@ def test_channel_patterns():
 
 # ---------------------------------------------------------------- channels (backend)
 
+@needs_php
 def test_channel_nodes_and_auth():
     rows = dict(db().execute("SELECT id, entry_kind FROM nodes WHERE kind='channel'").fetchall())
     assert rows == {"channel:App.Models.User.{id}": "channel_auth", "channel:team.{teamId}": "channel_auth",
@@ -76,6 +77,7 @@ def test_channel_nodes_and_auth():
     assert not edges("script:routes/channels.php", "CALLS", "method:App\\Models\\User::isBoardMember")
 
 
+@needs_php
 def test_broadcast_events_resolve_channel_names():
     on = {(e[0], e[1], e[4]["name"]) for e in edges(kind="BROADCASTS_ON")}
     assert ("event:App\\Events\\TaskMoved", "channel:board.{board}", "board.{board_id}") in on
@@ -87,6 +89,7 @@ def test_broadcast_events_resolve_channel_names():
     assert any(x[0] == "event:App\\Events\\TaskMoved" and x[1] == "channel:team.{teamId}" for x in on)
 
 
+@needs_php
 def test_channels_query_backend_only():
     st = GraphStore(built()["api"])
     res = RT.channels(st, "board.42")
@@ -99,6 +102,7 @@ def test_channels_query_backend_only():
     assert "WHO CAN JOIN" in out and "PUBLISHED BY" in out and "BoardAccess::visibleBoardIds" in out
 
 
+@needs_php
 def test_impact_of_broadcast_event_and_channel_entry():
     st = GraphStore(built()["api"])
     ent = {e["id"] for e in Q.impact(st, "App\\Events\\TaskMoved")["entry_points"]}
@@ -111,11 +115,13 @@ def test_impact_of_broadcast_event_and_channel_entry():
 
 # ---------------------------------------------------------------- small fixes
 
+@needs_php
 def test_writers_accepts_table_prefix():
     st = GraphStore(built()["api"])
     assert Q.writers(st, "table:tasks") == Q.writers(st, "tasks") != []
 
 
+@needs_php
 def test_secret_checked_routes():
     st = GraphStore(built()["api"])
     items = {x["route"]: x for x in R.routes_report(st)["items"]}
@@ -129,6 +135,7 @@ def test_secret_checked_routes():
 
 # ---------------------------------------------------------------- tests (PHP)
 
+@needs_php
 def test_php_test_nodes():
     tests = dict(db().execute("SELECT id, json_extract(attrs,'$.framework') FROM nodes WHERE kind='test'").fetchall())
     assert tests == {
@@ -146,6 +153,7 @@ def test_php_test_nodes():
     assert rows == []
 
 
+@needs_php
 def test_php_tests_covering():
     st = GraphStore(built()["api"])
     res = Q.tests_covering(st, "PATCH /api/tasks/{task}/move")
@@ -184,6 +192,7 @@ def test_ts_subscriptions_and_tests():
 
 
 @needs_ts
+@needs_php
 def test_link_channels_and_events():
     st = built()["link"]["stats"] if "stats" in built()["link"] else built()["link"]
     assert st["channel_subscriptions"] == 5 and st["channel_subscriptions_matched"] == 4
@@ -202,6 +211,7 @@ def test_link_channels_and_events():
 
 
 @needs_ts
+@needs_php
 def test_channels_and_tests_on_combined_graph():
     st = GraphStore(built()["combined"])
     res = RT.channels(st, "board.*")
@@ -218,6 +228,7 @@ def test_channels_and_tests_on_combined_graph():
 
 
 @needs_ts
+@needs_php
 def test_mcp_tools(monkeypatch):
     from codegraph import mcp_server as M
     monkeypatch.setattr(M, "_st", lambda: GraphStore(built()["combined"]))
@@ -227,6 +238,7 @@ def test_mcp_tools(monkeypatch):
     assert "admins see every board" in out
 
 
+@needs_php
 def test_public_publish_on_declared_channel_is_flagged():
     st = GraphStore(built()["api"])
     c = RT.channels(st, "team.{teamId}")["channels"][0]
@@ -237,6 +249,7 @@ def test_public_publish_on_declared_channel_is_flagged():
 
 
 @needs_ts
+@needs_php
 def test_listeners_on_an_assigned_channel_property():
     ev = json.loads(db("web").execute("SELECT attrs FROM nodes WHERE id='channel_sub:team.{teamId}.lobby'").fetchone()[0])["events"]
     assert ev == ["TeamOnline"]

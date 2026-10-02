@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from codegraph.indexer import index_project  # noqa: E402
+from sample import needs_php  # noqa: E402
 
 FIX = ROOT / "tests" / "gating_fixture"
 GATES = ROOT / "examples" / "bookstore.gates.json"
@@ -34,6 +35,7 @@ def gated(method, target="OldFlow"):
     return [g == SCENARIO for _, g in rows]
 
 
+@needs_php
 def test_predicates_derived():
     preds = dict(db().execute("SELECT method, value FROM gate_predicates").fetchall())
     assert preds.get("method:App\\Support\\Flags::on") == "true"
@@ -41,12 +43,14 @@ def test_predicates_derived():
     assert preds.get("method:App\\Support\\FeatureGate::oldMode") == "false"
 
 
+@needs_php
 def test_branch_shapes_gate_old_side():
     for m in ("ifElse", "earlyReturn", "negated", "ternary", "elseifChain", "inClosure", "matchArm"):
         assert all(gated(m)), m
     assert gated("viaVariable") == [True, True, True]
 
 
+@needs_php
 def test_new_side_and_unrelated_code_stay_live():
     for m in ("ifElse", "earlyReturn", "negated", "ternary", "matchArm"):
         assert not any(gated(m, "NewFlow")), m

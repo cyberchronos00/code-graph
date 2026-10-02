@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
-from sample import API, WEB, EXTRACTOR_DEPS  # noqa: E402
+from sample import API, WEB, EXTRACTOR_DEPS, needs_php  # noqa: E402
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph import coverage as C  # noqa: E402
 
@@ -53,6 +53,7 @@ def test_missing_node_skips_typescript(tmp_path):
     assert ts["status"] == "skipped" and "node not installed" in ts["reason"] and "npm ci" in ts["hint"]
 
 
+@needs_php
 def test_unsupported_languages_are_counted(tmp_path):
     proj = tmp_path / "mixed"
     shutil.copytree(API, proj)

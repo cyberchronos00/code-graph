@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph.link import match_endpoint, match_path  # noqa: E402
 from codegraph import query as Q  # noqa: E402
-from sample import build, EXTRACTOR_DEPS  # noqa: E402
+from sample import build, EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
 
@@ -81,6 +81,7 @@ def test_match_path_rules():
     assert match_endpoint("POST", "/api/v1/{storeSlug}/a", routes)["reason"].startswith("method")
 
 
+@needs_php
 def test_link_confidence_and_match_rate():
     res = build()["link"]
     by = {r["endpoint"]: r for r in res["results"]}
@@ -92,6 +93,7 @@ def test_link_confidence_and_match_rate():
     assert by["http:GET /api/v1/main/admin/session"]["reason"].startswith("no backend route")  # the sample API has no such route
 
 
+@needs_php
 def test_cross_repo_impact_and_downstream():
     st = GraphStore(build()["combined"])
     imp = Q.impact(st, "ReportController::destroy")
@@ -102,6 +104,7 @@ def test_cross_repo_impact_and_downstream():
     assert [s["kind"] for s in p] == ["HTTP_CALLS", "MATCHES_ROUTE", "ROUTES_TO", "CALLS"]
 
 
+@needs_php
 def test_mcp_tools_on_combined_and_reindex_repo():
     from codegraph import mcp_server as M
     old = dict(M.STATE)
@@ -117,6 +120,7 @@ def test_mcp_tools_on_combined_and_reindex_repo():
         M.STATE.clear(); M.STATE.update(old)
 
 
+@needs_php
 def test_path_to_table_follows_its_columns():
     """A table reached only through column reads still has a path (same rule as the visual view)."""
     st = GraphStore(build()["combined"])

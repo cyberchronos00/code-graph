@@ -13,7 +13,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
-from sample import EXTRACTOR_DEPS  # noqa: E402
+from sample import EXTRACTOR_DEPS, PHP_EXTRACTOR_DEPS  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
 
@@ -22,6 +22,8 @@ PROJECTS = [("tests/gating_fixture", "examples/bookstore.gates.json"), ("example
             ("tests/ts_fixtures/koa-api", None), ("examples/rust-kvstore", None), ("tests/rust_routes_fixture", None),
             ("examples/bookstore-android", None), ("tests/kotlin_fixture", None), ("tests/swift_fixture", None),
             ("examples/bookstore-ios", None), ("tests/django_access_fixture", None)]
+if not PHP_EXTRACTOR_DEPS.exists():   # the other languages are still checked without the PHP extractor
+    PROJECTS = PROJECTS[1:]
 SCRIPT = """
 import sys
 from codegraph.indexer import index_project
