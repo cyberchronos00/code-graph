@@ -60,6 +60,20 @@ Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, pl
   resolution, `heuristic` for fallbacks.
 - **No real-world code in fixtures.** Write fixtures from scratch; don't copy code from private or third-party
   projects.
+- **Changelog entry.** Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (Added / Changed /
+  Fixed / Removed), linking the issue if there is one.
 - **Docs follow the code.** Update the README or the relevant file in `docs/` when you change behaviour, a command or
   output.
 - Keep PRs focused. For a larger change, open an issue first to agree on the approach.
+
+## Releasing
+
+Versions follow [Semantic Versioning](https://semver.org/); the history is in [CHANGELOG.md](CHANGELOG.md).
+
+1. Every change adds its line under `## [Unreleased]` in the same commit.
+2. To release `X.Y.Z`: bump `__version__` in `codegraph/__init__.py`, rename `## [Unreleased]` to
+   `## [X.Y.Z] - YYYY-MM-DD` (UTC date), add a fresh empty `## [Unreleased]` above it, and update the compare links at
+   the bottom of the changelog.
+3. Commit, then create an annotated tag and push it: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin vX.Y.Z`.
+4. Create the GitHub release from the tag, titled `vX.Y.Z`, with that version's changelog section as the notes:
+   `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section.md>`.

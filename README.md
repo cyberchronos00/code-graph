@@ -545,6 +545,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/completeness.md](docs/completeness.md) | file completeness, unsupported source types, blind-spot detectors, notes on partial answers, the MCP `completeness` object |
 | [docs/limitations.md](docs/limitations.md) | all known gaps |
 | [docs/validation.md](docs/validation.md) | results on public Django and Flutter projects |
+| [CHANGELOG.md](CHANGELOG.md) | changes per release, and what is coming in the next one |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | dev setup, running the 179 tests, adding a plugin |
 | [docs/mcp/sample_outputs.md](docs/mcp/sample_outputs.md) | raw output of every MCP tool on the sample apps |
 | [docs/media/](docs/media) | demo videos: [setup](docs/media/cg-setup-demo.mp4), [terminal](docs/media/cg-terminal-demo.mp4), [visual view](docs/media/cg-view-demo.mp4), [AI agent over MCP](docs/media/cg-agent-demo.mp4), [without code-graph](docs/media/cg-agent-baseline.mp4) (recording scripts in `scripts/demo/`) |
