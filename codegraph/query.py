@@ -654,14 +654,110 @@ def caller_label(c: dict) -> str:
         lab = "  (call through a collection)"
     else:
         lab = ""
+    if c.get("via_override"):
+        v = c["via_override"]
+        lab += f"  (via override {v[0]}" + (f" +{len(v) - 1}" if len(v) > 1 else "") + ")"
+    elif c.get("via_base"):
+        lab += f"  (via base {c['via_base']})"
     return lab + generated_label(c) + platform_label(c)
 
 
+# override / implementation relation between methods (base -> override); a dispatch hop, not a call
+DISPATCH_KINDS = ("OVERRIDDEN_BY", "IMPLEMENTED_BY")
+
+
+def _fqn_of(st: GraphStore, ids) -> dict[str, str]:
+    ids, out = list(ids), {}
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        for r in st.q(f"SELECT id, fqn FROM nodes WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+            out[r["id"]] = r["fqn"] or r["id"]
+    return out
+
+
+def override_relations(st: GraphStore, targets: list[str], min_conf="heuristic") -> dict[str, list[dict]]:
+    """The direct override relation of the targets: `overrides` (the base / interface declarations a target
+    overrides or implements) and `overridden_by` (the overrides / implementations of a target)."""
+    out = {"overrides": [], "overridden_by": []}
+    if not targets:
+        return out
+    tq, kq = ",".join("?" * len(targets)), ",".join("?" * len(DISPATCH_KINDS))
+    rank = CONFIDENCE_RANK[min_conf]
+    up = st.q(f"SELECT DISTINCT src, dst, kind FROM edges WHERE dst IN ({tq}) AND kind IN ({kq}) AND conf_rank >= ?",
+              (*targets, *DISPATCH_KINDS, rank))
+    down = st.q(f"SELECT DISTINCT src, dst, kind FROM edges WHERE src IN ({tq}) AND kind IN ({kq}) AND conf_rank >= ?",
+                (*targets, *DISPATCH_KINDS, rank))
+    fq = _fqn_of(st, {r["src"] for r in up} | {r["dst"] for r in down})
+    tset = set(targets)
+    out["overrides"] = sorted(({"id": r["src"], "fqn": fq.get(r["src"], r["src"]), "of": r["dst"], "edge": r["kind"]}
+                               for r in up if r["src"] not in tset), key=lambda x: (x["fqn"], x["of"]))
+    out["overridden_by"] = sorted(({"id": r["dst"], "fqn": fq.get(r["dst"], r["dst"]), "of": r["src"], "edge": r["kind"]}
+                                   for r in down if r["dst"] not in tset), key=lambda x: (x["fqn"], x["of"]))
+    return out
+
+
+def _all_overrides(st: GraphStore, targets: list[str], min_conf: str) -> list[str]:
+    """Every override / implementation below the targets (transitively), not counting the targets themselves."""
+    seen, frontier = set(targets), list(targets)
+    kq = ",".join("?" * len(DISPATCH_KINDS))
+    while frontier:
+        nxt = []
+        for i in range(0, len(frontier), 500):
+            chunk = frontier[i:i + 500]
+            for r in st.q(f"SELECT dst FROM edges WHERE src IN ({','.join('?' * len(chunk))}) AND kind IN ({kq}) AND conf_rank >= ?",
+                          (*chunk, *DISPATCH_KINDS, CONFIDENCE_RANK[min_conf])):
+                if r["dst"] not in seen:
+                    seen.add(r["dst"])
+                    nxt.append(r["dst"])
+        frontier = nxt
+    return [x for x in seen if x not in set(targets)]
+
+
+def _dispatch_only(st: GraphStore, depth: dict[str, int], paths: dict[str, list[dict]], min_conf: str,
+                   platform: str | None) -> set[str]:
+    """Reached nodes whose every step towards the targets is an override hop (a base / interface method): they do not
+    call the target; their callers do, through the base type."""
+    cand = [n for n, d in depth.items() if d > 0 and paths.get(n) and paths[n][0]["kind"] in DISPATCH_KINDS]
+    if not cand:
+        return set()
+    px, rank, kinds = _px(st, platform), CONFIDENCE_RANK[min_conf], set(CALL_LIKE) - set(DISPATCH_KINDS)
+    calls = set()
+    for i in range(0, len(cand), 500):
+        chunk = cand[i:i + 500]
+        for e in st.q(f"SELECT id, src, dst, kind, conf_rank FROM edges WHERE src IN ({','.join('?' * len(chunk))})", chunk):
+            if e["kind"] in kinds and e["conf_rank"] >= rank and not (px and e["id"] in px) \
+                    and depth.get(e["dst"]) == depth[e["src"]] - 1:
+                calls.add(e["src"])
+    return {n for n in cand if n not in calls}
+
+
 def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None = None) -> dict:
+    """Callers up to entry points. The override relation is kept apart from the callers: a base method is listed
+    under `overrides`, not as a caller of its override (its callers are, `via_base`), and the callers of a base
+    method include the callers of its overrides (`via_override`): calls through a collection or a base-typed value
+    land on the concrete overrides."""
     targets = resolve_targets(st, spec)
     si = _has_class_target(targets)
-    depth = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
+    rel = override_relations(st, targets, min_conf)
+    below = [] if si else _all_overrides(st, targets, min_conf)
+    seeds = targets + below
+    depth = reverse_closure(st, seeds, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
+    own = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform) if below else depth
     paths = shortest_paths(st, depth, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
+    bases = _dispatch_only(st, depth, paths, min_conf, platform)
+    for b in list(depth):
+        if b in bases or b in below:
+            depth.pop(b)
+    fq = _fqn_of(st, bases | set(below))
+    direct = defaultdict(set)   # caller only through the overrides -> the overrides it calls directly
+    if below:
+        bset, kq = set(below), ",".join("?" * len(CALL_LIKE))
+        for i in range(0, len(below), 500):
+            chunk = below[i:i + 500]
+            for e in st.q(f"SELECT src, dst FROM edges WHERE dst IN ({','.join('?' * len(chunk))}) AND kind IN ({kq}) "
+                          f"AND conf_rank >= ?", (*chunk, *CALL_LIKE, CONFIDENCE_RANK[min_conf])):
+                if e["src"] not in own and e["src"] not in bset and e["src"] in depth:
+                    direct[e["src"]].add(e["dst"])
     rows = {}
     ids = list(depth)
     for i in range(0, len(ids), 500):
@@ -671,14 +767,33 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
             rows[r["id"]] = with_generated(dict(r))
     entries = [dict(rows[n], depth=d, path=paths[n], path_confidence=path_confidence(paths[n])) for n, d in depth.items()
                if n in rows and rows[n]["entry_kind"]]
-    callers = [dict(rows[n], depth=d, **_first_hop(paths.get(n))) for n, d in depth.items()
-               if n in rows and rows[n]["kind"] in CODE_KINDS + ("http",) and d > 0]
+    callers = []
+    for n, d in depth.items():
+        if n not in rows or rows[n]["kind"] not in CODE_KINDS + ("http",) or d == 0:
+            continue
+        c = dict(rows[n], depth=d, **_first_hop(paths.get(n)))
+        p = paths.get(n) or []
+        if p and p[0]["to"] in bases:      # calls the base declaration; reaches the target through the override
+            c["via_base"] = fq.get(p[0]["to"], p[0]["to"])
+        if n in direct:    # calls an override (not the target itself): reaches the target's API through it
+            c["via_override"] = sorted(fq.get(x, x) for x in direct[n])
+        callers.append(c)
     out = {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
-           "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or ""))}
+           "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or "")), **rel}
     if platform:
         from .platforms import filter_info
         out["platform"] = filter_info(st, platform)
         out["platform"]["targets_not_built"] = _not_built(st, targets, platform)
+    return out
+
+
+def override_lines(res: dict, limit: int = 8) -> list[str]:
+    """'overrides: Base.m' / 'overridden by: A.m, B.m' lines for an impact result (the relation, not callers)."""
+    out = []
+    for key, label in (("overrides", "overrides"), ("overridden_by", "overridden by")):
+        xs = list(dict.fromkeys(x["fqn"] for x in res.get(key) or []))
+        if xs:
+            out.append(f"{label}: {', '.join(xs[:limit])}" + (f" …+{len(xs) - limit}" if len(xs) > limit else ""))
     return out
 
 

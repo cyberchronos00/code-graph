@@ -140,12 +140,15 @@ class ToolReply(TypedDict):
     result: str
     completeness: dict[str, Any]
     platform: NotRequired[dict[str, Any]]     # the --platform filter a reply applied (target, excluded, unevaluated)
+    overrides: NotRequired[dict[str, Any]]    # impact: the override relation of the targets ({overrides, overridden_by})
 
 
 # scope of the answer a tool is producing, set by the tool while it runs (see _scope); read by the tool() wrapper
 _SCOPE: contextvars.ContextVar = contextvars.ContextVar("cg_answer_scope", default=None)
 # the platform filter the current reply applied (codegraph/platforms.py filter_info), for the structured content
 _PF: contextvars.ContextVar = contextvars.ContextVar("cg_platform_filter", default=None)
+# extra machine-readable parts of the current reply (e.g. impact's override relation), merged into the structured content
+_EXTRA: contextvars.ContextVar = contextvars.ContextVar("cg_reply_extra", default=None)
 
 
 class PlatformError(ValueError):
@@ -189,7 +192,7 @@ def _run(fn, args, kwargs) -> tuple[str, dict]:
     """Run a tool: text reply (repo-relative paths, coverage notes) + its completeness object."""
     from .coverage import answer_note
     from .plans import PlanError
-    token, ptoken = _SCOPE.set(None), _PF.set(None)
+    token, ptoken, xtoken = _SCOPE.set(None), _PF.set(None), _EXTRA.set(None)
     try:
         try:
             txt = fn(*args, **kwargs)
@@ -197,13 +200,16 @@ def _run(fn, args, kwargs) -> tuple[str, dict]:
             txt = f"plan error: {e}"
         except PlatformError as e:
             txt = f"platform error: {e}"
-        scope, pf = _SCOPE.get(), _PF.get()
+        scope, pf, extra = _SCOPE.get(), _PF.get(), _EXTRA.get()
     finally:
         _SCOPE.reset(token)
         _PF.reset(ptoken)
+        _EXTRA.reset(xtoken)
     comp = _completeness(scope)
     if pf:
         comp = {**comp, "_platform": pf}
+    if extra:
+        comp = {**comp, "_extra": extra}
     if not isinstance(txt, str) or txt.startswith(("plan error:", "platform error:")):
         return _rel_text(txt), comp
     scoped = ""
@@ -229,11 +235,12 @@ def tool(fn):
     @functools.wraps(fn)
     def served(*args, **kwargs):
         txt, comp = _run(fn, args, kwargs)
-        pf = comp.pop("_platform", None)
+        pf, extra = comp.pop("_platform", None), comp.pop("_extra", None)
         return CallToolResult(content=[TextContent(type="text", text=txt)],
-                              structured_content={"result": txt, "completeness": _rel_obj(comp), **({"platform": pf} if pf else {})})
+                              structured_content={"result": txt, "completeness": _rel_obj(comp), **({"platform": pf} if pf else {}),
+                                                  **_rel_obj(extra or {})})
     served.__signature__ = inspect.signature(fn, eval_str=True).replace(return_annotation=Annotated[CallToolResult, ToolReply])
-    wrapped.completeness = lambda *a, **k: {k2: v for k2, v in _run(fn, a, k)[1].items() if k2 != "_platform"}
+    wrapped.completeness = lambda *a, **k: {k2: v for k2, v in _run(fn, a, k)[1].items() if k2 not in ("_platform", "_extra")}
     wrapped.structured = lambda *a, **k: served(*a, **k).structured_content   # tests / scripts: the full structured reply
     server.tool()(served)
     return wrapped
@@ -410,7 +417,11 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
     if pf and set(r["platform"]["targets_not_built"]) == set(r["targets"]):
         return "\n".join(pline + [f"{method} is not built for {pf}: nothing calls it there; platform_divergence(target='{pf}') "
                                    f"lists references to it that would not build"])
-    out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
+    if r["overrides"] or r["overridden_by"]:   # the relation, apart from the callers
+        _EXTRA.set({"overrides": {k: [{"id": x["id"], "fqn": x["fqn"], "of": x["of"], "edge": x["edge"]} for x in r[k]]
+                                  for k in ("overrides", "overridden_by")}})
+    out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", *Q.override_lines(r),
+                   f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
     if not r["callers"] and not r["entry_points"]:
         return "\n".join(out + [Q.explain_no_callers(st, method, r["targets"])])
     byk = defaultdict(list)
@@ -436,6 +447,15 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
     if refs:   # code that holds the function as a value (dispatch table, callback, decorator) rather than calling it
         out.append(f"by reference ({len(refs)}): " + ", ".join(f"{short(c['id'])} ({c.get('how') or 'ref'})" for c in refs[:12])
                    + (f" …+{len(refs) - 12}" if len(refs) > 12 else ""))
+    vo = [c for c in r["callers"] if c.get("via_override")]
+    if vo:     # calls an override; the base API is reached through it
+        out.append(f"via override ({len(vo)}): " + ", ".join(f"{short(c['id'])} -> {', '.join(c['via_override'][:3])}"
+                                                             + (f" +{len(c['via_override']) - 3}" if len(c['via_override']) > 3 else "")
+                                                             for c in vo[:8]) + (f" …+{len(vo) - 8}" if len(vo) > 8 else ""))
+    vb = [c for c in r["callers"] if c.get("via_base")]
+    if vb:     # calls the base declaration; the target is reached through the override
+        out.append(f"via base ({len(vb)}): " + ", ".join(f"{short(c['id'])} -> {c['via_base']}" for c in vb[:8])
+                   + (f" …+{len(vb) - 8}" if len(vb) > 8 else ""))
     out += _snapshot_client_lines([e["id"] for e in r["entry_points"] if e["id"].startswith("route:")])
     return "\n".join(out)
 

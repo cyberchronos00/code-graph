@@ -16,6 +16,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 - `callers(symbol, min_confidence?, limit?)`: direct callers of a function, method or class (one level, with the call
   site and confidence; `ref@file:line` for code that takes the function as a value, such as a dispatch table or a
   callback); `impact` follows them up to the entry points and lists those references in a `by reference` line;
+  its `overrides:` / `overridden by:` lines and `via override` / `via base` lines keep the override relation apart
+  from the callers, and the structured content carries it as `overrides: {overrides, overridden_by}`;
 - `search(name, kind?, limit?)`: nodes by name / FQN substring, plus route middleware, guard, auth and access names
   with the routes that carry them (`search("auth")` finds `auth:api`, `ApiKeyGuard`, `IsAuthenticated`, …);
 - `routes(writes?, reaches?, missing?, unguarded?, auth_pattern?, max_items?, paths?, min_confidence?)`: routes with

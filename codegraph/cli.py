@@ -255,6 +255,8 @@ def main(argv=None):
         if a.platform and res["targets"] and set(res["platform"]["targets_not_built"]) == set(res["targets"]):
             print(f"{a.spec} is not built for {a.platform}: nothing calls it there (`cg platforms divergence --target "
                   f"{a.platform}` lists references to it that would not build)"); return
+        for line in Q.override_lines(res):
+            print(line)
         if not res["callers"] and not res["entry_points"]:
             print(Q.explain_no_callers(st, a.spec, res["targets"])); return
         print(f"callers (transitive): {len(res['callers'])}")

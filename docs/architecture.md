@@ -143,6 +143,9 @@ Both use the same two layers (details and env vars in [native.md](native.md)):
 
 Dispatch: trait and virtual method calls land on the declaring method. IMPLEMENTED_BY / OVERRIDDEN_BY edges then
 fan out to every impl or override, so `reaches` on an impl method includes the callers that go through the trait.
+`impact` reads these hops as the override relation, not as calls: the base method is shown as `overrides:` instead
+of a caller, its callers count `via base`, and `impact` on a base method adds the callers of its overrides
+(`via override`), the calls that a plugin loop or a base-typed value make on the concrete overrides.
 
 ## How `reaches` works
 1. A recursive CTE walks propagating edges in reverse from the target(s), with an optional minimum confidence, and

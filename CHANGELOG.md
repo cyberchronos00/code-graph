@@ -8,6 +8,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- `impact` keeps the override relation apart from the callers: a base method is listed as `overrides:` instead of
+  as a caller of its override, and `impact` on an abstract or base method lists the code that calls its overrides
+  (`via override`). The MCP structured content carries the relation as `overrides`
+  ([#26](https://github.com/cyberchronos00/code-graph/issues/26)).
+
 ## [0.5.0] - 2026-10-02
 
 ### Added
