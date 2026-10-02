@@ -21,7 +21,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
-from ...core.fsutil import keep_file
+from ...core.fsutil import content_key, keep_file
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from ..native import gates as G
 from ..native import runner, scipread
@@ -99,6 +99,12 @@ def _kind_ok(suffix: str, kind: str) -> bool:
     if suffix == "!":
         return kind == "macro"
     return False
+
+
+def scip_cache_key(root: Path, files: list[str], indexer_version: str, compdb: Path) -> str:
+    """SCIP cache key: the sources' content plus the compile_commands.json content (flags and defines change the
+    index even when no source does)."""
+    return runner.fingerprint(root, files, f"{indexer_version}|{compdb}|{content_key(compdb)}")
 
 
 class CFamilyPlugin(LanguagePlugin):
@@ -356,8 +362,7 @@ class CFamilyPlugin(LanguagePlugin):
         if not tool:
             return None, {"status": "scip-clang not installed; heuristic mode (docs/native.md)"}
         ver = runner.tool_version(tool)
-        files = list(self.files) + [str(self.compdb_path)]
-        key = runner.fingerprint(self.root, list(self.files), f"{ver}|{self.compdb_path}|{self.compdb_path.stat().st_mtime_ns}")
+        key = scip_cache_key(self.root, list(self.files), ver, self.compdb_path)
         jobs = os.environ.get("CODEGRAPH_JOBS")
         cmd = [tool, f"--compdb-path={self.compdb_path}"] + ([f"--jobs={jobs}"] if jobs else [])
         timeout = int(os.environ.get("CODEGRAPH_INDEXER_TIMEOUT", "3600"))

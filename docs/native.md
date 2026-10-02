@@ -30,8 +30,8 @@ chmod +x ~/.local/bin/scip-clang && scip-clang --version
 
 The tools are looked up in `PATH`, then `~/.cargo/bin` (rust-analyzer) and `~/.local/bin` (scip-clang). Override the
 lookup with `CODEGRAPH_RUST_ANALYZER=/path` or `CODEGRAPH_SCIP_CLANG=/path`. SCIP output is cached under
-`~/.cache/codegraph/scip/`, keyed by a fingerprint of the sources and the indexer version, so a re-index with no changes
-takes seconds.
+`~/.cache/codegraph/scip/`, keyed by the cache version, the indexer version and the content hash of every source file (and of
+`compile_commands.json` for C/C++), so a re-index with no changes takes seconds and any content change re-runs the indexer.
 
 ## Rust
 

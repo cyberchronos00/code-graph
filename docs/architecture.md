@@ -185,8 +185,9 @@ similarity of their callee sets.
   Cypress) are extracted with the rest and their edges rewritten to `TEST_*` kinds by `codegraph/tests_index.py`
   (`page.goto` / `cy.visit` → `TEST_VISITS`). See [channels-and-tests.md](channels-and-tests.md).
 - **Discovery** skips dangling symlinks with a per-file warning and does not follow symlinked directories.
-- **Facts cache:** extractor output is cached in `~/.cache/codegraph/ts/` keyed by the extractor code + lockfile, the config, and
-  (path, size, mtime) of every project file outside `node_modules` (incl. `.nuxt` and the lockfile). `CODEGRAPH_NO_CACHE=1` disables it.
+- **Facts cache:** extractor output is cached in `~/.cache/codegraph/ts/` keyed by the cache version, the extractor code + lockfile,
+  the config, and (path, size, content hash) of every project file outside `node_modules` (incl. `.nuxt` and the lockfile), so
+  any content change re-runs the extractor, even one that keeps the file size and mtime. `CODEGRAPH_NO_CACHE=1` disables it.
 
 ## TypeScript server and full-stack frameworks
 `plugins/nest`, `plugins/nextjs` and `plugins/express` sit on the same TS program. `extractor/fw.mjs` emits generic facts
@@ -238,7 +239,8 @@ tasks), `listener` (signal receivers), `management_command` and `admin_panel` (o
 
 ## Dart / Flutter plugin
 The extractor is a small Dart program using `package:analyzer` in parse-only mode (no `pub get` of the target project,
-no resolution), compiled once with `dart compile exe` and cached per file hash in `~/.cache/codegraph/dart`.
+no resolution), compiled with `dart compile exe` (rebuilt when the extractor source or lockfile hash changes); its facts are
+cached in `~/.cache/codegraph/dart`, keyed by the cache version, the config and the content hash of every `.dart` / `.yaml` / `.env*` file.
 Resolution is done in Python (`program.py`) from imports (`package:` via every `pubspec.yaml` name, relative, `part`/`part of`,
 `export show/hide`, prefixes). URLs are evaluated statically: string interpolation becomes `{param}`, constants/getters/
 constructor-provided fields are followed, `String.fromEnvironment`/`dotenv` become `{env:NAME}` (values from `.env` files

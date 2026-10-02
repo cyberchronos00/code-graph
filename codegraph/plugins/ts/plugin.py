@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from ...core.model import CONFIDENCE_RANK
-from ...core.fsutil import stat_key
+from ...core import fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
 EXTRACTOR_DIR = Path(__file__).parent / "extractor"
@@ -313,10 +313,10 @@ SKIP_DIRS = {"node_modules", ".git", ".output", "dist", ".cache", "coverage", "p
 
 
 def facts_fingerprint(root, cfg: dict) -> str:
-    """Cache key for extractor facts: extractor code + deps lock + config + (path, size, mtime) of every
-    project file outside node_modules (.nuxt and the project lockfile included, so `nuxi prepare` or a
-    dependency bump invalidates it)."""
-    h = hashlib.sha256()
+    """Cache key for extractor facts: cache version + extractor code + deps lock + config + (path, size, content hash)
+    of every project file outside node_modules (.nuxt and the project lockfile included, so `nuxi prepare` or a
+    dependency bump invalidates it). Content, not mtime: a same-size edit with a restored mtime is a miss."""
+    h = hashlib.sha256(f"cg-cache-v{fsutil.CACHE_VERSION}\n".encode())
     for f in (EXTRACTOR, EXTRACTOR_DIR / "package-lock.json"):
         h.update(f.read_bytes() if f.exists() else b"")
     # generated stand-in types live in a fresh temp dir per run; their content follows from the project files
@@ -331,7 +331,7 @@ def facts_fingerprint(root, cfg: dict) -> str:
         dns[:] = sorted(d for d in dns if d not in SKIP_DIRS)
         for fn in sorted(fns):
             p = os.path.join(dp, fn)
-            h.update(f"{os.path.relpath(p, root)}|{stat_key(p)}\n".encode())   # dangling symlinks hash too
+            h.update(f"{os.path.relpath(p, root)}|{fsutil.content_key(p)}\n".encode())   # dangling symlinks hash too
     return h.hexdigest()[:20]
 
 

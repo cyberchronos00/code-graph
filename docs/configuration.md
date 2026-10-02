@@ -86,6 +86,6 @@ repository root.
 
 | variable | effect |
 |---|---|
-| `CODEGRAPH_NO_CACHE=1` | disable the TS extractor facts cache and the native SCIP cache |
+| `CODEGRAPH_NO_CACHE=1` | disable the TS and Dart extractor facts caches and the native SCIP cache (all keyed by file content) |
 | `CODEGRAPH_CACHE=DIR` | cache location (default `~/.cache/codegraph`) |
 | `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0`, `CODEGRAPH_COMPDB`, `CODEGRAPH_CFAMILY`, ... | Rust / C / C++ options: see [native.md](native.md#environment-variables) |

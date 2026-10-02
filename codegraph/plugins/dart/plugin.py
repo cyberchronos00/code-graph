@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED, CONFIDENCE_RANK
-from ...core.fsutil import stat_key
+from ...core import fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from .http import TOKEN, HttpExtractor, Tpl, UrlEval, bind_args, join, load_env_files, min_conf
 from .models import ModelIndex
@@ -51,8 +51,34 @@ def module_of(path: str | None) -> str | None:
     return "/".join(parts[:-1]) or None
 
 
-def facts_fingerprint(root: Path, cfg: dict) -> str:
+def extractor_stamp() -> str:
+    """Hash of the extractor source and its lockfile; the compiled binary is reused only while it matches (an mtime
+    comparison would keep an outdated binary after a checkout that leaves the source older than the binary)."""
     h = hashlib.sha256()
+    for f in (EXTRACTOR, EXTRACTOR_DIR / "pubspec.lock"):
+        h.update(fsutil.content_key(f).encode() + b"\n")
+    return h.hexdigest()
+
+
+def _stamp_path() -> Path:
+    return BIN.with_name(BIN.name + ".sha256")
+
+
+def extractor_binary_current() -> bool:
+    try:
+        return BIN.exists() and _stamp_path().read_text().strip() == extractor_stamp()
+    except OSError:
+        return False
+
+
+def write_extractor_stamp() -> None:
+    _stamp_path().write_text(extractor_stamp() + "\n")
+
+
+def facts_fingerprint(root: Path, cfg: dict) -> str:
+    """Cache key for extractor facts: cache version + extractor code + deps lock + config + (path, size, content hash)
+    of every .dart / .yaml / .env* file. Content, not mtime: a same-size edit with a restored mtime is a miss."""
+    h = hashlib.sha256(f"cg-cache-v{fsutil.CACHE_VERSION}\n".encode())
     for f in (EXTRACTOR, EXTRACTOR_DIR / "pubspec.lock"):
         h.update(f.read_bytes() if f.exists() else b"")
     h.update(json.dumps(cfg, sort_keys=True).encode())
@@ -61,7 +87,7 @@ def facts_fingerprint(root: Path, cfg: dict) -> str:
         for fn in sorted(fns):
             if fn.endswith((".dart", ".yaml")) or fn.startswith(".env"):
                 p = os.path.join(dp, fn)
-                h.update(f"{os.path.relpath(p, root)}|{stat_key(p)}\n".encode())
+                h.update(f"{os.path.relpath(p, root)}|{fsutil.content_key(p)}\n".encode())
     return h.hexdigest()[:20]
 
 
@@ -108,7 +134,7 @@ class DartPlugin(LanguagePlugin):
         return False
 
     def ensure_extractor(self, dart: str) -> str:
-        if BIN.exists() and BIN.stat().st_mtime >= EXTRACTOR.stat().st_mtime:
+        if extractor_binary_current():
             return str(BIN)
         if not (EXTRACTOR_DIR / ".dart_tool" / "package_config.json").exists():
             subprocess.run([dart, "pub", "get"], cwd=EXTRACTOR_DIR, check=True, capture_output=True)
@@ -116,6 +142,7 @@ class DartPlugin(LanguagePlugin):
         r = subprocess.run([dart, "compile", "exe", str(EXTRACTOR), "-o", str(BIN)], cwd=EXTRACTOR_DIR, capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError("dart extractor compile failed: " + r.stderr[-500:])
+        write_extractor_stamp()
         return str(BIN)
 
     def run_extractor(self, project: Project, cfg: dict) -> tuple[dict, str]:

@@ -1,17 +1,21 @@
 """Running external SCIP indexers (rust-analyzer, scip-clang) with an on-disk cache.
 
-The cache key covers the indexer version, its arguments and (path, size, mtime) of every relevant source file,
-so re-indexing an unchanged project reuses the previous SCIP file. CODEGRAPH_NO_CACHE=1 disables the cache.
+The cache key covers the cache version, the indexer version, its arguments and (path, size, content hash) of every
+relevant source file, so re-indexing an unchanged project reuses the previous SCIP file and any content change (even
+one that keeps the size and mtime) re-runs the indexer. CODEGRAPH_NO_CACHE=1 disables the cache.
 Output never goes into the indexed project: files live under ~/.cache/codegraph/scip/ (or $CODEGRAPH_CACHE/scip/).
 """
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
+
+from ...core import fsutil
 
 
 def cache_dir() -> Path:
@@ -43,22 +47,27 @@ def tool_version(tool: str, args=("--version",)) -> str:
 
 
 def fingerprint(root: Path, files: list[str], extra: str) -> str:
-    h = hashlib.sha1(extra.encode())
+    """Cache key: cache version + `extra` (indexer version, config) + root + (path, size, content hash) per file."""
+    h = hashlib.sha256(f"cg-cache-v{fsutil.CACHE_VERSION}\0{extra}".encode())
     h.update(str(root).encode())
     for f in sorted(files):
-        try:
-            st = (root / f).stat()
-            h.update(f"{f}\0{st.st_size}\0{int(st.st_mtime_ns)}\n".encode())
-        except OSError:
-            h.update(f"{f}\0missing\n".encode())
+        h.update(f"{f}\0{fsutil.content_key(root / f)}\n".encode())
     return h.hexdigest()[:20]
+
+
+def _prune_legacy(name: str) -> None:
+    """Drop SCIP files written under an older cache version (`<name>-<20 hex>.scip`): their keys can never match again."""
+    for old in cache_dir().glob(f"{name}-*.scip"):
+        if re.fullmatch(rf"{re.escape(name)}-[0-9a-f]{{20}}\.scip", old.name):
+            old.unlink(missing_ok=True)
 
 
 def run_cached(name: str, key: str, cmd: list[str], cwd: Path, out_path_arg: str | None, timeout: int,
                out_flag_style: str = "space") -> tuple[Path | None, dict]:
     """Run `cmd` (which writes a SCIP file) unless a cached result exists. The output path is appended to `cmd`
     as `<out_path_arg> <path>` (style 'space') or `<out_path_arg>=<path>` (style 'eq')."""
-    out = cache_dir() / f"{name}-{key}.scip"
+    _prune_legacy(name)
+    out = cache_dir() / f"{name}-v{fsutil.CACHE_VERSION}-{key}.scip"
     info = {"cache": "hit" if out.exists() and os.environ.get("CODEGRAPH_NO_CACHE") != "1" else "miss", "command": " ".join(cmd)}
     if info["cache"] == "hit":
         return out, info
