@@ -1,6 +1,7 @@
 """Orchestrates detection -> language plugins (+ framework sub-plugins) -> entry tagging -> SQLite."""
 from __future__ import annotations
 
+import copy
 import json
 import time
 from collections import defaultdict, deque
@@ -72,6 +73,11 @@ def _tag_entries(builder: GraphBuilder, skip_gate: str | None) -> list[tuple]:
     return [(nid, k, c, sample[(nid, k)]) for nid, ks in counts.items() for k, c in ks.items()]
 
 
+def fresh_plugins(plugins: list) -> list:
+    """Per-run copies of the module-level plugin templates (the templates themselves never index anything)."""
+    return [copy.deepcopy(p) for p in plugins]
+
+
 def setup(project: Project) -> dict:
     """Which language plugins, framework plugins and presets apply to `project` (detection, then .cg.yaml
     frameworks.add / remove). Fills project.options["presets"] (the applied preset names)."""
@@ -82,9 +88,12 @@ def setup(project: Project) -> dict:
     add, remove = set(fwc.get("add") or []), set(fwc.get("remove") or [])
     if not project.detected:
         project.detected = detect(project.root)
-    langs = [lp for lp in LANGUAGE_PLUGINS if lp.detect(project)]
-    detected = [f for f in FRAMEWORK_PLUGINS if f.detect(project)]
-    fws = [f for f in FRAMEWORK_PLUGINS if (f in detected or f.name in add) and f.name not in remove]
+    # fresh plugin instances per run: state a plugin keeps on itself (caches, gate predicates, file lists) never
+    # carries over to the next project indexed in the same process (MCP `index`, test suites)
+    langs = [lp for lp in fresh_plugins(LANGUAGE_PLUGINS) if lp.detect(project)]
+    all_fws = fresh_plugins(FRAMEWORK_PLUGINS)
+    detected = [f for f in all_fws if f.detect(project)]
+    fws = [f for f in all_fws if (f in detected or f.name in add) and f.name not in remove]
     found = {f.name: "detected" for f in detected}
     for k in (project.detected.get("frameworks") or {}):        # sub-frameworks with a preset (DRF, django-ninja)
         k = presets.FRAMEWORK_ALIASES.get(k, k)
@@ -212,7 +221,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     from .coverage import compute
     from .blindspots import detect as detect_blind_spots
     t_cov = time.time()
-    progs = {lp.name: lp.program for lp in LANGUAGE_PLUGINS if getattr(lp, "program", None) is not None
+    progs = {lp.name: lp.program for lp in plan["language_plugins"] if getattr(lp, "program", None) is not None
              and lp.name in stats["plugins"] and "status" not in (stats["plugins"][lp.name] or {})}
     bspots = detect_blind_spots(project.root, scanned.paths, builder, progs)
     t_tag = time.time()
@@ -227,7 +236,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
         live = tag_entries(builder, skip_gate=sc)
         store.db.executemany("INSERT INTO node_entry_live VALUES (?,?,?,?,?)", [(sc, *r) for r in live])
         stats["gated_edges"] = {sc: sum(1 for e in builder.edges.values() if e.gate == sc)}
-    for lp in LANGUAGE_PLUGINS:
+    for lp in plan["language_plugins"]:
         store.db.executemany("INSERT OR REPLACE INTO gate_predicates VALUES (?,?,?,?)", getattr(lp, "gate_predicates", []) or [])
     store.db.commit()
     stats["coverage"] = compute(project.root, {k: v for k, v in stats["plugins"].items() if "/" not in k and not k.startswith("scip:")},

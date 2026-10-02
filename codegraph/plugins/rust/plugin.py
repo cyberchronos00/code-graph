@@ -70,6 +70,7 @@ class RustPlugin(LanguagePlugin):
         t0 = time.time()
         root = project.root
         self.root, self.b = root, builder
+        self._tm = None
         self.rules = path_rules(project, "rust")
         stats: dict = defaultdict(int)
         try:

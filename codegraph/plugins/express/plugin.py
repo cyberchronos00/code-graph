@@ -59,6 +59,7 @@ class ExpressPlugin(FrameworkPlugin):
         if not F:
             return {**st, "status": "no facts"}
         self.b, self.F = b, F
+        self._route_keys = None
         self.I = F.get("instances") or {}
         calls = F.get("calls") or []
         self.kinds = {}        # key -> (framework, "app"|"router"|"derived"|"param"|"name")
@@ -287,7 +288,7 @@ class ExpressPlugin(FrameworkPlugin):
                         self.router_mw[k].append((join_path(kp, p), mw, c["file"], c["line"]))
 
     def _has_routes(self, k) -> bool:
-        if not hasattr(self, "_route_keys"):
+        if self._route_keys is None:
             self._route_keys = {kk for c in self.F.get("calls") or [] if c["method"] in VERBS for kk, _ in self.inst_keys(c.get("recv") or {})}
         return k in self._route_keys
 
