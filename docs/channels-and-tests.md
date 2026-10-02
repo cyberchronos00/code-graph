@@ -129,7 +129,9 @@ routers and controllers that a TypeScript test builds for itself (`const app = e
   `app.test_client()` (or a fixture that returns one). Python URLs are evaluated from literals, f-strings (with
   literal `parametrize` values filled in), `%` / `+` / `.format`, local variables, class attributes and `self.url = …`
   in `setUp`; `reverse()` / `reverse_lazy()` with a literal route name resolve through the Django URL names cg
-  indexes (namespaces, DRF router names `<basename>-list` / `-detail` / `-<action>`). Project request
+  indexes (namespaces, DRF router names `<basename>-list` / `-detail` / `-<action>`), Flask `url_for('bp.view')`
+  through blueprint endpoint names and Starlette / FastAPI `app.url_path_for('name')` through route names. Constant
+  parts read from module constants and settings attributes (`f"{settings.API_V1_STR}/items/"`) are filled in. Project request
   helpers whose verb and URL are parameters (`$this->postAs('/x', …)` → `sendAs('post', $uri)` →
   `$this->json($method, $uri)`) are followed to their call sites. Requests are matched to routes like client calls in
   `cg link`; frontend tests are matched when the frontend is linked to its backend. A request whose URL is entirely
@@ -191,9 +193,9 @@ MCP: `tests_covering(target, min_confidence?, paths?)`.
   counts as reaching the backend through the page it visits.
 - Test discovery follows file naming conventions; tests generated at run time (data providers expanding into cases,
   `test.each`, `@pytest.mark.parametrize`) are one node per declaration, with the parameters on the node.
-- Python HTTP test requests link to routes of the web frameworks cg models (Django, DRF, django-ninja). FastAPI,
-  Starlette and Flask requests are found and counted (`cg index` stats, `cg coverage`), and link once those
-  frameworks' routes are indexed. A URL built by a helper method from its arguments (`self._get_url('list')`) or
+- Python HTTP test requests link to routes of the web frameworks cg models (Django, DRF, django-ninja, FastAPI,
+  Starlette, Flask); requests to any other framework are found and counted (`cg index` stats, `cg coverage`). A
+  `url_for()` with an endpoint that `add_url_rule(endpoint=...)` names without a view function, and a URL built by a helper method from its arguments (`self._get_url('list')`) or
   passed as `**request` stays unknown.
 - pytest hooks that generate tests or fixtures at run time (`pytest_generate_tests`, `pytest_collect_file`, fixtures
   registered by installed plugins other than `pytest_plugins` modules in the repo) are not followed; fixtures from

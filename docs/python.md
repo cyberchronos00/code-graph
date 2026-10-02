@@ -199,8 +199,8 @@ Measured on the same shallow clones as below, before and after:
 | Project | test cases | CALLS edges (now application code only) | TEST_* edges | fixtures / fixture uses | HTTP test requests |
 |---|---|---|---|---|---|
 | pytest-dev/pytest | 0 -> 3,512 (pytest 3,501, unittest 11) | 14,789 -> 2,987 | 0 -> 33,591 | 164 / 2,489 | - |
-| pallets/flask | 0 -> 391 | 1,538 -> 430 | 0 -> 3,151 | 23 / 535 | 331 found (Flask routes not modelled yet) |
-| fastapi/full-stack-fastapi-template | 0 -> 58 | 182 -> 54 | 0 -> 435 | 4 / 123 | 53 found (FastAPI routes not modelled yet) |
+| pallets/flask | 0 -> 391 | 1,538 -> 430 | 0 -> 3,151 | 23 / 535 | 331 found, 223 linked to Flask routes (see [Web routes](#web-routes-fastapi-starlette-flask)) |
+| fastapi/full-stack-fastapi-template | 0 -> 58 | 182 -> 54 | 0 -> 435 | 4 / 123 | 53 found, 53 linked to FastAPI routes |
 | open-telemetry/opentelemetry-python | 0 -> 2,599 (pytest 192, unittest 2,407) | 11,723 -> 2,860 | 0 -> 19,793 | 36 / 98 | - |
 | ansible/ansible | 0 -> 2,628 (pytest 1,647, unittest 981) | 22,247 -> 14,843 | 0 -> 16,723 | 122 / 845 | - |
 | netbox-community/netbox | 0 -> 14,103 (unittest) | 20,744 -> 5,170 | 0 -> 94,514 | - | 1,005 found, 443 linked to Django / DRF routes |
@@ -210,6 +210,44 @@ TEST_HTTP edges sampled at random all land on the route the test requests (DRF r
 the requests left unlinked build their URL in a helper method (`self._get_url('list')`) or name routes registered
 at run time. Indexing takes about 3-7% longer
 (ansible 11.2 s -> 12.0 s, netbox 33.0 s -> 34.1 s, best of three on a shared machine).
+
+## Web routes (FastAPI, Starlette, Flask)
+
+A project that depends on or imports `fastapi` / `starlette` or `flask` gets route nodes (`route:GET /api/v1/items/{id}`)
+with a `ROUTES_TO` edge to the handler, built from the app / router / blueprint objects the code assigns
+(`app = FastAPI()`, `router = APIRouter(prefix="/items")`, `bp = Blueprint("auth", __name__, url_prefix="/auth")`,
+inside a function too, as in Flask's `create_app()` factory):
+
+- FastAPI: `@router.get/post/...`, `@router.api_route(methods=[...])`, `router.add_api_route()`, `@app.websocket`,
+  `include_router(router, prefix=...)` chains across modules, router `prefix=` and `dependencies=`. Prefixes and paths
+  are evaluated from literals, f-strings, module constants and settings attributes (`settings.API_V1_STR` with
+  `class Settings: API_V1_STR: str = "/api/v1"`); a part cg cannot evaluate becomes `{?}`.
+- Starlette: `Starlette(routes=[Route(...), Mount("/x", routes=[...]), WebSocketRoute(...)])`, `Router`, `add_route`,
+  `HTTPEndpoint` classes (one route per method the class defines). `{id:int}` becomes `{id}`.
+- Flask: `@bp.route(..., methods=...)`, `@bp.get` / `.post` / ..., `add_url_rule()` (also `MethodView.as_view()`),
+  `register_blueprint(bp, url_prefix=...)` (the registration's prefix replaces the blueprint's own), nested blueprints,
+  `<int:id>` → `{id}`. Route names are the endpoints `url_for()` takes (`auth.login`).
+- Route access (`cg routes --unguarded`): `Depends()` / `Security()` dependencies of the handler (parameter defaults,
+  `Annotated[..., Depends(f)]` aliases such as `CurrentUser`), of `dependencies=` on the route, router or
+  `include_router`, and the non-framework decorators of a Flask view (`@login_required`).
+- A router or blueprint no app includes still gets its routes, with `mounted: false` and no entry point.
+
+The `python_decorator_routes` blind spot no longer fires for these frameworks. Test requests through `TestClient(app)`,
+`app.test_client()` and fixtures returning one link to the routes (`TEST_HTTP`), so `cg tests <handler>` lists them.
+
+Measured on shallow clones (before -> after):
+
+| Project | routes | HTTP test requests linked | `python_decorator_routes` blind spots | index time |
+|---|---|---|---|---|
+| pallets/flask `examples/tutorial` | 0 -> 12 | 0 / 21 -> 18 / 21 (3 URLs unknown) | 7 -> 0 | 0.05 s -> 0.06 s |
+| fastapi/full-stack-fastapi-template `backend` | 0 -> 23 | 0 / 53 -> 53 / 53 | 23 -> 0 | 0.13 s -> 0.2 s |
+| pallets/flask (whole repo, apps built inside its own tests) | 0 -> 156 | 0 / 331 -> 223 / 331 | 13 -> 0 | 0.6 s -> 0.9 s |
+
+In the template, 17 of 23 routes carry an auth dependency (`CurrentUser`, `get_current_active_superuser`); the 6 without
+are login, signup, password recovery, the health check and the private user route. The template's `deps.py` uses
+Python 3.14's unparenthesized `except A, B:`; cg re-parses such files with the parentheses added, so it indexes on
+older interpreters too. In the flask repository most unlinked requests target routes a test registers on the `app`
+fixture it receives as a parameter (`def test_x(app, client): @app.route(...)`), which cg does not model.
 
 ## Validation
 

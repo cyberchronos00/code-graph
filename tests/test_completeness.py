@@ -399,14 +399,14 @@ def test_django_detector_positive_and_negative(tmp_path):
 
 def test_python_registration_detectors_positive_and_negative(tmp_path):
     db = build(tmp_path, "reg", {
-        "requirements.txt": "flask\n", "svc/__init__.py": "",
+        "requirements.txt": "sanic\n", "svc/__init__.py": "",
         "svc/app.py": '''
-            from flask import Flask
+            from sanic import Sanic
             import functools
             from unittest import mock
             from .registry import registry
 
-            app = Flask(__name__)
+            app = Sanic(__name__)
 
             @app.route("/orders")
             def list_orders():

@@ -53,7 +53,8 @@ SETUP_MODULE = ("setUpModule", "tearDownModule", "setup_module", "teardown_modul
 HTTP_VERBS = {"get": "GET", "post": "POST", "put": "PUT", "patch": "PATCH", "delete": "DELETE", "head": "HEAD",
               "options": "OPTIONS", "trace": "TRACE"}
 GENERIC_VERBS = {"generic", "request"}          # client.generic("POST", url) (Django), client.request("POST", url)
-URL_NAME_FUNCS = {"reverse", "reverse_lazy", "resolve_url"}
+from ..pyweb.values import str_value
+URL_NAME_FUNCS = {"reverse", "reverse_lazy", "resolve_url", "url_for", "url_path_for"}   # Django, Flask, Starlette
 LOCAL_HOSTS = re.compile(r"^[a-z]+://(testserver|localhost|127\.0\.0\.1|0\.0\.0\.0|test|example\.com|\[::1\])(:\d+)?(?=/|$)",
                          re.I)
 
@@ -709,6 +710,9 @@ class PyTests:
                     outs = [o + str(v.value) for o in outs]
                     continue
                 lits = self.param_values.get(v.value.id) if isinstance(v.value, ast.Name) else None
+                if not lits and isinstance(v.value, (ast.Name, ast.Attribute)):
+                    sv = str_value(prog, v.value, ctx)        # f"{settings.API_V1_STR}/items/": a constant prefix
+                    lits = [sv] if sv and "{" not in sv else None
                 outs = [o + x for o in outs for x in lits][:6] if lits else [o + "{" + _ph(v) + "}" for o in outs]
             return [("path", o) for o in outs]
         if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Mod):
@@ -727,8 +731,8 @@ class PyTests:
             from .plugin import dotted
             fn = e.func
             last = (dotted(fn) or "").rsplit(".", 1)[-1]
-            if last in URL_NAME_FUNCS and e.args and isinstance(e.args[0], ast.Constant) and isinstance(e.args[0].value, str):
-                v = e.args[0].value
+            v = str_value(prog, e.args[0], ctx) if last in URL_NAME_FUNCS and e.args else None
+            if v is not None and "{" not in v:
                 return [("path", v)] if v.startswith("/") else [("name", v)]
             if isinstance(fn, ast.Attribute) and fn.attr == "format":
                 return [("path", re.sub(r"\{(\w*)[^{}]*\}", lambda mm: "{" + (mm.group(1) if mm.group(1) and not mm.group(1).isdigit() else "p") + "}", v))
@@ -749,7 +753,11 @@ class PyTests:
                 for val, _ln, _ann in r[1].vars.get(r[2], ()):
                     out += self.url_values(val, self.Ctx(r[1], None, None), depth + 1)
                 return out[:3]
-            return []
+            sv = str_value(prog, e, ctx)        # an imported constant (`from app.urls import ITEMS`)
+            return [("path", sv)] if sv is not None else []
+        if isinstance(e, ast.Attribute) and not (isinstance(e.value, ast.Name) and e.value.id in ("self", "cls")):
+            sv = str_value(prog, e, ctx)        # settings.API_V1_STR, urls.ITEMS
+            return [("path", sv)] if sv is not None else []
         if isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name) and e.value.id in ("self", "cls") and ctx.cls is not None:
             c = ctx.cls
             for k in [c] + [b[1] for b in prog.mro(c) if b[0] == "type"]:
@@ -852,7 +860,11 @@ class PyTests:
                 path = LOCAL_HOSTS.sub("", v.split("?")[0].split("#")[0])
                 if not path.startswith("/"):
                     continue     # `client.get("key")` on something that is not an HTTP test client, or an external URL
-                res = match_endpoint(verb, path, routes, "api") if routes else {"matched": []}
+                if path == "/":       # the site root: a literal in-process request (the client matcher skips "/")
+                    res = {"matched": [{"route": r["id"], "confidence": EXACT} for r in routes if r["uri"] in ("/", "")
+                                       and (r["method"] in (verb, "ANY") or (verb == "HEAD" and r["method"] == "GET"))]}
+                else:
+                    res = match_endpoint(verb, path, routes, "api") if routes else {"matched": []}
                 if len(res["matched"]) > 3 and all(mm["confidence"] == HEURISTIC for mm in res["matched"]):
                     res["matched"] = []
                 for mm in res["matched"]:

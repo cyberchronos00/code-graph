@@ -8,8 +8,22 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- FastAPI / Starlette and Flask routes: app, router and blueprint objects, `include_router` / `mount` /
+  `register_blueprint` prefix chains across files (prefixes from constants and settings attributes), verb and `route`
+  decorators, `add_api_route` / `add_url_rule` (incl. `MethodView.as_view()`), Starlette route lists, websockets and
+  path parameters become route nodes with `ROUTES_TO` to the handler. `Depends()` / `Security()` dependencies and
+  Flask view decorators are the route's access (`cg routes --unguarded`). `TestClient(app)` / `app.test_client()`
+  requests link to these routes (also through `url_for()` / `url_path_for()` names and f-string settings prefixes),
+  so `cg tests <handler>` lists them, and their route decorators are no longer `python_decorator_routes` blind spots
+  ([#16](https://github.com/cyberchronos00/code-graph/issues/16)).
+
 ### Fixed
 
+- Python files that use Python 3.14's unparenthesized `except A, B:` are parsed on older interpreters too (re-parsed
+  with the parentheses added) instead of counting as parse failures
+  ([#16](https://github.com/cyberchronos00/code-graph/issues/16)).
 - Rust / C / C++: processes indexing the same project at the same time all get the exact layer. One rust-analyzer /
   scip-clang run per cache key (a per-key lock; the other processes wait and read the cached SCIP file), private
   temporary output files and an atomically written rust-analyzer config. Before, all but one concurrent run could fall

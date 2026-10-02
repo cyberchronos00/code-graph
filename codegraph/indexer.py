@@ -20,6 +20,7 @@ from .plugins.rust.plugin import RustPlugin
 from .plugins.cfamily.plugin import CFamilyPlugin
 from .plugins.python.plugin import PythonPlugin
 from .plugins.django.plugin import DjangoPlugin
+from .plugins.pyweb.plugin import FastAPIPlugin, FlaskPlugin
 from .plugins.dart.plugin import DartPlugin
 from .plugins.flutter.plugin import FlutterPlugin
 from .plugins.nest.plugin import NestPlugin
@@ -30,7 +31,7 @@ from .plugins.swift.plugin import SwiftPlugin
 
 LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), KotlinPlugin(), SwiftPlugin(),
                     *SCIP_PLUGINS]
-FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin()]
+FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FastAPIPlugin(), FlaskPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin()]
 
 
 def _crash_site(ex: BaseException) -> str | None:

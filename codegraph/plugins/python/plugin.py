@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -155,6 +156,21 @@ def kwarg(call: ast.Call, name: str):
         if k.arg == name:
             return k.value
     return None
+
+
+# PEP 758 (Python 3.14): `except A, B:` without parentheses. Older interpreters reject it; the parenthesized form
+# has the same meaning, so a file that fails only on this is re-parsed with the parentheses added (same line numbers).
+PEP758_EXCEPT = re.compile(r"(?m)^(\s*except\*?\s+)([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)+)(\s*:)")
+
+
+def parse_source(src: str, filename: str = "<unknown>") -> ast.Module:
+    try:
+        return ast.parse(src, filename=filename)
+    except SyntaxError:
+        fixed = PEP758_EXCEPT.sub(r"\1(\2)\3", src)
+        if fixed == src:
+            raise
+        return ast.parse(fixed, filename=filename)
 
 
 def walk_body(node) -> Iterator[ast.AST]:
@@ -301,7 +317,7 @@ class PyProgram:
                     rep["skipped_oversize"].append(rel)
                     continue
                 src = p.read_text(encoding="utf-8", errors="replace")
-                tree = ast.parse(src, filename=rel)
+                tree = parse_source(src, rel)
             except (SyntaxError, ValueError, RecursionError, OSError) as ex:
                 self.parse_errors.append({"file": rel, "error": f"{type(ex).__name__}: {getattr(ex, 'msg', str(ex))}",
                                           "line": getattr(ex, "lineno", None)})

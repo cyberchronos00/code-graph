@@ -49,7 +49,7 @@ KNOWN_KEYS = set(SCHEMA)
 PYTHON_KEYS = SCHEMA["python"]
 VIZ_MODES = ("reaches", "impact", "downstream", "path", "plan")
 # framework plugins of codegraph/indexer.py FRAMEWORK_PLUGINS (frameworks.add / remove also take preset names)
-FRAMEWORK_PLUGIN_NAMES = ("laravel", "nuxt", "django", "flutter", "nest", "nextjs", "express")
+FRAMEWORK_PLUGIN_NAMES = ("laravel", "nuxt", "django", "fastapi", "flask", "flutter", "nest", "nextjs", "express")
 
 
 class ConfigError(ValueError):

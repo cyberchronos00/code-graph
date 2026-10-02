@@ -356,10 +356,10 @@ def test_registering_decorators(tmp_path):
             ''',
         "svc/jobs.py": '''
             import functools
-            from flask import Flask
+            from sanic import Sanic
             from .registry import register, hook, registry, render
 
-            app = Flask(__name__)
+            app = Sanic(__name__)
 
             @register
             def nightly(): return 1

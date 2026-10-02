@@ -1,7 +1,7 @@
 """pytest / unittest in the tests feature: discovery (defaults, pytest config, testpaths, conftest, pytest_plugins),
 test cases (functions, classes, inherited methods, parametrize, marks, unittest / Django / DRF TestCase with setUp),
 fixtures (nested conftest, overrides, autouse, chains, usefixtures, getfixturevalue), HTTP test requests linked to
-routes (Django client + reverse(), DRF APIClient; FastAPI / Flask clients recorded), isolation from the application
+routes (Django client + reverse(), DRF APIClient, FastAPI TestClient, Flask test_client), isolation from the application
 graph and the tests query. Every fixture is written from scratch in a temp dir, except the bundled Django sample."""
 import json
 import sys
@@ -537,8 +537,9 @@ def test_fastapi_and_flask_clients_are_recorded(tmp_path):
             ''',
     })
     h = st.stats["plugins"]["python"]["tests"]["http"]
-    assert h["requests"] == 3 and h.get("matched", 0) == 0 and "no route nodes" in h["note"]
-    assert names(Q.tests_covering(st, "svc.main.read_item"), "direct") == ["test_direct"]
+    assert h["requests"] == 3 and h["matched"] == 2 and h["unmatched_samples"] == ["tests/test_items.py:13 GET /health"]
+    res = Q.tests_covering(st, "svc.main.read_item")
+    assert names(res, "direct") == ["test_direct"] and names(res, "transitive") == ["test_inline", "test_read"]
     assert not [c for c in Q.impact(st, "svc.main.read_item")["callers"] if c["file"].startswith("tests/")]
 
 

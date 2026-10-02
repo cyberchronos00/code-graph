@@ -1,12 +1,12 @@
 # code-graph
 
-**A deterministic dependency graph for Laravel, Django, NestJS, Next.js, Express, Nuxt, Flutter, Rust, C and C++ codebases, so you (and your AI agent) can see everything a change touches before you make it.**
+**A deterministic dependency graph for Laravel, Django, FastAPI, Flask, NestJS, Next.js, Express, Nuxt, Flutter, Rust, C and C++ codebases, so you (and your AI agent) can see everything a change touches before you make it.**
 
 Ask "what depends on this table, connection, config key or method?" and get every caller, route, command and page that
 reaches it, each hop backed by `file:line` evidence. It runs locally on your source files, and every answer is exact,
 deterministic and reproducible.
 
-> **Status:** beta. Laravel (PHP), Django (Python), TypeScript/JavaScript (Nuxt/Vue, NestJS, Next.js,
+> **Status:** beta. Laravel (PHP), Django, FastAPI / Starlette and Flask (Python), TypeScript/JavaScript (Nuxt/Vue, NestJS, Next.js,
 > Express/Fastify/Koa/Hono), Flutter (Dart), Rust, C and C++ are
 > supported natively; other languages can be imported through SCIP. See [Limitations](#limitations).
 
@@ -207,7 +207,7 @@ note: sent but not forwarded: date_from (passed @ bookstore-web/app/pages/report
 
 `routes` lists every route that reaches a write, a table or any other node, together with its middleware, guards and
 auth checks (Laravel middleware, Nest guards, Express middleware, Next.js `middleware.ts`, django-ninja `auth=`,
-Django and DRF access checks):
+Django and DRF access checks, FastAPI `Depends()` / `Security()` dependencies, Flask view decorators):
 
 ```text
 $ cg routes --writes --db out/graph.db --no-paths      # abridged
@@ -346,6 +346,8 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Django | resolved + heuristic fallback | urls.py (path/re_path/include/namespaces, `app_name`), class/function views, view access checks (`login_required`, permission decorators, access mixins), models → tables/columns/relations, ORM reads/writes, settings/env (os.environ, getenv, django-environ), signals, management commands, admin |
 | django-ninja | resolved | NinjaAPI/Router/`add_router` prefixes, operations with path params, `auth=`, request/response Schema and ModelSchema fields |
 | Django REST Framework | resolved | routers, ViewSets (+ `@action`), APIView/generic views, `permission_classes`, serializer fields |
+| FastAPI / Starlette | resolved | `FastAPI` / `APIRouter` / `Starlette` / `Router` objects, `include_router` / `mount` prefix chains across files (prefixes from constants and settings attributes such as `settings.API_V1_STR`), verb decorators, `api_route`, `add_api_route`, Starlette `routes=[Route, Mount, WebSocketRoute]`, websockets, path parameters, `Depends()` / `Security()` dependencies (parameters, `Annotated` aliases, `dependencies=`) as route access, `name=` for `url_path_for` |
+| Flask | resolved | `Flask` / `Blueprint` objects, `register_blueprint` (`url_prefix` from the blueprint or the registration, nested blueprints), `@route` / verb decorators, `add_url_rule` incl. `MethodView.as_view()`, views defined in an app factory, `<int:id>` parameters, `blueprint.endpoint` names for `url_for`, view decorators (`login_required`) as route access |
 | Celery / Channels | resolved | tasks + `.delay`/`.apply_async` dispatches; websocket routing to consumers |
 | Dart | resolved (package:analyzer parse, declared types) + heuristic fallback | libraries/parts, classes, methods, functions, calls with import resolution |
 | Flutter | resolved + heuristic fallback | widgets/State, bloc/cubit events → handlers → states → UI, Navigator/go_router/auto_route pages, HTTP calls (package:http, Dio, dart:io, Retrofit/Chopper), WebSockets, json_serializable/freezed and hand-written JSON keys |
@@ -527,8 +529,7 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   callback makes. See [docs/channels-and-tests.md](docs/channels-and-tests.md#limits).
 - **Tests** are found by naming conventions (pytest's own settings for Python) and never count as callers. Transitive
   test paths are static, so a browser test that stubs the API still reaches the backend through the page it opens.
-  Python HTTP test requests link to Django, DRF and django-ninja routes; FastAPI and Flask test clients are counted
-  until those frameworks' routes are modelled.
+  Python HTTP test requests link to Django, DRF, django-ninja, FastAPI, Starlette and Flask routes.
 - **Base URLs** from runtime config and env are folded into endpoint paths when the value is in the repo (`nuxt.config`
   defaults, `.env`, `.env.example`, `||` defaults in code); values set only at deploy time stay an unknown origin.
   A Nuxt checkout without `.nuxt` is indexed with generated stand-ins for its own auto-imports and components.
@@ -569,7 +570,6 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Multiple gate scenarios per index, and middleware-level gates.
 - Tested SCIP recipes for Go and Java.
 - Rust/C/C++: macro-expanded items, function-pointer dataflow, Bazel and Meson autodetection.
-- FastAPI, Starlette and Flask routes, so the HTTP requests in their test suites link to the handlers they exercise.
 - Route guards: Laravel kernel middleware groups and controller-constructor middleware, Django's `MIDDLEWARE`
   setting and DRF `DEFAULT_PERMISSION_CLASSES` shown on each route.
 - More keys in `.cg.yaml`: monorepo apps and link pairs, and `include` paths for the TypeScript and Dart

@@ -45,7 +45,7 @@ GUARD_ATTRS = (("guards", "guard"), ("interceptors", "interceptor"), ("pipes", "
                ("access", "access"), ("wrapped_by", "wrapper"), ("middleware", "middleware"))
 GUARD_SOURCES = ("Laravel route/group middleware, Nest guards/interceptors/pipes, Express/Koa/Fastify/Hono route and router "
                  "middleware, Next.js middleware.ts matchers and handler wrappers, django-ninja auth=, Django view decorators / "
-                 "access mixins and DRF permission_classes")
+                 "access mixins and DRF permission_classes, FastAPI Depends()/Security() dependencies and Flask view decorators")
 
 
 def _names(v) -> list[str]:
