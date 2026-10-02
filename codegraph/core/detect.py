@@ -17,6 +17,7 @@ MARKERS = {
     "dart": ["pubspec.yaml"],
     "java": ["pom.xml", "build.gradle", "build.gradle.kts"],
     "kotlin": ["settings.gradle.kts", "build.gradle.kts"],
+    "swift": ["Package.swift"],
 }
 
 

@@ -26,8 +26,9 @@ from .plugins.nest.plugin import NestPlugin
 from .plugins.nextjs.plugin import NextPlugin
 from .plugins.express.plugin import ExpressPlugin
 from .plugins.kotlin.plugin import KotlinPlugin
+from .plugins.swift.plugin import SwiftPlugin
 
-LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), KotlinPlugin(),
+LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), KotlinPlugin(), SwiftPlugin(),
                     *SCIP_PLUGINS]
 FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin()]
 
@@ -73,11 +74,6 @@ def _tag_entries(builder: GraphBuilder, skip_gate: str | None) -> list[tuple]:
     return [(nid, k, c, sample[(nid, k)]) for nid, ks in counts.items() for k, c in ks.items()]
 
 
-def fresh_plugins(plugins: list) -> list:
-    """Per-run copies of the module-level plugin templates (the templates themselves never index anything)."""
-    return [copy.deepcopy(p) for p in plugins]
-
-
 def setup(project: Project) -> dict:
     """Which language plugins, framework plugins and presets apply to `project` (detection, then .cg.yaml
     frameworks.add / remove). Fills project.options["presets"] (the applied preset names)."""
@@ -90,8 +86,8 @@ def setup(project: Project) -> dict:
         project.detected = detect(project.root)
     # fresh plugin instances per run: state a plugin keeps on itself (caches, gate predicates, file lists) never
     # carries over to the next project indexed in the same process (MCP `index`, test suites)
-    langs = [lp for lp in fresh_plugins(LANGUAGE_PLUGINS) if lp.detect(project)]
-    all_fws = fresh_plugins(FRAMEWORK_PLUGINS)
+    langs = [lp for lp in copy.deepcopy(LANGUAGE_PLUGINS) if lp.detect(project)]
+    all_fws = copy.deepcopy(FRAMEWORK_PLUGINS)
     detected = [f for f in all_fws if f.detect(project)]
     fws = [f for f in all_fws if (f in detected or f.name in add) and f.name not in remove]
     found = {f.name: "detected" for f in detected}

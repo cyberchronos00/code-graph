@@ -1,6 +1,6 @@
 """Indexing several projects in one process (the MCP `index` tool called twice, a test session) gives the same graphs
 as indexing each project in a fresh process: no plugin state (caches, gate predicates, file lists) carries over from
-one project to the next. Projects cover PHP with gates, TS / Express / Koa, Rust, Kotlin and Python / Django."""
+one project to the next. Projects cover PHP with gates, TS / Express / Koa, Rust, Kotlin, Swift and Python / Django."""
 import os
 import sqlite3
 import subprocess
@@ -20,7 +20,8 @@ pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci
 # (root, gates file); the gated PHP project goes first so its gate predicates would show up in every later graph
 PROJECTS = [("tests/gating_fixture", "examples/bookstore.gates.json"), ("examples/bookstore-express", None),
             ("tests/ts_fixtures/koa-api", None), ("examples/rust-kvstore", None), ("tests/rust_routes_fixture", None),
-            ("examples/bookstore-android", None), ("tests/kotlin_fixture", None), ("tests/django_access_fixture", None)]
+            ("examples/bookstore-android", None), ("tests/kotlin_fixture", None), ("tests/swift_fixture", None),
+            ("examples/bookstore-ios", None), ("tests/django_access_fixture", None)]
 SCRIPT = """
 import sys
 from codegraph.indexer import index_project

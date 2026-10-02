@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Swift support (heuristic tree-sitter layer, `pip install tree-sitter-swift`, no Xcode needed): classes, structs,
+  enums, actors, protocols and extensions, functions and methods with name-based call resolution; Vapor routes with
+  `grouped` / `group` prefixes, middleware guards and `RouteCollection` handlers; URLSession and Alamofire endpoints
+  for `cg link`; SwiftUI (`NavigationLink`, `.navigationDestination`, `.sheet`, `TabView`, `WindowGroup`) and UIKit
+  navigation as pages; `@main`, app-delegate, view-controller and background-task entry points; XCTest tests;
+  `#if os(...)` blocks as platform conditions. `cg coverage` reports Swift as heuristic. New sample
+  `examples/bookstore-ios` links to the Django sample
+  ([#10](https://github.com/cyberchronos00/code-graph/issues/10)).
 - Kotlin support (heuristic tree-sitter layer, `pip install tree-sitter-kotlin`): classes, objects, interfaces,
   top-level / extension functions and methods with name-based call resolution; Ktor (`routing` / `route` /
   `authenticate`) and Spring (`@RestController`, `@GetMapping` ..., `@PreAuthorize` / `@Secured`) routes and guards,

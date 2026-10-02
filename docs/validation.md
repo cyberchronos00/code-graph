@@ -232,3 +232,19 @@ Heuristic mode (tree-sitter-kotlin 1.1.0), shallow clones, `cg index` on the def
 
 Unresolved calls are mostly library and standard-library calls (Compose, coroutines, collections), which have no
 node in the graph. An exact-mode comparison (scip-java) is on the roadmap in [kotlin.md](kotlin.md).
+
+## Swift
+
+Heuristic mode (tree-sitter-swift 0.7.3) on Linux without Xcode, shallow clones, `cg index` on the default branch:
+
+| Repository | Swift files | Declarations | Calls resolved / unresolved | Framework facts | Index time |
+|---|---|---|---|---|---|
+| Alamofire/Alamofire | 101 | 2,019 | 3,825 / 8,162 | 198 extensions, 33 `#if` platform blocks, 5 `AF.request` endpoints (the example apps) | 1.1 s |
+| Dimillian/IceCubesApp | 428 | 2,156 | 3,537 / 8,174 | 21 SwiftUI pages, 21 navigations, 14 `@main` entries (app, extensions, widgets), 259 `#if` platform blocks | 1.2 s |
+| pointfreeco/isowords | 388 | 1,729 | 2,606 / 7,794 | 17 SwiftUI pages, 12 navigations, 12 `@main` entries, 1 URLSession endpoint | 1.1 s |
+| vapor/template | 9 | 16 | 20 / 81 | 3 Vapor routes with their `RouteCollection` handlers | < 0.1 s |
+
+Unresolved calls are mostly SDK calls (SwiftUI modifiers, Foundation, Combine), which have no node in the graph.
+IceCubesApp and isowords call their APIs through typed endpoint enums and a swift-parsing router, which are not HTTP
+client forms the plugin reads yet. The Vapor template's `routes.swift` contains Mustache markup, so its two
+closure routes do not parse. The exact-mode comparison (compiler index store) is on the roadmap in [swift.md](swift.md).

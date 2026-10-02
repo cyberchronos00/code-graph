@@ -21,12 +21,13 @@ SUPPORTED = {
     "rust": (".rs",),
     "c_cpp": (".c", ".h", ".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".h++", ".ipp", ".inl"),
     "kotlin": (".kt", ".kts"),
+    "swift": (".swift",),
 }
 # source types without a native plugin (go / java can be imported from a SCIP index). A generic "looks like source" rule:
 # text source extensions of programming / scripting languages, plus a shebang for extensionless scripts (SHEBANGS).
 # Data, markup, config and asset extensions are not listed, so they never count as unsupported source.
 UNSUPPORTED = {
-    ".go": "go", ".java": "java", ".swift": "swift", ".rb": "ruby", ".cs": "csharp",
+    ".go": "go", ".java": "java", ".rb": "ruby", ".cs": "csharp",
     ".scala": "scala", ".ex": "elixir", ".exs": "elixir", ".m": "objective-c", ".mm": "objective-c", ".lua": "lua",
     ".pl": "perl", ".pm": "perl", ".clj": "clojure", ".erl": "erlang", ".hrl": "erlang", ".hs": "haskell", ".fs": "fsharp",
     ".fsx": "fsharp", ".groovy": "groovy", ".r": "r", ".jl": "julia", ".zig": "zig", ".sol": "solidity",
@@ -51,7 +52,7 @@ BUCKET_TEXT = {"parse_failed": "parse failed", "skipped_oversize": "over size li
 BUCKET_SHORT = {"parse_failed": "parse failed", "skipped_oversize": "over size limit", "unmapped": "unmapped",
                 "excluded": "excluded"}
 LANG_LABEL = {"php": "PHP", "typescript": "TypeScript / JavaScript", "python": "Python", "dart": "Dart", "rust": "Rust",
-              "c_cpp": "C / C++", "kotlin": "Kotlin"}
+              "c_cpp": "C / C++", "kotlin": "Kotlin", "swift": "Swift"}
 MAX_PATHS = 500      # file paths stored per bucket in the index (counts are always exact)
 SHOW_PATHS = 5       # shown per bucket by default (`cg coverage --all-files` / coverage(all_files=true) for all)
 HINTS = {
@@ -67,6 +68,8 @@ HINTS = {
     "kotlin": "heuristic mode (tree-sitter syntax layer, name-based call resolution); the layer needs "
               "`pip install tree-sitter tree-sitter-kotlin`. For compiler-resolved references index the Gradle / Maven "
               "build with scip-java and pass `--scip index.scip` (docs/kotlin.md)",
+    "swift": "heuristic mode (tree-sitter syntax layer, name-based call resolution; runs on Linux without Xcode); "
+             "the layer needs `pip install tree-sitter tree-sitter-swift` (docs/swift.md)",
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
     "java": "no native plugin: index with scip-java and pass `--scip index.scip`",
 }
@@ -198,6 +201,9 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
     mode = st.get("mode")
     if lang in ("rust", "c_cpp") and mode and mode != "scip":
         return "heuristic", None
+    if lang == "swift" and mode == "heuristic":
+        return "heuristic", ("tree-sitter syntax layer with name-based call resolution (no compiler index; works "
+                             "without Xcode or a Swift toolchain)")
     if lang == "kotlin" and mode == "heuristic":
         return "heuristic", "tree-sitter syntax layer with name-based call resolution (no compiler index)"
     if lang == "typescript" and st.get("program_files") == 0 and not st.get("nodes"):

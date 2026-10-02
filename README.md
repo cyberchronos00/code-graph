@@ -69,7 +69,7 @@ other tools; see [Prerequisites per language](#prerequisites-per-language).
 
 ```bash
 git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph
-python3 -m venv .venv && .venv/bin/pip install "mcp>=2.2" pyyaml pytest protobuf tree-sitter tree-sitter-rust tree-sitter-c tree-sitter-cpp tree-sitter-kotlin
+python3 -m venv .venv && .venv/bin/pip install "mcp>=2.2" pyyaml pytest protobuf tree-sitter tree-sitter-rust tree-sitter-c tree-sitter-cpp tree-sitter-kotlin tree-sitter-swift
 (cd codegraph/plugins/php/extractor && composer install)
 (cd codegraph/plugins/ts/extractor && npm ci)
 cg() { .venv/bin/python -m codegraph.cli "$@"; }    # shorthand used below
@@ -115,7 +115,7 @@ cg reaches kv_core::store::Store::get --db out/kv.db     # dyn/generic dispatch,
 cg downstream kv::main --db out/kv.db                     # env keys, unsafe, features and cfgs the binary touches
 ```
 
-`examples/bookstore-express` (Express), `examples/bookstore-flutter` (Flutter, links to the Django sample), `examples/bookstore-android` (Kotlin / Compose, links to the Django sample),
+`examples/bookstore-express` (Express), `examples/bookstore-flutter` (Flutter, links to the Django sample), `examples/bookstore-android` (Kotlin / Compose, links to the Django sample), `examples/bookstore-ios` (SwiftUI, links to the Django sample),
 `examples/c-ringbuf` (C) and `examples/cpp-eventbus` (C++) work the same way. Rust, C and C++ index in exact mode when
 rust-analyzer or scip-clang is installed, and in a labelled `heuristic` mode otherwise; C/C++ setup, including the
 compile database, is in [docs/native.md](docs/native.md#c-and-c).
@@ -351,6 +351,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Flutter | resolved + heuristic fallback | widgets/State, bloc/cubit events → handlers → states → UI, Navigator/go_router/auto_route pages, HTTP calls (package:http, Dio, dart:io, Retrofit/Chopper), WebSockets, json_serializable/freezed and hand-written JSON keys |
 | Rust | **exact** with rust-analyzer (SCIP); **heuristic** without | crates, modules, `pub` API, traits → impls (dyn/generic dispatch), bins, tests, benches, examples, `build.rs`, FFI, `unsafe`, `#[cfg(feature)]` gates, env keys, `#[tokio::main]`, axum/actix routes ([docs/native.md](docs/native.md)) |
 | Kotlin | **heuristic** (tree-sitter-kotlin) | classes, objects, functions / extension functions, calls by name; Ktor and Spring routes with guards, Retrofit / Ktor client / OkHttp endpoints, Compose Navigation pages, AndroidManifest components and deep links, workers, KMP source sets and `expect` / `actual` ([docs/kotlin.md](docs/kotlin.md)) |
+| Swift | **heuristic** (tree-sitter-swift, no Xcode needed) | classes, structs, enums, actors, protocols, extensions, calls by name; Vapor routes with groups and guards, URLSession / Alamofire endpoints, SwiftUI / UIKit navigation pages, `@main` / app-delegate / background-task entries, `#if os(...)` platform tags ([docs/swift.md](docs/swift.md)) |
 | C | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | translation units, includes, `main` and test entry points, exported API, `#if` gates, `getenv` keys, macros ([docs/native.md](docs/native.md#c-and-c)) |
 | C++ | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | the C facts plus namespaces, classes, overloads, virtual dispatch (overrides and implementations) ([docs/native.md](docs/native.md#c-and-c)) |
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
@@ -372,6 +373,7 @@ Python 3.11+ (tested with 3.13) runs the indexer, CLI and MCP server for every s
 | Rust | tree-sitter packages; rust-analyzer for exact mode (any 2024+ release) | `.venv/bin/pip install tree-sitter tree-sitter-rust`, `rustup component add rust-analyzer` |
 | C / C++ | tree-sitter packages; scip-clang 0.4+ and a `compile_commands.json` for exact mode | `.venv/bin/pip install tree-sitter tree-sitter-c tree-sitter-cpp`; scip-clang and compile database: [docs/native.md](docs/native.md#c-and-c) |
 | Kotlin | tree-sitter packages | `.venv/bin/pip install tree-sitter tree-sitter-kotlin` |
+| Swift | tree-sitter packages | `.venv/bin/pip install tree-sitter tree-sitter-swift` |
 | Go, Java | an existing SCIP index | `cg index <root> --scip index.scip` |
 
 ## How it works
@@ -541,7 +543,8 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   [docs/limitations.md](docs/limitations.md#rust-c-and-c).
 - **Platform conditions** are evaluated per target from the source text; conditions on feature flags, build macros
   or API levels count as unknown and keep their code in every target's view (`cg platforms` lists them). Swift `#if
-  os()`, Kotlin Multiplatform `expect` / `actual` and Electron / Tauri IPC come with the Swift and Kotlin plugins. See
+  os()` blocks and Kotlin Multiplatform source sets / `expect` / `actual` are tagged by their plugins; Electron / Tauri
+  IPC is on the roadmap. See
   [docs/platforms.md](docs/platforms.md).
 - **Route guards** come from route definitions and global enhancers (Nest `APP_GUARD` / `useGlobal*`, Express
   `app.use`). Whether a guard counts as auth is decided by the framework preset, then by its name; project guards are
@@ -574,7 +577,8 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.
-- Platform-specific code in Swift and Kotlin Multiplatform, and Electron / Tauri main ↔ renderer IPC as edges
+- Swift exact mode from the compiler's index store, Moya / Fluent / `canImport` support
+  ([#23](https://github.com/cyberchronos00/code-graph/issues/23)); Electron / Tauri main ↔ renderer IPC as edges
   between the processes.
 - Web / native bridge links: Capacitor plugins, React Native native modules and Flutter platform channels as
   `BRIDGE_CALLS` edges to the Kotlin and Swift methods they reach, with the Kotlin and Swift plugins

@@ -1,0 +1,10 @@
+name: swift
+kind: language
+docs: docs/swift.md
+# SwiftPM build output and checkouts, Xcode DerivedData, CocoaPods / Carthage dependencies, IDE state
+skip_dirs: [.build, .swiftpm, DerivedData, Pods, Carthage, xcuserdata, node_modules]
+auth:
+  guards:
+    - {name: guardMiddleware, source: "Vapor Authenticatable.guardMiddleware(), https://docs.vapor.codes/security/authentication/"}
+    - {name: authenticator, source: "Vapor ModelAuthenticatable / BearerAuthenticator authenticators"}
+    - {name: redirectMiddleware, source: "Vapor session auth redirectMiddleware(path:)"}
