@@ -510,9 +510,23 @@ def apply(builder, clf: Classifier) -> dict:
             if dst and dst != nid:
                 builder.add_edge(nid, dst, "COPY_OF", file=f, line=1)
                 linked += 1
-    out = {"files": sum(1 for h in by_file.values() if h), "mode": "indexed" if clf.include else "excluded"}
+    with_nodes = sum(1 for h in by_file.values() if h)
+    out = {**classified_counts(clf), "mode": "indexed" if clf.include else "excluded"}
     if clf.include:
-        out.update(nodes_labelled=tagged, copy_of_edges=linked)
+        out.update(files_with_nodes=with_nodes, nodes_labelled=tagged, copy_of_edges=linked)
     else:
-        out.update(nodes_dropped=len(drop), edges_dropped=edges_dropped)
+        out.update(files_with_dropped_nodes=with_nodes, nodes_dropped=len(drop), edges_dropped=edges_dropped)
     return out
+
+
+def classified_counts(clf: Classifier) -> dict:
+    """The files the classifier labelled (the up-front scan, the same list `cg coverage` shows): the total, per
+    language (coverage language keys; `other` for non-source files) and per reason / kind."""
+    from ..coverage import UNSUPPORTED, _lang_of_file
+    by_lang, by_reason, by_kind = Counter(), Counter(), Counter()
+    for rel, h in clf.files.items():
+        by_lang[_lang_of_file(rel) or UNSUPPORTED.get(os.path.splitext(rel)[1].lower()) or "other"] += 1
+        by_reason[h["reason"]] += 1
+        by_kind[h["kind"]] += 1
+    return {"files": len(clf.files), "by_language": dict(by_lang.most_common()), "by_reason": dict(by_reason.most_common()),
+            "by_kind": dict(by_kind.most_common())}

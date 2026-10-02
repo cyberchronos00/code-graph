@@ -414,3 +414,32 @@ def test_typescript_generated_client_and_capacitor_copy(tmp_path):
     assert json.loads(cp[0]["attrs"])["generated"]["copy_of"] == "www/app.js"
     e = st.q("SELECT src, dst FROM edges WHERE kind = 'COPY_OF'")
     assert [(r["src"], r["dst"]) for r in e] == [(cp[0]["id"], "module:www/app.js")]
+
+
+@pytest.mark.skipif(not HAS_NODE, reason="node + the TS extractor are needed")
+def test_index_stats_count_the_classified_files(tmp_path):
+    """stats.generated.files is the coverage count: TS / Dart files the extractors skip before parsing count too."""
+    root = write(tmp_path / "shop", {
+        "package.json": '{"name": "shop-web", "dependencies": {"axios": "^1"}}\n',
+        "tsconfig.json": '{"compilerOptions": {"allowJs": true, "module": "commonjs"}}\n',
+        "src/api/.openapi-generator/FILES": "api.ts\nmodels/order.ts\n",
+        "src/api/api.ts": "export function listOrders() { return fetch('/api/orders') }\n",
+        "src/api/models/order.ts": "export interface Order { id: number }\n",
+        "src/orders.ts": "import { listOrders } from './api/api'\nexport function load() { return listOrders() }\n",
+        "pubspec.yaml": "name: shop_app\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n",
+        "lib/user.dart": "part 'user.g.dart';\nclass User { final String name; User(this.name); }\n",
+        "lib/user.g.dart": "// GENERATED CODE - DO NOT MODIFY BY HAND\npart of 'user.dart';\n"
+                           "User _$UserFromJson(Map<String, dynamic> j) => User(j['name']);\n",
+        "lib/main.dart": "import 'user.dart';\nvoid main() { print(User('a').name); }\n",
+    })
+    stats = index_project(root, tmp_path / "shop.db", "shop")
+    g = stats["generated"]
+    cov = C.for_graph(GraphStore(tmp_path / "shop.db"))["shop"]["generated"]
+    assert g["files"] == cov["files"] == 3
+    assert g["by_language"] == {"typescript": 2, "dart": 1}
+    assert g["by_reason"] == cov["by_reason"] == {"OpenAPI Generator (.openapi-generator/FILES)": 2,
+                                                  "build_runner output (*.g.dart)": 1}
+    assert g["mode"] == "excluded" and g["files_with_dropped_nodes"] <= g["files"]
+    stats = index_project(root, tmp_path / "inc.db", "shop", include_generated=True)
+    assert stats["generated"]["files"] == 3 and stats["generated"]["mode"] == "indexed"
+    assert "files_with_nodes" in stats["generated"]

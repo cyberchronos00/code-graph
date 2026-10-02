@@ -46,6 +46,20 @@ coverage app: typescript 140 exact | not fully covered: java 3 unsupported | gen
 The MCP `coverage(path=...)` answer for a generated file says so and names the reason, so an agent edits the source
 instead.
 
+The `cg index` stats JSON has the same count under `generated`, broken down by language (the coverage language
+keys, `other` for non-source files), reason and kind, plus what the final pass did:
+
+```json
+"generated": {"files": 3, "by_language": {"typescript": 2, "dart": 1},
+              "by_reason": {"OpenAPI Generator (.openapi-generator/FILES)": 2, "build_runner output (*.g.dart)": 1},
+              "by_kind": {"generated": 3}, "mode": "excluded",
+              "files_with_dropped_nodes": 1, "nodes_dropped": 2, "edges_dropped": 4}
+```
+
+`files` counts every classified file, including the TypeScript and Dart files the extractors skip before parsing.
+`files_with_dropped_nodes` counts the files whose nodes the final pass removed (`files_with_nodes`,
+`nodes_labelled` and `copy_of_edges` with `--include-generated`).
+
 Files that serve as resolution input are still read. Nuxt's `.nuxt/` types resolve auto-imports, and `*.g.dart`
 gives json_serializable's exact JSON keys (`PARSES_JSON` and the response-field check are unchanged). Their own
 functions don't become nodes.

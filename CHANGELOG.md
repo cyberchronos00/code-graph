@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- `cg index` stats: `generated.files` counts every file the classifier labelled, the same number `cg coverage`
+  lists, with `by_language`, `by_reason` and `by_kind`. The old count (files whose nodes the final pass removed) is
+  `files_with_dropped_nodes` (`files_with_nodes` with `--include-generated`)
+  ([#27](https://github.com/cyberchronos00/code-graph/issues/27)).
+
+### Fixed
+
 - `impact` keeps the override relation apart from the callers: a base method is listed as `overrides:` instead of
   as a caller of its override, and `impact` on an abstract or base method lists the code that calls its overrides
   (`via override`). The MCP structured content carries the relation as `overrides`
