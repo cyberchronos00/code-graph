@@ -19,7 +19,8 @@ Framework facts read from the same syntax tree:
                 attribute); `@Suite` types carry attrs.suite. Test files: Tests/, *Tests/ targets, or `import
                 XCTest` / `import Testing`
   SwiftUI       `NavigationLink(destination: V())`, `.navigationDestination { V() }`, `.sheet` / `.fullScreenCover` /
-                `.popover { V() }`, `TabView` children and the `WindowGroup` root: the target views become page nodes
+                `.popover { V() }`, `TabView` children and the `WindowGroup` root, `navigationDestination(for: T.self)`
+                cases matched to `NavigationLink(value: T.x)` / `router.navigate(to: .x)`: the target views become page nodes
                 (`page:swift:<View>`, ROUTES_TO its `body`) with NAVIGATES_TO edges; UIKit
                 `pushViewController(V(), ...)` / `present(V(), ...)` likewise
   HTTP clients  URLSession (`data(from:)`, `data(for:)`, `dataTask`, `upload(for:)`) with the URL built in the same
@@ -105,6 +106,9 @@ STDLIB_LABELS = {"_", "where", "at", "by", "of", "into", "separator", "with", "c
                  "maxSplits", "omittingEmptySubsequences", "offsetBy", "limitedBy", "from", "to", "through",
                  "uniquingKeysWith", "isIncluded", "options", "range", "locale", "in", "forKey"}
 PRESENT = {"sheet", "fullScreenCover", "popover", "navigationDestination"}
+CONTAINER_VIEWS = {"Text", "Image", "Label", "Button", "VStack", "HStack", "ZStack", "List", "Group", "NavigationStack",
+                   "NavigationView", "ScrollView", "Form"}
+NAV_RECV = re.compile(r"(?i)path|router|navigat|stack|coordinator")
 OS_PLATFORM = {"iOS": "ios", "iPadOS": "ios", "watchOS": "watchos", "tvOS": "tvos", "visionOS": "visionos", "macOS": "macos",
                "OSX": "macos", "Linux": "linux", "Windows": "windows", "Android": "android", "WASI": "web"}
 # `#if canImport(X)`: the SDK framework implies the platform (UIKit: iOS family, AppKit: macOS)
@@ -436,6 +440,9 @@ class SwiftPlugin(LanguagePlugin):
         self.sigs: dict[str, list] = defaultdict(list)   # function / init node id -> [((label, optional), ...)]
         self.http: list[dict] = []
         self.navs: list[tuple] = []          # (owner, view type name, how, file, line)
+        # navigationDestination(for: T.self) { switch d { case .x: V() } }: T -> case (None: any) -> view names (#68)
+        self.dest_map: dict[str, dict] = defaultdict(lambda: defaultdict(list))
+        self.value_navs: list[tuple] = []    # (owner, type name | None, case, how, file, line)
         self.handler_refs: list[tuple] = []  # (route id, method name, type fqn, file, line)
         self.st = defaultdict(int)
         from ...xcode import apple_build
@@ -1286,6 +1293,21 @@ class SwiftPlugin(LanguagePlugin):
             for lab, v in al:
                 if lab == "destination" and v is not None:
                     self._nav_target(v, owner, sf, line, "NavigationLink")
+        if name == "NavigationLink" or (name in ("navigate", "push", "append") and recv is not None
+                                        and NAV_RECV.search(recv)):
+            for lab, v in al[:1] if name != "NavigationLink" else al:
+                if v is not None and (name != "NavigationLink" or lab == "value") and \
+                        (name != "navigate" or lab == "to"):
+                    m = re.match(r"\s*([A-Z]\w*)?\s*\.\s*([a-z]\w*)\b", self.t(v))
+                    if m and m.group(2) not in ("init", "self"):
+                        self.value_navs.append((owner, m.group(1), m.group(2),
+                                                "NavigationLink(value:)" if name == "NavigationLink" else f"{name}(...)",
+                                                sf.rel, line))
+        if name == "navigationDestination" and lam is not None:
+            ty = next((re.match(r"\s*([A-Z][\w.]*)\s*\.\s*self\s*$", self.t(v)) for lab, v in al
+                       if lab == "for" and v is not None), None)
+            if ty:
+                self._destinations(lam, ty.group(1).split(".")[-1], owner, sf, line)
         if name in PRESENT and lam is not None:
             self._lambda_views(lam, owner, sf, line, f".{name}")
         if name in ("pushViewController", "present", "show") and al and al[0][1] is not None:
@@ -1422,6 +1444,46 @@ class SwiftPlugin(LanguagePlugin):
         if m:
             self.navs.append((owner, m.group(1), how, sf.rel, line))
 
+    def _view_names(self, stm) -> list[str]:
+        out = []
+        for x in (stm.children if stm is not None else []):
+            node = x
+            while node.type in ("call_expression", "navigation_expression") and node.children and \
+                    node.children[0].type in ("call_expression", "navigation_expression"):
+                node = node.children[0]
+            m = re.match(r"\s*([A-Z]\w*)\s*\(", self.t(node))
+            if m and m.group(1) not in CONTAINER_VIEWS:
+                out.append(m.group(1))
+        return out
+
+    def _destinations(self, lam, tname: str, owner, sf, line):
+        """`navigationDestination(for: Route.self) { r in switch r { case .detail(let id): DetailView(id: id) } }`:
+        the views per case of Route, for `NavigationLink(value: Route.detail(...))` / `router.navigate(to: .detail)`
+        (#68). The modifier's holder navigates to every one of them."""
+        stm = next((x for x in lam.children if x.type == "statements"), None)
+        for sw in (stm.children if stm is not None else []):
+            if sw.type != "switch_statement":
+                continue
+            for e in sw.children:
+                if e.type != "switch_entry":
+                    continue
+                cases = []
+                for sp in e.children:
+                    if sp.type == "switch_pattern":
+                        m = re.match(r"\s*(?:[A-Z]\w*)?\s*\.\s*(\w+)", self.t(sp))
+                        if m:
+                            cases.append(m.group(1))
+                if not cases and not any(x.type == "default_keyword" or self.t(x) == "default" for x in e.children):
+                    continue
+                views = self._view_names(next((x for x in e.children if x.type == "statements"), None))
+                for v in views:
+                    for cs in cases or [None]:
+                        self.dest_map[tname][cs].append((v, sf.rel, line))
+                    self.navs.append((owner, v, ".navigationDestination(for:)", sf.rel, line))
+                    self.st["navigation_destinations"] += 1
+        for v in self._view_names(stm):              # no switch: one view for every value
+            self.dest_map[tname][None].append((v, sf.rel, line))
+
     def _lambda_views(self, lam, owner, sf, line, how, page_only=False):
         stm = next((x for x in lam.children if x.type == "statements"), None)
         for x in (stm.children if stm is not None else []):
@@ -1430,8 +1492,7 @@ class SwiftPlugin(LanguagePlugin):
                     node.children[0].type in ("call_expression", "navigation_expression"):
                 node = node.children[0]          # View(...).tabItem { } -> View(...)
             m = re.match(r"\s*([A-Z]\w*)\s*\(", self.t(node))
-            if m and m.group(1) not in ("Text", "Image", "Label", "Button", "VStack", "HStack", "ZStack", "List",
-                                        "Group", "NavigationStack", "NavigationView", "ScrollView", "Form"):
+            if m and m.group(1) not in CONTAINER_VIEWS:
                 self.navs.append((owner, m.group(1), how, sf.rel, line, page_only))
 
     # ---- URLSession
@@ -1446,6 +1507,30 @@ class SwiftPlugin(LanguagePlugin):
             return template(m.group(1))
         return None
 
+    COMP_INIT = re.compile(r"(\w+)\s*=\s*URLComponents\s*\(\s*(?:string\s*:\s*(\"(?:[^\"\\]|\\.)*\"))?")
+
+    def _components_url(self, txt: str) -> str | None:
+        """`var c = URLComponents(string: "https://api.x.com")` / `URLComponents()` with `c.scheme` / `c.host` /
+        `c.path = "/v1/users/\\(id)"` set after it (#68); query items are not part of the route."""
+        m = self.COMP_INIT.search(txt)
+        if not m:
+            return None
+        v = re.escape(m.group(1))
+
+        def field(f):
+            fm = re.search(rf"\b{v}\s*\.\s*{f}\s*=\s*(\"(?:[^\"\\]|\\.)*\")", txt)
+            return template(fm.group(1)) if fm else None
+        base = template(m.group(2)) if m.group(2) else None
+        path = field("path")
+        if base is None:
+            host = field("host")
+            if host is None and path is None:
+                return None
+            base = (f"{field('scheme') or 'https'}://{host}" if host else "")
+        if path is None:
+            return base or None
+        return base.rstrip("/") + "/" + path.lstrip("/")
+
     def _fn_http(self, fn, sf: SFile, d: Decl):
         txt = self.t(fn)
         if not URLSESSION.search(txt) or "URLSession" not in txt and "session" not in txt:
@@ -1453,6 +1538,8 @@ class SwiftPlugin(LanguagePlugin):
         url = None
         for m in re.finditer(r'URL\s*\(\s*string\s*:\s*("(?:[^"\\]|\\.)*")', txt):
             url = template(m.group(1))
+        if url is None:
+            url = self._components_url(txt)
         if url is None:
             base = re.search(r"(\w+)\s*\.\s*appending(?:PathComponent|Path)?\s*\(\s*(?:path\s*:\s*)?(\"(?:[^\"\\]|\\.)*\")", txt)
             if base:
@@ -2487,6 +2574,22 @@ class SwiftPlugin(LanguagePlugin):
         return depth < 4 and any(self._is_controller(self.types[s], depth + 1) for s in v.supers if s in self.types)
 
     def _link_navs(self):
+        # NavigationLink(value: T.x(...)) / navigate(to: .x): the views navigationDestination(for: T.self) shows for
+        # case x (an untyped `.x` only when exactly one destination type has that case)
+        for owner, tname, case, how, file, line in self.value_navs:
+            if tname is None:
+                def declares(t):        # the enum declares the case (shown by a `default:` branch)
+                    ty = self.types.get(t)
+                    return ty is not None and case in self.values.get(ty.fqn, {})
+                hits = [t for t, m in self.dest_map.items() if case in m] or \
+                    [t for t, m in self.dest_map.items() if None in m and declares(t)]
+                tname = hits[0] if len(hits) == 1 else None
+            m = self.dest_map.get(tname) if tname else None
+            views = (m.get(case) or m.get(None) or []) if m else []
+            for v, _f, _l in views:
+                self.navs.append((owner, v, how, file, line))
+            if views:
+                self.st["navigations_by_value"] += 1
         pages = {}
         for nav in self.navs:
             owner, tname, how, file, line = nav[:5]

@@ -597,7 +597,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
   project config file.
 - Electron `MessagePort` / `utilityProcess` and Tauri events (`emit` / `listen`) between processes.
 - Swift: `URLComponents` and helper-built URLs, `Info.plist` / `.xcconfig` base URLs, OS-version conditions, App Intents /
-  widget entries, `navigationDestination(for:)` values ([docs/swift.md](docs/swift.md#not-covered-yet)).
+  widget entries, value navigation through variables ([docs/swift.md](docs/swift.md#not-covered-yet)).
 - Protocol links: extraction for MQTT, NATS, AMQP, Kafka and Redis pub/sub (matchers registered), Socket.IO outside
   Python, raw WebSocket / SSE message names, gRPC / GraphQL / webhooks (epic #29; [docs/protocols.md](docs/protocols.md#not-covered-yet)).
 - AI harnesses: TypeScript MCP servers / clients and the Vercel AI SDK, LangGraph graphs, agent runners, tools declared

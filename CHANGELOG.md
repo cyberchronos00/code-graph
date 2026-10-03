@@ -8,6 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Swift value navigation (#68): the views per case of `navigationDestination(for: Route.self) { switch ... }` are
+  `NAVIGATES_TO` targets of `NavigationLink(value: Route.x(...))` and of `navigate(to:)` / `push` / `append` on a
+  router or navigation path (`routerPath.navigate(to: .x)`). IceCubesApp: pages 21 → 36, NAVIGATES_TO 21 → 92.
+- Swift URLSession calls whose URL is built with `URLComponents` (`URLComponents(string:)` + `.path`, or `.scheme` /
+  `.host` / `.path` set one by one) are HTTP_CALLS to that URL (#68).
+
 ## [0.9.0] - 2026-10-03
 
 Enum cases and constants as nodes with `USES_VALUE` references (#84), `cg parity` port gap reports (#85), scoped
