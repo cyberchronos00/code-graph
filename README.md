@@ -616,7 +616,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/ts-frameworks.md](docs/ts-frameworks.md) | NestJS, Next.js and Express-style layers, validation on public projects |
 | [docs/python.md](docs/python.md) | Python source roots (detection, module names, `.cg.yaml` / `--python-root`, coverage output), entry points and function references, pytest / unittest tests, validation |
 | [docs/value-facts.md](docs/value-facts.md) | request keys, settings, fallback chains, `resolutions` |
-| [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`: PHPUnit, Pest, Vitest, Jest, Playwright, Cypress, pytest, unittest) |
+| [docs/channels-and-tests.md](docs/channels-and-tests.md) | broadcast channels (`channels`) and test coverage (`tests`: PHPUnit, Pest, Vitest, Jest, Playwright, Cypress, pytest, unittest, Swift Testing, XCTest, JUnit / kotlin.test) |
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`, `cg config show`), framework presets, gates, viz presets and starter queries, plans dir, environment variables |

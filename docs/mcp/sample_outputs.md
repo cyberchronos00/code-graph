@@ -227,7 +227,7 @@ structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php"
 ```
 targets: 1 node(s): Services\StockService::reserve
 tests: 0 direct, 0 transitive (of 0 test cases in the graph)
-no indexed test reaches the target (the graph has no test nodes: tests/ or *.spec files were not indexed)
+no indexed test reaches the target (the graph has no test code: no test files or test cases were indexed)
 coverage: every source file cg found is indexed (php, typescript); code outside these languages or generated at runtime is not in the graph.
 ```
 

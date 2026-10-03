@@ -29,6 +29,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   stay unbound, so they no longer make false hubs; a labelled selector one project method declares is kept through
   optional / force-unwrapped / untyped receivers again (`region!.contains(normalized:y:)`, dropped in 0.7.1)
   ([docs/swift.md](docs/swift.md), [#70](https://github.com/cyberchronos00/code-graph/issues/70)).
+- `cg tests` counts Swift Testing `@Test` functions (parameterized `@Test(arguments:)` included, with display names,
+  tags, traits and `@Suite` nesting), XCTest `test*` methods of `XCTestCase` subclasses only, and Kotlin `@Test` /
+  `@ParameterizedTest` functions (JUnit 5 / 4, kotlin.test, TestNG, Kotest) as test cases per framework; files
+  importing `XCTest` / `Testing` are test code, Swift 6.2 raw identifiers (`` func `sums items`() ``) parse, and an
+  empty answer says whether the graph has no test code, test files without recognised cases, or cases that do not
+  reach the target
+  ([docs/channels-and-tests.md](docs/channels-and-tests.md), [#71](https://github.com/cyberchronos00/code-graph/issues/71)).
 
 ## [0.7.1] - 2026-10-03
 

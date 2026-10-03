@@ -26,8 +26,9 @@ Framework facts read from the same syntax tree:
                   `expect` declarations -> their `actual` implementations (IMPLEMENTED_BY)
   tables          Spring Data repositories (JpaRepository<Entity, ID> ...) and Exposed table objects -> READS_TABLE /
                   WRITES_TABLE
-Test code (src/test, src/androidTest, *Test source sets, *Test.kt) carries attrs.test; @Test functions are `test`
-entries.
+Test code (src/test, src/androidTest, *Test source sets, *Test.kt) carries attrs.test; @Test / @ParameterizedTest /
+@RepeatedTest / @TestFactory functions are `test` entries with attrs.framework (junit5, junit4, kotlin-test, testng, kotest)
+from the file's imports; they count as test cases in `cg tests`.
 """
 from __future__ import annotations
 
@@ -64,6 +65,9 @@ SPRING_GUARDS = {"PreAuthorize", "Secured", "RolesAllowed", "PostAuthorize"}
 LISTENERS = {"KafkaListener", "RabbitListener", "JmsListener", "SqsListener", "EventListener", "StreamListener"}
 WORKER_BASES = {"Worker", "CoroutineWorker", "ListenableWorker", "RxWorker", "JobService", "JobIntentService"}
 LIFECYCLE = re.compile(r"^(on[A-Z]\w*|doWork|startWork|createWork|query|insert|update|delete|getType)$")
+TEST_ANNOTATIONS = {"Test", "ParameterizedTest", "RepeatedTest", "TestFactory", "TestTemplate"}
+TEST_FRAMEWORKS = (("org.junit.jupiter.", "junit5"), ("org.junit.", "junit4"), ("kotlin.test.", "kotlin-test"),
+                   ("org.testng.", "testng"), ("io.kotest.", "kotest"))
 TEST_PATH = re.compile(r"(^|/)(src/(test|androidTest|testDebug|testRelease|\w+Test)/|tests?/)|(Test|Tests|Spec)\.kt$")
 SOURCE_SET = re.compile(r"(?:^|/)src/(\w+?)Main/")
 SET_PLATFORM = {"android": "android", "ios": "ios", "iosArm64": "ios", "iosX64": "ios", "iosSimulatorArm64": "ios",
@@ -188,6 +192,7 @@ class KotlinPlugin(LanguagePlugin):
         if files is None:
             files = source_files(project.root, project)
         self.decls: dict[str, Decl] = {}
+        self.test_fw: dict[str, str | None] = {}
         self._fd = None
         self.by_name: dict[str, list[Decl]] = defaultdict(list)
         self.classes: dict[str, Decl] = {}
@@ -215,6 +220,8 @@ class KotlinPlugin(LanguagePlugin):
         for kf in kfiles:            # pass 1: declarations
             self.cur = kf
             self._header(kf)
+            if kf.test:
+                self.test_fw[kf.rel] = self._test_framework(kf)
             self._decls(kf.tree.root_node, kf, None, None)
         self._data_models(kfiles)
         for kf in kfiles:            # pass 2: references and framework facts
@@ -292,6 +299,19 @@ class KotlinPlugin(LanguagePlugin):
                         if q is not None:
                             fq = self.t(q)
                             kf.imports[fq.rsplit(".", 1)[-1]] = fq
+
+    def _test_framework(self, kf: KFile) -> str | None:
+        """The test framework a test file's `@Test` comes from: the explicit `Test` import, else a star import, else
+        the first framework import in the file (JUnit 5 > JUnit 4 > kotlin.test > TestNG)."""
+        fq = kf.imports.get("Test") or kf.imports.get("ParameterizedTest") or ""
+        cands = [fq] if fq else []
+        cands += [f + ".*" for f in kf.star]
+        cands += list(kf.imports.values())
+        for c in cands:
+            for prefix, fw in TEST_FRAMEWORKS:
+                if c.startswith(prefix):
+                    return fw
+        return None
 
     # ------------------------------------------------------------------ pass 1
     def _annotations(self, n) -> tuple[list, set]:
@@ -435,8 +455,14 @@ class KotlinPlugin(LanguagePlugin):
         pkg = d.fqn.rsplit(".", 1)[0] if "." in d.fqn else ""
         self.b.add_node(d.kind, d.id.split(":", 1)[1], name=d.name, fqn=d.fqn, file=d.file, line=d.line, end_line=d.end,
                         module=pkg or None, lang="kotlin", attrs=attrs)
-        if d.test and any(a[0] == "Test" for a in d.annotations):
-            self.b.nodes[d.id].entry_kind = "test"
+        if d.test and d.kind in ("function", "method") and any(a[0] in TEST_ANNOTATIONS for a in d.annotations):
+            n = self.b.nodes[d.id]
+            n.entry_kind = "test"
+            fw = self.test_fw.get(d.file)
+            if fw:
+                n.attrs["framework"] = fw
+            if any(a[0] == "ParameterizedTest" for a in d.annotations):
+                n.attrs["parameterized"] = True
         self.decls[d.id] = d
         self.by_name[d.name].append(d)
         if d.kind == "class":

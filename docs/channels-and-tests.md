@@ -190,6 +190,36 @@ The header counts the test cases in the graph per framework; `cg coverage` print
 (`python tests: 10 test cases (pytest 5, unittest 5) in 5 files, 5 fixtures; 9 HTTP test requests, 9 linked to
 routes`). A function that only tests call has no callers in `impact` / `callers`, and the answer points to `tests`.
 
+Swift and Kotlin test cases are the test functions themselves (`entry_kind` `test`), counted in the same header:
+
+- **Swift Testing** (`swift-testing`): every `@Test` function or method, free or in a type, a parameterized
+  `@Test(arguments: ...)` included (one case, marked `(parameterized)`). The display name (`@Test("sums items")`),
+  `.tags(...)` and the `.disabled` / `.enabled` / `.bug` / `.timeLimit` / `.serialized` traits are on the node;
+  `@Suite` types, nested suites included, carry `attrs.suite` (and their own display name / tags), and each test
+  names its suite type (`attrs.suite`, e.g. `DiscountTests.Edge`). A helper without `@Test` is not a test case.
+- **XCTest** (`xctest`): `test*` instance methods without parameters on a class whose superclass chain reaches
+  `XCTestCase` (directly, through a project base class, or through an external `*TestCase` base).
+- Swift test code is a file under `Tests/` (SwiftPM), a `*Tests/` / `*UITests/` folder or `*Tests.swift` (Xcode
+  test targets), or any file that imports `XCTest` or `Testing`.
+- **Kotlin** (`junit5`, `junit4`, `kotlin-test`, `testng`, `kotest`): `@Test`, `@ParameterizedTest`,
+  `@RepeatedTest`, `@TestFactory` and `@TestTemplate` functions in test code (`src/test`, `src/androidTest`, `*Test`
+  source sets, `*Test.kt`), the framework read from the file's imports.
+
+```text
+$ cg tests Pricing.total --db out/lib.db
+targets: 1 node(s): Pricing.total
+tests: 3 direct, 0 transitive (of 3 test cases in the graph: swift-testing 3)
+
+== DIRECT (the test code itself calls / requests the target): 3
+  totalOfEmptyIsZero  [swift-testing] Tests/LibTests/PricingTests.swift:5  depth=1 conf=heuristic
+  sums "sums items"  [swift-testing] Tests/LibTests/PricingTests.swift:9  depth=1 conf=heuristic
+  freeFunctionTest  [swift-testing] Tests/LibTests/PricingTests.swift:14  depth=1 conf=heuristic
+```
+
+When no test reaches the target, the last line says why: the graph has no test code at all, it has test files but
+no recognised test cases (a framework cg does not model), or it has N test cases and none of them calls the target,
+directly or through application code.
+
 Targets: `Class::method`, `Class`, `route:VERB /uri`, `` `VERB /path` `` or `/path` (matched against route URIs),
 `table.column`, or any node id. **Direct** means the test code itself calls or requests the target; **transitive**
 means through application code (test → route → controller → service → target). Both lists start with the closest
@@ -211,7 +241,8 @@ MCP: `tests_covering(target, min_confidence?, paths?)`.
 - Transitive test paths follow the code statically. A browser test that stubs the API (`page.route(...)`) still
   counts as reaching the backend through the page it visits.
 - Test discovery follows file naming conventions; tests generated at run time (data providers expanding into cases,
-  `test.each`, `@pytest.mark.parametrize`) are one node per declaration, with the parameters on the node.
+  `test.each`, `@pytest.mark.parametrize`, Swift Testing `@Test(arguments:)`, JUnit `@ParameterizedTest`) are one
+  node per declaration, with the parameters on the node.
 - Python HTTP test requests link to routes of the web frameworks cg models (Django, DRF, django-ninja, FastAPI,
   Starlette, Flask); requests to any other framework are found and counted (`cg index` stats, `cg coverage`). A
   `url_for()` with an endpoint that `add_url_rule(endpoint=...)` names without a view function, and a URL built by a helper method from its arguments (`self._get_url('list')`) or

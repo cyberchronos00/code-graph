@@ -693,3 +693,36 @@ Dimillian/IceCubesApp (`9efcb16`, heuristic only, no Linux build), before → af
   untyped receivers, `MediaContainer.pending(...)` static factories, `extension View` modifiers on SDK view chains,
   members of nested types). `calls_sdk_selector`: 2,132 calls left unbound by the SDK-selector rule.
 - `cg starters` still suggests `MastodonClient.get` / `.post`, now with real callers only (76 / 42 direct callers).
+
+## Swift Testing, XCTest and Kotlin test cases (#71)
+
+Test cases in `cg tests`, before → after (before, Swift and Kotlin test functions were `test` entries but the header
+counted only `test` nodes, so every project read "of 0 test cases"; all graphs heuristic, sources at the commits
+named):
+
+| Project | Before | After (per framework) |
+|---|---|---|
+| swiftlang/swift-testing (`b5c410c`) | 0 | 1,010 (swift-testing 885, xctest 125) |
+| Alamofire/Alamofire (`bda9ed5`) | 0 | 834 (xctest 761, swift-testing 73) |
+| Dimillian/IceCubesApp (`9efcb16`) | 0 | 65 (xctest 40, swift-testing 25) |
+| pointfreeco/isowords (`c727d3a`) | 0 | 237 (xctest 237) |
+| android/nowinandroid (`a49ed25`) | 0 | 232 (junit4 232) |
+| touchlab/KaMPKit (`4af0200`) | 0 | 28 (kotlin-test 24, xctest 4) |
+| spring-petclinic-kotlin (`c77f77b`) | 0 | 41 (junit5 41) |
+| ktorio/ktor-samples (`1c9df7c`) | 0 | 162 (kotlin-test 149, junit4 9, xctest 4) |
+
+- Swift Testing cases are new (863 on swift-testing, 73 on Alamofire, 25 on IceCubesApp: every uncommented `@Test`
+  in Alamofire and IceCubesApp). On swift-testing's own suite, 137 are parameterized, 143 types are `@Suite`s and
+  29 nodes carry tags. Its raw-identifier suites (`` struct `ABI.EncodedEvent Tests` ``,
+  `` @Test func `Decode issueRecorded`() ``) parse now: 2,831 → 2,953 nodes and 6,952 → 7,159 edges. 59 functions
+  that a parse error had turned into free functions are methods of their suite again. The `@Test` lines still
+  missing are an `@Test` inside `#if` in front of its function and a few declarations the grammar cannot read.
+- XCTest: 3 `test*` methods are no longer test cases, all helpers with parameters (`IssueTests.testThrowing(_:producesIssueMatching:)`,
+  `BuiltInConformances.test(_:)` on swift-testing, `TimelineFilterTests.testCodableOn(filter:)` on IceCubesApp). No
+  other test case was lost, on any project.
+- Alamofire `cg tests Instant`: 0 direct, 7 transitive (of 0 test cases) → 3 direct (the three `InstantTests` cases),
+  8 transitive (a Swift Testing `RequestInterceptorTests` case joins the XCTest ones), of 834.
+- Kotlin numbers are unchanged; they now have a framework from the file's imports. Kotlin `@Test` lines without a
+  test case: benchmarks in `src/main` (nowinandroid, not test code by path), `@Test` inside lint-test source strings,
+  and on ktor-samples 30 expression-bodied tests (`fun anything() = testApplication { ... }`) in three httpbin files
+  where the Kotlin grammar drops the class body's functions.

@@ -1710,6 +1710,9 @@ def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=3
     for tid, t in sorted(tests.items(), key=lambda x: (x[1]["file"] or "", x[1]["line"] or 0)):
         a = json.loads(t["attrs"] or "{}")
         it = {"test": tid, "name": t["name"], "framework": a.get("framework"), "file": t["file"], "line": t["line"]}
+        for k in ("display_name", "parameterized"):
+            if a.get(k):
+                it[k] = a[k]
         if tid in direct:
             it.update(depth=direct[tid], path=dpaths.get(tid, []))
             key = "direct"
@@ -1723,10 +1726,16 @@ def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=3
         out[key].append(it)
     for k in ("direct", "transitive"):     # closest tests first
         out[k].sort(key=lambda t: (t["depth"], CONFIDENCE_RANK.get(t["path_confidence"], 0) * -1, t["file"] or "", t["line"] or 0))
+    # test cases: `test` nodes (pytest / PHPUnit / Jest ...) and functions marked entry_kind=test (Swift XCTest and
+    # Swift Testing, Kotlin JUnit / kotlin.test)
     by_fw = {(r["fw"] or "test"): r["c"] for r in
-             st.q("SELECT json_extract(attrs, '$.framework') fw, count(*) c FROM nodes WHERE kind='test' GROUP BY fw ORDER BY c DESC, fw")}
+             st.q("SELECT json_extract(attrs, '$.framework') fw, count(*) c FROM nodes "
+                  "WHERE kind='test' OR entry_kind='test' GROUP BY fw ORDER BY c DESC, fw")}
+    test_files = 0
+    if not by_fw:
+        test_files = st.q("SELECT count(*) c FROM nodes WHERE kind='file' AND json_extract(attrs, '$.test')")[0]["c"]
     out["stats"] = {"direct": len(out["direct"]), "transitive": len(out["transitive"]),
-                    "tests_in_graph": sum(by_fw.values()), "tests_by_framework": by_fw}
+                    "tests_in_graph": sum(by_fw.values()), "tests_by_framework": by_fw, "test_files": test_files}
     return out
 
 
@@ -1757,13 +1766,21 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
         L += ["", f"== {label}: {len(group)}"]
         for t in group[:limit]:
             vo = t.get("via_override")
-            L.append(f"  {t['name']}  [{t.get('framework') or 'test'}] {t['file']}:{t['line']}  depth={t['depth']} conf={t['path_confidence']}"
+            dn = (f' "{t["display_name"]}"' if t.get("display_name") else "") + (" (parameterized)" if t.get("parameterized") else "")
+            L.append(f"  {t['name']}{dn}  [{t.get('framework') or 'test'}] {t['file']}:{t['line']}  depth={t['depth']} conf={t['path_confidence']}"
                      + (f"  (via override {vo[0]}" + (f" +{len(vo) - 1}" if len(vo) > 1 else "") + ")" if vo else ""))
             if show_paths and t["path"]:
                 L.append(f"      {_path_short(t['path'][:8])}{' ...' if len(t['path']) > 8 else ''}")
         if len(group) > limit:
             L.append(f"  ... {len(group) - limit} more")
     if not res["direct"] and not res["transitive"]:
-        L.append("no indexed test reaches the target" + ("" if st["tests_in_graph"] else
-                                                          " (the graph has no test nodes: tests/ or *.spec files were not indexed)"))
+        if st["tests_in_graph"]:
+            why = (f" ({st['tests_in_graph']} test cases are indexed; none calls the target, directly or through"
+                   " application code)")
+        elif st.get("test_files"):
+            why = (f" (the graph has {st['test_files']} test files but no recognised test cases; the supported"
+                   " frameworks are listed in docs/channels-and-tests.md)")
+        else:
+            why = " (the graph has no test code: no test files or test cases were indexed)"
+        L.append("no indexed test reaches the target" + why)
     return "\n".join(L)

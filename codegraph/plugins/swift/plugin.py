@@ -13,7 +13,11 @@ covers; files it does not cover keep heuristic edges, and `cg coverage` names th
 
 Framework facts read from the same syntax tree:
   entry points  `@main` types (main), `UIApplicationDelegate` / `UISceneDelegate` / `App` lifecycle callbacks,
-                `BGTaskScheduler.shared.register(forTaskWithIdentifier:)` handlers (queue_job), XCTest `test*` methods
+                `BGTaskScheduler.shared.register(forTaskWithIdentifier:)` handlers (queue_job); tests: XCTest `test*`
+                methods of XCTestCase subclasses (attrs.framework xctest) and Swift Testing `@Test` functions, a
+                parameterized `@Test(arguments:)` included (swift-testing; display name, tags and traits from the
+                attribute); `@Suite` types carry attrs.suite. Test files: Tests/, *Tests/ targets, or `import
+                XCTest` / `import Testing`
   SwiftUI       `NavigationLink(destination: V())`, `.navigationDestination { V() }`, `.sheet` / `.fullScreenCover` /
                 `.popover { V() }`, `TabView` children and the `WindowGroup` root: the target views become page nodes
                 (`page:swift:<View>`, ROUTES_TO its `body`) with NAVIGATES_TO edges; UIKit
@@ -48,6 +52,7 @@ from ..native.ts import TreeSitterMissing
 
 EXTS = (".swift",)
 VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+TEST_IMPORTS = {"XCTest", "Testing"}
 TEST_PATH = re.compile(r"(^|/)(Tests?|\w+Tests|\w+UITests)/|Tests?\.swift$")
 TEMPLATE = re.compile(r"\\\(([^()]*(?:\([^()]*\)[^()]*)*)\)")
 LIFECYCLE = re.compile(r"^(application\w*|scene\w*|sceneDid\w*|sceneWill\w*|viewDidLoad|viewWillAppear|viewDidAppear|"
@@ -187,6 +192,27 @@ class Decl:
     test: bool = False
 
 
+RAW_IDENT_DECL = re.compile(rb"\b(?:func|struct|class|enum|actor|extension|protocol|case|let|var)\s+`[^`\"\n\\]*[^\w`\"\n\\]")
+RAW_IDENT = re.compile(rb"`([^`\n]*)`")       # backticks pair up left to right on a line
+
+
+def _raw_span(m) -> bytes:
+    body = m.group(1)
+    if not body or re.fullmatch(rb"\w+", body) or re.search(rb"[\"\\]", body):
+        return m.group(0)
+    return b"`" + re.sub(rb"\W", b"_", body) + b"`"
+
+
+def _raw_identifiers(src: bytes) -> bytes:
+    """Swift 6.2 raw identifiers (`` @Test func `Sums the items`() ``, `` struct `Pricing tests` ``) are not in the
+    tree-sitter grammar: in a file that declares one, each backticked span with a space or punctuation is parsed as
+    a same-length plain identifier (`_` for every other byte), so byte offsets, and the names read from the
+    original source, stay as written."""
+    if b"`" not in src or not RAW_IDENT_DECL.search(src):
+        return src
+    return RAW_IDENT.sub(_raw_span, src)
+
+
 class SFile:
     def __init__(self, rel: str, src: bytes, tree):
         self.rel, self.src, self.tree = rel, src, tree
@@ -213,6 +239,8 @@ class SwiftPlugin(LanguagePlugin):
         if files is None:
             files = source_files(project.root, project)
         self.decls: dict[str, Decl] = {}
+        self._raw: dict[str, str] = {}
+        self._attr_raw: dict[str, dict] = {}     # decl id -> {"Test" | "Suite": attribute source text}
         self._overloads: dict[tuple, Decl] = {}
         self.by_name: dict[str, list[Decl]] = defaultdict(list)
         self.types: dict[str, Decl] = {}
@@ -230,7 +258,10 @@ class SwiftPlugin(LanguagePlugin):
             except OSError:
                 failed.append(rel)
                 continue
-            tree = p.parse(src)
+            psrc = _raw_identifiers(src)
+            if psrc is not src:
+                self.st["files_with_raw_identifiers"] += 1
+            tree = p.parse(psrc)
             if tree.root_node.has_error:
                 self.st["files_with_syntax_errors"] += 1
             sfiles.append(SFile(rel, src, tree))
@@ -241,9 +272,12 @@ class SwiftPlugin(LanguagePlugin):
             for c in sf.tree.root_node.children:
                 if c.type == "import_declaration":
                     sf.imports.add(self.t(c).split()[-1])
+            if sf.imports & TEST_IMPORTS:     # an Xcode test target folder with any name
+                sf.test = True
             self._decls(sf.tree.root_node, sf, None)
         for d in self.decls.values():
             self._fd[d.file].append(d)
+        self._xctest_methods()
         self._moya_targets(sfiles)
         self._fluent_models(sfiles)
         for sf in sfiles:            # pass 2: references and framework facts
@@ -315,13 +349,16 @@ class SwiftPlugin(LanguagePlugin):
 
     def _mods(self, n) -> tuple[list, set]:
         attrs, mods = [], set()
+        self._raw = {}
         for c in n.children:
             if c.type == "modifiers":
                 for m in c.children:
                     if m.type == "attribute":
-                        mm = re.match(r"@([\w.]+)", self.t(m))
+                        mm = re.match(r"@`?([\w.]+)`?", self.t(m))
                         if mm:
                             attrs.append(mm.group(1).split(".")[-1])
+                            if attrs[-1] in ("Test", "Suite"):
+                                self._raw.setdefault(attrs[-1], self.t(m))
                     else:
                         mods.update(self.t(m).split())
         return attrs, mods
@@ -344,7 +381,8 @@ class SwiftPlugin(LanguagePlugin):
                 if not nm:
                     continue
                 head = self.t(c).split("{", 1)[0]
-                kw = re.match(r"\s*(?:@\w+(?:\([^)]*\))?\s+|\w+\s+)*?(class|struct|enum|actor|extension|protocol)\b", head)
+                kw = re.match(r"\s*(?:@[\w.]+(?:\((?:[^()]|\([^()]*\))*\))?\s*|\w+\s+)*?(class|struct|enum|actor|extension|protocol)\b",
+                              head)
                 kw = kw.group(1) if kw else ("protocol" if ty == "protocol_declaration" else "class")
                 attrs, mods = self._mods(c)
                 supers = [self._type_name(x) for x in c.children if x.type == "inheritance_specifier"]
@@ -372,6 +410,9 @@ class SwiftPlugin(LanguagePlugin):
                     n0 = self.b.nodes[d.id]
                     n0.file, n0.line, n0.end_line = d.file, d.line, d.end
                     n0.attrs["swift_kind"] = kw
+                    if d.test and "Suite" in attrs:
+                        self._attr_raw[d.id] = self._raw
+                        self._swift_testing(n0, d, "Suite")
                 else:
                     d = Decl(f"class:{fq}", "class", nm, fq, sf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
                              cls.fqn if cls else None, supers, attrs, mods, test=sf.test)
@@ -449,11 +490,15 @@ class SwiftPlugin(LanguagePlugin):
         self.b.add_node(d.kind, d.id.split(":", 1)[1], name=d.name, fqn=d.fqn, file=d.file, line=d.line,
                         end_line=d.end, module=mod, lang="swift", attrs=attrs)
         n = self.b.nodes[d.id]
+        if self._raw and ("Test" in d.attributes or "Suite" in d.attributes):
+            self._attr_raw[d.id] = self._raw
         if d.kind == "class" and "main" in d.attributes:
             n.entry_kind = "main"
             self.st["entries_main"] += 1
-        if d.test and d.kind == "method" and d.name.startswith("test"):
-            n.entry_kind = "test"
+        if d.test and d.kind in ("function", "method") and "Test" in d.attributes:
+            self._swift_testing(n, d, "Test")
+        elif d.test and d.kind == "class" and "Suite" in d.attributes:
+            self._swift_testing(n, d, "Suite")
         self.decls[d.id] = d
         self.by_name[d.name].append(d)
         if d.kind == "class":
@@ -461,6 +506,61 @@ class SwiftPlugin(LanguagePlugin):
         if d.cls:
             self.members[d.cls][d.name].append(d)
             self.b.add_edge(f"class:{d.cls}", d.id, "CONTAINS", d.file, d.line, EXACT)
+
+    def _swift_testing(self, n, d: Decl, attr: str):
+        """Swift Testing: an `@Test` function / method is one test case (a parameterized `@Test(arguments:)` too), an
+        `@Suite` type a suite; the display name, tags and traits come from the attribute's arguments."""
+        raw = self._attr_raw.get(d.id, {}).get(attr, "")
+        if attr == "Test":
+            n.entry_kind = "test"
+            n.attrs["framework"] = "swift-testing"
+            if d.cls:
+                n.attrs["suite"] = d.cls
+            if re.search(r"\barguments\s*:", raw):
+                n.attrs["parameterized"] = True
+            self.st["swift_testing_tests"] += 1
+        else:
+            n.attrs["suite"] = True
+            self.st["swift_testing_suites"] += 1
+        m = re.match(r'@(?:Testing\.)?\w+\s*\(\s*"((?:[^"\\]|\\.)*)"', raw)
+        if m:
+            n.attrs["display_name"] = m.group(1)
+        tags = [t for grp in re.findall(r"\.tags\(([^)]*)\)", raw) for t in re.findall(r"\.?(\w+)", grp)]
+        if tags:
+            n.attrs["tags"] = tags[:12]
+        traits = sorted(set(re.findall(r"\.(disabled|enabled|bug|timeLimit|serialized)\b", raw)))
+        if traits:
+            n.attrs["traits"] = traits
+
+    def _xctest_methods(self):
+        """XCTest: a `test*` instance method without parameters on a class whose superclass chain reaches XCTestCase
+        (directly, through a project base class, or through an external `*TestCase` base)."""
+        memo: dict[str, bool] = {}
+
+        def is_case(fq: str, depth=0) -> bool:
+            if fq in memo:
+                return memo[fq]
+            memo[fq] = False
+            d = self.types.get(fq) or self.types.get(fq.rsplit(".", 1)[-1])
+            ok = False
+            if d is not None and depth < 12:
+                for s in d.supers:
+                    if s == "XCTestCase" or s.endswith("TestCase") or (s in self.types and is_case(s, depth + 1)):
+                        ok = True
+                        break
+            memo[fq] = ok
+            return ok
+
+        for d in self.decls.values():
+            if not (d.test and d.kind == "method" and d.name.startswith("test") and d.cls) or "static" in d.modifiers:
+                continue
+            n = self.b.nodes.get(d.id)
+            if n is None or n.entry_kind == "test" or any(self.sigs.get(d.id, [()])[0]):
+                continue
+            if is_case(d.cls):
+                n.entry_kind = "test"
+                n.attrs["framework"] = "xctest"
+                self.st["xctest_tests"] += 1
 
     # ------------------------------------------------------------------ pass 2
     def _decl_at(self, sf: SFile, n, kinds, name=None) -> Decl | None:
