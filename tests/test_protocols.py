@@ -2,6 +2,7 @@
 the adapters over existing kinds (Nest messages, Bull jobs, HTTP, Pusher), checks, `cg protocols` / MCP, and the
 first endpoint protocol end to end (python-socketio, two services linked by cg link)."""
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -150,6 +151,22 @@ def test_nest_messages_and_bull_jobs_adapted(nest_db):
     assert r.returncode == 0 and "bull" in r.stdout and "nest-rpc" in r.stdout
 
 
+def test_nest_message_guards(nest_db, tmp_path):
+    """#69: @UseGuards / APP_GUARD on message handlers are recorded and classified like route guards."""
+    from codegraph.protocols.view import protocols
+    msgs = {m["name"]: m for p in ("nest-rpc", "nest-ws") for m in protocols(GraphStore(nest_db), protocol=p)["endpoints"]}
+    rpc = msgs['{"cmd":"inventory.check"}']
+    assert rpc["guards"] == ["ThrottleGuard"] and "unguarded" in rpc["checks"]        # APP_GUARD, not auth
+    proj = tmp_path / "bookstore-nest"
+    shutil.copytree(ROOT / "examples" / "bookstore-nest", proj, ignore=shutil.ignore_patterns("node_modules"))
+    gw = proj / "src" / "inventory" / "inventory.gateway.ts"
+    gw.write_text("import { UseGuards } from '@nestjs/common';\n" + gw.read_text().replace(
+        "  @SubscribeMessage('watch')", "  @UseGuards(WsJwtGuard)\n  @SubscribeMessage('watch')"))
+    db = tmp_path / "g.db"
+    index_project(proj, db, "bookstore-nest")
+    ws = protocols(GraphStore(db), protocol="nest-ws")["endpoints"]
+    assert len(ws) == 1 and ws[0]["guards"] == ["ThrottleGuard", "WsJwtGuard"] and "unguarded" not in ws[0]["checks"]
+
 # ------------------------------------------------------------------ python-socketio end to end, two services
 @pytest.fixture(scope="module")
 def linked(tmp_path_factory):
@@ -181,6 +198,9 @@ def test_link_path_from_producer_route_to_consumer_table(linked):
     st = GraphStore(linked["db"])
     stats = linked["res"]["stats"]["protocols"]["socketio"]
     assert stats["match_edges"] == 2 and stats["ambiguous"] == 1
+    # #69: the .cg.yaml protocols.external emit (/#audit:order) is `external`, not `no_receiver`, in the link stats
+    assert stats["no_receiver"] == 1 and stats["external"] == 1
+    assert linked["sa"]["protocols"]["socketio"]["external"] == 1
     r = cli("path", "route:POST /orders", "table:orders", "--db", str(linked["db"]))
     assert r.returncode == 0, r.stderr
     for hop in ("SENDS_TO", "endpoint:socketio:/orders#order:created", "RECEIVED_BY", "WRITES_TABLE", "table:orders"):
@@ -228,3 +248,25 @@ def test_mcp_protocol_links(linked, monkeypatch):
     out = mcp_server.protocol_links(protocol="socketio", unmatched=True)
     out = out if isinstance(out, str) else str(out)
     assert "order:cancelled" in out and "no_receiver" in out
+
+
+def test_socketio_direction(tmp_path):
+    """#69: a Socket.IO client emit reaches server handlers only; a client's own handler of that name is not its
+    receiver (and a server emit reaches client handlers)."""
+    from codegraph.protocols.view import protocols
+    (tmp_path / "requirements.txt").write_text("python-socketio\n")
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "client.py").write_text(
+        "import socketio\n\nsio = socketio.Client()\n\n\n@sio.on('chat')\ndef on_chat(data):\n    print(data)\n\n\n"
+        "def say(text):\n    sio.emit('chat', text)\n\n\ndef ping():\n    sio.emit('ping', 1)\n")
+    (tmp_path / "app" / "server.py").write_text(
+        "import socketio\n\nsrv = socketio.Server()\n\n\n@srv.on('ping')\ndef on_ping(sid, data):\n    srv.emit('pong', data)\n\n\n"
+        "@srv.on('hello')\ndef on_hello(sid, data):\n    pass\n")
+    st = index_project(tmp_path, tmp_path / "g.db", "sio")
+    s = st["protocols"]["socketio"]
+    assert s["matched"] == 1 and s["no_receiver"] == 2        # ping -> server; chat (client-only) and pong (no client)
+    by = {e["name"]: e for e in protocols(GraphStore(tmp_path / "g.db"), protocol="socketio")["endpoints"]}
+    assert by["/#ping"]["linked"] and "no_receiver" not in by["/#ping"]["checks"]
+    assert not by["/#chat"]["linked"] and {"no_receiver", "no_sender"} <= set(by["/#chat"]["checks"])
+    assert by["/#hello"]["checks"][:1] == ["no_sender"]

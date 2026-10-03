@@ -30,8 +30,14 @@ endpoint (send side)  -MATCHES_ENDPOINT->  endpoint (receive side)       names d
 
 Matching runs at the end of `cg index` (both ends in one repo) and in `cg link` over the combined graph. `cg link`
 adds `protocols` to its stats (per protocol: endpoints, send, receive, matched, match_edges, no_receiver, no_sender,
-ambiguous) only when the graphs hold endpoints of these protocols, so the HTTP and channel output of existing graphs
-is unchanged.
+ambiguous, external) only when the graphs hold endpoints of these protocols, so the HTTP and channel output of existing graphs
+is unchanged. Names matching `.cg.yaml` `protocols.external` (of either repo) count as `external`, not as
+`no_receiver` / `no_sender`, in the index and link stats as in `cg protocols`.
+
+Socket.IO is directional: one endpoint per event holds both directions, and every send and receive edge records
+its `process` (`server` / `client`). A server `emit` reaches client handlers and a client `emit` server handlers
+only, so a client that emits `chat` and also handles `chat` itself is `no_receiver` and `no_sender` until a server
+handles it (`compatible()` in codegraph/protocols; a side without a known process matches either).
 
 ## Registry
 
@@ -92,7 +98,7 @@ alone does not report every route as `no_sender`, nor a client every call as `no
 | `test_sender_only` | received, sent from tests only |
 | `ambiguous` | a sender matched several receivers equally well (HTTP: several routes; request protocols: ties) |
 | `schema_mismatch` | senders and receivers name different message types (when both are known) |
-| `unguarded` | a receiver reachable from outside (HTTP / WebSocket / GraphQL routes, server-side Socket.IO handlers) with no auth guard: routes are classified as in `cg routes --unguarded`; a guard a plugin records on a receiver (a Socket.IO `connect` handler that rejects) counts as auth |
+| `unguarded` | a receiver reachable from outside (HTTP / WebSocket / GraphQL routes, server-side Socket.IO handlers) with no auth guard: routes are classified as in `cg routes --unguarded`; a guard a plugin records on a receiver (a Socket.IO `connect` handler that rejects) counts as auth; Nest message handlers (`nest-rpc`, `nest-event`, `nest-ws`, `grpc`) record their `@UseGuards` (handler and class) and `APP_GUARD` guard classes, classified like route guards (`app.useGlobalGuards()` binds the HTTP app only, so it does not count) |
 | `external` | declared in `.cg.yaml` (`protocols.external`), a third-party HTTP origin, a signal the framework itself sends (Django's `post_save`, `request_finished`, ...: never `no_sender`), or a bridge module implemented outside the repo |
 
 Bridge endpoints keep the checks of [bridges.md](bridges.md) (`missing_on`, `no_receiver`, `no_sender`,
@@ -142,10 +148,6 @@ used in their module or imported by name:
 - Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
   children (#32-#39); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
   endpoints (#32).
-- One endpoint per Socket.IO event serves both directions: a client `emit` and a client `on` of the same event share
-  the node, so `linked` does not tell server -> client from client -> server (the `process` attr on the edges does).
-- Guards on Nest microservice / gateway handlers (`@UseGuards`) and Bull processors are not recorded on the adapted
-  `message` / `job` nodes, so `unguarded` is not checked for them.
+- Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.
-- `cg link` per-protocol stats count `no_receiver` before `.cg.yaml` externals are applied (the query applies them).
 - Broker / host nodes (#30 / #40) are not attached to endpoints yet.

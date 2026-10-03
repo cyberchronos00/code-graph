@@ -596,13 +596,19 @@ class NestPlugin(FrameworkPlugin):
                     d = md.get(n)
                     if not d or not _is_nest(d):
                         continue
+                    # @UseGuards on the class / handler and APP_GUARD providers (#69); app.useGlobalGuards() binds the
+                    # HTTP app only, not microservice / gateway handlers
+                    guards = [nm for r, nm, _ in list(global_enh_named(b, self.app_enhancers))
+                              + self._enhancer_refs(c.get("decorators") or []) + self._enhancer_refs(m.get("decorators") or [])
+                              if r == "UseGuards"]
                     a = d.get("args") or []
                     pat = _pattern(a[0]) if a else m["name"]
                     if n == "GrpcMethod":
                         pat = ".".join(x for x in [sval(a[0]) if a else c.get("name"), sval(a[1]) if len(a) > 1 else m["name"]] if x)
                     key = f"{transport}:{ns + ':' if ns and transport == 'ws' else ''}{pat}"
                     mid = b.add_node("message", key, name=f"{transport} {pat}", file=c["file"], line=d.get("line") or line, module=module_of(c["file"]),
-                                     lang="ts", entry_kind="message_handler", attrs={"transport": transport, "pattern": pat, "namespace": ns, "framework": "nest"})
+                                     lang="ts", entry_kind="message_handler", attrs={"transport": transport, "pattern": pat, "namespace": ns, "framework": "nest",
+                                                                                     "guards": list(dict.fromkeys(guards))})
                     b.add_edge(mid, m["id"], "HANDLED_BY", file=c["file"], line=d.get("line") or line, confidence="exact")
                     messages.setdefault(pat, []).append(mid)
                     st["messages"] += 1

@@ -16,11 +16,12 @@ register(Protocol("pusher", "tcp", "Pusher protocol broadcast channel (Laravel B
                   "pusher-js subscription; MATCHES_CHANNEL; the `cg channels` view)", matcher=M.dotted, fanout=True,
                   source=A, kinds=("channel", "channel_sub")))
 register(Protocol("nest-rpc", "tcp", "NestJS microservice request (ClientProxy.send -> @MessagePattern)", source=A,
-                  kinds=("message",)))
+                  kinds=("message",), guards=True))
 register(Protocol("nest-event", "tcp", "NestJS microservice event (ClientProxy.emit -> @EventPattern)", fanout=True, source=A,
-                  kinds=("message",)))
-register(Protocol("nest-ws", "tcp", "NestJS WebSocket gateway message (@SubscribeMessage)", source=A, kinds=("message",)))
-register(Protocol("grpc", "tcp", "gRPC method (NestJS @GrpcMethod)", source=A, kinds=("message",)))
+                  kinds=("message",), guards=True))
+register(Protocol("nest-ws", "tcp", "NestJS WebSocket gateway message (@SubscribeMessage)", source=A, kinds=("message",),
+                  guards=True))
+register(Protocol("grpc", "tcp", "gRPC method (NestJS @GrpcMethod)", source=A, kinds=("message",), guards=True))
 register(Protocol("bull", "tcp", "Bull / BullMQ job queue (Queue.add -> @Processor / @Process, WorkerHost.process)",
                   source=A, kinds=("job",)))
 register(Protocol("laravel-queue", "tcp", "Laravel queued job (dispatch / Bus / schedule -> Job::handle)", source=A,
@@ -53,7 +54,8 @@ register(Protocol("kafka", "tcp", "Kafka topic (produce -> consumer group subscr
 register(Protocol("redis-pubsub", "tcp", "Redis PUBLISH -> SUBSCRIBE / PSUBSCRIBE (glob patterns)", matcher=M.glob,
                   fanout=True, ports=(6379,), schemes=("redis", "rediss")))
 register(Protocol("socketio", "tcp", "Socket.IO event (<namespace>#<event>; emit -> on, both directions; python-socketio "
-                  "server and client)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True))
+                  "server and client)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True,
+                  directional=True))
 
 # ---- AI harnesses (#66, codegraph/plugins/python/aitools.py): tools the model or an MCP client calls by name
 register(Protocol("llm_tool", "local", "LLM tool / function: schema offered to the model (OpenAI, Anthropic, LangChain, "

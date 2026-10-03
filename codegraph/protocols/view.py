@@ -33,7 +33,7 @@ import fnmatch
 import json
 from collections import defaultdict
 
-from . import REGISTRY, external_match
+from . import REGISTRY, compatible, external_match
 
 KINDS = ("http", "route", "channel", "channel_sub", "message", "job", "event", "endpoint")
 EDGE_ROLE_KINDS = ("HTTP_CALLS", "MATCHES_ROUTE", "ROUTES_TO", "USES_MIDDLEWARE", "TEST_HTTP", "BROADCASTS_ON",
@@ -144,7 +144,7 @@ def collect(st) -> dict:
             continue
         if d in ep and k in SEND_IN.get(ep[d]["kind"], ()):
             ep[d]["senders"].append({"fn": s, "at": at, "confidence": e["confidence"], "via": a.get("via") or a.get("role"),
-                                     **({"schema": a["schema"]} if a.get("schema") else {})})
+                                     **({k2: a[k2] for k2 in ("schema", "process") if a.get(k2)})})
         elif k == "DISPATCHES" and a.get("via") == "job" and d in job_of_handler:
             ep[job_of_handler[d]]["senders"].append({"fn": s, "at": at, "confidence": e["confidence"], "via": "dispatch"})
         if s in ep and k in RECV_OUT.get(ep[s]["kind"], ()):
@@ -163,11 +163,22 @@ def collect(st) -> dict:
     for n in ep.values():
         a, p = n["attrs"], REGISTRY.get(n["protocol"])
         peers = [ep[m["endpoint"]] for m in n["matches"]]
-        sent = bool(n["senders"]) or any(x["senders"] for x in peers)
-        recv = bool(n["receivers"]) or any(x["receivers"] or x["kind"] == "route" for x in peers)   # a matched route receives
+        # a directional protocol (Socket.IO): this endpoint's own senders and receivers pair up only across processes
+        own = compatible(p, {x["process"] for x in n["senders"] if x.get("process")},
+                         {x["process"] for x in n["receivers"] if x.get("process")})
+        psent = any(x["senders"] for x in peers)
+        precv_ = any(x["receivers"] or x["kind"] == "route" for x in peers)   # a matched route receives
+        if own:
+            sent = bool(n["senders"]) or psent
+            recv = bool(n["receivers"]) or precv_
+        else:                      # e.g. a client emits `x` and a client handles `x`: neither reaches the other
+            sent = psent or (bool(n["senders"]) and not n["receivers"])
+            recv = precv_ or (bool(n["receivers"]) and not n["senders"])
         n["side"] = "both" if n["senders"] and n["receivers"] else "send" if n["senders"] or (n["kind"] == "http") \
             else "receive" if n["receivers"] or n["kind"] in ("route",) else ("send" if n["test_senders"] else "none")
         n["linked"] = sent and recv
+        if not own:
+            n["linked"] = bool((n["senders"] and precv_) or (n["receivers"] and psent))
         ck = []
         n["external"] = None
         if p and p.source == "bridges":
@@ -183,9 +194,11 @@ def collect(st) -> dict:
                 n["external"] = f"other origin {a.get('origin')}"
             test_only = bool(a.get("test_only"))
             skip_route = n["kind"] == "route" and (a.get("mounted", True) is False or a.get("framework") == "django-admin")
-            if sent and not recv and precv[n["protocol"]] and not n["external"] and not test_only:
+            if (sent and not recv or not own and n["senders"] and not precv_) and precv[n["protocol"]] \
+                    and not n["external"] and not test_only:
                 ck.append("no_receiver")
-            if recv and not sent and psend[n["protocol"]] and not n["external"] and not skip_route:
+            if (recv and not sent or not own and n["receivers"] and not psent) and psend[n["protocol"]] \
+                    and not n["external"] and not skip_route:
                 ck.append("test_sender_only" if n["test_senders"] or any(x["test_senders"] for x in peers) else "no_sender")
             outs = [m for m in n["matches"] if m["dir"] == "out"]
             amb = any(m.get("ambiguous") for m in outs)
@@ -206,9 +219,11 @@ def collect(st) -> dict:
                 ck.append("schema_mismatch")
                 n["schemas"] = {"sent": sorted(ss), "received": sorted(rs)}
         # guards: routes as in `cg routes`, generic receivers from attrs.guards
-        if n["kind"] == "route" or (n["kind"] == "endpoint" and "guards" in a):
+        if n["kind"] == "route" or (n["kind"] in ("endpoint", "message") and "guards" in a):
             if n["kind"] == "route":
                 g = route_guards(a, n["mw"], is_auth)
+            elif n["kind"] == "message":   # Nest @UseGuards / APP_GUARD class names: classified like route guards (#69)
+                g = [{"name": x, "auth": is_auth(x), "secret": is_auth.secret(x)} for x in a.get("guards") or []]
             else:   # recorded by the plugin as a check that rejects (connect handler, io.use, interceptor): auth
                 g = [{"name": x if isinstance(x, str) else x.get("name"), "auth": True} for x in a.get("guards") or []]
             n["guards"] = [x["name"] for x in g]

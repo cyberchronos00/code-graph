@@ -16,6 +16,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - Swift URLSession calls whose URL is built with `URLComponents` (`URLComponents(string:)` + `.path`, or `.scheme` /
   `.host` / `.path` set one by one) are HTTP_CALLS to that URL (#68).
 
+### Fixed
+
+- Protocol links (#69): Socket.IO matching follows the direction (a client `emit` reaches server handlers, a server
+  `emit` client handlers), so a client handler no longer counts as the receiver of a client emit; the index and
+  `cg link` per-protocol stats apply `.cg.yaml` `protocols.external` (new `external` count) as `cg protocols` does.
+- Nest microservice / gateway / gRPC handlers record their guards (`@UseGuards` on the handler or class, `APP_GUARD`
+  providers), and `cg protocols` checks `unguarded` for `nest-rpc`, `nest-event`, `nest-ws` and `grpc` (#69).
+
 ## [0.9.0] - 2026-10-03
 
 Enum cases and constants as nodes with `USES_VALUE` references (#84), `cg parity` port gap reports (#85), scoped
