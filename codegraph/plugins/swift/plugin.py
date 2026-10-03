@@ -242,6 +242,7 @@ class Decl:
     types: dict = field(default_factory=dict)
     test: bool = False
     ranges: list = field(default_factory=list)      # property node: [(first line, last line, "get" | "didSet" ...)]
+    owner: str | None = None    # the containing type's node id when it is a per-`#if`-branch variant (`class:T@9`)
 
 
 RAW_IDENT_DECL = re.compile(rb"\b(?:func|struct|class|enum|actor|extension|protocol|case|let|var)\s+`[^`\"\n\\]*[^\w`\"\n\\]")
@@ -415,6 +416,7 @@ class SwiftPlugin(LanguagePlugin):
         self._raw: dict[str, str] = {}
         self._attr_raw: dict[str, dict] = {}     # decl id -> {"Test" | "Suite": attribute source text}
         self._overloads: dict[tuple, Decl] = {}
+        self._vmember: dict[tuple, str] = {}    # (variant type id, member id without @line) -> its node id (#86)
         self.by_name: dict[str, list[Decl]] = defaultdict(list)
         self.types: dict[str, Decl] = {}
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
@@ -525,16 +527,66 @@ class SwiftPlugin(LanguagePlugin):
         return mode
 
     # ------------------------------------------------------------------ pass 1
-    def _in_directive(self, sf: SFile, n) -> bool:
-        """Does a `#if` / `#elseif` / `#else` line sit between the previous sibling declaration and `n`?"""
+    def _opens_branch(self, n) -> bool:
+        """Is `n` the first declaration of a `#if` / `#elseif` / `#else` branch (comments aside)? A conditional
+        definition next to an unconditional one of that name is its own node too (Alamofire's `init(_:)` and the
+        per-platform `init()`s)."""
         p = n.prev_sibling
         while p is not None:
             if p.type == "directive":
-                return True
-            if p.is_named:
+                return not self.t(p).lstrip().startswith("#endif")
+            if p.is_named and p.type not in ("comment", "multiline_comment"):
                 return False
             p = p.prev_sibling
         return False
+
+    def _other_branch(self, n, prev_line: int) -> bool:
+        """Does `n` sit in another `#if` / `#elseif` / `#else` branch than the declaration at `prev_line` before it?
+        It does when a `#else` / `#elseif` of the block around that declaration comes between them, or when both are
+        in conditional blocks (`#if A ... #endif #if B ... #endif`). Comments, imports and other declarations in
+        between do not matter; an unconditional overload after an unrelated `#if DEBUG ... #endif` is no variant."""
+        a = n
+        while a.parent is not None and not (a.parent.start_point[0] + 1 <= prev_line <= a.parent.end_point[0] + 1):
+            a = a.parent                   # the ancestor of `n` that is a sibling of the earlier declaration
+        if a.parent is None:
+            return False
+        depth, exited = 0, False
+        for p in a.parent.children:
+            if p.start_point[0] + 1 < prev_line or p.type != "directive":
+                if p.id == a.id:
+                    break
+                continue
+            t = self.t(p).lstrip()
+            if t.startswith("#if"):
+                depth += 1
+            elif t.startswith("#endif"):
+                if depth:
+                    depth -= 1
+                else:
+                    exited = True
+            elif t.startswith("#else") and depth == 0:         # `#else` and `#elseif`
+                return True
+        return exited and depth > 0
+
+    def _branch_variant(self, prev: Decl, sf: SFile, n, cls: Decl | None) -> bool:
+        """Is `n`, declared with the same name as `prev`, a separate definition for another `#if` branch? It is when
+        the two sit in different branches of the same file (`_other_branch`), when `n` opens a branch
+        (`_opens_branch`), or when `n` is a member of a type that is itself a per-branch variant
+        (`#if os(macOS) struct T { func f() } #else struct T { func f() } #endif`, #86)."""
+        if prev.file != sf.rel:
+            return False
+        if self._opens_branch(n) or self._other_branch(n, prev.line):
+            return True
+        return cls is not None and "@" in cls.id and prev.owner != cls.id
+
+    @staticmethod
+    def _owner(cls: Decl | None) -> str | None:
+        return cls.id if cls is not None and "@" in cls.id else None
+
+    def _prev(self, did: str, cls: Decl | None) -> Decl:
+        """The declaration `did` names so far, inside the variant type `cls` when it is one (its own overloads)."""
+        own = self._vmember.get((cls.id, did)) if cls is not None else None
+        return self.decls[own] if own else self.decls[did]
 
     def _mods(self, n) -> tuple[list, set]:
         attrs, mods = [], set()
@@ -652,8 +704,11 @@ class SwiftPlugin(LanguagePlugin):
                         self._attr_raw[d.id] = self._raw
                         self._swift_testing(n0, d, "Suite")
                 else:
-                    d = Decl(f"class:{fq}", "class", nm, fq, sf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
-                             cls.fqn if cls else None, supers, attrs, mods, test=sf.test)
+                    did = f"class:{fq}"
+                    if d is not None and self._branch_variant(d, sf, c, cls):
+                        did = f"{did}@{c.start_point[0] + 1}"     # one definition per `#if` branch (#86)
+                    d = Decl(did, "class", nm, fq, sf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
+                             cls.fqn if cls else None, supers, attrs, mods, test=sf.test, owner=self._owner(cls))
                     self._add(d, kw)
                 if body is not None:
                     self._props(body, d, sf)
@@ -689,8 +744,8 @@ class SwiftPlugin(LanguagePlugin):
                     # overloads of one static-ness still share a node
                     did = f"{did}~{'static' if STATIC_MODS & mods else 'instance'}"
                 if did in self.decls:
-                    prev = self.decls[did]
-                    if prev.file != sf.rel or not self._in_directive(sf, c):  # overloads share one node
+                    prev = self._prev(did, cls)
+                    if not self._branch_variant(prev, sf, c, cls):           # overloads share one node
                         prev.types.update(params)
                         self.sigs[did].append(tuple(sig))
                         self._overloads[(sf.rel, c.start_point[0] + 1, nm)] = prev    # its body's calls are prev's
@@ -698,16 +753,26 @@ class SwiftPlugin(LanguagePlugin):
                     did = f"{did}@{c.start_point[0] + 1}"                     # per-platform definition (#if os)
                 self.sigs[did].append(tuple(sig))
                 d = Decl(did, kind, nm, fq, sf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
-                         cls.fqn if cls else None, [], attrs, mods, params, sf.test)
+                         cls.fqn if cls else None, [], attrs, mods, params, sf.test, owner=self._owner(cls))
                 self._add(d, "protocol requirement" if ty == "protocol_function_declaration" else kind)
             elif ty == "property_declaration" and cls is not None:
                 nm = self._name(c)
                 if nm == "body" and any(x.type == "computed_property" for x in c.children):
-                    d = Decl(f"method:{cls.fqn}.body", "method", "body", f"{cls.fqn}.body", sf.rel,
-                             c.start_point[0] + 1, c.end_point[0] + 1, cls.fqn, [], [], set(), test=sf.test)
+                    did = f"method:{cls.fqn}.body"
+                    if did in self.decls and self._branch_variant(self._prev(did, cls), sf, c, cls):
+                        did = f"{did}@{c.start_point[0] + 1}"
+                    d = Decl(did, "method", "body", f"{cls.fqn}.body", sf.rel,
+                             c.start_point[0] + 1, c.end_point[0] + 1, cls.fqn, [], [], set(), test=sf.test,
+                             owner=self._owner(cls))
                     self._add(d, "view body")
                 elif nm:
                     self._prop_decl(c, nm, sf, cls)
+            elif ty == "protocol_property_declaration" and cls is not None:
+                nm = (self._name(c) or "").split()[-1:]     # `var isShown: Bool { get }`: a conformer has it (#86)
+                nm = nm[0] if nm else None
+                req = self.b.nodes[cls.id].attrs.setdefault("property_requirements", [])
+                if nm and nm not in req and len(req) < 64:
+                    req.append(nm)
             elif ty not in ("lambda_literal", "statements", "function_body"):
                 self._decls(c, sf, cls)
 
@@ -740,10 +805,10 @@ class SwiftPlugin(LanguagePlugin):
         did = f"method:{fq}"
         line = c.start_point[0] + 1
         if did in self.decls:
-            prev = self.decls[did]
+            prev = self._prev(did, cls)
             if "property" not in prev.modifiers:
                 did = f"{did}~property"            # a `func label(for:)` declared first
-            elif prev.file == sf.rel and self._in_directive(sf, c):
+            elif self._branch_variant(prev, sf, c, cls):
                 did = f"{did}@{line}"              # one definition per `#if` branch
             else:
                 return
@@ -754,7 +819,8 @@ class SwiftPlugin(LanguagePlugin):
                     ranges.append((x.start_point[0] + 1, x.end_point[0] + 1, ACCESSOR_CLAUSES[x.type]))
         how = "computed" if comp is not None else "observed" if obs is not None else "lazy"
         mods = set(mods) | {"property", how}
-        d = Decl(did, "method", nm, fq, sf.rel, line, c.end_point[0] + 1, cls.fqn, [], attrs, mods, {}, sf.test, ranges)
+        d = Decl(did, "method", nm, fq, sf.rel, line, c.end_point[0] + 1, cls.fqn, [], attrs, mods, {}, sf.test, ranges,
+                 self._owner(cls))
         self._add(d, {"computed": "computed property", "observed": "property observers", "lazy": "lazy property"}[how],
                   index=False)
         n = self.b.nodes[d.id]
@@ -789,6 +855,8 @@ class SwiftPlugin(LanguagePlugin):
         elif d.test and d.kind == "class" and "Suite" in d.attributes:
             self._swift_testing(n, d, "Suite")
         self.decls[d.id] = d
+        if d.owner:
+            self._vmember.setdefault((d.owner, d.id.split("@", 1)[0]), d.id)
         if index:            # a property node is not a call target (`_prop_targets` resolves reads of it)
             self.by_name[d.name].append(d)
         if d.kind == "class":
@@ -796,7 +864,7 @@ class SwiftPlugin(LanguagePlugin):
         if d.cls:
             if index:
                 self.members[d.cls][d.name].append(d)
-            self.b.add_edge(f"class:{d.cls}", d.id, "CONTAINS", d.file, d.line, EXACT)
+            self.b.add_edge(d.owner or f"class:{d.cls}", d.id, "CONTAINS", d.file, d.line, EXACT)
 
     def _swift_testing(self, n, d: Decl, attr: str):
         """Swift Testing: an `@Test` function / method is one test case (a parameterized `@Test(arguments:)` too), an
@@ -1390,17 +1458,69 @@ class SwiftPlugin(LanguagePlugin):
                     self.st["platform_blocks"] += 1
 
     def _os_expr(self, expr: str):
-        from ...platforms import _plat_atom
+        """Platform condition tree of a `#if` expression: `os()`, `canImport()`, `targetEnvironment()` joined by
+        `||`, `&&`, `!` and parentheses (`(os(iOS) && canImport(CoreTelephony)) || os(tvOS)`, #86). An `||` with a
+        term that names no platform is unknown; such a term in an `&&` is left out (`os(iOS) && DEBUG`: iOS), except
+        under a `!` where leaving it out would claim too much."""
         expr = re.sub(r"//.*|/\*.*?\*/", "", expr).strip()
-        if "||" in expr:
-            parts = [self._os_expr(x) for x in expr.split("||")]
+        toks = re.findall(r"\|\||&&|!|\(|\)|[^\s()!&|]+(?:\s*\([^()]*\))?", expr)
+        pos = [0]
+
+        def peek():
+            return toks[pos[0]] if pos[0] < len(toks) else None
+
+        def take():
+            pos[0] += 1
+            return toks[pos[0] - 1]
+
+        def p_or(strict):
+            parts = [p_and(strict)]
+            while peek() == "||":
+                take()
+                parts.append(p_and(strict))
+            if len(parts) == 1:
+                return parts[0]
             return ("any", parts) if all(parts) else None
-        if "&&" in expr:
-            parts = [self._os_expr(x) for x in expr.split("&&")]
-            parts = [p for p in parts if p]
-            return ("all", parts) if parts else None
-        neg = expr.startswith("!")
-        m = re.match(r"!?\s*(os|canImport|targetEnvironment)\s*\(\s*([\w.]+)\s*\)$", expr)
+
+        def p_and(strict):
+            parts = [p_not(strict)]
+            while peek() == "&&":
+                take()
+                parts.append(p_not(strict))
+            if len(parts) == 1:
+                return parts[0]
+            known = [x for x in parts if x]
+            if not known or (strict and len(known) < len(parts)):
+                return None
+            return ("all", known) if len(known) > 1 else known[0]
+
+        def p_not(strict):
+            t = peek()
+            if t == "!":
+                take()
+                if peek() not in ("(", "!") and peek() is not None:
+                    return self._os_atom(take(), True)
+                x = p_not(True)
+                return ("not", x) if x else None
+            if t == "(":
+                take()
+                x = p_or(strict)
+                if peek() == ")":
+                    take()
+                return x
+            if t is None:
+                return None
+            return self._os_atom(take(), False)
+
+        try:
+            r = p_or(False)
+        except RecursionError:
+            return None
+        return r if pos[0] == len(toks) else None
+
+    def _os_atom(self, expr: str, neg: bool):
+        from ...platforms import _plat_atom
+        m = re.match(r"(os|canImport|targetEnvironment)\s*\(\s*([\w.]+)\s*\)$", expr)
         if not m:
             return None
         fn, arg = m.groups()
@@ -1863,6 +1983,10 @@ class SwiftPlugin(LanguagePlugin):
         for d in list(self.decls.values()):
             if d.kind != "class":
                 continue
+            ext = [s for s in d.supers if s not in self.types or "extension-only" in self.types[s].modifiers]
+            if ext and self.b.nodes[d.id].attrs.get("swift_kind") == "class":
+                # an SDK superclass (`NSPopover`, `UIImageView`): members and initializers it gives are not in the graph
+                self.b.nodes[d.id].attrs["external_supers"] = ext[:4]
             for s in d.supers:
                 sc = self.types.get(s)
                 if sc is None:

@@ -72,8 +72,10 @@ TEST_ANNOTATIONS = {"Test", "ParameterizedTest", "RepeatedTest", "TestFactory", 
 TEST_FRAMEWORKS = (("org.junit.jupiter.", "junit5"), ("org.junit.", "junit4"), ("kotlin.test.", "kotlin-test"),
                    ("org.testng.", "testng"), ("io.kotest.", "kotest"))
 TEST_PATH = re.compile(r"(^|/)(src/(test|androidTest|testDebug|testRelease|\w+Test)/|tests?/)|(Test|Tests|Spec)\.kt$")
-SOURCE_SET = re.compile(r"(?:^|/)src/(\w+?)Main/")
-SET_PLATFORM = {"android": "android", "ios": "ios", "iosArm64": "ios", "iosX64": "ios", "iosSimulatorArm64": "ios",
+# `iosMain`, and the test sets built for one platform (`iosTest`, `androidUnitTest`, `androidInstrumentedTest`, #86)
+SOURCE_SET = re.compile(r"(?:^|/)src/((\w+?)(?:Main|Test|UnitTest|InstrumentedTest))/")
+SET_PLATFORM = {"android": "android", "androidHost": "android", "androidDevice": "android", "ios": "ios",
+                "iosArm64": "ios", "iosX64": "ios", "iosSimulatorArm64": "ios",
                 "apple": "ios", "macos": "macos", "macosArm64": "macos", "macosX64": "macos", "js": "web",
                 "wasmJs": "web", "wasm": "web", "linux": "linux", "linuxX64": "linux", "mingw": "windows",
                 "mingwX64": "windows"}
@@ -173,7 +175,8 @@ class KFile:
         self.star: list[str] = []
         self.test = bool(TEST_PATH.search(rel))
         m = SOURCE_SET.search(rel)
-        self.source_set = m.group(1) if m else None
+        self.source_set = m.group(2) if m else None
+        self.source_set_dir = m.group(1) if m else None
 
 
 class KotlinPlugin(LanguagePlugin):
@@ -471,7 +474,10 @@ class KotlinPlugin(LanguagePlugin):
         self.decls[d.id] = d
         self.by_name[d.name].append(d)
         if d.kind == "class":
-            self.classes.setdefault(d.fqn, d)
+            if "expect" in d.modifiers:
+                self.classes[d.fqn] = d     # common code names the `expect` class, not the actual of whichever source
+            else:                           # set happened to be read first (#86)
+                self.classes.setdefault(d.fqn, d)
             self.class_short[d.name].append(d)
         if d.cls:
             self.members[d.cls][d.name].append(d)
@@ -751,7 +757,7 @@ class KotlinPlugin(LanguagePlugin):
         from ...platforms import Cond, _plat_atom, mark
         plat = SET_PLATFORM[kf.source_set]
         lines = kf.src.count(b"\n") + 1
-        mark(self.b, kf.rel, 1, lines, Cond("tree", _plat_atom(plat), f"source set {kf.source_set}Main"))
+        mark(self.b, kf.rel, 1, lines, Cond("tree", _plat_atom(plat), f"source set {kf.source_set_dir}"))
         self.st["platform_source_set_files"] += 1
 
     # ------------------------------------------------------------------ resolution
@@ -807,7 +813,7 @@ class KotlinPlugin(LanguagePlugin):
             if cls is not None:
                 r = [d for d in self._member(cls, name) if d.kind != "class"]
                 if r:
-                    return r
+                    return self._same_set(r, kf)
             if decl is not None and decl.receiver:                         # extension function: members of its receiver
                 rc = self._class_of(decl.receiver.split(".")[-1], kf)
                 if rc is not None:
@@ -845,7 +851,7 @@ class KotlinPlugin(LanguagePlugin):
                     comp = self.classes.get(f"{tc.fqn}.Companion")
                     r = self._member(comp, name) if comp else []
                 if r:
-                    return r
+                    return self._same_set(r, kf)
                 return []
             short = re.sub(r"[<(].*", "", tyname, flags=re.S).rstrip("?! ").split(".")[-1]
             if len(short) > 1 and short[:1].isupper() and not self.class_short.get(short):
@@ -865,6 +871,18 @@ class KotlinPlugin(LanguagePlugin):
             return []
         self._how = "name" if len(cands) == 1 else "candidate"
         return cands
+
+    @staticmethod
+    def _same_set(cands: list[Decl], kf: KFile) -> list[Decl]:
+        """Members of an `expect` class and its `actual`s share one name (#86): code in a platform source set calls the
+        member of its own `actual`, common code the `expect` one; an `actual` from another platform's set never."""
+        if len(cands) < 2 or not any("actual" in d.modifiers for d in cands):
+            return cands
+        same = [d for d in cands if d.file == kf.rel]
+        if same:
+            return same
+        own = [d for d in cands if "actual" in d.modifiers and kf.source_set and d.id.endswith(f"@{kf.source_set}")]
+        return own or [d for d in cands if "actual" not in d.modifiers] or cands
 
     def _field_type(self, cls: Decl, name: str, depth=0):
         if name in cls.types:

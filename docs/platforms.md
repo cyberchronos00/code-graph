@@ -105,6 +105,14 @@ target's view. `cg platforms` and `cg coverage` list how many conditions are unk
   Swift per-platform definition carries `attrs.variant_platforms`, the targets that definition is built for, and the
   divergence check counts any variant of the symbol, so a caller without a condition of its own is not reported as
   missing on the target another variant covers.
+- A Swift type defined once per `#if` branch (`#if os(macOS) struct Toolbar { } #else struct Toolbar { } #endif`) is
+  one node per branch (`class:Toolbar`, `class:Toolbar@7`); each variant contains its own members
+  (`method:Toolbar.show@8`), and a nested type follows its variant. Comments, imports and other declarations between
+  the branches do not matter. A member a variant does not define is not missing there when that variant conforms to a
+  protocol requiring it, or, for `init`, when its SDK superclass provides it (`attrs.external_supers`). Conditions
+  with parentheses (`(os(iOS) && canImport(CoreTelephony)) || os(tvOS)`) are evaluated as written. Kotlin common
+  code binds to the `expect` class, members called from an `actual` class bind to that `actual`, and a platform's
+  test source set (`iosTest`, `androidUnitTest`, `androidInstrumentedTest`) is built for that platform.
 - Rust exact mode: rust-analyzer resolves the host configuration, then runs once per other target the `cfg` conditions
   name (up to 3; `CODEGRAPH_RUST_TARGETS`), so references under another target's `cfg` are exact
   (`attrs.exact_target`). What none resolves is added from the syntax layer (`via: cfg-inactive`), so every target's

@@ -849,6 +849,50 @@ ALT_KINDS = ("function", "method", "struct", "enum", "type_alias", "typedef", "c
              "static", "global")
 
 
+def _swift_inherited(builder, nvals: dict, alts: dict, vkey_of: dict):
+    """Swift: the targets where a member exists without a definition of its own in the graph (#86). A type defined
+    per `#if` branch (`class Popover: NSObject { var isShown }` / `class Popover: NSPopover { }`) has the member on
+    the other branch too when that variant conforms to a protocol requiring it, and an `init` when the variant's
+    SDK superclass gives it (no initializer of its own on that target)."""
+    parent, conforms, names, inits = {}, defaultdict(set), defaultdict(set), defaultdict(list)
+    for e in builder.edges.values():
+        if e.kind == "CONTAINS" and e.src.startswith("class:"):
+            sn = builder.nodes.get(e.src)
+            dn = builder.nodes.get(e.dst)
+            if sn is None or dn is None or sn.lang != "swift":
+                continue
+            parent[e.dst] = e.src
+            names[e.src].add(dn.name)
+            if dn.name == "init":
+                inits[e.src].append(e.dst)
+        elif e.kind == "IMPLEMENTS" and e.src.startswith("class:"):
+            conforms[e.src].add(e.dst)
+    for nid, n in builder.nodes.items():
+        if n.lang == "swift" and n.kind == "class":
+            names[nid] |= set((n.attrs or {}).get("property_requirements") or ())
+
+    def avail(i):
+        return {p for p in KNOWN if _avail(nvals.get(i), p)}
+
+    def of(dst: str) -> set:
+        dn = builder.nodes.get(dst)
+        c = parent.get(dst)
+        if dn is None or c is None:
+            return set()
+        have = set()
+        for v in alts.get(vkey_of.get(c, c)) or [c]:
+            vn = builder.nodes.get(v)
+            if vn is None:
+                continue
+            if any(dn.name in names.get(pr, ()) for pr in conforms.get(v, ())):
+                have |= avail(v)
+            elif dn.name == "init" and (vn.attrs or {}).get("external_supers"):
+                own = set().union(*[avail(i) for i in inits.get(v, ())]) if inits.get(v) else set()
+                have |= avail(v) - own
+        return have
+    return of
+
+
 def _alt_groups(builder, nvals: dict) -> dict[str, list[str]]:
     """Rust / C / C++ / Swift alternative definitions of one symbol (one per `cfg` / `#if` branch), keyed by _vkey."""
     alts: dict[str, list[str]] = defaultdict(list)
@@ -967,6 +1011,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                 if sl is not None:
                     gslot[n.id] = ("group", g["name"], sl)
     group_of = {f: g["name"] for g in groups for f, _ in g["members"]}
+    inherited = _swift_inherited(builder, nvals, alts, vkey_of)
     sites = defaultdict(list)
     for e in builder.edges.values():
         if e.kind in ("CALLS", "REFERENCES_FN", "USES_TYPE", "USES_VALUE", "IMPORTS", "INSTANTIATES", "RENDERS",
@@ -1011,6 +1056,8 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                 have |= set(KNOWN)
         if isinstance(base, str) and base in alts:        # any definition of the symbol on that target will do
             have |= {p for i in alts[base] for p in KNOWN if _avail(nvals.get(i), p)}
+        if not set(live) <= have:
+            have |= inherited(es[0].attrs.get("platform_variant_of") or es[0].dst)
         if isinstance(base, tuple) and base[0] == "group" and base[2][1]:
             # a member that re-exports the name from a package (`export {x} from 'react-dom'`, `export const X = Y`)
             for mf, c in gmembers.get(base[1], ()):
