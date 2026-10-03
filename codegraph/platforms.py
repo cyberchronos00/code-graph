@@ -39,12 +39,16 @@ from . import presets
 # dependency / VCS directories every walk skips (codegraph/presets/common.yaml skip_dirs)
 COMMON_SKIP = presets.skip_dirs("common")
 
-KNOWN = ("windows", "linux", "macos", "ios", "android", "web")
+KNOWN = ("windows", "linux", "macos", "ios", "android", "web", "tvos", "watchos", "visionos")
 DESKTOP = ("windows", "linux", "macos")
+APPLE = ("macos", "ios", "tvos", "watchos", "visionos")
 ALIASES = {"win": "windows", "win32": "windows", "win64": "windows", "darwin": "macos", "mac": "macos", "osx": "macos",
-           "macosx": "macos", "iphoneos": "ios", "iphone": "ios", "browser": "web", "wasm": "web", "wasm32": "web",
-           "js": "web", "emscripten": "web"}
-UNIX = ("linux", "macos", "ios", "android")
+           "macosx": "macos", "iphoneos": "ios", "iphone": "ios", "ipados": "ios", "browser": "web", "wasm": "web",
+           "wasm32": "web", "js": "web", "emscripten": "web", "appletvos": "tvos", "xros": "visionos",
+           "visionos": "visionos", "tvos": "tvos", "watchos": "watchos"}
+APPLE_SRC = re.compile(r"\.(swift|c|h|cc|cpp|cxx|hh|hpp|hxx|m|mm)$")    # what an Xcode project compiles
+IPHONE_FAMILY = {"ios", "tvos", "watchos", "visionos"}
+UNIX = ("linux", "macos", "ios", "android", "tvos", "watchos", "visionos")
 BIG = 10 ** 9
 
 
@@ -77,6 +81,10 @@ def eval_atom(key: str, val: str | None, p: str):
     if key == "platform":                         # Platform.OS === 'ios', Platform.isIOS, kIsWeb, file suffixes
         v = ALIASES.get((val or "").lower(), (val or "").lower())
         return p == v
+    if key == "never":                            # a condition no known target meets (Swift `os(macOS)` in a Catalyst-only app)
+        return False
+    if key == "unknown_on":                       # true or false on that target, false elsewhere (#74)
+        return None if p == val else False
     if key == "native":                           # React Native `.native.ts` / Platform.select native: every non-web target
         return p != "web"
     if key == "target_platform":                  # Flutter TargetPlatform: on the web it is the browser's OS
@@ -106,7 +114,7 @@ def eval_atom(key: str, val: str | None, p: str):
         return None
     if key == "target_vendor":
         if val == "apple":
-            return p in ("macos", "ios")
+            return p in APPLE
         return None
     if key == "target_arch":
         if val in ("wasm32", "wasm64"):
@@ -150,6 +158,15 @@ C_FACTS: dict[str, dict[str, str | None]] = {
     "ios": {"__APPLE__": "1", "__MACH__": "1", "TARGET_OS_MAC": "1", "TARGET_OS_OSX": "0", "TARGET_OS_IPHONE": "1",
             "TARGET_OS_IOS": "1", "TARGET_OS_SIMULATOR": None, "TARGET_IPHONE_SIMULATOR": None, "TARGET_OS_TV": "0",
             "TARGET_OS_WATCH": "0", "TARGET_OS_VISION": "0", "TARGET_OS_MACCATALYST": None, "__APPLE_CC__": None},
+    "tvos": {"__APPLE__": "1", "__MACH__": "1", "TARGET_OS_MAC": "1", "TARGET_OS_OSX": "0", "TARGET_OS_IPHONE": "1",
+             "TARGET_OS_IOS": "0", "TARGET_OS_SIMULATOR": None, "TARGET_IPHONE_SIMULATOR": None, "TARGET_OS_TV": "1",
+             "TARGET_OS_WATCH": "0", "TARGET_OS_VISION": "0", "TARGET_OS_MACCATALYST": "0", "__APPLE_CC__": None},
+    "watchos": {"__APPLE__": "1", "__MACH__": "1", "TARGET_OS_MAC": "1", "TARGET_OS_OSX": "0", "TARGET_OS_IPHONE": "1",
+                "TARGET_OS_IOS": "0", "TARGET_OS_SIMULATOR": None, "TARGET_IPHONE_SIMULATOR": None, "TARGET_OS_TV": "0",
+                "TARGET_OS_WATCH": "1", "TARGET_OS_VISION": "0", "TARGET_OS_MACCATALYST": "0", "__APPLE_CC__": None},
+    "visionos": {"__APPLE__": "1", "__MACH__": "1", "TARGET_OS_MAC": "1", "TARGET_OS_OSX": "0", "TARGET_OS_IPHONE": "1",
+                 "TARGET_OS_IOS": "0", "TARGET_OS_SIMULATOR": None, "TARGET_IPHONE_SIMULATOR": None, "TARGET_OS_TV": "0",
+                 "TARGET_OS_WATCH": "0", "TARGET_OS_VISION": "1", "TARGET_OS_MACCATALYST": "0", "__APPLE_CC__": None},
     "web": {"__EMSCRIPTEN__": "1", "EMSCRIPTEN": None, "__wasm__": "1", "__wasm32__": None, "__wasm64__": None,
             "__unix__": "1", "__unix": "1", "unix": None},
 }
@@ -315,16 +332,22 @@ def declared_targets(root: Path, cfg: dict, marks: list, langs: set[str]) -> tup
         for dep, t in (("react-native-web", "web"), ("react-native-windows", "windows"), ("react-native-macos", "macos")):
             if _has_dep(root, dep):
                 src.setdefault(t, f"{dep} dependency")
+    if not src:                     # Kotlin Multiplatform first: its iosApp/ Xcode project is one consumer of it
+        _kmp_targets(root, src)
     if not src:
-        _swift_package_targets(root, src)
-        if src:     # platforms: only sets Apple minimums; SwiftPM builds elsewhere too: the targets conditions name
-            for m in marks or []:
+        xcode = _swift_package_targets(root, src)
+        if src and not xcode:   # SwiftPM platforms: only sets Apple minimums; it builds elsewhere too: the targets
+            for m in marks or []:          # conditions name (an Xcode app builds only what its project lists)
                 if _positive(m["cond"]):
                     for p, x in m["cond"].values().items():
                         if x is True and p not in src and p in ("linux", "windows", "android", "web"):
                             src[p] = f"named by {m['cond'].text} @ {m['file']}:{m['line']}"
-    if not src:
-        _kmp_targets(root, src)
+        elif src:           # an Xcode app next to code in other languages (an android/ module): what that code names
+            for m in marks or []:
+                only = [p for p, x in m["cond"].values().items() if x is True]
+                if (only in (["android"], ["web"]) and only[0] not in src and _positive(m["cond"])
+                        and not APPLE_SRC.search(m["file"])):     # (a build script's win32 check is no app target)
+                    src[only[0]] = f"named by {m['cond'].text} @ {m['file']}:{m['line']}"
     if not src:                     # Tauri 2 mobile: src-tauri/gen/android, src-tauri/gen/apple
         for d, t in (("android", "android"), ("apple", "ios")):
             if (root / "src-tauri" / "gen" / d).is_dir():
@@ -346,15 +369,18 @@ def declared_targets(root: Path, cfg: dict, marks: list, langs: set[str]) -> tup
         for m in marks:
             v = m["cond"].values()
             only = [p for p, x in v.items() if x is True]
+            if "ios" in only and set(only) <= IPHONE_FAMILY:
+                only = ["ios"]      # TARGET_OS_IPHONE, canImport(UIKit): names iOS (tvOS / watchOS only on their own)
             if len(only) == 1 and only[0] not in src and _positive(m["cond"]):
                 src[only[0]] = f"named by {m['cond'].text} @ {m['file']}:{m['line']}"
     order = [p for p in KNOWN if p in src]
     return order, {p: src[p] for p in order}
 
 
-SPM_PLATFORM = {"iOS": "ios", "tvOS": "ios", "watchOS": "ios", "visionOS": "ios", "macCatalyst": "macos", "macOS": "macos"}
 KMP_TARGET = [(re.compile(r"\b(?:androidTarget|android|androidLibrary|androidNative(?:Arm32|Arm64|X86|X64))\s*[({]"), "android"),
-              (re.compile(r"\b(?:ios|tvos|watchos)(?:X64|Arm64|SimulatorArm64|Arm32|DeviceArm64)?\s*[({]"), "ios"),
+              (re.compile(r"\bios(?:X64|Arm64|SimulatorArm64)?\s*[({]"), "ios"),
+              (re.compile(r"\btvos(?:X64|Arm64|SimulatorArm64)?\s*[({]"), "tvos"),
+              (re.compile(r"\bwatchos(?:X64|Arm64|SimulatorArm64|Arm32|DeviceArm64)?\s*[({]"), "watchos"),
               (re.compile(r"\bmacos(?:X64|Arm64)\s*[({]"), "macos"),
               (re.compile(r"\blinux(?:X64|Arm64)\s*[({]"), "linux"),
               (re.compile(r"\bmingwX64\s*[({]"), "windows"),
@@ -366,22 +392,23 @@ _KMP_PLUGIN = re.compile(r"kotlin\s*\(\s*\"multiplatform\"|kotlin\.multiplatform
 _KMP_DESKTOP = re.compile(r"\bjvm\s*\(\s*\"desktop\"|compose\.desktop\b|\bcompose\s*\.\s*desktop\s*\{")
 
 
-def _swift_package_targets(root: Path, src: dict) -> None:
-    """SwiftPM `platforms: [.iOS(.v15), .macOS(.v12)]` in Package.swift (root or one level down)."""
+def _swift_package_targets(root: Path, src: dict) -> bool:
+    """Apple targets from the build files (#74): the platforms of the Xcode projects' targets (SDKROOT,
+    SUPPORTED_PLATFORMS, SUPPORTS_MACCATALYST), else SwiftPM `platforms: [.iOS(.v15), .macOS(.v12)]` (the root
+    manifest, else the local packages'). True when an Xcode project named them."""
+    from .xcode import apple_build
+    ab = apple_build(root)
+    for p, where in ab["targets"].items():
+        src.setdefault(p, where)
     for pk in [root / "Package.swift", *root.glob("*/Package.swift")]:
-        if not pk.is_file():
+        if not pk.is_file() or not src:
             continue
         txt = pk.read_text(encoding="utf-8", errors="replace")
-        m = re.search(r"\bplatforms\s*:\s*\[([^\]]*)\]", txt)
-        if not m:
-            continue
-        where = pk.relative_to(root).as_posix()
-        for name in re.findall(r"\.(\w+)\s*\(", m.group(1)) + re.findall(r"\.(\w+)\s*(?=[,\]]|$)", m.group(1)):
-            if name in SPM_PLATFORM:
-                src.setdefault(SPM_PLATFORM[name], f"{where} platforms: .{name}")
         srv = re.search(r"github\.com/(vapor/vapor|hummingbird-project/hummingbird|swift-server/[\w-]+)", txt)
-        if srv and src:
-            src.setdefault("linux", f"{where} server-side Swift dependency ({srv.group(1)})")
+        if srv:
+            src.setdefault("linux", f"{pk.relative_to(root).as_posix()} server-side Swift dependency ({srv.group(1)})")
+    # an Xcode app without a root manifest builds only what its project lists (a package also builds elsewhere)
+    return any(" target " in w for w in ab["targets"].values()) and not (root / "Package.swift").is_file()
 
 
 def _kmp_targets(root: Path, src: dict) -> None:
@@ -573,6 +600,18 @@ def apply(project, builder) -> dict:
                 continue                                   # also imported unconditionally: available everywhere
             tree = cs[0][0].expr if len(cs) == 1 else ("any", [c.expr for c, _ in cs])
             mark(builder, f, 1, BIG, Cond("tree", tree, cs[0][0].text + f" ({cs[0][1]['file']}:{cs[0][1]['line']})"), line=1)
+    # Xcode target membership: a source file only the targets of some platforms compile (a macOS-only target, a
+    # widget extension without Catalyst) exists only there (#74)
+    if langs & {"swift", "c", "cpp"} and pc.get("xcode_membership", True):
+        from .xcode import apple_build
+        ab = apple_build(root)
+        every = set(ab["targets"])
+        for f, m in sorted(ab["membership"].items()):
+            ps = [p for p in m["platforms"] if p in KNOWN]
+            if f in nodes_by_file and ps and set(ps) < every:
+                tree = ("any", [_plat_atom(p) for p in ps]) if len(ps) > 1 else _plat_atom(ps[0])
+                names = ", ".join(m["targets"][:3]) + (" …" if len(m["targets"]) > 3 else "")
+                mark(builder, f, 1, BIG, Cond("tree", tree, f"Xcode target membership ({names})"), line=1)
     marks = builder.platform_marks
     if not marks:
         return {}
@@ -583,6 +622,8 @@ def apply(project, builder) -> dict:
     ntag: dict[str, list] = defaultdict(list)
     for f, ms in by_file.items():
         for n in nodes_by_file.get(f, ()):
+            if (n.attrs or {}).get("swift_kind") == "extension":
+                continue        # `extension URL { }`: the type exists everywhere; its members carry the condition (#74)
             for m in ms:
                 if m["nodes"] and _inside(m, n.line, _local_name(n), lines_of):
                     ntag[n.id].append(m)
@@ -603,8 +644,9 @@ def apply(project, builder) -> dict:
             hit = [m for m in ms if _inside(m, e.line, name, lines_of)]
             if hit:
                 etag[k] = hit
-    _write_attrs(builder, ntag, nvals, etag)
     targets, tsrc = declared_targets(root, cfg, marks, set(langs) | ({"c_cpp"} if langs & {"c", "cpp"} else set()))
+    _write_attrs(builder, ntag, nvals, etag, targets)
+    _variant_platforms(builder, nvals, targets)
     unknown = [m for m in marks if any(m["cond"].values().get(p) is None for p in targets)]
     tagged_files = sorted({m["file"] for m in marks})
     st = {"targets": targets, "target_sources": tsrc, "conditions": len(marks), "files_with_conditions": len(tagged_files),
@@ -715,10 +757,17 @@ def _mirror(builder, groups: list[dict], nvals: dict) -> int:
     return len(builder.edges) - n0
 
 
-def _write_attrs(builder, ntag, nvals, etag) -> None:
+def _write_attrs(builder, ntag, nvals, etag, targets=None) -> None:
+    """platforms / platform_unknown attrs: the project's targets the code exists on (every known target when the
+    project declares none), so `#else` / `!os(iOS)` code lists the other targets, not every platform cg knows (#74)."""
+    shown = [p for p in KNOWN if p in (targets or KNOWN)]
+
     def put(attrs: dict, ms: list, vals: dict):
-        attrs["platforms"] = [p for p in KNOWN if vals[p] is not False]
-        unk = [p for p in KNOWN if vals[p] is None]
+        attrs["platforms"] = [p for p in shown if vals[p] is not False]
+        other = [p for p in KNOWN if p not in shown and vals[p] is not False]
+        if other:            # known platforms outside the targets the code would exist on: for `--platform <other>`
+            attrs["platforms_other"] = other
+        unk = [p for p in shown if vals[p] is None]
         if unk:
             attrs["platform_unknown"] = unk
         texts = list(dict.fromkeys(m["cond"].text for m in ms))
@@ -735,6 +784,24 @@ def _write_attrs(builder, ntag, nvals, etag) -> None:
         if e is not None:
             e.attrs = dict(e.attrs or {})
             put(e.attrs, ms, _combine([m["cond"].values() for m in ms]))
+
+
+def _variant_platforms(builder, nvals: dict, targets) -> int:
+    """A reference into one of a symbol's per-platform definitions (Rust / C / C++ / Swift `#if` branches) carries
+    `variant_platforms`: the targets that definition is built for. Every definition is linked (_mirror), so a caller
+    with no condition of its own reaches each variant, labelled with its platforms (#74)."""
+    shown = [p for p in KNOWN if p in (targets or KNOWN)]
+    alt_of = {}
+    for ids in _alt_groups(builder, nvals).values():
+        if len(ids) > 1 and any(i in nvals for i in ids):
+            for i in ids:
+                alt_of[i] = ids
+    n = 0
+    for e in builder.edges.values():
+        if e.dst in alt_of and e.kind not in ("CONTAINS", "DEFINES", "GATED_BY") and e.src not in alt_of[e.dst]:
+            e.attrs = {**(e.attrs or {}), "variant_platforms": [p for p in shown if _avail(nvals.get(e.dst), p)]}
+            n += 1
+    return n
 
 
 CODE = ("function", "method", "class", "struct", "enum", "trait", "union", "typedef", "type_alias", "component",
@@ -820,6 +887,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
       missing_callee  references live on a target where the referenced code does not exist there (and no variant does)
     """
     tset = [p for p in KNOWN if p in targets]
+    shown = tset or list(KNOWN)          # platforms listed per member: the project's targets (#74)
     out = {"variants": [], "api_surface": [], "missing_callee": []}
     importers = defaultdict(set)
     ext_refs = defaultdict(set)          # node -> files referring to it
@@ -837,7 +905,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
         for f, c in g["members"]:
             ps = [p for p, v in c.values().items() if v is not False]
             covered |= set(ps)
-            mem.append({"file": f, "platforms": ps, "condition": c.text})
+            mem.append({"file": f, "platforms": [p for p in ps if p in shown], "condition": c.text})
         used = sorted({u for f, _ in g["members"] for u in importers.get(f"module:{f}", ())
                        if not any(u.startswith(m + ":") for m, _ in g["members"])})
         missing = [p for p in tset if p not in covered]
@@ -884,7 +952,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
         n0 = builder.nodes[ids[0]]
         out["variants"].append({"kind": "per-platform definitions", "name": base.split(":", 1)[1] if "::*::" in base else (n0.fqn or n0.name),
                                 "members": [{"id": i, "file": builder.nodes[i].file, "line": builder.nodes[i].line,
-                                             "platforms": [p for p in KNOWN if _avail(nvals.get(i), p)],
+                                             "platforms": [p for p in shown if _avail(nvals.get(i), p)],
                                              "condition": builder.nodes[i].attrs.get("platform_expr")} for i in ids],
                                 "covered": [p for p in KNOWN if p in covered and p in tset], "missing": [p for p in tset if p not in covered],
                                 "used_at": sorted(importers.get(ids[0], ()))[:5]})
@@ -918,8 +986,8 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
             dn = builder.nodes.get(base)
             if base in gslot:
                 base = gslot[base]
-            elif dn is not None and dn.lang in ("rust", "c", "cpp"):
-                base = vkey_of.get(base, base)
+            elif dn is not None and dn.lang in ("rust", "c", "cpp", "swift"):
+                base = vkey_of.get(base, base)      # Swift: `func close()` per `#if` branch (#74)
             sites[(e.src, e.file, e.line, e.kind, base)].append(e)
     # every module one import line can resolve to (a conditional import names several on one line)
     import_alts = defaultdict(set)
@@ -935,7 +1003,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
     for (src, f, line, kind, base), es in sites.items():
         sv = nvals.get(src)
         ev = es[0].attrs
-        live = [p for p in tset if _avail(sv, p) and (not ev.get("platforms") or p in ev["platforms"])]
+        live = [p for p in tset if _avail(sv, p) and ("platforms" not in ev or p in ev["platforms"])]
         have = {p for e in es for p in KNOWN if _avail(nvals.get(e.dst), p)}
         if kind == "IMPORTS":
             have |= {p for d in import_alts.get((src, f, line), ()) for p in KNOWN if _avail(nvals.get(d), p)}
@@ -953,7 +1021,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
         if miss:
             dst = es[0].attrs.get("platform_variant_of") or es[0].dst
             out["missing_callee"].append({"from": src, "to": dst, "kind": kind, "at": f"{f}:{line}", "missing_on": miss,
-                                          "callee_platforms": [p for p in KNOWN if p in have],
+                                          "callee_platforms": [p for p in shown if p in have],
                                           "callee_condition": " | ".join(dict.fromkeys(
                                               (builder.nodes[e.dst].attrs or {}).get("platform_expr") or "" for e in es
                                               if e.dst in builder.nodes)) or None})
@@ -985,7 +1053,7 @@ def exclusions(st, platform: str) -> dict:
     for r in st.q("SELECT id, attrs FROM nodes WHERE attrs LIKE '%\"platforms\"%'"):
         a = json.loads(r["attrs"] or "{}")
         if "platforms" in a:
-            if platform not in a["platforms"]:
+            if platform not in a["platforms"] and platform not in (a.get("platforms_other") or ()):
                 nodes.add(r["id"])
             elif platform in (a.get("platform_unknown") or ()):
                 unknown_n += 1
@@ -993,7 +1061,7 @@ def exclusions(st, platform: str) -> dict:
     for r in st.q("SELECT id, attrs FROM edges WHERE attrs LIKE '%\"platforms\"%'"):
         a = json.loads(r["attrs"] or "{}")
         if "platforms" in a:
-            if platform not in a["platforms"]:
+            if platform not in a["platforms"] and platform not in (a.get("platforms_other") or ()):
                 edges.add(r["id"])
             elif platform in (a.get("platform_unknown") or ()):
                 unknown_e += 1

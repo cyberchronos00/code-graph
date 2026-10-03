@@ -102,11 +102,12 @@ STDLIB_LABELS = {"_", "where", "at", "by", "of", "into", "separator", "with", "c
                  "maxSplits", "omittingEmptySubsequences", "offsetBy", "limitedBy", "from", "to", "through",
                  "uniquingKeysWith", "isIncluded", "options", "range", "locale", "in", "forKey"}
 PRESENT = {"sheet", "fullScreenCover", "popover", "navigationDestination"}
-OS_PLATFORM = {"iOS": "ios", "iPadOS": "ios", "watchOS": "ios", "tvOS": "ios", "visionOS": "ios", "macOS": "macos",
+OS_PLATFORM = {"iOS": "ios", "iPadOS": "ios", "watchOS": "watchos", "tvOS": "tvos", "visionOS": "visionos", "macOS": "macos",
                "OSX": "macos", "Linux": "linux", "Windows": "windows", "Android": "android", "WASI": "web"}
 # `#if canImport(X)`: the SDK framework implies the platform (UIKit: iOS family, AppKit: macOS)
 # (Apple-only frameworks: iOS or macOS; swift-corelibs FoundationNetworking: not Apple)
-IMPORT_PLATFORM = {"UIKit": "ios", "WatchKit": "ios", "MobileCoreServices": "ios", "AppKit": "macos", "Cocoa": "macos",
+IMPORT_PLATFORM = {"UIKit": ("ios", "tvos", "visionos"), "WatchKit": "watchos",
+                   "MobileCoreServices": ("ios", "tvos", "watchos", "visionos"), "AppKit": "macos", "Cocoa": "macos",
                    "Glibc": "linux", "Musl": "linux", "WinSDK": "windows", "ucrt": "windows", "Android": "android",
                    "WASILibc": "web"}
 APPLE_ONLY = {"Darwin", "Security", "Network", "SystemConfiguration", "UniformTypeIdentifiers", "Combine", "SwiftUI",
@@ -393,6 +394,7 @@ class SFile:
 
 class SwiftPlugin(LanguagePlugin):
     name = "swift"
+    mac = None          # how the project builds for the Mac (xcode.apple_build), set per index
 
     def detect(self, project: Project) -> bool:
         self._files = source_files(project.root, project)
@@ -428,6 +430,11 @@ class SwiftPlugin(LanguagePlugin):
         self.navs: list[tuple] = []          # (owner, view type name, how, file, line)
         self.handler_refs: list[tuple] = []  # (route id, method name, type fqn, file, line)
         self.st = defaultdict(int)
+        from ...xcode import apple_build
+        try:     # how the project builds for the Mac: AppKit target, Catalyst, both or neither (#74)
+            self.mac = apple_build(project.root)["mac"]
+        except Exception:  # noqa: BLE001  (a build file cg cannot read never fails the index)
+            self.mac = None
         sfiles, failed = [], []
         errs: dict[str, list] = {}
         for rel in files:
@@ -1242,7 +1249,10 @@ class SwiftPlugin(LanguagePlugin):
             head = "\n".join(lines[d.line - 1:d.end]).split("{", 1)[0]
             for m in self.AVAILABLE.finditer(head):
                 plat = OS_PLATFORM[m.group(1)]
-                mark(self.b, sf.rel, d.line, d.end, Cond("tree", ("not", _plat_atom(plat)), m.group(0) + ")"))
+                if plat == "macos" and self.mac == "catalyst":
+                    continue                 # `@available(macOS, unavailable)` does not apply to a Catalyst build
+                atom = self._apple(plat) if plat == "ios" else _plat_atom(plat)   # iOS-unavailable: Catalyst too
+                mark(self.b, sf.rel, d.line, d.end, Cond("tree", ("not", atom), m.group(0) + ")"))
                 self.st["platform_unavailable"] += 1
             av, dep = {}, None
             for m in self.AVAIL_ATTR.finditer(head):
@@ -1395,18 +1405,41 @@ class SwiftPlugin(LanguagePlugin):
             return None
         fn, arg = m.groups()
         if fn == "os":
-            plat = OS_PLATFORM.get(arg)
+            a = self._apple(OS_PLATFORM.get(arg))
         elif fn == "canImport":
-            plat = IMPORT_PLATFORM.get(arg)
             if arg in APPLE_ONLY or arg == "FoundationNetworking":
-                apple = ("any", [_plat_atom("ios"), _plat_atom("macos")])
+                apple = ("any", [_plat_atom(p) for p in ("macos", "ios", "tvos", "watchos", "visionos")])
                 return apple if (arg in APPLE_ONLY) != neg else ("not", apple)
+            plat = IMPORT_PLATFORM.get(arg)
+            if isinstance(plat, tuple):        # UIKit: the iOS family, and the Mac when the app builds for Catalyst
+                a = ("any", [self._apple(p) for p in plat] + ([self._apple("catalyst")] if self.mac in ("catalyst", "both") else []))
+            elif plat == "macos" and self.mac == "catalyst":
+                a = ("atom", "unknown_on", "macos")      # AppKit in a Catalyst-only app: may or may not import
+            else:
+                a = _plat_atom(plat) if plat else None
         else:                       # Mac Catalyst: the iOS app built for macOS; simulator: not a platform
-            plat = "macos" if arg == "macCatalyst" else None
-        if not plat:
+            a = self._apple("catalyst") if arg == "macCatalyst" else None
+        if a is None:
             return None
-        a = _plat_atom(plat)
         return ("not", a) if neg else a
+
+    def _apple(self, plat: str | None):
+        """Atom of an Apple platform name for this project (#74): `os(macOS)` is the AppKit target (never true in a
+        Catalyst-only app), `os(iOS)` is also true on the Mac when the app builds for Catalyst, and
+        `targetEnvironment(macCatalyst)` is the Mac only then; with both a native and a Catalyst Mac build those are
+        unknown on macOS. tvOS, watchOS and visionOS are their own targets."""
+        from ...platforms import _plat_atom
+        if plat is None:
+            return None
+        unk = ("atom", "unknown_on", "macos")
+        if plat == "macos":
+            return {"catalyst": ("atom", "never", None), "both": unk}.get(self.mac, _plat_atom("macos"))
+        if plat == "ios":
+            return {"catalyst": ("any", [_plat_atom("ios"), _plat_atom("macos")]),
+                    "both": ("any", [_plat_atom("ios"), unk])}.get(self.mac, _plat_atom("ios"))
+        if plat == "catalyst":
+            return {"catalyst": _plat_atom("macos"), "both": unk}.get(self.mac, ("atom", "never", None))
+        return _plat_atom(plat)
 
     # ------------------------------------------------------------------ resolution
     def _member(self, cls: Decl | None, name: str, depth: int = 0) -> list[Decl]:

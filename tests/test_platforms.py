@@ -49,7 +49,7 @@ def cli(*args) -> subprocess.CompletedProcess:
 def test_condition_evaluation():
     from codegraph.plugins.native.gates import parse_cfg
     t = parse_cfg('all(unix, not(target_os = "macos"))')
-    assert [p for p in PF.KNOWN if PF.eval_tree(t, p)] == ["linux", "ios", "android"]
+    assert [p for p in PF.KNOWN if PF.eval_tree(t, p)] == ["linux", "ios", "android", "tvos", "watchos", "visionos"]
     assert PF.eval_tree(parse_cfg('feature = "x"'), "linux") is None                 # not a platform: unknown
     assert PF.eval_tree(("any", [parse_cfg("windows"), parse_cfg('feature = "x"')]), "windows") is True
     assert PF.eval_c("defined(_WIN32) || defined(__APPLE__)", "macos") is True
@@ -90,7 +90,8 @@ def test_rust_cfg_tags_variants_and_filtered_impact():
     s = res["platforms"]
     assert s["targets"] == ["windows", "linux", "macos"]
     assert tags(st, "function:dirs_demo::paths::config_dir") == ["windows"]
-    assert tags(st, "function:dirs_demo::paths::config_dir@9") == ["linux", "macos", "ios", "android"]
+    # the unix branch lists the project's targets it covers, not every unix platform cg knows (#74)
+    assert tags(st, "function:dirs_demo::paths::config_dir@9") == ["linux", "macos"]
     assert tags(st, "mod:dirs_demo::win") == ["windows"] and tags(st, "function:dirs_demo::win::set_console_title") == ["windows"]
     assert tags(st, "function:dirs_demo::dock_badge") == ["macos"]
     assert tags(st, "function:dirs_demo::main") is None
@@ -290,7 +291,7 @@ def test_declared_targets_swiftpm_kmp_tauri(tmp_path):
     (sp / "Package.swift").write_text('let package = Package(name: "x",\n platforms: [\n .iOS(.v15),\n .tvOS(.v15),\n'
                                       ' .macOS(.v12)\n ], targets: [])\n')
     t, src = PF.declared_targets(sp, {}, [], {"swift"})
-    assert t == ["macos", "ios"] and src["ios"] == "Package.swift platforms: .iOS"
+    assert t == ["macos", "ios", "tvos"] and src["ios"] == "Package.swift platforms: .iOS"     # tvOS: its own (#74)
     kmp = tmp_path / "kmp" / "shared"
     kmp.mkdir(parents=True)
     (kmp / "build.gradle.kts").write_text('''plugins { kotlin("multiplatform") }

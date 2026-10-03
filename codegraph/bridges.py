@@ -1141,7 +1141,7 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
                     expected = [p for p in expected if p in have]
             # every sender is gated to some platforms (`Platform.OS === 'android'`, kIsWeb, ...): only those need it
             gated = [e.attrs.get("platforms") for e in send[nid]]
-            if gated and all(gated):
+            if gated and all(g is not None for g in gated):     # [] : on none of the targets (#74)
                 only = sorted({p for g in gated for p in g})
                 a["sender_platforms"] = only
                 expected = [p for p in expected if p in only]

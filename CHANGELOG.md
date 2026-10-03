@@ -8,6 +8,20 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- Apple platforms (#74): an Xcode project's targets come from its `project.pbxproj` (`SUPPORTED_PLATFORMS`,
+  `SDKROOT`, `SUPPORTS_MACCATALYST`), so an Apple-only app no longer gets windows / linux as "desktop default"
+  targets, and SwiftPM local packages are read when there is no root manifest. tvOS, watchOS and visionOS are their
+  own targets (`os(visionOS)` no longer counts as iOS; C `TARGET_OS_IPHONE` holds on all four and still names ios in
+  the desktop default; a Kotlin Multiplatform project keeps its `kotlin { }` targets over its iosApp project). `#else` and negated conditions list the project's other
+  targets, not every platform cg knows. In a Mac Catalyst app, `os(iOS)` and `targetEnvironment(macCatalyst)` hold on
+  macos and `os(macOS)` does not; without a Catalyst build `targetEnvironment(macCatalyst)` is no target. Files only
+  some Xcode targets compile (build phases, synchronized folders and their exceptions) are tagged with those targets'
+  platforms. Calls into a Swift method defined per `#if` branch reach every variant (`variant_platforms`), and the
+  divergence check counts any variant. IceCubesApp: targets macos (Catalyst), ios, visionos from the project; the 4
+  `missing on: macos` findings for `ToolbarItems.close` are gone.
+
 ## [0.8.2] - 2026-10-03
 
 Swift properties as graph nodes (#72), Swift sources that did not parse (#73) with a per-file syntax error listing in

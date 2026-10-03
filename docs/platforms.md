@@ -15,7 +15,7 @@ $ cg platforms divergence --db out/app.db
 == VARIANTS (implemented per platform): 1, 0 with a declared target no variant covers
   dirs_demo::paths::config_dir  [per-platform definitions]  covered: windows, linux, macos
       src/paths.rs:4  windows  (cfg(target_os = "windows"))
-      src/paths.rs:9  linux, macos, ios, android  (cfg(unix))
+      src/paths.rs:9  linux, macos  (cfg(unix))
       used at: src/main.rs:8
 
 == REFERENCED WHERE THE CALLEE IS NOT BUILT: 1
@@ -24,8 +24,9 @@ $ cg platforms divergence --db out/app.db
 
 ## Targets
 
-The known targets are `windows`, `linux`, `macos`, `ios`, `android` and `web`; `--platform` also takes the usual
-aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's own targets come from, in order:
+The known targets are `windows`, `linux`, `macos`, `ios`, `android`, `web`, `tvos`, `watchos` and `visionos`;
+`--platform` also takes the usual aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, `xros`, ...). A
+project's own targets come from, in order:
 
 | source | targets |
 |---|---|
@@ -33,11 +34,32 @@ aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's o
 | Flutter: platform folders next to a Flutter `pubspec.yaml` (`android/`, `ios/`, `web/`, `macos/`, `windows/`, `linux/`) | one per folder |
 | Expo: `app.json` `expo.platforms` | the listed ones (Expo's default: ios, android) |
 | React Native (`react-native` / `expo` dependency) | ios, android, plus web / windows / macos with `react-native-web` / `-windows` / `-macos` |
-| SwiftPM: `platforms: [.iOS(.v16), .macOS(.v13)]` in `Package.swift` (root or one level down) | the listed ones (tvOS / watchOS / visionOS count as ios, macCatalyst as macos) |
-| Kotlin Multiplatform: the targets in the `kotlin { }` block of a multiplatform `build.gradle(.kts)` (root, one or two levels down) | `androidTarget()` / `androidNative*()` android, `iosArm64()` / `iosX64()` / `tvos*` / `watchos*` ios, `macosArm64()` macos, `linuxX64()` linux, `mingwX64()` windows, `js()` / `wasmJs()` web, `jvm("desktop")` / Compose Desktop windows, linux, macos |
+| Kotlin Multiplatform: the targets in the `kotlin { }` block of a multiplatform `build.gradle(.kts)` (root, one or two levels down; its `iosApp/` Xcode project is not read for targets) | `androidTarget()` / `androidNative*()` android, `iosArm64()` / `iosX64()` ios, `tvos*()` tvos, `watchos*()` watchos, `macosArm64()` macos, `linuxX64()` linux, `mingwX64()` windows, `js()` / `wasmJs()` web, `jvm("desktop")` / Compose Desktop windows, linux, macos |
+| Xcode: the targets of every `*.xcodeproj` (root, one or two levels down): `SUPPORTED_PLATFORMS`, else `SDKROOT` (`iphoneos` ios, `macosx` macos, `appletvos` tvos, `watchos`, `xros` visionos), and `SUPPORTS_MACCATALYST = YES` (macos, as Mac Catalyst) | the platforms the targets build for (`target_sources` names the project and target) |
+| SwiftPM: `platforms: [.iOS(.v16), .macOS(.v13)]` in `Package.swift` (root or one level down; the local packages' when no Xcode project or root manifest names a platform) | the listed ones (macCatalyst counts as macos); with an Xcode project, both are read |
 | Tauri 2 mobile (`src-tauri/gen/android/`, `src-tauri/gen/apple/`) | windows, linux, macos plus android / ios |
 | Electron or Tauri (`electron` dependency, `src-tauri/tauri.conf.json`) | windows, linux, macos |
-| anything else with platform conditions | windows, linux, macos, plus a mobile or web target a condition names on its own (`target_os = "android"`, `defined(__ANDROID__)`, `Platform.OS === 'web'`) |
+| anything else with platform conditions | windows, linux, macos ("desktop default"), plus a mobile or web target a condition names on its own (`target_os = "android"`, `defined(__ANDROID__)`, `Platform.OS === 'web'`; `TARGET_OS_IPHONE` names ios) |
+
+A SwiftPM package also builds where its conditions say (`#if os(Linux)` adds linux; so does a Vapor / Hummingbird
+dependency). An Xcode app without a root `Package.swift` builds only for the platforms its project lists, so the
+desktop default never applies to it.
+
+### Apple platforms (#74)
+
+- tvOS, watchOS and visionOS are their own targets: `os(visionOS)` is `visionos` and never stands for iOS. When it is
+  not one of the project's targets, code under `#if os(visionOS)` is built for none of them (labelled
+  `no known target`) and `#if !os(visionOS)` code for all of them.
+- Mac Catalyst: when the project builds the iOS app for the Mac (`SUPPORTS_MACCATALYST = YES`) and has no AppKit
+  macOS target, the macos target is the Catalyst build. There `os(iOS)` and `targetEnvironment(macCatalyst)` are true,
+  `os(macOS)` is false and `canImport(UIKit)` is true. Without a Catalyst build, `targetEnvironment(macCatalyst)` is
+  built for no target; with both an AppKit and a Catalyst Mac build those conditions are unknown on macos.
+- Xcode target membership: a source file that only some targets compile (a widget extension without Catalyst, a
+  macOS-only target), from the targets' Sources build phases and Xcode 16 synchronized folders with their
+  membership exceptions, is tagged with those targets' platforms (`platform_expr: Xcode target membership
+  (AppWidget)`). Files of local packages are not target members and keep their own conditions.
+  `platforms.xcode_membership: false` turns this off.
+- An `extension URL { }` type node is never tagged (the type exists everywhere); its members are.
 
 `cg platforms` prints the targets and where each one came from.
 
@@ -52,8 +74,9 @@ aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's o
 
 A guard clause (`if (Platform.OS !== 'ios') return`, `if (!Platform.isIOS) return;`) tags the rest of the enclosing
 block with the negated condition, and a JS / TS branch without braces or semicolons ends at its line (automatic
-semicolon insertion). Swift `#if os(iOS)`, `canImport(UIKit)` (ios), `canImport(AppKit)` (macos),
-`targetEnvironment(macCatalyst)` (macos) and `@available(iOS, unavailable)` / `@available(macOS, unavailable)` / `@available(*, unavailable)` on a
+semicolon insertion). Swift `#if os(iOS)`, `canImport(UIKit)` (ios, tvos, visionos; macos in a Catalyst app),
+`canImport(AppKit)` (macos), `targetEnvironment(macCatalyst)` (macos when the app builds for Catalyst, see
+[Apple platforms](#apple-platforms-74)) and `@available(iOS, unavailable)` / `@available(macOS, unavailable)` / `@available(*, unavailable)` on a
 declaration are platform conditions; `targetEnvironment(simulator)` is not, and version forms (`@available(iOS 17, *)`,
 `#available`) are recorded as minimum OS versions (`attrs.available`, see [swift.md](swift.md)). Kotlin Multiplatform source sets (`iosMain`, `androidMain`, ...) are platform conditions on
 their files, and `expect` declarations link to each `actual` ([kotlin.md](kotlin.md)). Electron and Tauri process
@@ -68,14 +91,20 @@ target's view. `cg platforms` and `cg coverage` list how many conditions are unk
 
 ## In the graph
 
-- `nodes.attrs.platforms`: the targets a symbol is built for (absent: every target). `platform_expr` is the source
+- `nodes.attrs.platforms`: the project's targets a symbol is built for (absent: every target). An `#else` branch or
+  a negated condition lists the project's other targets, not every platform cg knows; `platforms_other` holds the
+  known non-target platforms where the condition also holds, for `--platform` on a target the project does not
+  declare. `platform_expr` is the source
   condition (`cfg(unix)`, `#if defined(_WIN32)`, `.ios file`, `if (dart.library.io) (lib/sync.dart:1)`),
   `platform_at` its file:line and `platform_unknown` the targets on which it could not be evaluated.
 - `edges.attrs.platforms`: the same for a call or reference inside a platform branch (`if (Platform.OS === 'ios')
   { openIosSettings() }`).
 - Variant links: a call that resolves to one variant (`storage.ios.ts`, the stub of a conditional import, the
-  host's `cfg` in rust-analyzer, a Swift function defined once per `#if os(...)` branch) is also linked to its sibling variants, with `attrs.platform_variant_of`. `impact`
-  on `storage.android.ts#save` finds the callers that import `./storage`.
+  host's `cfg` in rust-analyzer, a Swift function or method defined once per `#if` branch) is also linked to its sibling variants, with `attrs.platform_variant_of`. `impact`
+  on `storage.android.ts#save` finds the callers that import `./storage`. Every reference into a Rust / C / C++ /
+  Swift per-platform definition carries `attrs.variant_platforms`, the targets that definition is built for, and the
+  divergence check counts any variant of the symbol, so a caller without a condition of its own is not reported as
+  missing on the target another variant covers.
 - Rust exact mode: rust-analyzer resolves the host configuration, then runs once per other target the `cfg` conditions
   name (up to 3; `CODEGRAPH_RUST_TARGETS`), so references under another target's `cfg` are exact
   (`attrs.exact_target`). What none resolves is added from the syntax layer (`via: cfg-inactive`), so every target's
@@ -127,6 +156,7 @@ platforms:
     "src/posix/**": [unix]              # also: native (every non-web target)
   file_suffixes: true                   # React Native .ios.ts / .android.ts files (default true)
   path_conventions: true                # C / C++ win/ unix/ directories and *_win.c file names (default true)
+  xcode_membership: true                # tag files only some Xcode targets compile (default true)
 ```
 
 `cg config show` lists the effective values and where each one comes from.

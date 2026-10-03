@@ -174,7 +174,8 @@ def _platform_names(v: Any, where: str, extra: tuple = ()) -> list[str]:
 
 def _platforms(pf: dict, fname: str) -> dict:
     """platforms: targets (the project's build targets), paths (glob -> targets: files built only there),
-    file_suffixes / path_conventions (React Native .ios.ts files, C/C++ win/ unix/ directories; default on)."""
+    file_suffixes / path_conventions / xcode_membership (React Native .ios.ts files, C/C++ win/ unix/ directories,
+    Xcode target membership; default on)."""
     out: dict = {}
     if pf.get("targets") is not None:
         out["targets"] = _platform_names(pf["targets"], f"{fname}: platforms.targets")
@@ -193,7 +194,7 @@ def _platforms(pf: dict, fname: str) -> dict:
             if not names:
                 raise ConfigError(f"{fname}: platforms.paths[{g!r}]: expected at least one target")
             out["paths"][g] = names
-    for k in ("file_suffixes", "path_conventions"):
+    for k in ("file_suffixes", "path_conventions", "xcode_membership"):
         if pf.get(k) is not None:
             if not isinstance(pf[k], bool):
                 raise ConfigError(f"{fname}: platforms.{k}: expected true or false, got {pf[k]!r}")
