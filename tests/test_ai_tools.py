@@ -200,3 +200,144 @@ def test_mcp_llm_tools(shop, monkeypatch):
     out = mcp_server.llm_tools(unmatched=True)
     out = out if isinstance(out, str) else str(out)
     assert "escalate" in out and "no_receiver" in out
+
+
+def test_mcp_tools_declared_inside_functions(tmp_path):
+    """#76: a server built in a factory function and tools defined in a test body: the enclosing function receives."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "factory.py").write_text(textwrap.dedent('''
+        from mcp.server.fastmcp import FastMCP
+
+
+        def build():
+            mcp = FastMCP("notes")
+
+            @mcp.tool()
+            def add_note(text: str) -> str:
+                """Store a note."""
+                return text
+
+            @mcp.resource("notes://{id}")
+            def note(id: str) -> str:
+                return id
+
+            @mcp.tool(name="drop")
+            async def remove(id: str):
+                return id
+            return mcp
+
+
+        def unrelated():
+            def helper():
+                return 1
+            return helper
+        '''))
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_srv.py").write_text(textwrap.dedent('''
+        from mcp.server.fastmcp import FastMCP
+
+
+        def test_tool_roundtrip():
+            server = FastMCP("t")
+
+            @server.tool()
+            def echo(x: str) -> str:
+                return x
+            assert echo("a") == "a"
+        '''))
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "nested")
+    st = GraphStore(db)
+    rb = edges(st, "RECEIVED_BY")
+    for ep in ("mcp_tool:notes/add_note", "mcp_resource:notes/notes://{id}", "mcp_tool:notes/drop"):
+        assert (f"endpoint:{ep}", "function:app.factory.build") in rb, ep
+    assert ("endpoint:mcp_tool:t/echo", "function:tests.test_srv.test_tool_roundtrip") in edges(st, "TEST_CALLS")
+    eps = {r[0] for r in st.q("SELECT id FROM nodes WHERE kind='endpoint'")}
+    assert eps == {"endpoint:mcp_tool:notes/add_note", "endpoint:mcp_resource:notes/notes://{id}",
+                   "endpoint:mcp_tool:notes/drop", "endpoint:mcp_tool:t/echo"}           # no owner-named duplicates
+    a = json.loads(st.node("endpoint:mcp_tool:notes/add_note")["attrs"])
+    assert a["handler_name"] == "add_note" and a["nested_in"] == "build" and a["params"] == ["text"]
+    assert a["description"] == "Store a note."
+    assert not [e for e in rb if "unrelated" in e[1]]
+
+
+def test_lowlevel_server_enum_branches(tmp_path):
+    """#76: `match name: case GitTools.STATUS:` with `class GitTools(str, Enum)` (reference servers)."""
+    (tmp_path / "srv").mkdir()
+    (tmp_path / "srv" / "__init__.py").write_text("")
+    (tmp_path / "srv" / "names.py").write_text(textwrap.dedent('''
+        from enum import Enum
+
+
+        class GitTools(str, Enum):
+            STATUS = "git_status"
+            DIFF = "git_diff"
+        '''))
+    (tmp_path / "srv" / "server.py").write_text(textwrap.dedent('''
+        from enum import Enum
+        from mcp.server import Server
+        from srv.names import GitTools
+
+        server = Server("mcp-git")
+
+
+        class Local(Enum):
+            LOG = "git_log"
+
+
+        def git_status(repo):
+            return repo
+
+
+        def git_log(repo):
+            return repo
+
+
+        @server.call_tool()
+        async def call_tool(name: str, arguments: dict):
+            match name:
+                case GitTools.STATUS:
+                    return git_status(arguments)
+                case Local.LOG:
+                    return git_log(arguments)
+            if name == GitTools.DIFF:
+                return None
+        '''))
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "git")
+    st = GraphStore(db)
+    rb = edges(st, "RECEIVED_BY")
+    assert ("endpoint:mcp_tool:mcp-git/git_status", "function:srv.server.git_status") in rb
+    assert ("endpoint:mcp_tool:mcp-git/git_log", "function:srv.server.git_log") in rb
+    assert ("endpoint:mcp_tool:mcp-git/git_diff", "function:srv.server.call_tool") in rb
+
+
+def test_lowlevel_server_built_inside_function(tmp_path):
+    """#76: mcp-server-git shape: `async def serve(): server = Server(...)` with a nested `@server.call_tool()`."""
+    (tmp_path / "git_srv.py").write_text(textwrap.dedent('''
+        from enum import Enum
+        from mcp.server import Server
+
+
+        class GitTools(str, Enum):
+            STATUS = "git_status"
+
+
+        def git_status(repo):
+            return repo
+
+
+        async def serve(repository):
+            server = Server("mcp-git")
+
+            @server.call_tool()
+            async def call_tool(name: str, arguments: dict):
+                match name:
+                    case GitTools.STATUS:
+                        return git_status(arguments)
+            return server
+        '''))
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "git")
+    assert ("endpoint:mcp_tool:mcp-git/git_status", "function:git_srv.git_status") in edges(GraphStore(db), "RECEIVED_BY")

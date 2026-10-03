@@ -150,13 +150,58 @@ def index(prog, b, walk_body, Ctx) -> dict:
             handlers.add(f.id)
         return nid
 
+    # tools declared inside a function (servers built in a factory, tools defined in test bodies, #76): the nested def
+    # has no node of its own, so the endpoint is received by the enclosing function, with the nested name recorded
+    nested_owners: set = set()
+    local_servers: dict = {}         # FuncInfo.id -> {local var: server name}
+    for f in prog.funcs.values():
+        if f.id not in b.nodes or f.module.name not in ai_mods:
+            continue
+        local: dict = {}
+        nested = []
+        for sub in ast.walk(f.node):
+            if sub is f.node:
+                continue
+            if isinstance(sub, ast.Assign) and isinstance(sub.value, ast.Call) and _last(sub.value.func) in MCP_SERVERS:
+                v = sub.value
+                if _head(f.module, v.func) in ("mcp", "fastmcp") or _last(v.func) in ("FastMCP", "MCPServer"):
+                    sn = (_s(v.args[0]) if v.args else None) or _s(_kw(v, "name")) or f.name
+                    for t in sub.targets:
+                        if isinstance(t, ast.Name):
+                            local[t.id] = sn
+            elif isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and sub.decorator_list:
+                nested.append(sub)
+        if local:
+            local_servers[f.id] = local
+        for fn in nested:
+            for d in fn.decorator_list:
+                de = d.func if isinstance(d, ast.Call) else d
+                if not (isinstance(de, ast.Attribute) and de.attr in ("tool", "resource", "prompt") and isinstance(de.value, ast.Name)):
+                    continue
+                srv = local.get(de.value.id) or server_of(f.module, de.value.id)
+                if srv is None:
+                    continue
+                call = d if isinstance(d, ast.Call) else None
+                pos = call.args if call is not None else []
+                if de.attr == "resource":
+                    nm = ((_s(pos[0]) if pos else None) or _s(_kw(call, "uri"))) if call is not None else None
+                    if not nm:
+                        continue
+                else:
+                    nm = ((_s(_kw(call, "name")) or (_s(pos[0]) if pos else None)) if call is not None else None) or fn.name
+                ok = protocol_receive(b, f"mcp_{de.attr}", f"{srv}/{nm}", f.id, f.file, d.lineno, EXACT, framework="mcp",
+                                      node_attrs={"framework": "mcp", "declared_in": f.file, "server": srv, "toolset": srv,
+                                                  "description": _first_line(ast.get_docstring(fn)), "params": _params(fn),
+                                                  "schema_source": "decorator", "nested_in": f.name, "handler_name": fn.name})
+                st["mcp"][de.attr] += bool(ok)
+                nested_owners.add(f.id)
     # ---- 1. MCP server registrations (refs.py) -> endpoints
     for n in regd:
         f = fn_by_id.get(n.id)
         if f is None:
             continue
         for r in n.attrs["registrations"]:
-            if r.get("framework") != "mcp":
+            if r.get("framework") != "mcp" or (r.get("closure") and n.id in nested_owners):   # read from the nested defs
                 continue
             kind = r.get("registration") or "tool"
             txt = r.get("decorator") or r.get("call") or ""
@@ -319,11 +364,23 @@ def index(prog, b, walk_body, Ctx) -> dict:
                 if ids:
                     registries[(m.name, name)] = ids
 
+    def nested_call_tool(f):
+        """`@server.call_tool()` on a def nested in f (`async def serve(): server = Server(...)`, #76): server var."""
+        for sub in walk_body(f.node):
+            if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for d in sub.decorator_list:
+                    de = d.func if isinstance(d, ast.Call) else d
+                    if _last(de) == "call_tool" and isinstance(de, ast.Attribute) and isinstance(de.value, ast.Name):
+                        return de.value.id
+        return None
+
     def loop_like(f):
         for d in f.decorators:
             de = d.func if isinstance(d, ast.Call) else d
             if _last(de) == "call_tool":
                 return "mcp"
+        if f.id in local_servers and nested_call_tool(f):
+            return "mcp"
         for sub in walk_body(f.node):
             if isinstance(sub, ast.Attribute) and sub.attr in LOOP_MARKS:
                 return "llm"
@@ -336,11 +393,27 @@ def index(prog, b, walk_body, Ctx) -> dict:
     def name_expr(e):
         return (isinstance(e, ast.Name) and e.id in NAME_VARS) or (isinstance(e, ast.Attribute) and e.attr == "name")
 
+    def lit_of(m, e):
+        """A string literal, or a `Cls.MEMBER` whose class body assigns it a string (`class GitTools(str, Enum)`, #76)."""
+        if _s(e):
+            return _s(e)
+        if not (isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name)):
+            return None
+        c = m.classes.get(e.value.id)
+        imp = m.imports.get(e.value.id)
+        if c is None and isinstance(imp, tuple) and len(imp) > 2 and imp[0] == "sym":
+            c = prog.classes.get(f"{imp[1]}.{imp[2]}")
+        v = c.attrs.get(e.attr) if c is not None else None
+        return _s(v[0]) if v else None
+
     def lowlevel_server(f):
         for d in f.decorators:
             de = d.func if isinstance(d, ast.Call) else d
             if _last(de) == "call_tool" and isinstance(de, ast.Attribute) and isinstance(de.value, ast.Name):
                 return server_of(f.module, de.value.id) or f.module.name
+        var = nested_call_tool(f)
+        if var:
+            return local_servers.get(f.id, {}).get(var) or server_of(f.module, var) or f.module.name
         return None
 
     for f in list(prog.funcs.values()):
@@ -356,14 +429,14 @@ def index(prog, b, walk_body, Ctx) -> dict:
             if isinstance(sub, ast.If) and isinstance(sub.test, ast.Compare) and len(sub.test.ops) == 1 \
                     and isinstance(sub.test.ops[0], ast.Eq):
                 l, r = sub.test.left, sub.test.comparators[0]
-                lit = _s(r) if name_expr(l) else _s(l) if name_expr(r) else None
+                lit = lit_of(f.module, r) if name_expr(l) else lit_of(f.module, l) if name_expr(r) else None
                 if lit:
                     branches.append((lit, sub.body, sub.lineno, "if"))
             elif isinstance(sub, ast.Match) and name_expr(sub.subject):
                 for case in sub.cases:
                     p = case.pattern
-                    if isinstance(p, ast.MatchValue) and _s(p.value):
-                        branches.append((_s(p.value), case.body, p.lineno, "match"))
+                    if isinstance(p, ast.MatchValue) and lit_of(f.module, p.value):
+                        branches.append((lit_of(f.module, p.value), case.body, p.lineno, "match"))
             elif isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Call) and _last(sub.value.func) in ("globals", "locals"):
                 _dynamic(b, f, sub, st)
             elif isinstance(sub, ast.Call) and _last(sub.func) == "getattr" and len(sub.args) >= 2 and _dyn_name(sub.args[1]):

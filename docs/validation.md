@@ -667,15 +667,16 @@ before and after).
 | modelcontextprotocol/python-sdk | 2118f14 | 128 tools (124), 35 resources, 18 prompts | 264 tool / 111 resource / 28 prompt calls (58 / 32 / 6) | – | 11 s |
 | openai/openai-agents-python | 81f0ccf | 90 llm tools (42; 48 declared inside tests), 6 MCP tools | 10 MCP tool calls (1) | 497 (6 handoffs) | 50 model calls, 39 s |
 | code-graph itself | – | 29 MCP tools (29) | – | – | 29 decorator references replaced |
-| modelcontextprotocol/servers | f46d957 | 0 | – | – | TypeScript servers; the Python ones branch on enum members |
+| modelcontextprotocol/servers | f46d957 | 0 | – | – | TypeScript servers; the Python ones branch on enum members (since #76: the 12 `mcp-server-git` tools) |
 
 What the findings are, from spot checks:
 
 - **python-sdk:** `examples/snippets/clients/stdio_client.py` `call_tool("add")` matches the `add` tool of three
   example servers (`Demo`, `Calculator`, `audited`): the client does not name its server, so every server tool of
-  that name is a candidate. Most unmatched client calls go to servers built inside a factory function
+  that name is a candidate. Most unmatched client calls went to servers built inside a factory function
   (`examples/stories/*/server.py`: `def build(): mcp = MCPServer(...)` with nested `@mcp.tool()` handlers) or inside
-  tests; nested definitions collapse into their owner, so they have no handler node.
+  tests. Since #76 these are endpoints received by the enclosing function: MCP endpoints 584 → 955, `no_receiver`
+  tool calls 30 → 10.
 - **openai-agents-python:** `appointment_referral_status_lookup` (`examples/sandbox/healthcare_support`) links the
   `@function_tool` handler to the module building the agent; `ask_order_agent` is offered in a realtime session
   config whose handler is `agent.as_tool()` (not modelled). The first run flagged 7 `getattr(context, f.name)`-style

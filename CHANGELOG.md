@@ -16,6 +16,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - Swift URLSession calls whose URL is built with `URLComponents` (`URLComponents(string:)` + `.path`, or `.scheme` /
   `.host` / `.path` set one by one) are HTTP_CALLS to that URL (#68).
 
+- MCP servers built inside a function (#76): nested `@mcp.tool()` / `resource` / `prompt` handlers in a factory
+  function or a test body are endpoints received by the enclosing function (`nested_in`, `handler_name`), and
+  low-level `@server.call_tool()` handlers resolve enum-member branches (`case GitTools.STATUS:`) and servers built
+  inside `async def serve()`. python-sdk: MCP endpoints 584 → 955, handled tools 124 → 162, unmatched client calls
+  (`no_receiver`) 30 → 10; modelcontextprotocol/servers (Python): 0 → 12 git tools.
+
 ### Fixed
 
 - Protocol links (#69): Socket.IO matching follows the direction (a client `emit` reaches server handlers, a server
