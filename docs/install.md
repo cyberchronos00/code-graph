@@ -11,6 +11,7 @@ user-level tool in its own environment; no checkout and no sudo are needed.
 | Windows script (PowerShell) | `irm https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.ps1 \| iex` |
 | uv | `uv tool install git+https://github.com/cyberchronos00/code-graph` |
 | pipx | `pipx install git+https://github.com/cyberchronos00/code-graph` |
+| PyPI | `uv tool install cg-code-graph`, `pipx install cg-code-graph` or `pip install cg-code-graph` (the package is `cg-code-graph`; the commands stay `cg` and `cg-mcp`) |
 | a release | `uv tool install git+https://github.com/cyberchronos00/code-graph@vX.Y.Z` (or `install.sh --version vX.Y.Z`) |
 
 Then run `cg doctor`: it lists the tools found, whether the extractor dependencies are installed, and per language
@@ -34,11 +35,13 @@ instead of an exact layer that silently adds nothing.
 
 | | update | uninstall |
 |---|---|---|
-| uv | `uv tool upgrade codegraph` | `uv tool uninstall codegraph` |
-| pipx | `pipx upgrade codegraph` | `pipx uninstall codegraph` |
+| uv | `uv tool upgrade cg-code-graph` | `uv tool uninstall cg-code-graph` |
+| pipx | `pipx upgrade cg-code-graph` | `pipx uninstall cg-code-graph` |
 | script | `install.sh --update` (`install.ps1 -Update`) | `install.sh --uninstall` (`install.ps1 -Uninstall`) |
 
-`uv tool upgrade` installs the latest commit of the branch it was installed from; `pipx upgrade` reinstalls a git
+Installs made before the rename (package `codegraph`, up to v0.9.0) are removed by `install.sh` / `install.ps1`
+before they install `cg-code-graph`; by hand: `uv tool uninstall codegraph` (or `pipx uninstall codegraph`), then
+install again. `uv tool upgrade` installs the latest commit of the branch it was installed from; `pipx upgrade` reinstalls a git
 install only when the version changed (a release), so `install.sh --update` reinstalls with `pipx install --force`
 to get the latest commit. `--update` uses whichever of uv / pipx installed cg; with `--version vX.Y.Z` it installs that tag instead
 (tags after v0.6.0: earlier ones have no `pyproject.toml`).

@@ -17,7 +17,10 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def test_pyproject_metadata():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert meta["project"]["name"] == "cg-code-graph"          # PyPI name; `codegraph` is taken there
     assert meta["project"]["scripts"]["cg"] == "codegraph.cli:main"
+    wf = (ROOT / ".github" / "workflows" / "publish.yml").read_text()
+    assert "pypa/gh-action-pypi-publish" in wf and "id-token: write" in wf and "workflow_dispatch" in wf
     assert meta["project"]["dynamic"] == ["version"]
     assert meta["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "codegraph.__version__"}
     deps = " ".join(meta["project"]["dependencies"])

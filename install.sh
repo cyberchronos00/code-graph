@@ -9,7 +9,8 @@
 set -eu
 
 REPO_URL="https://github.com/cyberchronos00/code-graph"
-PKG="codegraph"
+PKG="cg-code-graph"
+OLD_PKG="codegraph"   # the package name up to v0.9.0 (installs from the git URL)
 MIN_PY="3.11"
 SCIP_JAVA_13="0.13.1"
 ACTION="install"; VERSION=""; SOURCE=""; WITH=""; EXTRACTORS=1; DRY=0
@@ -81,7 +82,17 @@ installed_with() {
 
 cache_dir() { printf '%s' "${CODEGRAPH_CACHE:-${CODEGRAPH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/codegraph}}"; }  # as codegraph/core/cache.py
 
+drop_old_name() {  # an install under the pre-0.9.1 package name owns the `cg` command: remove it first
+  if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q "^$OLD_PKG "; then
+    say "removing the install under the old package name $OLD_PKG (now $PKG)"; run uv tool uninstall "$OLD_PKG"
+  fi
+  if command -v pipx >/dev/null 2>&1 && pipx list --short 2>/dev/null | grep -q "^$OLD_PKG "; then
+    say "removing the install under the old package name $OLD_PKG (now $PKG)"; run pipx uninstall "$OLD_PKG"
+  fi
+}
+
 uninstall() {
+  drop_old_name
   w="$(installed_with)"
   case "$w" in
     uv) run uv tool uninstall "$PKG" ;;
@@ -107,6 +118,7 @@ ensure_installer() {
 
 install_cg() {
   ensure_installer; i="$INSTALLER"
+  drop_old_name
   s="$(spec)"
   py="$(find_python || true)"
   if [ "$i" = uv ]; then

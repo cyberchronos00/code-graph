@@ -72,11 +72,12 @@ options and updates):
 curl -fsSL https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.sh | sh
 #   or: uv tool install git+https://github.com/cyberchronos00/code-graph
 #   or: pipx install git+https://github.com/cyberchronos00/code-graph
+#   or from PyPI: pip install cg-code-graph   (uv tool install cg-code-graph / pipx install cg-code-graph)
 cg doctor                     # what indexes exact / heuristic on this machine, and what to install for the rest
 git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph    # the sample apps used below
 ```
 
-Update with `uv tool upgrade codegraph`, `pipx upgrade codegraph` or `install.sh --update`. cg keeps its caches
+Update with `uv tool upgrade cg-code-graph`, `pipx upgrade cg-code-graph` or `install.sh --update`. cg keeps its caches
 (extractor installs, SCIP outputs, parse caches) under `~/.cache/codegraph`; `cg doctor` shows their size and
 `cg clean ROOT`, `cg clean --stale` or `cg clean --all` removes them ([docs/cli.md](docs/cli.md#clean)). Working on cg itself:
 [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -582,7 +583,7 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
 
 Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 
-- Packaging: `pip install` with a `code-graph` console script, plus prebuilt extractor deps.
+- Packaging: prebuilt extractor deps.
 - Nuxt server routes (Nitro) and navigation edges.
 - Payload checks in `link` (Nest DTO / Fastify schema fields against client request keys), and Nest module scoping.
 - Laravel: seeders, closure commands, and observers triggered by model writes; Livewire Echo listeners as channel

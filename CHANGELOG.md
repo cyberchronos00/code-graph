@@ -10,6 +10,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- The Python package is now `cg-code-graph` (for PyPI; `codegraph` is taken there). The `cg` / `cg-mcp` commands
 - Native event names from locals and computed properties (#95): `let event = self?.visibilityChanged` before
   `notifyListeners(event, ..)`, and `notifyListeners(event.listenerEvent, ..)` with a Swift computed
   `var listenerEvent: String { switch self { ... return "x" } }` (each returned literal). capacitor-plugins: 5 of

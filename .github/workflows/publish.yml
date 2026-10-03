@@ -1,0 +1,64 @@
+# Upload a release to PyPI as cg-code-graph with trusted publishing (OIDC; no API token in the repo).
+# Needs on pypi.org a (pending) trusted publisher: project cg-code-graph, owner cyberchronos00, repository
+# code-graph, workflow publish.yml, environment pypi.
+#   - on a published GitHub release: builds that release's tag
+#   - manually (Actions > Publish to PyPI > Run workflow): builds the tag given (e.g. v0.9.0, tagged before the
+#     package was renamed: the build sets the name to cg-code-graph)
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload (e.g. v0.9.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Package name cg-code-graph (tags up to v0.9.0 say codegraph)
+        run: |
+          sed -i 's/^name = "codegraph"$/name = "cg-code-graph"/' pyproject.toml
+          grep -q '^name = "cg-code-graph"$' pyproject.toml
+      - name: The tag matches codegraph.__version__
+        run: |
+          v=$(python -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('codegraph/__init__.py').read()).group(1))")
+          [ "v$v" = "$TAG" ] || { echo "tag $TAG != v$v"; exit 1; }
+      - name: Build and check
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/cg-code-graph
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

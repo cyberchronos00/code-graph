@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codegraph"
+name = "cg-code-graph"
 dynamic = ["version"]
 description = "cg: a code graph of routes, calls, data access and platform boundaries for agents and humans (CLI + MCP server)"
 readme = "README.md"

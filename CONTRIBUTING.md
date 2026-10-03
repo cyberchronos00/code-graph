@@ -92,4 +92,4 @@ Versions follow [Semantic Versioning](https://semver.org/); the history is in [C
    `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section.md>`.
 5. Check the install path from the tag in a clean environment: `sh install.sh --version vX.Y.Z` (or
    `uv tool install git+https://github.com/cyberchronos00/code-graph@vX.Y.Z`), then `cg doctor`. Users update with
-   `uv tool upgrade codegraph`, `pipx upgrade codegraph` or `install.sh --update`.
+   `uv tool upgrade cg-code-graph`, `pipx upgrade cg-code-graph` or `install.sh --update`.

@@ -271,7 +271,7 @@ def _mark_broken(langs: list[dict], imports: dict) -> None:
         x["fix"] = "see `cg modules` above"
 
 
-UPGRADE_HINT = ("upgrade cg (`uv tool upgrade codegraph` / `install.sh --update`); if it persists, report it with the "
+UPGRADE_HINT = ("upgrade cg (`uv tool upgrade cg-code-graph` / `install.sh --update`); if it persists, report it with the "
                 "`cg doctor` output, and meanwhile reinstall cg under a newer Python (`uv tool install --python 3.12 ...`)")
 
 
@@ -368,7 +368,7 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         "tools": tools, "python_modules": {m: _module(m) for m in (*PIP_NAMES, "yaml", "mcp")},
         "modules": imports, "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
         **({"project": project_checks(rootp, present)} if rootp is not None else {}),
-        "update": "uv tool upgrade codegraph  |  pipx upgrade codegraph (releases)  |  install.sh --update",
+        "update": "uv tool upgrade cg-code-graph  |  pipx upgrade cg-code-graph  |  install.sh --update",
         **({"scip": [scip_health(x) for x in scip]} if scip else {}),
     }
 

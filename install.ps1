@@ -16,7 +16,8 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $RepoUrl = "https://github.com/cyberchronos00/code-graph"
-$Pkg = "codegraph"
+$Pkg = "cg-code-graph"
+$OldPkg = "codegraph"   # the package name up to v0.9.0 (installs from the git URL)
 $MinPy = [version]"3.11"
 
 function Say($msg) { Write-Host "cg-install: $msg" }
@@ -58,10 +59,17 @@ function Installed-With {
     return "none"
 }
 
+function Remove-OldName {
+    # an install under the pre-0.9.1 package name owns the `cg` command: remove it first
+    if ((Have "uv") -and ((uv tool list 2>$null) -match "^$OldPkg ")) { Say "removing the install under the old package name $OldPkg (now $Pkg)"; Run "uv" @("tool", "uninstall", $OldPkg) }
+    if ((Have "pipx") -and ((pipx list --short 2>$null) -match "^$OldPkg ")) { Say "removing the install under the old package name $OldPkg (now $Pkg)"; Run "pipx" @("uninstall", $OldPkg) }
+}
+
 $localBin = Join-Path $HOME ".local\bin"
 $env:Path = "$localBin;$(Join-Path $HOME '.cargo\bin');$env:Path"
 
 if ($Uninstall) {
+    Remove-OldName
     switch (Installed-With) {
         "uv" { Run "uv" @("tool", "uninstall", $Pkg) }
         "pipx" { Run "pipx" @("uninstall", $Pkg) }
@@ -82,6 +90,7 @@ if ($installer -eq "none") {
 }
 $spec = Get-Spec
 $py = Find-Python
+Remove-OldName
 Say "installing with $installer from $spec"
 if ($installer -eq "uv") {
     if (-not $py) { Say "no Python >= $MinPy found: uv downloads a managed Python for cg's environment" }

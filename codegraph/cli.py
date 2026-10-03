@@ -238,7 +238,7 @@ def main(argv=None):
         except (SyntaxError, ImportError) as ex:   # a plugin this interpreter cannot load: name it, point to doctor
             from .doctor import _describe
             print(f"cg index: cannot load the indexer on Python {sys.version.split()[0]}: {_describe(ex)}\n"
-                  "run `cg doctor` for details; upgrading cg (`uv tool upgrade codegraph`) usually fixes it", file=sys.stderr)
+                  "run `cg doctor` for details; upgrading cg (`uv tool upgrade cg-code-graph`) usually fixes it", file=sys.stderr)
             return 2
         from .config import ConfigError, load as load_config
         try:
