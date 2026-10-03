@@ -38,3 +38,13 @@ final class OrderDetailController: UIViewController {
     override func viewDidLoad() { super.viewDidLoad() }
 }
 #endif
+
+#if canImport(AppKit)
+func pasteboardName() -> String { "general" }
+#elseif canImport(UIKit) && !targetEnvironment(macCatalyst)
+func pasteboardName() -> String { "UIPasteboard" }
+#endif
+
+#if targetEnvironment(simulator)
+func isSimulator() -> Bool { true }
+#endif

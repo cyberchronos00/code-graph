@@ -1,0 +1,6 @@
+{
+  "name": "tauri-fixture",
+  "version": "1.0.0",
+  "dependencies": { "@tauri-apps/api": "^2.0.0", "@tauri-apps/plugin-fs": "^2.0.0" },
+  "devDependencies": { "@tauri-apps/cli": "^2.0.0", "typescript": "^5.0.0" }
+}

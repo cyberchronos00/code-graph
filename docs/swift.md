@@ -14,7 +14,7 @@ Swift toolchain or build is needed, so any checkout indexes as-is, on Linux CI t
 | SwiftUI / UIKit | views reached by `NavigationLink(destination:)`, `.navigationDestination { }`, `.sheet` / `.fullScreenCover` / `.popover { }`, `TabView` and the `WindowGroup` root become `page:swift:<View>` (ROUTES_TO its `body`) with `NAVIGATES_TO` edges; UIKit `pushViewController(V(), ...)` / `present(V(), ...)` likewise |
 | HTTP clients | URLSession (`data(from:)`, `data(for:)`, `dataTask`, `upload(for:)`) with the URL built in the same function (`URL(string: "...")`, `baseURL.appendingPathComponent("...")`, `"\(baseURL)/..."`) and `request.httpMethod = "POST"`; Alamofire `AF.request(url, method: .post)`. `\(base)` keeps `{base}` as the origin, so `cg link` still matches the path |
 | Vapor | `app.get("orders", ":id") { }`, `routes.post("x", use: handler)`, `grouped("v1")` / `group("v1") { v1 in }` prefixes, middleware passed to `grouped(...)` (`User.authenticator()`, `User.guardMiddleware()`) as the route's guards, `RouteCollection.boot(routes:)` controllers → `route:GET /v1/orders/{id}`; closure handlers are nodes of their own |
-| Platforms | `#if os(iOS)` / `#elseif os(macOS)` / `#else` blocks feed the platform tags (`cg platforms`, `--platform`); a function defined once per branch keeps one node per platform |
+| Platforms | `#if os(iOS)` / `#elseif os(macOS)` / `#else` blocks, `canImport(UIKit)` (ios) / `canImport(AppKit)` (macos), `targetEnvironment(macCatalyst)` (macos; `simulator` is unknown) feed the platform tags (`cg platforms`, `--platform`); a function defined once per branch keeps one node per platform; the project's targets come from `Package.swift` `platforms:` |
 | Tests | files under `Tests/`, `*Tests/` and `*Tests.swift` are test code |
 
 SwiftPM build output (`.build`, `.swiftpm`), Xcode `DerivedData`, CocoaPods `Pods` and `Carthage` are skipped
@@ -42,5 +42,5 @@ Tracked in [#23](https://github.com/cyberchronos00/code-graph/issues/23):
 - Exact mode from the compiler's index store (`swift build -index-store-path`, Xcode DerivedData) through the SCIP
   import path, with an exact-vs-heuristic measurement.
 - Moya `TargetType`, `URLComponents` paths and query items, base URLs from `Info.plist` / `.xcconfig`.
-- Fluent models, migrations and queries as tables; `canImport(...)`, `targetEnvironment(...)`, `@available` and
-  `Package.swift` platforms as platform conditions; App Intents / widgets as their own entry kinds.
+- Fluent models, migrations and queries as tables; `@available` / `#available` version checks as platform
+  conditions; App Intents / widgets as their own entry kinds.

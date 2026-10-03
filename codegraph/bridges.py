@@ -1,4 +1,5 @@
-"""Web / native bridges: Capacitor plugins, React Native (and Expo) native modules, Flutter platform channels.
+"""Web / native bridges: Capacitor plugins, React Native (and Expo) native modules, Flutter platform channels, and the
+process boundaries of desktop apps: Electron IPC / context bridge, Tauri commands.
 
 A bridge call is local message passing between the JS / Dart side of an app and its Kotlin / Java / Swift / ObjC side.
 It is modelled with the protocol endpoint model of #31 (epic #29), so the bridge path is
@@ -18,6 +19,16 @@ language plugin: their receivers become stub method nodes with attrs.bridge_stub
 endpoint which platforms receive it and the checks: missing_on (sent, received on some mobile targets of the project
 but not on these), no_receiver (the namespace is implemented in this repo, the method is not), no_sender, external
 (nothing in this repo implements the namespace: an npm / pub plugin package).
+
+Process protocols (one app, two processes; receivers carry attrs.process instead of a platform, no missing_on):
+  electron-ipc       endpoint:electron-ipc:<channel>; ipcRenderer.invoke / send / sendSync / postMessage and
+                     webContents.send -> ipcMain.handle / handleOnce / on / once and ipcRenderer.on / once handlers
+  electron-preload   endpoint:electron-preload:<key>#<member>; window.<key>.<member>() in the renderer ->
+                     contextBridge.exposeInMainWorld('<key>', {member: ...}) in the preload script
+  tauri              endpoint:tauri:<command> (plugin commands: endpoint:tauri:plugin:<name>|<command>, external
+                     tauri-plugin-<name> unless the plugin crate is in the repo); invoke('cmd') from @tauri-apps/api ->
+                     #[tauri::command] fn in the Rust core; check unregistered: not listed in generate_handler!
+no_receiver for these: the other side is in the repo (some channel / command is received) but not this one.
 """
 from __future__ import annotations
 
@@ -35,7 +46,14 @@ PROTOCOLS = {
                     "@ReactMethod / RCT_EXPORT_METHOD / Expo Function)",
     "flutter": "Flutter MethodChannel method (invokeMethod -> setMethodCallHandler)",
     "flutter-event": "Flutter EventChannel stream (receiveBroadcastStream -> setStreamHandler)",
+    "electron-ipc": "Electron IPC channel (ipcRenderer.invoke / send -> ipcMain.handle / on; webContents.send -> "
+                    "ipcRenderer.on)",
+    "electron-preload": "Electron context bridge member (window.<key>.<member>() -> contextBridge.exposeInMainWorld)",
+    "tauri": "Tauri command (invoke('cmd') -> #[tauri::command] fn cmd registered in generate_handler!)",
 }
+# protocols between processes of one app (no per-platform receivers)
+PROCESS_PROTOCOLS = ("electron-ipc", "electron-preload", "tauri")
+TRANSPORT = {"electron-ipc": "ipc", "tauri": "ipc", "electron-preload": "local"}
 MOBILE = ("android", "ios", "macos")
 # Capacitor Plugin / CAPPlugin base-class methods: handled by the bridge on every platform unless a plugin overrides them
 CAP_BASE_METHODS = {"checkPermissions", "requestPermissions", "addListener", "removeAllListeners", "removeListener"}
@@ -94,7 +112,8 @@ def _endpoint(builder, protocol: str, namespace: str, method: str | None) -> str
     key = endpoint_key(protocol, namespace, method)
     name = key.split(":", 1)[1]
     return builder.add_node("endpoint", key, name, fqn=name,
-                            attrs={"protocol": protocol, "transport": "local", "namespace": namespace, "method": method})
+                            attrs={"protocol": protocol, "transport": TRANSPORT.get(protocol, "local"), "namespace": namespace,
+                                   "method": method})
 
 
 def protocol_send(builder, protocol: str, namespace: str, method: str | None, src: str, file: str | None,
@@ -543,10 +562,69 @@ def _native_files(project, scanned, builder) -> list[str]:
     return sorted(set(out))
 
 
+TAURI_CMD = re.compile(r"#\[\s*(tauri::)?command\b[^\]]*\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?"
+                       r"(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_]\w*)")
+TAURI_HANDLER = re.compile(r"generate_handler!\s*\[((?:[^\[\]]|\[[^\]]*\])*)\]")     # `#![plugin(x)]` inside
+TAURI_PLUGIN = re.compile(r"\bBuilder\s*(?:::\s*<[^>]*>\s*)?::\s*new\s*\(\s*\"([\w-]+)\"")
+
+
+def tauri_receivers(project, builder) -> dict:
+    """Tauri commands: `#[tauri::command] fn cmd` in the Rust core -> RECEIVED_BY from endpoint:tauri:<cmd> (a command
+    registered by a plugin crate, `tauri::plugin::Builder::new("x")...generate_handler![cmd]`, is
+    endpoint:tauri:plugin:x|cmd). attrs.registered: listed in a generate_handler! (an unregistered command cannot be
+    invoked)."""
+    root = Path(project.root)
+    by_file = defaultdict(dict)
+    for n in builder.nodes.values():
+        if n.lang == "rust" and n.kind in ("function", "method") and n.file:
+            by_file[n.file].setdefault(n.name.rsplit("::", 1)[-1], n.id)
+    cmds, registered = [], {}
+    for rel in sorted(by_file):
+        try:
+            src = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "command" not in src and "generate_handler" not in src:
+            continue
+        src = strip_comments(src)
+        bare_ok = bool(re.search(r"\buse\s+tauri::(?:\{[^}]*\bcommand\b|command\b)", src))
+        for m in TAURI_CMD.finditer(src):
+            if m.group(1) or bare_ok:
+                cmds.append((rel, m.group(2), src.count("\n", 0, m.start(2)) + 1))
+        plugin = TAURI_PLUGIN.search(src)
+        for h in TAURI_HANDLER.finditer(src):
+            for item in re.sub(r"#!?\[[^\]]*\]", " ", h.group(1)).split(","):
+                name = item.strip().rsplit("::", 1)[-1].strip()
+                if re.fullmatch(r"[A-Za-z_]\w*", name):
+                    registered.setdefault(name, plugin.group(1) if plugin else None)
+    n = 0
+    for rel, name, line in cmds:
+        nid = by_file[rel].get(name)
+        if not nid:
+            continue
+        plugin = registered.get(name)
+        ns = f"plugin:{plugin}|{name}" if plugin else name
+        ep = protocol_receive(builder, "tauri", ns, None, nid, rel, line, "exact", via="#[tauri::command]",
+                              process="core", registered=name in registered)
+        if name not in registered:
+            builder.nodes[ep].attrs["unregistered"] = True
+        n += 1
+    return {"commands": n, "registered": len(registered)} if n else {}
+
+
 def apply(project, builder, scanned=None, sends_only: bool = False) -> dict:
     """Index pass: native receivers of every bridge protocol -> RECEIVED_BY edges (+ stub nodes for Java / ObjC) and
     platform marks on their files. Returns the bridges stats (empty when there is no bridge code)."""
     from .platforms import BIG, Cond, _plat_atom, mark
+    tauri = tauri_receivers(project, builder)
+    st0 = {"tauri": tauri} if tauri else {}
+    st = _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom)
+    if st0 or st:
+        st = {**(st or {}), **st0}
+    return st or {}
+
+
+def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -> dict:
     sends = [e for e in builder.edges.values() if e.kind == "SENDS_TO" or (e.kind == "TEST_CALLS" and e.attrs.get("orig") == "SENDS_TO")]
     root = Path(project.root)
     files = _native_files(project, scanned, builder)
@@ -744,6 +822,29 @@ def project_targets(project, builder) -> list[str]:
         return []
 
 
+def _process_roles(builder, eps, recv, send) -> None:
+    """Electron / Tauri: process role of each file taking part in IPC (attrs.process on its module node): main,
+    preload (exposes a context bridge), renderer (Electron), webview / core (Tauri)."""
+    roles = defaultdict(set)
+    for nid, n in eps.items():
+        if n.attrs.get("protocol") not in PROCESS_PROTOCOLS:
+            continue
+        for e in recv[nid]:
+            dn = builder.nodes.get(e.dst)
+            if dn and dn.file and e.attrs.get("process"):
+                roles[dn.file].add(e.attrs["process"])
+        for e in send[nid]:
+            sn = builder.nodes.get(e.src)
+            if sn and sn.file and e.attrs.get("process"):
+                roles[sn.file].add(e.attrs["process"])
+    if not roles:
+        return
+    for n in builder.nodes.values():
+        if n.kind in ("module", "file", "mod", "crate") and n.file in roles:
+            r = roles[n.file]
+            n.attrs["process"] = "preload" if "preload" in r else next(iter(r)) if len(r) == 1 else "+".join(sorted(r))
+
+
 def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
     """Per endpoint: platforms receiving it, sides seen, checks. Called after platforms.apply (targets known)."""
     eps = {nid: n for nid, n in builder.nodes.items() if n.kind == "endpoint" and n.attrs.get("protocol") in PROTOCOLS}
@@ -764,6 +865,10 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
         a = eps[nid].attrs
         for e in es:
             ns_plat[(a["protocol"], a["namespace"])].add(e.attrs.get("platform"))
+    proto_recv = defaultdict(set)
+    for nid in recv:
+        proto_recv[eps[nid].attrs["protocol"]].add(None)
+    _process_roles(builder, eps, recv, send)
     # macOS counts only where some bridge module is implemented for it (a Flutter macos/ runner)
     used = {e.attrs.get("platform") for es in recv.values() for e in es}
     mobile = [p for p in (targets or []) if p in ("android", "ios") or (p == "macos" and p in used)]
@@ -777,7 +882,12 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
         a["side"] = "both" if send[nid] and recv[nid] else "send" if send[nid] or tsend[nid] else "receive"
         a.pop("checks", None)
         ck = []
+        proc = a["protocol"] in PROCESS_PROTOCOLS
         impl = ns_plat.get((a["protocol"], a["namespace"]))
+        if proc:
+            # one app, two processes: a receiver-less channel is a miss when the other side is in the repo at all
+            ext_pkg = any(e.attrs.get("external") for e in send[nid] + tsend[nid])
+            impl = None if ext_pkg else (proto_recv.get(a["protocol"]) or None)
         base = a.get("method") in BASE_METHODS.get(a["protocol"], ())
         if base:
             a["base_method"] = True        # the framework's base class implements it on every platform; a module may override
@@ -792,7 +902,9 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
                     a["package"] = ext[0]
         if recv[nid] and not send[nid] and not base:
             ck.append("no_sender" if not tsend[nid] else "test_sender_only")
-        if recv[nid] and impl and not base:
+        if a.get("unregistered"):
+            ck.append("unregistered")
+        if recv[nid] and impl and not base and not proc:
             expected = mobile or sorted(impl - {None})
             if a["protocol"] == "react-native":
                 declared = set()
@@ -873,13 +985,16 @@ def bridges(st, pattern: str | None = None, protocol: str | None = None, unmatch
                     st.q("SELECT entry_kind, entry_count FROM node_entry WHERE node_id=?", (r["src"],))}
             s = {"fn": r["src"], "at": f"{r['file']}:{r['line']}", "confidence": r["confidence"], "via": ea.get("via"),
                  "entry_kinds": ents}
+            if ea.get("process"):
+                s["process"] = ea["process"]
             (item["senders"] if r["kind"] == "SENDS_TO" else item["test_senders"]).append(s)
         for r in st.q("SELECT dst, file, line, confidence, attrs FROM edges WHERE src=? AND kind='RECEIVED_BY' ORDER BY file, line",
                       (n["id"],)):
             ea = _attrs(r)
             item["receivers"].append({"handler": r["dst"], "at": f"{r['file']}:{r['line']}", "platform": ea.get("platform"),
                                       "via": ea.get("via"), "confidence": r["confidence"],
-                                      "stub": bool(_attrs(st.node(r["dst"]) or {"attrs": None}).get("bridge_stub"))})
+                                      "stub": bool(_attrs(st.node(r["dst"]) or {"attrs": None}).get("bridge_stub")),
+                                      **({"process": ea["process"]} if ea.get("process") else {})})
         out.append(item)
     summ = defaultdict(lambda: defaultdict(int))
     for i in out:
@@ -909,27 +1024,34 @@ def render_bridges(res: dict, max_items: int = 60) -> str:
     detail = len(eps) <= 6
     for i in eps[:max_items]:
         flags = []
+        proc = i["protocol"] in PROCESS_PROTOCOLS
         if i["missing_on"]:
             flags.append("MISSING ON " + ", ".join(i["missing_on"]))
         for c in i["checks"]:
             if c == "no_receiver":
-                flags.append("NO NATIVE RECEIVER (the module is implemented here, this method is not)")
+                flags.append("NO RECEIVER (this app handles other channels / commands, not this one)" if proc else
+                             "NO NATIVE RECEIVER (the module is implemented here, this method is not)")
             elif c == "no_sender":
-                flags.append("no JS / Dart sender")
+                flags.append("no sender" if proc else "no JS / Dart sender")
+            elif c == "unregistered":
+                flags.append("NOT REGISTERED (missing from generate_handler!)")
             elif c == "test_sender_only":
                 flags.append("sent from tests only")
         if i["external"]:
             flags.append("external" + (f" ({i['package']})" if i.get("package") else ": implemented outside this repo"))
-        L.append(f"{i['id'].split(':', 1)[1]}  received on: {', '.join(i['platforms_received']) or '-'}"
+        where = (f"received in: {', '.join(sorted({r.get('process') or '?' for r in i['receivers']})) or '-'}" if proc else
+                 f"received on: {', '.join(i['platforms_received']) or '-'}")
+        L.append(f"{i['id'].split(':', 1)[1]}  {where}"
                  + (f"  [{i['api']}]" if i.get("api") else "") + (f"  ! {'; '.join(flags)}" if flags else ""))
         if detail:
             for s in i["senders"][:8]:
                 ek = ", ".join(f"{k}({v})" for k, v in sorted(s["entry_kinds"].items()))
-                L.append(f"    sent by {short_id(s['fn'])} @ {s['at']} [{s['confidence']}]" + (f"  entries: {ek}" if ek else ""))
+                L.append(f"    sent by {short_id(s['fn'])} @ {s['at']} [{s['confidence']}"
+                         + (f", {s['process']}" if s.get("process") else "") + "]" + (f"  entries: {ek}" if ek else ""))
             for s in i["test_senders"][:4]:
                 L.append(f"    test {short_id(s['fn'])} @ {s['at']}")
             for r in i["receivers"]:
-                L.append(f"    received by {short_id(r['handler'])} @ {r['at']} [{r['platform']}, {r['via']}]"
+                L.append(f"    received by {short_id(r['handler'])} @ {r['at']} [{r.get('process') or r['platform']}, {r['via']}]"
                          + ("  (stub: no language plugin)" if r["stub"] else ""))
         else:
             L.append(f"    senders {len(i['senders'])}" + (f" (+{len(i['test_senders'])} test)" if i["test_senders"] else "")

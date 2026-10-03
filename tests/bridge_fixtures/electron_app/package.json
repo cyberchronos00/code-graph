@@ -1,0 +1,7 @@
+{
+  "name": "electron-fixture",
+  "version": "1.0.0",
+  "main": "src/main/main.ts",
+  "dependencies": {},
+  "devDependencies": { "electron": "^30.0.0", "typescript": "^5.0.0" }
+}

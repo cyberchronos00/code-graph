@@ -64,7 +64,10 @@ class RustPlugin(LanguagePlugin):
     name = "rust"
 
     def detect(self, project: Project) -> bool:
-        return project.exists("Cargo.toml")
+        if project.exists("Cargo.toml"):
+            return True
+        from .cargo import tauri_crates
+        return bool(tauri_crates(project.root))
 
     # ------------------------------------------------------------------ main
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:

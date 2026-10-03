@@ -20,6 +20,7 @@ generated global-components map, and file-kind rules.
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 import re
 import shutil
 import hashlib
@@ -302,17 +303,35 @@ class TypeScriptPlugin(LanguagePlugin):
                                  events=sub.get("events") or None)
                 n_sub += 1
         # web / native bridge sends (Capacitor, React Native, Expo) -> endpoint:<protocol>:<module>#<method>
-        from ...bridges import protocol_send
-        n_br = 0
+        # Electron IPC (endpoint:electron-ipc:<channel>), context bridge (endpoint:electron-preload:<key>#<member>),
+        # Tauri commands (endpoint:tauri:<command>)
+        from ...bridges import endpoint_key, protocol_receive, protocol_send
+        n_br = n_brr = 0
         for br in facts.get("bridges") or []:
             if not builder.has(br["src"]):
                 continue
             protocol_send(builder, br["protocol"], br["module"], br["method"], br["src"], br["file"], br["line"], br["conf"],
                           test=bool(br.get("test")), via=br.get("via"), module_at=br.get("at"), external=br.get("external"),
-                          api=br.get("api"))
+                          api=br.get("api"), process=br.get("process"))
             if br.get("api"):
-                builder.nodes["endpoint:" + f"{br['protocol']}:{br['module']}#{br['method']}"].attrs["api"] = br["api"]
+                builder.nodes["endpoint:" + endpoint_key(br["protocol"], br["module"], br["method"])].attrs["api"] = br["api"]
             n_br += 1
+        rvs = facts.get("bridge_receivers") or []
+        # a channel variable typed as a union (`ipcMain.on(name, relay)` for every IpcEvents member) is a fallback:
+        # dropped where the process also receives the channel by name, kept only for channels another process sends
+        named = {(rv["protocol"], rv["module"], rv.get("process")) for rv in rvs if not rv.get("union")}
+        # (and from another process: main's webContents.send never reaches an ipcMain listener)
+        sent = defaultdict(set)
+        for br in facts.get("bridges") or []:
+            sent[(br["protocol"], br["module"])].add(br.get("process"))
+        for rv in rvs:
+            key = (rv["protocol"], rv["module"])
+            if not builder.has(rv["handler"]) or (rv.get("union") and (key + (rv.get("process"),) in named
+                                                               or not (sent.get(key, set()) - {rv.get("process")}))):
+                continue
+            protocol_receive(builder, rv["protocol"], rv["module"], rv["method"], rv["handler"], rv["file"], rv["line"],
+                             rv["conf"], via=rv.get("via"), process=rv.get("process"))
+            n_brr += 1
         # browser tests opening pages: resolved to page nodes once the framework plugin has set page routes
         pv = getattr(builder, "pending_visits", None)
         if pv is None:
@@ -337,7 +356,7 @@ class TypeScriptPlugin(LanguagePlugin):
             st["skipped_dangling_symlinks"] = facts["skipped_links"]
             print(f"typescript: skipped {len(facts['skipped_links'])} dangling symlink(s): "
                   + ", ".join(facts["skipped_links"][:5]), file=sys.stderr)
-        st.update({"literal_fallbacks": n_fb, "channel_subscriptions": n_sub, "bridge_sends": n_br,
+        st.update({"literal_fallbacks": n_fb, "channel_subscriptions": n_sub, "bridge_sends": n_br, "bridge_receivers": n_brr,
                    "config_base_urls": {k: f"{v['value']} ({v['from']})" for k, v in sorted(base_hits.items())},
                    "config_base_urls_unresolved": sorted(base_unresolved), "http_url_unknown": n_url_unknown})
         st.update({"extract_seconds": round(t_extract, 2), "http_edges": n_http, "http_endpoints": len(ctx.http_nodes),

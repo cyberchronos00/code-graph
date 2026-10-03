@@ -282,3 +282,37 @@ def test_config_platforms_section(tmp_path):
     assert "function:src/main.ts#run" in callers(st, "function:src/win/io.ts#openPort", "windows")
     assert any(m["to"] == "function:src/win/io.ts#openPort" and m["missing_on"] == ["linux"]
                for m in res["platforms"]["divergence"]["missing_callee"])
+
+
+def test_declared_targets_swiftpm_kmp_tauri(tmp_path):
+    sp = tmp_path / "spm"
+    sp.mkdir()
+    (sp / "Package.swift").write_text('let package = Package(name: "x",\n platforms: [\n .iOS(.v15),\n .tvOS(.v15),\n'
+                                      ' .macOS(.v12)\n ], targets: [])\n')
+    t, src = PF.declared_targets(sp, {}, [], {"swift"})
+    assert t == ["macos", "ios"] and src["ios"] == "Package.swift platforms: .iOS"
+    kmp = tmp_path / "kmp" / "shared"
+    kmp.mkdir(parents=True)
+    (kmp / "build.gradle.kts").write_text('''plugins { kotlin("multiplatform") }
+kotlin {
+    androidTarget { }
+    // jvm("desktop")
+    listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach { }
+    wasmJs { browser() }
+    sourceSets { commonMain.dependencies { } }
+}
+''')
+    t, src = PF.declared_targets(kmp.parent, {}, [], {"kotlin"})
+    assert t == ["ios", "android", "web"], t
+    assert src["android"] == "shared/build.gradle.kts kotlin { androidTarget() }"
+    (kmp / "build.gradle.kts").write_text('plugins { id("org.jetbrains.kotlin.multiplatform") }\nkotlin { jvm("desktop")\n'
+                                          'iosArm64() }\n')
+    assert PF.declared_targets(kmp.parent, {}, [], {"kotlin"})[0] == ["windows", "linux", "macos", "ios"]
+    (kmp / "build.gradle.kts").write_text('plugins { alias(libs.plugins.kotlin.multiplatform) }\nkotlin { jvm()\n'
+                                          'androidNativeArm64(); mingwX64() }\n')
+    assert PF.declared_targets(kmp.parent, {}, [], {"kotlin"})[0] == ["windows", "android"]
+    ta = tmp_path / "tauri"
+    (ta / "src-tauri" / "gen" / "android").mkdir(parents=True)
+    (ta / "src-tauri" / "tauri.conf.json").write_text("{}")
+    t, src = PF.declared_targets(ta, {}, [], {"ts", "rust"})
+    assert t == ["windows", "linux", "macos", "android"] and src["android"] == "Tauri mobile project src-tauri/gen/android/"

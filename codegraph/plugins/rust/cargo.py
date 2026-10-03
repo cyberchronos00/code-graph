@@ -136,6 +136,25 @@ def from_toml(root: Path) -> list[Package]:
     if "package" in top:
         dirs.append(root)
     dirs += [d for d in _members(root, ws) if d != root]
+    return _packages(root, dirs, ws_pkg)
+
+
+def tauri_crates(root: Path, depth: int = 4) -> list[Path]:
+    """Without a root Cargo.toml: the Rust core of Tauri apps, <app>/src-tauri/Cargo.toml (a JS project root)."""
+    out = []
+    for dp, dn, fn in os.walk(root):
+        d = Path(dp)
+        rel = d.relative_to(root)
+        dn[:] = sorted(x for x in dn if not x.startswith(".") and x not in ("node_modules", "target", "dist", "build"))
+        if d.name == "src-tauri" and "Cargo.toml" in fn:
+            out.append(d)
+            dn[:] = []
+        if len(rel.parts) >= depth:
+            dn[:] = []
+    return out
+
+
+def _packages(root: Path, dirs: list[Path], ws_pkg: dict) -> list[Package]:
     pkgs = []
     for d in dirs:
         try:
@@ -196,6 +215,10 @@ def from_toml(root: Path) -> list[Package]:
 
 
 def discover(root: Path) -> tuple[list[Package], str]:
+    if not (root / "Cargo.toml").exists():
+        tc = tauri_crates(root)
+        if tc:
+            return _packages(root, tc, {}), "src-tauri/Cargo.toml"
     if os.environ.get("CODEGRAPH_NO_CARGO") != "1":
         md = from_metadata(root)
         if md is not None:

@@ -620,8 +620,12 @@ def bridges(pattern: str | None = None, protocol: str | None = None, unmatched: 
     One endpoint per module method (endpoint:<protocol>:<module>#<method>) with its JS / Dart senders and the native
     receivers per platform; flags methods missing on a target (missing_on), sent methods of a module implemented here
     that no native code receives (no_receiver), native methods nothing sends (no_sender) and modules implemented outside
-    the repo (external). pattern: endpoint name, substring or glob; protocol: capacitor | react-native | flutter |
-    flutter-event; unmatched: only endpoints with a check."""
+    the repo (external). Desktop process boundaries too: Electron IPC channels (endpoint:electron-ipc:<channel>,
+    ipcRenderer.invoke / send / webContents.send -> ipcMain.handle / on, ipcRenderer.on), the context bridge
+    (endpoint:electron-preload:<key>#<member>) and Tauri commands (endpoint:tauri:<command>, invoke -> #[tauri::command]);
+    their receivers carry the process role (main / preload / renderer / webview / core). pattern: endpoint name,
+    substring or glob; protocol: capacitor | react-native | flutter | flutter-event | electron-ipc | electron-preload |
+    tauri; unmatched: only endpoints with a check."""
     from .bridges import bridges as _br, render_bridges
     return render_bridges(_br(_st(), pattern, protocol=protocol, unmatched=unmatched))
 

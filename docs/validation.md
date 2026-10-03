@@ -331,6 +331,32 @@ What the findings are, from spot checks:
   notification-extension preferences.
 - **immich:** the mobile app talks to native code through Pigeon-generated APIs only, which are not modelled yet.
 
+## Desktop process boundaries (Electron, Tauri) and declared targets
+
+`cg index <repo>` with no flags and no `.cg.yaml`, then `cg bridges`; Rust in heuristic mode
+(`CODEGRAPH_RUST_SCIP=0`). Index times are one run each on a shared box.
+
+| Project | Commit | Endpoints | Linked | Checks | Index before → after (nodes / edges) |
+|---|---|---|---|---|---|
+| electron/fiddle | a63225b | 87 electron-ipc, 62 electron-preload | 87, 60 | 2 no_sender | 4.1 s → 3.8 s; 2195 / 5811 → 2456 / 6319 |
+| clash-verge-rev/clash-verge-rev (Tauri 2, React) | 3607e66 | 90 tauri | 89 | 1 no_sender | 5.4 s → 5.0 s; 5263 / 15540 → 5353 / 15720 |
+| tauri-apps/tauri `examples/` (no root `Cargo.toml`) | 30da1fd | 7 tauri (2 of them `plugin:app-menu\|…` from a plugin `Builder`) | 0 | 7 no_sender | the frontends are `.svelte` / plain HTML, which the TypeScript extractor does not read: no senders |
+
+- **fiddle:** channels are `IpcEvents` enum members, registered through an `ipcMainManager` wrapper; main → renderer
+  messages go to a preload `addEventListener` that maps event names to channels through a lookup table (a
+  union-typed channel). Every channel is linked. The two `no_sender` members are real: `getTemplateValues` and
+  `removeAllListeners` of the isolated run-button API are exposed but never called. `impact` on the main process's
+  `readThemeFile` went from 5 callers (main only) to 18, through the preload script into the renderer components.
+- **clash-verge-rev:** 90 `#[tauri::command]` functions, all registered in `generate_handler!`; 89 are invoked from
+  the TypeScript services. `perf_state` (a command in a perf script crate) has no sender.
+- Declared targets: swift-Alamofire `windows, linux, macos, ios` (desktop default) → `windows, linux, macos, ios,
+  android` (`Package.swift` platforms, plus the targets its `#if os(Linux) || os(Windows) || os(Android)` names);
+  `canImport` / `targetEnvironment` conditions take it from 33 to 103 platform conditions and from 26 to 370 tagged
+  nodes. KaMPKit `windows, linux, macos, ios, android` → `ios, android` (the `kotlin { }` block of
+  `shared/build.gradle.kts`); Kotlin/kotlinx-datetime (c73ca37) `windows, linux, macos, web` → `windows, linux, macos,
+  ios, android, web` (`mingwX64()`, `linuxX64()`, `macosArm64()`, `iosArm64()`, `androidNativeArm64()`, `js()`; a
+  plain `jvm()` is not a platform target). Graph edges are unchanged on all three.
+
 ## Overrides in `tests` / `reaches`, inherited specs, TypeScript class hierarchy
 
 `cg index <repo>` before and after (#53), no flags. TypeScript graphs gain only class hierarchy edges (no node and no

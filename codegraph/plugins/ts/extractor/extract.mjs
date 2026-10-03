@@ -416,6 +416,57 @@ function routeCallInfo(node) {
   while (ts.isCallExpression(base) && ts.isPropertyAccessExpression(unwrap(base.expression))) base = unwrap(unwrap(base.expression).expression)
   return { label: `${base.getText().replace(/\s+/g, ' ').slice(0, 40)}.${c.name.text}(${pathText})` }
 }
+// Electron IPC / context bridge registrations whose inline handlers become function nodes:
+//   ipcMain.handle('ch', fn) / handleOnce / on / once, ipcRenderer.on('ch', fn) / once  -> label `ipcMain.handle('ch')`
+//   contextBridge.exposeInMainWorld('api', { ping: () => ... })                       -> one node per member `api.ping`
+const IPC_RECV = new Map([['ipcMain', new Set(['handle', 'handleOnce', 'on', 'once'])], ['ipcRenderer', new Set(['on', 'once'])]])
+function ipcCallInfo(node) {
+  if (!ts.isCallExpression(node)) return null
+  const c = unwrap(node.expression)
+  if (!ts.isPropertyAccessExpression(c)) return null
+  const obj = unwrap(c.expression)
+  const on0 = obj && (ts.isIdentifier(obj) ? obj.text : ts.isPropertyAccessExpression(obj) ? obj.name.text : null)
+  // ipcMain / ipcRenderer, or a project wrapper named after them (ipcMainManager.handle(IpcEvents.X, fn))
+  const on = on0 && (IPC_RECV.has(on0) ? on0 : /^ipcMain[A-Z_]\w*$/.test(on0) ? 'ipcMain' : /^ipcRenderer[A-Z_]\w*$/.test(on0) ? 'ipcRenderer' : on0)
+  if (!node.arguments[0]) return null
+  const ch = ipcChan(node.arguments[0])        // a literal, a const, an enum member (IpcEvents.OPEN = 'open')
+  if (on && IPC_RECV.has(on) && IPC_RECV.get(on).has(c.name.text) && node.arguments.length >= 2) {
+    // a channel variable typed as a union of literals (`channel: IpcEvents` from a lookup table): every member
+    const chans = ch != null ? [ch] : ipcChanUnion(node.arguments[0])
+    if (!chans) return null
+    const lab = ch != null ? `'${ch}'` : unwrap(node.arguments[0]).getText().slice(0, 40)
+    return { kind: 'ipc', process: on === 'ipcMain' ? 'main' : 'renderer', channels: chans, label: `${on0}.${c.name.text}(${lab})`, wrapper: on !== on0, union: ch == null }
+  }
+  if (ch == null) return null
+  if (on === 'contextBridge' && c.name.text === 'exposeInMainWorld' && node.arguments.length >= 2) return { kind: 'expose', key: ch }
+  return null
+}
+function ipcChan(a) {
+  a = unwrap(a)
+  if (!a) return null
+  if (ts.isStringLiteralLike(a)) return a.text
+  if (!ts.isIdentifier(a) && !ts.isPropertyAccessExpression(a) && !ts.isElementAccessExpression(a)) return null
+  try {
+    if (ts.isPropertyAccessExpression(a) || ts.isElementAccessExpression(a)) {
+      const v = checker.getConstantValue(a)
+      if (typeof v === 'string') return v
+    }
+    const t = checker.getTypeAtLocation(a)
+    if (t && t.isStringLiteral && t.isStringLiteral()) return t.value
+  } catch { }
+  return null
+}
+function ipcChanUnion(a) {
+  a = unwrap(a)
+  if (!a || !ts.isIdentifier(a)) return null
+  try {
+    const t = checker.getTypeAtLocation(a)
+    const ts_ = t && t.isUnion && t.isUnion() ? t.types : null
+    if (ts_ && ts_.length <= 500 && ts_.every(x => x.isStringLiteral && x.isStringLiteral())) return [...new Set(ts_.map(x => x.value))].sort()
+  } catch { }
+  return null
+}
+const exposedKeys = new Set()      // contextBridge.exposeInMainWorld keys (`window.api`)
 // `wrap(async () => {...}, opts)` / `withA(withB(fn))`: the wrapped function literal (HOF wrappers: route handler
 // builders, asyncHandler, withAuth, ...)
 function wrappedFn(init, depth = 0) {
@@ -524,6 +575,37 @@ for (const sf of sourceFiles) {
       if (cb) { declId.set(cb, id); declId.set(node, id); ts.forEachChild(cb, c => visit(c, q, id)) }
       return
     } else if (ts.isCallExpression(node)) {
+      const ic = ipcCallInfo(node)
+      if (ic) {
+        const fns = []
+        if (ic.kind === 'ipc') {
+          const h = unwrap(node.arguments[1])
+          if (isFn(h)) fns.push([h, ic.label])
+        } else {
+          exposedKeys.add(ic.key)
+          const o = unwrap(node.arguments[1])
+          if (o && ts.isObjectLiteralExpression(o)) for (const p of o.properties) {
+            const pn = p.name && (ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name)) ? p.name.text : null
+            if (!pn) continue
+            if (ts.isMethodDeclaration(p)) fns.push([p, `${ic.key}.${pn}`])
+            else if (ts.isPropertyAssignment(p) && isFn(unwrap(p.initializer))) fns.push([unwrap(p.initializer), `${ic.key}.${pn}`])
+          }
+        }
+        if (fns.length) {
+          const handled = new Set()
+          for (const [f, lab] of fns) {
+            const q = qual ? `${qual}.${lab}` : lab
+            const id = mkId('function', `${r}#${q}`)
+            nodes.push({ id, kind: 'function', name: q, file: r, line: lineOf(f, sf), end_line: sf.getLineAndCharacterOfPosition(f.end).line + 1,
+              doc: null, parent: parentId, attrs: { inline_handler: true, ipc: ic.kind === 'ipc' && !ic.union ? ic.channels[0] : undefined, exposed: ic.kind === 'expose' ? ic.key : undefined } })
+            declId.set(f, id)
+            ts.forEachChild(f, c => visit(c, q, id))
+            handled.add(f)
+          }
+          ts.forEachChild(node, c => { if (!handled.has(c) && !handled.has(unwrap(c))) visit(c, qual, parentId) })
+          return
+        }
+      }
       const rc = routeCallInfo(node)
       if (rc) {
         const handled = new Set()
@@ -1257,6 +1339,108 @@ function realtimeSub(node, callee) {
 // NativeModules.Name, TurboModuleRegistry.get('Name'), requireNativeModule('Name'), an @capacitor/* plugin export) is
 // a bridge send: {protocol, module, method}. codegraph/bridges.py links it to the Kotlin / Java / Swift / ObjC side.
 const bridges = []
+const bridgeReceivers = []
+const ELECTRON = ['electron']
+const TAURI_PKGS = ['@tauri-apps/api']
+function handlerNode(a) {
+  const u = unwrap(a)
+  if (!u) return null
+  if (declId.has(u)) return { id: declId.get(u), conf: 'exact' }
+  if (ts.isIdentifier(u) || ts.isPropertyAccessExpression(u)) {
+    let sym = null
+    try { sym = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(u) ? u.name : u) } catch { }
+    const t = sym && resolveSymbol(sym)
+    if (t) return { id: t.id, conf: t.conf }
+  }
+  return null
+}
+function ipcFacts(node, callee, cur, r, line) {
+  const testSf = testFiles.has(realFile(node.getSourceFile())) || undefined
+  if (ts.isPropertyAccessExpression(callee)) {
+    const m = callee.name.text
+    const obj = unwrap(callee.expression)
+    // renderer / preload -> main: ipcRenderer.invoke('ch') / send / sendSync / postMessage
+    // project wrappers named after the Electron objects: ipcRendererManager.invoke / ipcMainManager.send(ch, ...)
+    const wn = ts.isIdentifier(obj) ? obj.text : ts.isPropertyAccessExpression(obj) ? obj.name.text : ''
+    if (['invoke', 'send', 'sendSync', 'postMessage'].includes(m) && /^ipc(Main|Renderer)[A-Z_]\w*$/.test(wn)) {
+      const ch = ipcChan(node.arguments[0])
+      if (ch) { bridges.push({ src: cur, file: r, line, protocol: 'electron-ipc', module: ch, method: null, conf: 'heuristic', via: [`${wn}.${m}`], process: wn.startsWith('ipcMain') ? 'main' : 'renderer', test: testSf }); return }
+    }
+    if (['invoke', 'send', 'sendSync', 'postMessage'].includes(m)) {
+      const k = bridgeLib(obj, ['ipcRenderer'], ELECTRON)
+      const ch = k && (strArg(node) ?? ipcChan(node.arguments[0]))
+      if (ch) { bridges.push({ src: cur, file: r, line, protocol: 'electron-ipc', module: ch, method: null, conf: k, via: [`ipcRenderer.${m}`], process: 'renderer', test: testSf }); return }
+      // main -> renderer: win.webContents.send('ch') / webContents.send
+      // main -> renderer: win.webContents.send('ch'), event.sender.send (reply), a WebFrameMain (frame.send)
+      if (m === 'send' || m === 'postMessage') {
+        let tn = null
+        try { const t = checker.getTypeAtLocation(obj); tn = t && t.symbol && t.symbol.name } catch { }
+        const typed = tn === 'WebContents' || tn === 'WebFrameMain'
+        const named = ['webContents', 'sender', 'mainFrame', 'frame'].includes(wn)
+        const c2 = (typed || named) && (strArg(node) ?? ipcChan(node.arguments[0]))
+        if (c2) { bridges.push({ src: cur, file: r, line, protocol: 'electron-ipc', module: c2, method: null, conf: typed || wn === 'webContents' ? 'resolved' : 'heuristic', via: [`${tn || wn}.${m}`], process: 'main', test: testSf }); return }
+      }
+    }
+    // receivers: ipcMain.handle('ch', fn) / on / once, ipcRenderer.on('ch', fn)
+    const info = ipcCallInfo(node)
+    if (info && info.kind === 'ipc') {
+      const k = info.wrapper ? 'heuristic' : bridgeLib(obj, [info.process === 'main' ? 'ipcMain' : 'ipcRenderer'], ELECTRON)
+      if (testSf) return            // a test registering a handler is not the app's receiver
+      // a handler outside the project (`ipcMain.on('quit', app.quit)`): the function registering it receives
+      const h = k && (handlerNode(node.arguments[1]) || (cur && !cur.startsWith('module:') ? { id: cur, conf: 'heuristic' } : null))
+      if (h) for (const ch of info.channels)
+        bridgeReceivers.push({ protocol: 'electron-ipc', module: ch, method: null, handler: h.id, file: r, line, conf: info.union ? 'heuristic' : k === 'exact' ? h.conf : k, via: info.label.replace(/\(.*/, ''), process: info.process, union: info.union || undefined })
+      return
+    }
+    if (info && info.kind === 'expose') {
+      if (testSf) return
+      const o = unwrap(node.arguments[1])
+      if (o && ts.isObjectLiteralExpression(o)) for (const p of o.properties) {
+        const pn = p.name && (ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name)) ? p.name.text : null
+        const h = pn && handlerNode(ts.isPropertyAssignment(p) ? p.initializer : ts.isShorthandPropertyAssignment(p) ? p.name : p)
+        if (h) bridgeReceivers.push({ protocol: 'electron-preload', module: info.key, method: pn, handler: h.id, file: r, line: lineOf(p), conf: h.conf, via: 'contextBridge.exposeInMainWorld', process: 'preload' })
+      }
+      return
+    }
+    // renderer -> preload: window.api.ping() / globalThis.api.ping() for an exposed key
+    let ob = obj
+    if (ts.isIdentifier(obj) && exposedKeys.size) {     // const api = window.api; api.ping()
+      try {
+        const d = (checker.getSymbolAtLocation(obj) || {}).valueDeclaration
+        const init = d && ts.isVariableDeclaration(d) && unwrap(d.initializer)
+        if (init && ts.isPropertyAccessExpression(init)) ob = init
+      } catch { }
+    }
+    if (ts.isPropertyAccessExpression(ob) && exposedKeys.has(ob.name.text)) {
+      const obj = ob
+      const root = unwrap(obj.expression)
+      if (root && ts.isIdentifier(root) && ['window', 'globalThis', 'self'].includes(root.text)) {
+        bridges.push({ src: cur, file: r, line, protocol: 'electron-preload', module: obj.name.text, method: m, conf: 'resolved', via: [`${root.text}.${obj.name.text}`], process: 'renderer', test: testSf })
+        return
+      }
+    }
+  }
+  // Tauri: invoke('cmd', args) from @tauri-apps/api/core (v2) or /tauri (v1), window.__TAURI__.core.invoke
+  const isInvoke = (ts.isIdentifier(callee) && callee.text === 'invoke') || (ts.isPropertyAccessExpression(callee) && callee.name.text === 'invoke')
+  if (isInvoke) {
+    let k = null
+    if (ts.isIdentifier(callee)) {
+      const lib = FW.importSource ? FW.importSource(callee) : null
+      if (lib && TAURI_PKGS.some(p => lib === p || lib.startsWith(p + '/'))) k = 'exact'
+    } else if (/__TAURI__|__TAURI_INTERNALS__/.test(callee.expression.getText())) k = 'resolved'
+    else {
+      const o = unwrap(callee.expression)
+      const lib = o && ts.isIdentifier(o) && FW.importSource ? FW.importSource(o) : null
+      if (lib && TAURI_PKGS.some(p => lib === p || lib.startsWith(p + '/'))) k = 'exact'
+    }
+    const cmd = k && strArg(node)
+    if (cmd) {
+      const plugin = cmd.match(/^plugin:([^|]+)\|/)
+      bridges.push({ src: cur, file: r, line, protocol: 'tauri', module: cmd, method: null, conf: k, via: ['invoke'], process: 'webview', test: testSf,
+        external: plugin ? `tauri-plugin-${plugin[1]}` : undefined })
+    }
+  }
+}
 const BRIDGE_SKIP = new Set(['then', 'catch', 'finally', 'bind', 'call', 'apply', 'toString', 'hasOwnProperty'])
 const CAP_BUILTIN = new Set(['addListener', 'removeAllListeners', 'removeListener', 'notifyListeners'])   // listener plumbing of the bridge
 const CAP_CORE_EXPORTS = new Set(['Capacitor', 'registerPlugin', 'Plugins', 'WebPlugin', 'CapacitorHttp', 'CapacitorCookies', 'WebView', 'SplashScreen'])
@@ -1574,6 +1758,8 @@ function handleCall(node, cur, sf, r, encFn) {
     if (depParams.length && encFn) deferredParamCalls.push({ rec, encFn, urlExpr: http.urlExpr })
     apiCalls.push(rec)
   }
+  // Electron IPC / context bridge / Tauri commands -> endpoint:<protocol>:<name> (codegraph/bridges.py)
+  if (ts.isCallExpression(node)) ipcFacts(node, callee, cur, r, line)
   // web / native bridge sends: Capacitor.nativePromise('Plugin', 'method', ...) / nativeCallback (the low-level bridge)
   if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && ['nativePromise', 'nativeCallback'].includes(callee.name.text)
       && node.arguments.length >= 2 && /(^|\.)(Capacitor|cap)$/.test(unwrap(callee.expression).getText())) {
@@ -1704,6 +1890,6 @@ stats.seconds_fw_facts = tFw / 1000
 stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
 stats.config = { tsconfig: noConfig ? null : rel(tsconfigPath), root_files: rootNames.length }
 fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts,
-  subscriptions, bridges, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
+  subscriptions, bridges, bridge_receivers: bridgeReceivers, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
   skipped_links: [...new Set(skippedLinks)].sort(), stats }))
 console.log(JSON.stringify(stats))

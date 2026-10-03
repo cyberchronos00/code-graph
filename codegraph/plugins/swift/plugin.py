@@ -48,6 +48,14 @@ URLSESSION = re.compile(r"\b(data|dataTask|upload|uploadTask|download|downloadTa
 PRESENT = {"sheet", "fullScreenCover", "popover", "navigationDestination"}
 OS_PLATFORM = {"iOS": "ios", "iPadOS": "ios", "watchOS": "ios", "tvOS": "ios", "visionOS": "ios", "macOS": "macos",
                "OSX": "macos", "Linux": "linux", "Windows": "windows", "Android": "android", "WASI": "web"}
+# `#if canImport(X)`: the SDK framework implies the platform (UIKit: iOS family, AppKit: macOS)
+# (Apple-only frameworks: iOS or macOS; swift-corelibs FoundationNetworking: not Apple)
+IMPORT_PLATFORM = {"UIKit": "ios", "WatchKit": "ios", "MobileCoreServices": "ios", "AppKit": "macos", "Cocoa": "macos",
+                   "Glibc": "linux", "Musl": "linux", "WinSDK": "windows", "ucrt": "windows", "Android": "android",
+                   "WASILibc": "web"}
+APPLE_ONLY = {"Darwin", "Security", "Network", "SystemConfiguration", "UniformTypeIdentifiers", "Combine", "SwiftUI",
+              "CoreServices", "CoreLocation", "CoreData", "CoreGraphics", "CoreFoundation", "ObjectiveC", "os",
+              "StoreKit", "AVFoundation", "Metal", "CryptoKit", "UserNotifications", "WidgetKit"}
 TYPE_DECLS = ("class_declaration", "protocol_declaration")
 
 
@@ -649,7 +657,7 @@ class SwiftPlugin(LanguagePlugin):
 
     def _os_expr(self, expr: str):
         from ...platforms import _plat_atom
-        expr = expr.strip()
+        expr = re.sub(r"//.*|/\*.*?\*/", "", expr).strip()
         if "||" in expr:
             parts = [self._os_expr(x) for x in expr.split("||")]
             return ("any", parts) if all(parts) else None
@@ -658,10 +666,22 @@ class SwiftPlugin(LanguagePlugin):
             parts = [p for p in parts if p]
             return ("all", parts) if parts else None
         neg = expr.startswith("!")
-        m = re.match(r"!?\s*os\s*\(\s*(\w+)\s*\)$", expr)
-        if not m or m.group(1) not in OS_PLATFORM:
+        m = re.match(r"!?\s*(os|canImport|targetEnvironment)\s*\(\s*([\w.]+)\s*\)$", expr)
+        if not m:
             return None
-        a = _plat_atom(OS_PLATFORM[m.group(1)])
+        fn, arg = m.groups()
+        if fn == "os":
+            plat = OS_PLATFORM.get(arg)
+        elif fn == "canImport":
+            plat = IMPORT_PLATFORM.get(arg)
+            if arg in APPLE_ONLY or arg == "FoundationNetworking":
+                apple = ("any", [_plat_atom("ios"), _plat_atom("macos")])
+                return apple if (arg in APPLE_ONLY) != neg else ("not", apple)
+        else:                       # Mac Catalyst: the iOS app built for macOS; simulator: not a platform
+            plat = "macos" if arg == "macCatalyst" else None
+        if not plat:
+            return None
+        a = _plat_atom(plat)
         return ("not", a) if neg else a
 
     # ------------------------------------------------------------------ resolution

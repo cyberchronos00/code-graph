@@ -33,6 +33,9 @@ aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's o
 | Flutter: platform folders next to a Flutter `pubspec.yaml` (`android/`, `ios/`, `web/`, `macos/`, `windows/`, `linux/`) | one per folder |
 | Expo: `app.json` `expo.platforms` | the listed ones (Expo's default: ios, android) |
 | React Native (`react-native` / `expo` dependency) | ios, android, plus web / windows / macos with `react-native-web` / `-windows` / `-macos` |
+| SwiftPM: `platforms: [.iOS(.v16), .macOS(.v13)]` in `Package.swift` (root or one level down) | the listed ones (tvOS / watchOS / visionOS count as ios, macCatalyst as macos) |
+| Kotlin Multiplatform: the targets in the `kotlin { }` block of a multiplatform `build.gradle(.kts)` (root, one or two levels down) | `androidTarget()` / `androidNative*()` android, `iosArm64()` / `iosX64()` / `tvos*` / `watchos*` ios, `macosArm64()` macos, `linuxX64()` linux, `mingwX64()` windows, `js()` / `wasmJs()` web, `jvm("desktop")` / Compose Desktop windows, linux, macos |
+| Tauri 2 mobile (`src-tauri/gen/android/`, `src-tauri/gen/apple/`) | windows, linux, macos plus android / ios |
 | Electron or Tauri (`electron` dependency, `src-tauri/tauri.conf.json`) | windows, linux, macos |
 | anything else with platform conditions | windows, linux, macos, plus a mobile or web target a condition names on its own (`target_os = "android"`, `defined(__ANDROID__)`, `Platform.OS === 'web'`) |
 
@@ -49,7 +52,12 @@ aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's o
 
 A guard clause (`if (Platform.OS !== 'ios') return`, `if (!Platform.isIOS) return;`) tags the rest of the enclosing
 block with the negated condition, and a JS / TS branch without braces or semicolons ends at its line (automatic
-semicolon insertion). Native files that receive [web / native bridge](bridges.md) calls are tagged with the platform of
+semicolon insertion). Swift `#if os(iOS)`, `canImport(UIKit)` (ios), `canImport(AppKit)` (macos),
+`targetEnvironment(macCatalyst)` (macos) are platform conditions; `targetEnvironment(simulator)` is unknown (see
+[swift.md](swift.md)). Kotlin Multiplatform source sets (`iosMain`, `androidMain`, ...) are platform conditions on
+their files, and `expect` declarations link to each `actual` ([kotlin.md](kotlin.md)). Electron and Tauri process
+roles (main, preload, renderer; webview, core) are recorded on module nodes by the
+[bridges](bridges.md#desktop-process-boundaries-electron-and-tauri) pass. Native files that receive [web / native bridge](bridges.md) calls are tagged with the platform of
 their folder (`android/`, `ios/`, `macos/`), and a Capacitor project's targets come from `capacitor.config.*` with
 `android/` / `ios/` next to it, plus web.
 

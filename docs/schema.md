@@ -36,9 +36,11 @@ command), admin, event (signal). See [python.md](python.md#entry-points-and-func
 Dart (lang='dart'): module (library), class (incl. enums, mixins, extensions), method, function, http (client endpoint, incl.
 `WS` for WebSockets), page (Navigator/go_router/auto_route routes, `page:dart:<package>:<path>`), env (`String.fromEnvironment`, dotenv).
 Web / native bridges ([bridges.md](bridges.md), no lang): endpoint (`endpoint:<protocol>:<module>#<method>`, protocol
-capacitor, react-native, flutter; `endpoint:flutter-event:<channel>`; attrs `protocol`, `transport`, `namespace`,
+capacitor, react-native, flutter; `endpoint:flutter-event:<channel>`; desktop processes: `endpoint:electron-ipc:<channel>`,
+`endpoint:electron-preload:<key>#<member>`, `endpoint:tauri:<command>`; attrs `protocol`, `transport`, `namespace`,
 `method`, `platforms_received`, `side`, `checks`, `missing_on`, `external`, `package`, `base_method`,
-`sender_platforms`). Java / Objective-C receivers (and Kotlin / Swift methods the plugins missed) are method nodes
+`sender_platforms`, `unregistered` for a Tauri command missing from `generate_handler!`). Module / mod / crate nodes of
+files taking part in Electron / Tauri IPC carry `attrs.process` (main, preload, renderer, webview, core). Java / Objective-C receivers (and Kotlin / Swift methods the plugins missed) are method nodes
 with `attrs.bridge_stub` (lang java, objc, kotlin or swift).
 TS server frameworks (NestJS, Next.js, Express-style; see [ts-frameworks.md](ts-frameworks.md)) reuse the backend kinds:
 route (`route:<METHOD> <uri>`, also `GRAPHQL Query.x` and `ACTION <file>#<fn>` for server actions), schedule, job (`job:<queue>`),
@@ -68,7 +70,7 @@ Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (eve
 `site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs
 `visibility_mismatch`), LISTENS_FOR (channel_sub → event).
 Web / native bridges ([bridges.md](bridges.md)): SENDS_TO✓ (JS / Dart code → endpoint; attrs `role` = invoke, `via`,
-`module_at`, `external`), RECEIVED_BY✓ (endpoint → native handler; attrs `platform`, `via`).
+`module_at`, `external`, `process`), RECEIVED_BY✓ (endpoint → native handler; attrs `platform`, `via`, `process`).
 Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind; Python test → fixture and
 fixture → fixture with `via` = fixture / autouse fixture and `attrs.fixture`), TEST_HTTP (test → route),
 TEST_VISITS (browser test → page). None of them propagate, so tests never count as callers.

@@ -357,13 +357,14 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Flutter | resolved + heuristic fallback | widgets/State, bloc/cubit events → handlers → states → UI, Navigator/go_router/auto_route pages, HTTP calls (package:http, Dio, dart:io, Retrofit/Chopper), WebSockets, json_serializable/freezed and hand-written JSON keys |
 | Rust | **exact** with rust-analyzer (SCIP); **heuristic** without | crates, modules, `pub` API, traits → impls (dyn/generic dispatch), bins, tests, benches, examples, `build.rs`, FFI, `unsafe`, `#[cfg(feature)]` gates, env keys, `#[tokio::main]`, axum/actix routes ([docs/native.md](docs/native.md)) |
 | Kotlin | **heuristic** (tree-sitter-kotlin) | classes, objects, functions / extension functions, calls by name; Ktor and Spring routes with guards, Retrofit / Ktor client / OkHttp endpoints, Compose Navigation pages, AndroidManifest components and deep links, workers, KMP source sets and `expect` / `actual` ([docs/kotlin.md](docs/kotlin.md)) |
-| Swift | **heuristic** (tree-sitter-swift, no Xcode needed) | classes, structs, enums, actors, protocols, extensions, calls by name; Vapor routes with groups and guards, URLSession / Alamofire endpoints, SwiftUI / UIKit navigation pages, `@main` / app-delegate / background-task entries, `#if os(...)` platform tags ([docs/swift.md](docs/swift.md)) |
+| Swift | **heuristic** (tree-sitter-swift, no Xcode needed) | classes, structs, enums, actors, protocols, extensions, calls by name; Vapor routes with groups and guards, URLSession / Alamofire endpoints, SwiftUI / UIKit navigation pages, `@main` / app-delegate / background-task entries, `#if os(...)` / `canImport(...)` platform tags ([docs/swift.md](docs/swift.md)) |
 | C | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | translation units, includes, `main` and test entry points, exported API, `#if` gates, `getenv` keys, macros ([docs/native.md](docs/native.md#c-and-c)) |
 | C++ | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | the C facts plus namespaces, classes, overloads, virtual dispatch (overrides and implementations) ([docs/native.md](docs/native.md#c-and-c)) |
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
 | Go, Java | via SCIP (experimental) | definitions and references imported from an existing SCIP index |
 | Platform-specific code | Rust `#[cfg]` / `cfg!`, C / C++ `#if` and platform paths, Dart `Platform.isX` / `kIsWeb` / conditional imports, React Native `Platform.OS` / `Platform.select` / `.ios.ts` files | every symbol and reference carries the targets it is built for; `--platform ios` views one target's build; `cg platforms divergence` lists variants that leave a target uncovered, API differences and calls into code a target does not build ([docs/platforms.md](docs/platforms.md)) |
 | Web / native bridges | Capacitor plugins, React Native / Expo native modules, Flutter method and event channels | each JS / Dart call linked through a shared `endpoint:<protocol>:<module>#<method>` node to its Kotlin, Java, Swift or Objective-C receiver per platform; `cg bridges` lists methods missing on a platform, without a receiver or implemented outside the repo; `impact` / `tests` / `--platform` cross the bridge ([docs/bridges.md](docs/bridges.md)) |
+| Desktop processes | Electron `ipcMain` / `ipcRenderer` / `webContents.send` and `contextBridge.exposeInMainWorld`; Tauri `invoke` → `#[tauri::command]` | `endpoint:electron-ipc:<channel>`, `endpoint:electron-preload:<key>#<member>`, `endpoint:tauri:<command>` with SENDS_TO / RECEIVED_BY across the processes, process roles (main / preload / renderer, webview / core) on module nodes; checks for channels nobody receives and unregistered commands ([docs/bridges.md](docs/bridges.md#desktop-process-boundaries-electron-and-tauri)) |
 | Generated and copied files | detected (`.gitattributes`, generator banners, framework build paths, generator file names, Capacitor / Cordova copy targets, `.openapi-generator/FILES`) | kept out of the graph and listed by `cg coverage` by reason; copies map back to their source; `--include-generated` indexes them labelled `attrs.generated` ([docs/generated.md](docs/generated.md)) |
 
 ## Prerequisites per language
@@ -551,8 +552,9 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   [docs/limitations.md](docs/limitations.md#rust-c-and-c).
 - **Platform conditions** are evaluated per target from the source text; conditions on feature flags, build macros
   or API levels count as unknown and keep their code in every target's view (`cg platforms` lists them). Swift `#if
-  os()` blocks and Kotlin Multiplatform source sets / `expect` / `actual` are tagged by their plugins; Electron / Tauri
-  IPC is on the roadmap. See
+  os()` / `canImport` blocks and Kotlin Multiplatform source sets / `expect` / `actual` are tagged by their plugins,
+  targets come from `Package.swift` / the `kotlin { }` block; Electron / Tauri IPC crosses processes through
+  endpoints. See
   [docs/platforms.md](docs/platforms.md).
 - **Route guards** come from route definitions and global enhancers (Nest `APP_GUARD` / `useGlobal*`, Express
   `app.use`). Whether a guard counts as auth is decided by the framework preset, then by its name; project guards are
@@ -582,9 +584,9 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.
-- Swift exact mode from the compiler's index store, Moya / Fluent / `canImport` support
-  ([#23](https://github.com/cyberchronos00/code-graph/issues/23)); Electron / Tauri main ↔ renderer IPC as edges
-  between the processes.
+- Swift exact mode from the compiler's index store, Moya / Fluent support
+  ([#23](https://github.com/cyberchronos00/code-graph/issues/23)); Electron `MessagePort` / `utilityProcess` and
+  Tauri events (`emit` / `listen`) between processes.
 - Web / native bridges beyond Capacitor, React Native and Flutter channels: Pigeon APIs, native → Dart / JS calls,
   Cordova plugins and native UI components ([docs/bridges.md](docs/bridges.md#not-covered-yet)).
 - More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.

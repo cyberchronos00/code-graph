@@ -68,6 +68,12 @@ def test_platform_blocks_and_variants():
     assert attrs("fix", "function:deviceName@20")["platforms"] == ["macos"]
     assert not attrs("fix", "function:sharedGreeting").get("platforms")
     assert attrs("fix", "class:OrdersViewController")["platforms"] == ["ios"]
+    # canImport(AppKit / UIKit) name the platform; targetEnvironment(macCatalyst) is macOS, (simulator) no platform
+    assert attrs("fix", "function:pasteboardName")["platforms"] == ["macos"]
+    assert attrs("fix", "function:pasteboardName@45")["platforms"] == ["ios"]
+    assert not attrs("fix", "function:isSimulator").get("platforms")
+    # Package.swift platforms: [.macOS(.v13), .iOS(.v16)] are the targets, plus linux for the Vapor server dependency
+    assert _S["fix_stats"]["platforms"]["targets"] == ["linux", "macos", "ios"]
 
 
 def test_uikit_navigation_tests_and_entries():

@@ -10,6 +10,18 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Desktop process boundaries on the bridge endpoint model: Electron IPC (`endpoint:electron-ipc:<channel>`,
+  `ipcRenderer.invoke` / `send`, `webContents.send` → `ipcMain.handle` / `on`, `ipcRenderer.on`; enum and `const`
+  channels, wrappers named after the Electron objects, union-typed channels), the context bridge
+  (`endpoint:electron-preload:<key>#<member>`, `window.<key>.<member>()` → `contextBridge.exposeInMainWorld`) and
+  Tauri commands (`endpoint:tauri:<command>`, `invoke('cmd')` → `#[tauri::command]`, check `unregistered` for a
+  command missing from `generate_handler!`, plugin commands `plugin:x|cmd`). Module nodes carry the process role
+  (main, preload, renderer; webview, core); `cg bridges --protocol electron-ipc | electron-preload | tauri`. A Tauri
+  app without a root `Cargo.toml` has its `src-tauri` crate indexed. Swift `canImport(...)` / `targetEnvironment(...)`
+  are platform conditions; project targets come from `Package.swift` `platforms:` and the Kotlin Multiplatform
+  `kotlin { }` block, and Tauri 2 mobile projects add android / ios
+  ([#21](https://github.com/cyberchronos00/code-graph/issues/21)).
+
 - `tests` and `reaches` follow overrides like `impact`: on a base or interface method they include the tests and the
   dependents of its overrides, marked `via override` (`via_override` in JSON and MCP). `Sub.method` for a method a
   class inherits without redefining it resolves through its ancestors to the inherited definition (`B.run ->

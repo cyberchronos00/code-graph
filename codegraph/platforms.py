@@ -315,6 +315,23 @@ def declared_targets(root: Path, cfg: dict, marks: list, langs: set[str]) -> tup
         for dep, t in (("react-native-web", "web"), ("react-native-windows", "windows"), ("react-native-macos", "macos")):
             if _has_dep(root, dep):
                 src.setdefault(t, f"{dep} dependency")
+    if not src:
+        _swift_package_targets(root, src)
+        if src:     # platforms: only sets Apple minimums; SwiftPM builds elsewhere too: the targets conditions name
+            for m in marks or []:
+                if _positive(m["cond"]):
+                    for p, x in m["cond"].values().items():
+                        if x is True and p not in src and p in ("linux", "windows", "android", "web"):
+                            src[p] = f"named by {m['cond'].text} @ {m['file']}:{m['line']}"
+    if not src:
+        _kmp_targets(root, src)
+    if not src:                     # Tauri 2 mobile: src-tauri/gen/android, src-tauri/gen/apple
+        for d, t in (("android", "android"), ("apple", "ios")):
+            if (root / "src-tauri" / "gen" / d).is_dir():
+                src.setdefault(t, f"Tauri mobile project src-tauri/gen/{d}/")
+        if src:
+            for d in DESKTOP:
+                src.setdefault(d, "Tauri desktop app")
     if not src and (_has_dep(root, "electron") or (root / "src-tauri" / "tauri.conf.json").is_file()):
         for d in DESKTOP:
             src.setdefault(d, "Electron / Tauri desktop app")
@@ -333,6 +350,60 @@ def declared_targets(root: Path, cfg: dict, marks: list, langs: set[str]) -> tup
                 src[only[0]] = f"named by {m['cond'].text} @ {m['file']}:{m['line']}"
     order = [p for p in KNOWN if p in src]
     return order, {p: src[p] for p in order}
+
+
+SPM_PLATFORM = {"iOS": "ios", "tvOS": "ios", "watchOS": "ios", "visionOS": "ios", "macCatalyst": "macos", "macOS": "macos"}
+KMP_TARGET = [(re.compile(r"\b(?:androidTarget|android|androidLibrary|androidNative(?:Arm32|Arm64|X86|X64))\s*[({]"), "android"),
+              (re.compile(r"\b(?:ios|tvos|watchos)(?:X64|Arm64|SimulatorArm64|Arm32|DeviceArm64)?\s*[({]"), "ios"),
+              (re.compile(r"\bmacos(?:X64|Arm64)\s*[({]"), "macos"),
+              (re.compile(r"\blinux(?:X64|Arm64)\s*[({]"), "linux"),
+              (re.compile(r"\bmingwX64\s*[({]"), "windows"),
+              (re.compile(r"\b(?:js|wasmJs|wasmWasi|wasm)\s*[({]"), "web")]
+# the multiplatform plugin applied: kotlin("multiplatform"), id("org.jetbrains.kotlin.multiplatform"),
+# alias(libs.plugins.kotlin.multiplatform) / alias(libs.plugins.kotlinMultiplatform), apply plugin: 'kotlin-multiplatform'
+_KMP_PLUGIN = re.compile(r"kotlin\s*\(\s*\"multiplatform\"|kotlin\.multiplatform\b|['\"]kotlin-multiplatform['\"]|"
+                         r"plugins\.(?:kotlin\.)?(?:kotlinM|m)ultiplatform\b|plugins\.kmp\b")
+_KMP_DESKTOP = re.compile(r"\bjvm\s*\(\s*\"desktop\"|compose\.desktop\b|\bcompose\s*\.\s*desktop\s*\{")
+
+
+def _swift_package_targets(root: Path, src: dict) -> None:
+    """SwiftPM `platforms: [.iOS(.v15), .macOS(.v12)]` in Package.swift (root or one level down)."""
+    for pk in [root / "Package.swift", *root.glob("*/Package.swift")]:
+        if not pk.is_file():
+            continue
+        txt = pk.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"\bplatforms\s*:\s*\[([^\]]*)\]", txt)
+        if not m:
+            continue
+        where = pk.relative_to(root).as_posix()
+        for name in re.findall(r"\.(\w+)\s*\(", m.group(1)) + re.findall(r"\.(\w+)\s*(?=[,\]]|$)", m.group(1)):
+            if name in SPM_PLATFORM:
+                src.setdefault(SPM_PLATFORM[name], f"{where} platforms: .{name}")
+        srv = re.search(r"github\.com/(vapor/vapor|hummingbird-project/hummingbird|swift-server/[\w-]+)", txt)
+        if srv and src:
+            src.setdefault("linux", f"{where} server-side Swift dependency ({srv.group(1)})")
+
+
+def _kmp_targets(root: Path, src: dict) -> None:
+    """Kotlin Multiplatform targets declared in the `kotlin { }` block of build.gradle(.kts) (root, one or two levels
+    down): androidTarget(), iosArm64(), jvm("desktop"), js(), wasmJs(), linuxX64(), mingwX64(), macosArm64()."""
+    files = [p for g in ("build.gradle.kts", "build.gradle", "*/build.gradle.kts", "*/build.gradle",
+                         "*/*/build.gradle.kts", "*/*/build.gradle") for p in root.glob(g)]
+    for f in sorted(set(files)):
+        if not f.is_file() or not COMMON_SKIP.isdisjoint(f.relative_to(root).parts):
+            continue
+        txt = f.read_text(encoding="utf-8", errors="replace")
+        if not _KMP_PLUGIN.search(txt):
+            continue
+        txt = re.sub(r"//[^\n]*|/\*.*?\*/", " ", txt, flags=re.S)
+        where = f.relative_to(root).as_posix()
+        for rx, plat in KMP_TARGET:
+            m = rx.search(txt)
+            if m:
+                src.setdefault(plat, f"{where} kotlin {{ {m.group(0).rstrip('({ ')}() }}")
+        if _KMP_DESKTOP.search(txt):
+            for d in DESKTOP:
+                src.setdefault(d, f"{where} kotlin {{ jvm(\"desktop\") }}")
 
 
 def _positive(c: "Cond") -> bool:

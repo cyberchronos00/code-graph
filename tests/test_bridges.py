@@ -261,3 +261,85 @@ def test_flutter_package_platform_folders(tmp_path):
     assert B._flutter_folders(tmp_path, "ios_only/lib/src/main.dart", cache) == {"ios"}
     assert B._flutter_folders(tmp_path, "both/lib/main.dart", cache) == {"android", "ios"}
     assert B._flutter_folders(tmp_path, "tool/x.dart", cache) is None
+
+
+# ------------------------------------------------------------------ Electron / Tauri (process boundaries)
+def recv_all(e: dict) -> list:
+    return [r["handler"] for r in e["receivers"]]
+
+
+def nattrs(st, nid) -> dict:
+    a = st.node(nid)["attrs"]
+    return json.loads(a) if isinstance(a, str) else (a or {})
+
+
+@needs_ts
+def test_electron_ipc_and_context_bridge():
+    st, res, db = graph("electron_app")
+    ep = endpoints(st)
+    assert set(ep) == {"electron-ipc:settings:read", "electron-ipc:settings:save", "electron-ipc:settings:saved",
+                       "electron-ipc:settings:missing", "electron-ipc:app:unused", "electron-preload:api#readSettings",
+                       "electron-preload:api#saveSettings", "electron-preload:api#missing", "electron-ipc:app:quit",
+                       "electron-ipc:fiddle:run", "electron-ipc:theme:changed", "electron-preload:fiddle#quit",
+                       "electron-preload:fiddle#addEventListener"}
+    rd = ep["electron-ipc:settings:read"]
+    assert senders(rd) == {"function:src/preload/preload.ts#readSettings"}
+    assert recv(rd) == {None: "function:src/main/main.ts#ipcMain.handle('settings:read')"} and not rd["checks"]
+    # main -> renderer: webContents.send -> ipcRenderer.on
+    assert recv(ep["electron-ipc:settings:saved"]) == {None: "function:src/preload/preload.ts#ipcRenderer.on('settings:saved')"}
+    assert senders(ep["electron-ipc:settings:saved"]) == {"function:src/main/main.ts#notifySaved"}
+    # renderer window.api.* -> contextBridge.exposeInMainWorld('api', {...}) members
+    assert senders(ep["electron-preload:api#readSettings"]) == {"function:src/renderer/app.ts#loadSettings"}
+    assert ep["electron-ipc:settings:missing"]["checks"] == ["no_receiver"]
+    assert ep["electron-ipc:app:unused"]["checks"] == ["no_sender"]
+    assert nattrs(st, "endpoint:electron-ipc:settings:read")["transport"] == "ipc"
+    assert nattrs(st, "endpoint:electron-preload:api#readSettings")["transport"] == "local"
+    # enum channels, project wrappers (ipcMainManager.on / send), a handler outside the project (app.quit: the
+    # registering function receives), event.sender.send replies, `const api = window.fiddle` aliases
+    assert recv(ep["electron-ipc:app:quit"]) == {None: "function:src/main/lifecycle.ts#setupLifecycle"}
+    assert senders(ep["electron-ipc:app:quit"]) == {"function:src/preload/events.ts#quit"}
+    assert senders(ep["electron-preload:fiddle#quit"]) == {"function:src/renderer/menu.ts#quitApp"}
+    # a union-typed channel (`ipcRenderer.on(table[type])`) receives every member another process sends; the main
+    # relay `ipcMain.on(name)` over IpcEvents[] is dropped (main receives these by name / only main sends them)
+    run = ep["electron-ipc:fiddle:run"]
+    assert senders(run) == {"function:src/main/lifecycle.ts#runFiddle"}
+    assert set(recv_all(run)) == {"function:src/preload/events.ts#addEventListener.ipcRenderer.on(channel)"}
+    assert run["receivers"][0]["confidence"] == "heuristic"
+    assert "function:src/preload/events.ts#addEventListener.ipcRenderer.on(channel)" in recv_all(ep["electron-ipc:theme:changed"])
+    assert not any("ipc-manager.ts" in h for e in ep.values() for h in recv_all(e))
+    # process roles on the module nodes
+    roles = {f: nattrs(st, f"module:{f}").get("process") for f in
+             ("src/main/main.ts", "src/preload/preload.ts", "src/renderer/app.ts", "src/main/settings.ts")}
+    assert roles == {"src/main/main.ts": "main", "src/preload/preload.ts": "preload", "src/renderer/app.ts": "renderer",
+                     "src/main/settings.ts": None}
+    # impact crosses renderer -> preload -> main
+    callers = {c["id"] for c in Q.impact(st, "function:src/main/settings.ts#readSettings")["callers"]}
+    assert {"function:src/preload/preload.ts#readSettings", "function:src/renderer/app.ts#loadSettings"} <= callers
+    r = cli("bridges", "--db", str(db), "--protocol", "electron-ipc", "--unmatched")
+    assert r.returncode == 0, r.stderr
+    assert "electron-ipc:settings:missing" in r.stdout and "electron-ipc:settings:read" not in r.stdout
+
+
+@needs_ts
+def test_tauri_commands(monkeypatch):
+    monkeypatch.setenv("CODEGRAPH_RUST_SCIP", "0")
+    st, res, _ = graph("tauri_app")
+    ep = endpoints(st)
+    assert set(ep) == {"tauri:greet", "tauri:increment", "tauri:gret", "tauri:secret", "tauri:plugin:fs|read_text_file",
+                       "tauri:plugin:app-menu|popup"}
+    # a plugin crate's command (Builder::new("app-menu") ... generate_handler![#![plugin(app_menu)] popup])
+    assert recv(ep["tauri:plugin:app-menu|popup"]) == {None: "function:tauri_fixture::menu::popup"}
+    assert senders(ep["tauri:plugin:app-menu|popup"]) == {"function:src/main.ts#showMenu"}
+    assert recv(ep["tauri:greet"]) == {None: "function:tauri_fixture::greet"}
+    assert senders(ep["tauri:greet"]) == {"function:src/main.ts#greet"} and not ep["tauri:greet"]["checks"]
+    # bare #[command] with `use tauri::command`, registered as commands::increment
+    assert recv(ep["tauri:increment"]) == {None: "function:tauri_fixture::commands::increment"}
+    assert ep["tauri:gret"]["checks"] == ["no_receiver"]
+    assert ep["tauri:secret"]["checks"] == ["unregistered"]
+    fs = ep["tauri:plugin:fs|read_text_file"]
+    assert fs["external"] and fs["package"] == "tauri-plugin-fs" and not fs["checks"]
+    assert res["bridges"]["tauri"] == {"commands": 4, "registered": 3}
+    assert nattrs(st, "crate:tauri_fixture")["process"] == "core"
+    assert nattrs(st, "module:src/main.ts")["process"] == "webview"
+    # impact of the Rust command lists the webview caller
+    assert "function:src/main.ts#counter" in {c["id"] for c in Q.impact(st, "tauri_fixture::commands::increment")["callers"]}

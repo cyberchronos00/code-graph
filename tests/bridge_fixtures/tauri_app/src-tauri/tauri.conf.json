@@ -1,0 +1,1 @@
+{ "productName": "tauri-fixture", "identifier": "com.example.fixture", "build": { "frontendDist": "../dist" } }

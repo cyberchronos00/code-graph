@@ -205,7 +205,9 @@ Issues and pull requests that extend it are welcome.
   file; source maps of minified bundles are not read.
   Web / native bridge calls are linked for Capacitor plugins, React Native / Expo modules and Flutter method / event
   channels ([bridges.md](bridges.md)); Pigeon APIs, native → Dart / JS calls, Cordova plugins and native UI
-  components are not, and Java / Objective-C receivers are stubs without a call graph inside them.
+  components are not, and Java / Objective-C receivers are stubs without a call graph inside them. Electron IPC /
+  context bridge and Tauri commands are linked across processes; Electron `MessagePort` / `utilityProcess`, Tauri
+  events and commands invoked from `.svelte` files are not.
 - **Symlinks.** Dangling symlinks (for example ones that point outside the checkout) are skipped with a warning per
   file instead of stopping the language; the TypeScript stats list them as `skipped_dangling_symlinks`, and the
   TypeScript walker does not follow symlinked directories.
@@ -252,9 +254,12 @@ Issues and pull requests that extend it are welcome.
 - **Variant grouping** links platform files (`x.ios.ts` / `x.android.ts` / `x.ts`), conditional-import alternatives,
   Rust / C definitions repeated per `cfg` / `#if` branch and items of per-platform sibling modules. Variants behind a
   runtime factory or dependency injection are separate symbols.
-- **Not yet covered:** Electron / Tauri main ↔ renderer IPC. Swift `#if os(...)` blocks come from the Swift plugin
-  ([swift.md](swift.md)); Kotlin Multiplatform source sets and `expect` / `actual` from the Kotlin plugin
-  ([kotlin.md](kotlin.md)).
+- **Per-target indexes:** one graph holds every target; `--platform` filters it by the conditions. There is no
+  separate exact index per target (one compile per Android / iOS / desktop configuration), and Swift `@available`
+  version checks are not platform conditions. Swift `#if os(...)` / `canImport` / `targetEnvironment` blocks come from
+  the Swift plugin ([swift.md](swift.md)); Kotlin Multiplatform source sets and `expect` / `actual` from the Kotlin
+  plugin ([kotlin.md](kotlin.md)); Electron / Tauri process boundaries from the bridges pass
+  ([bridges.md](bridges.md#desktop-process-boundaries-electron-and-tauri)).
 - **C heuristic mode:** a function after a region tree-sitter cannot parse (heavy macro use) can be missing from the
   graph, so its platform variant is missing too; exact mode with a compile database has every definition.
 

@@ -61,8 +61,9 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   publish on it, which client code listens. PATTERN is a channel pattern, a concrete name or a glob. See
   [channels-and-tests.md](channels-and-tests.md#broadcast-channels).
 - `bridges [PATTERN] [--protocol P] [--unmatched]`: web / native bridge endpoints (Capacitor plugins, React Native /
-  Expo modules, Flutter channels): JS / Dart senders, native receivers per platform, methods missing on a platform,
-  without a receiver or implemented outside the repo. See [bridges.md](bridges.md).
+  Expo modules, Flutter channels) and desktop process boundaries (Electron IPC channels and context-bridge members,
+  Tauri commands): senders, receivers per platform or process, methods missing on a platform, without a receiver,
+  unregistered or implemented outside the repo. See [bridges.md](bridges.md).
 - `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
   [channels-and-tests.md](channels-and-tests.md#tests).
 - `platforms [summary|divergence] [--target T] [--kind K]`: platform-specific code: the project's targets and where
@@ -556,7 +557,7 @@ options:
 
 ```
 usage: python -m codegraph.cli bridges [-h] --db DB [--json]
-                         [--protocol {capacitor,react-native,flutter,flutter-event}]
+                         [--protocol {capacitor,react-native,flutter,flutter-event,electron-ipc,electron-preload,tauri}]
                          [--unmatched]
                          [pattern]
 
@@ -568,7 +569,7 @@ options:
   -h, --help            show this help message and exit
   --db DB
   --json
-  --protocol {capacitor,react-native,flutter,flutter-event}
+  --protocol {capacitor,react-native,flutter,flutter-event,electron-ipc,electron-preload,tauri}
   --unmatched           only endpoints with a check: missing on a platform, no
                         receiver, no sender, external
 ```

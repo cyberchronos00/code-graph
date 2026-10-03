@@ -108,7 +108,7 @@ def main(argv=None):
                                         "channels): JS / Dart senders, native receivers per platform, methods missing on a platform")
     p.add_argument("pattern", nargs="?", help="endpoint name, substring or glob (Echo#echo, Echo, samples.flutter.dev/*); omit to list all")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
-    p.add_argument("--protocol", choices=["capacitor", "react-native", "flutter", "flutter-event"])
+    p.add_argument("--protocol", choices=["capacitor", "react-native", "flutter", "flutter-event", "electron-ipc", "electron-preload", "tauri"])
     p.add_argument("--unmatched", action="store_true", help="only endpoints with a check: missing on a platform, no receiver, no sender, external")
     p = sub.add_parser("tests", help="tests covering a symbol / route / table: direct (test code calls it) and transitive (through app code)")
     p.add_argument("spec", help="Class::method, Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
