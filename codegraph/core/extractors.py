@@ -8,7 +8,8 @@ The extractor sources ship inside the package (codegraph/plugins/{ts,php,dart}/e
   use or by `cg setup`. The directory is keyed by the lock file, so an update that only changes the extractor source
   reuses the installed dependencies, and one that changes the lock file installs into a fresh directory.
 
-Cache root: $CODEGRAPH_CACHE (default ~/.cache/codegraph; %LOCALAPPDATA%\\codegraph on Windows) / extractors.
+Cache root (core/cache.py): $CODEGRAPH_CACHE, else $CODEGRAPH_CACHE_DIR, else %LOCALAPPDATA%\\codegraph on Windows,
+else $XDG_CACHE_HOME/codegraph or ~/.cache/codegraph; the extractors live in <root>/extractors.
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import cache
 
 PLUGINS = Path(__file__).resolve().parent.parent / "plugins"
 
@@ -45,14 +48,7 @@ SPECS = {
 
 
 def cache_root() -> Path:
-    env = os.environ.get("CODEGRAPH_CACHE")
-    if env:
-        base = Path(env)
-    elif os.name == "nt" and os.environ.get("LOCALAPPDATA"):
-        base = Path(os.environ["LOCALAPPDATA"]) / "codegraph"
-    else:
-        base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "codegraph"
-    return base / "extractors"
+    return cache.root() / "extractors"
 
 
 def _installed(d: Path, spec: Spec) -> bool:

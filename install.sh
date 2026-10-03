@@ -78,7 +78,7 @@ installed_with() {
   echo none
 }
 
-cache_dir() { printf '%s' "${CODEGRAPH_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/codegraph}"; }
+cache_dir() { printf '%s' "${CODEGRAPH_CACHE:-${CODEGRAPH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/codegraph}}"; }  # as codegraph/core/cache.py
 
 uninstall() {
   w="$(installed_with)"

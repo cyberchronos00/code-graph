@@ -37,7 +37,7 @@ from ... import presets
 from ...core.model import CONFIDENCE_RANK
 from ...core.paths import names_regex, rules as path_rules
 from ...coverage import SUPPORTED
-from ...core import extractors, fsutil
+from ...core import cache, extractors, fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
 EXTRACTOR_DIR = Path(__file__).parent / "extractor"
@@ -190,9 +190,9 @@ class TypeScriptPlugin(LanguagePlugin):
         cache_file, cache_status = None, "disabled"
         if not os.environ.get("CODEGRAPH_NO_CACHE"):
             fp = facts_fingerprint(project.root, ctx.extractor_cfg)
-            cdir = Path(os.environ.get("CODEGRAPH_CACHE", Path.home() / ".cache" / "codegraph")) / "ts"
-            rkey = hashlib.sha256(str(Path(project.root).resolve()).encode()).hexdigest()[:12]
-            cache_file = cdir / f"{rkey}-{fp}.json"
+            cdir = cache.subdir("ts")
+            rkey = cache.root_key(project.root)
+            cache_file = cdir / f"{rkey}-v{fsutil.CACHE_VERSION}-{fp}.json"
             cache_status = "miss"
         if cache_file and cache_file.exists():
             facts = json.loads(cache_file.read_text())
@@ -211,8 +211,9 @@ class TypeScriptPlugin(LanguagePlugin):
             if cache_file:
                 cache_file.parent.mkdir(parents=True, exist_ok=True)
                 for old in cache_file.parent.glob(f"{rkey}-*.json"):
-                    old.unlink()  # keep one entry per project root
+                    old.unlink(missing_ok=True)  # keep one entry per project root
                 cache_file.write_text(json.dumps(facts))
+                cache.note_project(project.root)
         ctx.facts = facts
         facts.setdefault("stats", {})["facts_cache"] = cache_status
         t_extract = time.time() - t0

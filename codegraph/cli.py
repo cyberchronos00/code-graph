@@ -66,6 +66,17 @@ def main(argv=None):
     p.add_argument("--scip", action="append", metavar="FILE",
                    help="check a SCIP index: documents, occurrences with a usable position, definitions (repeatable)")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("clean", help="remove cache entries: one project's (ROOT), stale ones (--stale) or all (--all); "
+                                     "--db also deletes a graph DB")
+    p.add_argument("root", nargs="?", help="project root: remove the cache entries of this project and of every "
+                                           "project indexed below it")
+    p.add_argument("--all", action="store_true", help="empty the whole cache root (keeps the extractors)")
+    p.add_argument("--extractors", action="store_true", help="with --all: also remove the extractor installs")
+    p.add_argument("--stale", action="store_true",
+                   help="only entries of older cache versions / layouts and orphaned .tmp / .lock files")
+    p.add_argument("--db", help="also delete this graph DB and its -wal / -shm files")
+    p.add_argument("--dry-run", action="store_true", help="list what would be removed, delete nothing")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("setup", help="install the Node / PHP / Dart extractor dependencies (into the user cache; "
                                      "otherwise done on the first index)")
     p.add_argument("languages", nargs="*", metavar="LANG",
@@ -217,6 +228,36 @@ def main(argv=None):
         print(json.dumps(r, indent=2) if a.json else render(r))
         broken = bool((r.get("modules") or {}).get("failed"))
         return 1 if broken or any(x.get("warning") for x in r.get("scip") or ()) else 0
+    if a.cmd == "clean":
+        from .core import cache as C
+        try:
+            pl = C.plan(a.root, all_=a.all, extractors=a.extractors, stale=a.stale, db=a.db)
+        except C.CacheError as ex:
+            print(f"cg clean: {ex}", file=sys.stderr)
+            return 2
+        errors = [] if a.dry_run else C.execute(pl)
+        if a.json:
+            print(json.dumps({"root": str(pl.root), "dry_run": a.dry_run, "bytes": pl.bytes, "projects": pl.projects,
+                              "removed" if not a.dry_run else "would_remove":
+                                  [{"path": str(e.path), "kind": e.kind, "bytes": e.size,
+                                    **({"stale": e.stale} if e.stale else {})} for e in pl.remove]
+                                  + [{"path": str(x), "kind": "db", "bytes": C._size(x)} for x in pl.db_files],
+                              "skipped": [{"path": str(x), "reason": r} for x, r in pl.skipped],
+                              "errors": [{"path": str(x), "error": r} for x, r in errors]}, indent=2))
+        else:
+            verb = "would remove" if a.dry_run else "removed"
+            for e in pl.remove:
+                print(f"  {C.human(e.size):>9}  {e.kind:<13} {e.path}" + (f"  ({e.stale})" if e.stale else ""))
+            for x in pl.db_files:
+                print(f"  {C.human(C._size(x)):>9}  {'db':<13} {x}")
+            for x, r in pl.skipped:
+                print(f"  skipped {x} ({r})")
+            for x, r in errors:
+                print(f"  error {x}: {r}", file=sys.stderr)
+            n = len(pl.remove) + len(pl.db_files) - len(errors)
+            print(f"cg clean: {verb} {n} entr{'y' if n == 1 else 'ies'}, {C.human(pl.bytes)} (cache root {pl.root})"
+                  + (f"; projects: {', '.join(pl.projects)}" if pl.projects else ""))
+        return 1 if errors else 0
     if a.cmd == "setup":
         from .doctor import setup
         bad = [x for x in a.languages if x not in ("typescript", "php", "dart")]

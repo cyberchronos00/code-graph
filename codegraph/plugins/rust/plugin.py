@@ -27,6 +27,7 @@ from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.fsutil import keep_file
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from ..native import gates as G
+from ...core import cache
 from ..native import runner, scipread
 from ..native.ts import TreeSitterMissing
 from ...core.paths import PathRules, rel_dir, rules as path_rules
@@ -403,7 +404,8 @@ class RustPlugin(LanguagePlugin):
             cfg["cargo"]["target"] = triple
         cfg_text = json.dumps(cfg, sort_keys=True)
         # named by content and written atomically: a concurrent run never reads a half-written config
-        cfg_path = runner.cache_dir() / f"ra-config-{hashlib.sha256(cfg_text.encode()).hexdigest()[:12]}.json"
+        cfg_path = (runner.cache_dir() / f"ra-config-{cache.root_key(self.root)}-"
+                    f"{hashlib.sha256(cfg_text.encode()).hexdigest()[:12]}.json")
         runner.write_atomic(cfg_path, cfg_text)
         ver = runner.tool_version(ra)
         files = list(_rust_files(self.root, getattr(self, "rules", None)))

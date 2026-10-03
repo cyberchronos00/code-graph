@@ -3,7 +3,8 @@
 The cache key covers the cache version, the indexer version, its arguments and (path, size, content hash) of every
 relevant source file, so re-indexing an unchanged project reuses the previous SCIP file and any content change (even
 one that keeps the size and mtime) re-runs the indexer. CODEGRAPH_NO_CACHE=1 disables the cache.
-Output never goes into the indexed project: files live under ~/.cache/codegraph/scip/ (or $CODEGRAPH_CACHE/scip/).
+Output never goes into the indexed project: files live under <cache root>/scip/ (core/cache.py: $CODEGRAPH_CACHE,
+else $XDG_CACHE_HOME/codegraph or ~/.cache/codegraph), named <name>-v<cache version>-<project key>-<key>.scip.
 Concurrent processes indexing the same project share one indexer run (a per-key lock) and never see each other's
 partial output (private temporary files, atomic os.replace).
 """
@@ -24,13 +25,11 @@ try:
 except ImportError:      # Windows: no flock; runs stay safe through private temporary files, without the wait
     fcntl = None
 
-from ...core import fsutil
+from ...core import cache, fsutil
 
 
 def cache_dir() -> Path:
-    d = Path(os.environ.get("CODEGRAPH_CACHE") or os.environ.get("CODEGRAPH_CACHE_DIR") or Path.home() / ".cache" / "codegraph") / "scip"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    return cache.subdir("scip", create=True)
 
 
 def find_tool(env: str, names: list[str], extra_dirs: list[Path] = ()) -> str | None:
@@ -121,13 +120,16 @@ def _prune_tmp(name: str, max_age: float = 86400) -> None:
 
 def run_cached(name: str, key: str, cmd: list[str], cwd: Path, out_path_arg: str | None, timeout: int,
                out_flag_style: str = "space", env: dict | None = None,
-               notes: str | None = None) -> tuple[Path | None, dict]:
+               notes: str | None = None, root: Path | None = None) -> tuple[Path | None, dict]:
     """Run `cmd` (which writes a SCIP file) unless a cached result exists. The output path is appended to `cmd`
     as `<out_path_arg> <path>` (style 'space') or `<out_path_arg>=<path>` (style 'eq'). `env` replaces the child's
     environment; output lines matching the `notes` regex are kept in info["notes"] (a build error far above the tail).
     Safe for concurrent processes: one run per key at a time (key_lock; the others wait and get a cache hit), each
     run writes its own temporary file and moves it into the cache atomically."""
     _prune_legacy(name)
+    proj = root or cwd
+    key = f"{cache.root_key(proj)}-{key}"        # the project's entries carry its key: `cg clean <root>` finds them
+    cache.note_project(proj)
     out = cache_dir() / f"{name}-v{fsutil.CACHE_VERSION}-{key}.scip"
     use_cache = os.environ.get("CODEGRAPH_NO_CACHE") != "1"
     info = {"cache": "hit" if out.exists() and use_cache else "miss", "command": " ".join(cmd)}

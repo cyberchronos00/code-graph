@@ -74,8 +74,8 @@ The TypeScript, PHP and Dart extractors ship as sources inside the package; thei
 | Dart | Dart SDK 3.x | `dart pub get` + `dart compile exe` |
 
 They install on the first index that needs them, or ahead of time with `cg setup [typescript php dart]`, into
-`$CODEGRAPH_CACHE/extractors/<language>-<lock hash>` (default `~/.cache/codegraph`, `%LOCALAPPDATA%\codegraph` on
-Windows). The directory is keyed by the lock file: an update that changes only the extractor code reuses the
+`<cache root>/extractors/<language>-<lock hash>` (the root is `$CODEGRAPH_CACHE`, default `$XDG_CACHE_HOME/codegraph`
+or `~/.cache/codegraph`, `%LOCALAPPDATA%\codegraph` on Windows; [cli.md](cli.md#clean)). The directory is keyed by the lock file: an update that changes only the extractor code reuses the
 installed dependencies, one that changes the lock file installs fresh ones. A development checkout whose extractor
 directory already has its dependencies (`npm ci` run there) keeps using it.
 

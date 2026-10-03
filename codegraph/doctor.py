@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .core import extractors
+from .core import cache, extractors
 
 INSTALL_DOC = "docs/install.md"
 REPO = "https://github.com/cyberchronos00/code-graph"
@@ -299,6 +299,7 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         "package": str(pkg), "checkout": (pkg.parent / ".git").exists(),
         "os": f"{platform.system()} {platform.machine()}",
         "extractors": {k: extractors.status(k) for k in extractors.SPECS}, "cache": str(extractors.cache_root()),
+        "cache_usage": cache.usage(),
         "tools": tools, "python_modules": {m: _module(m) for m in (*PIP_NAMES, "yaml", "mcp")},
         "modules": imports, "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
         "update": "uv tool upgrade codegraph  |  pipx upgrade codegraph (releases)  |  install.sh --update",
@@ -315,6 +316,11 @@ def render(r: dict) -> str:
     out.append(f"extractor dependencies (cache {r['cache']}):")
     for k, v in r["extractors"].items():
         out.append(f"  {k:<14} {'installed' if v['installed'] else 'not installed'}  ({v['where']}: {v['dir']})")
+    cu = r.get("cache_usage")
+    if cu:
+        kinds = ", ".join(f"{k} {cache.human(v['bytes'])}" for k, v in cu["kinds"].items())
+        out.append(f"cache: {cache.human(cu['bytes'])} in {cu['root']}" + (f" ({kinds})" if kinds else "")
+                   + (f"; {cache.human(cu['stale_bytes'])} stale (`cg clean --stale`)" if cu["stale_bytes"] else ""))
     mods = r["python_modules"]
     missing = sorted(m for m, ok in mods.items() if not ok)
     out.append("python modules: " + ("all present" if not missing else "missing " + ", ".join(missing)))

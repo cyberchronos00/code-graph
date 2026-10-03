@@ -76,7 +76,9 @@ cg doctor                     # what indexes exact / heuristic on this machine, 
 git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph    # the sample apps used below
 ```
 
-Update with `uv tool upgrade codegraph`, `pipx upgrade codegraph` or `install.sh --update`. Working on cg itself:
+Update with `uv tool upgrade codegraph`, `pipx upgrade codegraph` or `install.sh --update`. cg keeps its caches
+(extractor installs, SCIP outputs, parse caches) under `~/.cache/codegraph`; `cg doctor` shows their size and
+`cg clean ROOT`, `cg clean --stale` or `cg clean --all` removes them ([docs/cli.md](docs/cli.md#clean)). Working on cg itself:
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Index both apps and link them into one graph** (a few seconds):

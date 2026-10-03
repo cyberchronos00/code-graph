@@ -33,7 +33,7 @@ Swift as **exact** (`Swift index store (swift build)`), or names the reason it s
 
 | Setting | Effect |
 |---|---|
-| `CODEGRAPH_SWIFT_INDEX=1` | for a SwiftPM package (`Package.swift`), cg runs `swift build --enable-index-store` into its cache (`~/.cache/codegraph/swift-build/`, or `$CODEGRAPH_CACHE`), never into the checkout. The store is reused while the sources, manifests and toolchain are unchanged; otherwise `swift build` runs again (incrementally, in the same build directory). `CODEGRAPH_NO_CACHE=1` forces the run, `CODEGRAPH_INDEXER_TIMEOUT` caps it |
+| `CODEGRAPH_SWIFT_INDEX=1` | for a SwiftPM package (`Package.swift`), cg runs `swift build --enable-index-store` into its cache (`<cache root>/swift-build/`, `~/.cache/codegraph` by default; `cg clean ROOT` removes it), never into the checkout. The store is reused while the sources, manifests and toolchain are unchanged; otherwise `swift build` runs again (incrementally, in the same build directory). `CODEGRAPH_NO_CACHE=1` forces the run, `CODEGRAPH_INDEXER_TIMEOUT` caps it |
 | `CODEGRAPH_SWIFT_INDEX_STORE=/path/to/store` | an existing store: Xcode's `DerivedData/<project>/Index.noindex/DataStore` (`Index/DataStore` before Xcode 14), a CI build's `.build/<triple>/debug/index/store`. Paths from another checkout are mapped by their longest common suffix |
 | `CODEGRAPH_SWIFT=/path/to/swift`, `CODEGRAPH_LIBINDEXSTORE=/path/to/libIndexStore.so` | toolchain and library, when they are not on `PATH` / next to `swift` (`~/tools/swift-*`, `/usr/share/swift`, `/opt/swift`, and on macOS the selected Xcode's default toolchain are searched) |
 

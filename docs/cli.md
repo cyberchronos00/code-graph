@@ -22,6 +22,9 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   naming the module and the error, when one does not import on the running Python. [install.md](install.md)
 - `setup [typescript] [php] [dart] [--quiet]`: install the extractor dependencies now (into the user cache for an
   installed cg) instead of on the first index; default: every language whose toolchain is installed.
+- `clean [ROOT] [--all [--extractors]] [--stale] [--db DB] [--dry-run] [--json]`: remove cache entries: those of one
+  project (and of every project indexed below ROOT), the stale ones, or all of them except the extractors; `--db`
+  also deletes a graph DB with its `-wal` / `-shm` files. `doctor` shows the cache size per kind ([clean](#clean)).
 - `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,
   `heuristic` when the exact-mode indexer is missing, `skipped` when the toolchain is missing, with the install hint),
   file completeness (discovered / indexed / parse failed / over size limit / unmapped / excluded, the first 5 paths
@@ -802,6 +805,59 @@ options:
                         (default: viz.presets in .cg.yaml, then the sample
                         presets that resolve, then the starter queries)
 ```
+
+### `clean`
+
+```
+usage: python -m codegraph.cli clean [-h] [--all] [--extractors] [--stale] [--db DB] [--dry-run]
+                [--json]
+                [root]
+
+positional arguments:
+  root          project root: remove the cache entries of this project and of
+                every project indexed below it
+
+options:
+  -h, --help    show this help message and exit
+  --all         empty the whole cache root (keeps the extractors)
+  --extractors  with --all: also remove the extractor installs
+  --stale       only entries of older cache versions / layouts and orphaned
+                .tmp / .lock files
+  --db DB       also delete this graph DB and its -wal / -shm files
+  --dry-run     list what would be removed, delete nothing
+  --json
+```
+
+cg keeps everything it builds outside the indexed projects, under one **cache root**: `$CODEGRAPH_CACHE`, else
+`$CODEGRAPH_CACHE_DIR` (the older name, still read), else `%LOCALAPPDATA%\codegraph` on Windows, else
+`$XDG_CACHE_HOME/codegraph`, else `~/.cache/codegraph`. Every cache user (extractor installs, SCIP outputs, the TS and
+Dart facts caches, the Swift build directory, rust-analyzer configs) takes its directory from this one lookup.
+
+| kind (`doctor`) | path below the root | what |
+|---|---|---|
+| `extractors` | `extractors/<language>-<lock hash>/` | npm / Composer / dart pub installs of the extractors (`cg setup`) |
+| `scip` | `scip/<indexer>-v<N>-<project key>-<key>.scip` and `.lock` | SCIP output of the exact layers (Rust, C/C++, Kotlin) |
+| `rust-analyzer` | `scip/ra-config-<project key>-<hash>.json` | the config file rust-analyzer runs with |
+| `swift-build` | `swift-build/<build key>/` | `swift build --enable-index-store` output (`CODEGRAPH_SWIFT_INDEX=1`) |
+| `ts`, `dart` | `ts/<project key>-v<N>-<fingerprint>.json` | extractor facts, one entry per project |
+| `projects` | `projects/<project key>` | the project root a key stands for |
+
+`v<N>` is the cache version and the project key the first 12 hex digits of the SHA-256 of the resolved project root.
+
+- `cg clean ROOT` removes the entries of the project at ROOT and of every project indexed below it (a monorepo's
+  apps), in every kind except `extractors`.
+- `cg clean --stale` removes what no cg can read again: entries of an older cache version, names from an older cache
+  layout (up to cg 0.7.1, SCIP outputs and TS / Dart facts carried no project key / cache version in their names), temporary files older
+  than the indexer timeout (`CODEGRAPH_INDEXER_TIMEOUT` + 10 min), and lock files without their cache entry.
+- `cg clean --all` empties the cache root but keeps the extractors; `--extractors` removes them too (the next index
+  or `cg setup` installs them again).
+- `--db DB` deletes the graph DB and its `-wal` / `-shm` / `-journal` files; a file that is not an SQLite database is
+  refused. On its own, `--db` leaves the cache alone.
+- `--dry-run` lists the paths and sizes and deletes nothing; `--json` prints the same as JSON.
+
+Safety: nothing outside the cache root is deleted except an explicit `--db`; symlinks in the cache are removed, never
+followed; a lock a running cg holds is skipped. When the cache root resolves to `/`, a drive root, `$HOME` or a
+directory above `$HOME`, `cg clean` refuses with exit status 2 and deletes nothing.
 
 ### `detect`
 

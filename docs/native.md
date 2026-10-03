@@ -30,7 +30,7 @@ chmod +x ~/.local/bin/scip-clang && scip-clang --version
 
 The tools are looked up in `PATH`, then `~/.cargo/bin` (rust-analyzer) and `~/.local/bin` (scip-clang). Override the
 lookup with `CODEGRAPH_RUST_ANALYZER=/path` or `CODEGRAPH_SCIP_CLANG=/path`. SCIP output is cached under
-`~/.cache/codegraph/scip/`, keyed by the cache version, the indexer version and the content hash of every source file (and of
+`<cache root>/scip/` (`~/.cache/codegraph/scip/` by default, [cli.md](cli.md#clean)), keyed by the cache version, the indexer version and the content hash of every source file (and of
 `compile_commands.json` for C/C++), so a re-index with no changes takes seconds and any content change re-runs the indexer.
 Processes that index the same project at the same time (parallel CI jobs, test workers, an MCP `index` next to a CLI
 run) share one indexer run: the first takes a per-key lock and runs rust-analyzer / scip-clang, the others wait and
@@ -210,7 +210,7 @@ cold cache (cached afterwards like the host index); `rust: {targets: off}` in `.
 | `CODEGRAPH_INDEXER_TIMEOUT` | seconds (default 3600; also the Kotlin scip-java run) |
 | `CODEGRAPH_KOTLIN_SCIP=1`, `CODEGRAPH_KOTLIN_SCIP_FILE`, `CODEGRAPH_SCIP_JAVA` | Kotlin exact mode: run scip-java (it runs the Gradle / Maven build), use an existing index, scip-java binary ([kotlin.md](kotlin.md#exact-mode)) |
 | `CODEGRAPH_SWIFT_INDEX=1`, `CODEGRAPH_SWIFT_INDEX_STORE`, `CODEGRAPH_SWIFT`, `CODEGRAPH_LIBINDEXSTORE` | Swift exact mode: run `swift build --enable-index-store` for a SwiftPM package, use an existing index store (Xcode DerivedData, CI), toolchain and `libIndexStore` paths ([swift.md](swift.md#exact-mode)) |
-| `CODEGRAPH_NO_CACHE=1`, `CODEGRAPH_CACHE_DIR` | SCIP cache control |
+| `CODEGRAPH_NO_CACHE=1`, `CODEGRAPH_CACHE` | SCIP cache control (`cg clean` removes entries) |
 | `CODEGRAPH_NO_CARGO=1`, `CODEGRAPH_CARGO` | skip `cargo metadata` / cargo binary |
 | `CODEGRAPH_EXCLUDE_DIRS`, `CODEGRAPH_INCLUDE_DIRS` | C/C++ directory filters (comma-separated names) |
 | `CODEGRAPH_C_MASK_ANNOTATIONS=0` | do not blank annotation macros (`FOO_API`, `FOO_CONSTEXPR`) before parsing |

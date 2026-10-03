@@ -67,7 +67,7 @@ if ($Uninstall) {
         "pipx" { Run "pipx" @("uninstall", $Pkg) }
         default { Say "cg is not installed with uv or pipx (nothing to uninstall)" }
     }
-    $cache = if ($env:CODEGRAPH_CACHE) { $env:CODEGRAPH_CACHE } else { Join-Path $env:LOCALAPPDATA "codegraph" }
+    $cache = if ($env:CODEGRAPH_CACHE) { $env:CODEGRAPH_CACHE } elseif ($env:CODEGRAPH_CACHE_DIR) { $env:CODEGRAPH_CACHE_DIR } else { Join-Path $env:LOCALAPPDATA "codegraph" }
     $ex = Join-Path $cache "extractors"
     if (Test-Path $ex) { Say "removing the extractor dependencies in $ex"; Remove-Item -Recurse -Force $ex }
     Say "left in place: index caches in $cache, uv / pipx themselves"

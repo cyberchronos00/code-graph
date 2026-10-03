@@ -24,7 +24,7 @@ from pathlib import Path
 from ... import presets
 from ...core.model import EXACT, HEURISTIC, RESOLVED, CONFIDENCE_RANK
 from ...core.paths import rules as path_rules
-from ...core import extractors, fsutil
+from ...core import cache, extractors, fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from .http import TOKEN, HttpExtractor, Tpl, UrlEval, bind_args, join, load_env_files, min_conf
 from .models import ModelIndex
@@ -162,9 +162,9 @@ class DartPlugin(LanguagePlugin):
         cache_file, status = None, "disabled"
         if not os.environ.get("CODEGRAPH_NO_CACHE"):
             fp = facts_fingerprint(project.root, cfg, rules)
-            cdir = Path(os.environ.get("CODEGRAPH_CACHE", Path.home() / ".cache" / "codegraph")) / "dart"
-            rkey = hashlib.sha256(str(Path(project.root).resolve()).encode()).hexdigest()[:12]
-            cache_file = cdir / f"{rkey}-{fp}.json"
+            cdir = cache.subdir("dart")
+            rkey = cache.root_key(project.root)
+            cache_file = cdir / f"{rkey}-v{fsutil.CACHE_VERSION}-{fp}.json"
             if cache_file.exists():
                 return json.loads(cache_file.read_text()), "hit"
             status = "miss"
@@ -185,6 +185,7 @@ class DartPlugin(LanguagePlugin):
             for old in cache_file.parent.glob(cache_file.name.split("-")[0] + "-*.json"):
                 old.unlink(missing_ok=True)
             cache_file.write_text(json.dumps(facts))
+            cache.note_project(project.root)
         return facts, status
 
     @staticmethod

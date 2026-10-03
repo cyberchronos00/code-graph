@@ -264,5 +264,5 @@ A presets file:
 | variable | effect |
 |---|---|
 | `CODEGRAPH_NO_CACHE=1` | disable the TS and Dart extractor facts caches and the native SCIP cache (all keyed by file content) |
-| `CODEGRAPH_CACHE=DIR` | cache location (default `~/.cache/codegraph`) |
+| `CODEGRAPH_CACHE=DIR` | cache root (else `$CODEGRAPH_CACHE_DIR`, `%LOCALAPPDATA%\codegraph` on Windows, `$XDG_CACHE_HOME/codegraph`, `~/.cache/codegraph`); `cg clean` empties it ([cli.md](cli.md#clean)) |
 | `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0`, `CODEGRAPH_COMPDB`, `CODEGRAPH_CFAMILY`, ... | Rust / C / C++ options: see [native.md](native.md#environment-variables) |

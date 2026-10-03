@@ -36,6 +36,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
   empty answer says whether the graph has no test code, test files without recognised cases, or cases that do not
   reach the target
   ([docs/channels-and-tests.md](docs/channels-and-tests.md), [#71](https://github.com/cyberchronos00/code-graph/issues/71)).
+- `cg clean ROOT` removes a project's cache entries (and those of every project indexed below ROOT), `--stale` the
+  entries no cg reads again (older cache versions and layouts, orphaned `.tmp` / `.lock` files), `--all` the whole
+  cache except the extractors (`--extractors` too); `--db` deletes a graph DB with its `-wal` / `-shm`, `--dry-run`
+  lists without deleting, and a cache root of `/` or `$HOME` is refused. `cg doctor` shows the cache size per kind.
+  Every cache user now resolves one root (`$CODEGRAPH_CACHE`, `$CODEGRAPH_CACHE_DIR`, `$XDG_CACHE_HOME/codegraph`,
+  `~/.cache/codegraph`, `%LOCALAPPDATA%\codegraph`); SCIP outputs and TS / Dart facts carry the project key and cache
+  version in their names, so each re-runs once after the update
+  ([docs/cli.md](docs/cli.md#clean), [#80](https://github.com/cyberchronos00/code-graph/issues/80)).
 
 ## [0.7.1] - 2026-10-03
 

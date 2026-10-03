@@ -75,7 +75,7 @@ def test_single_run_and_cache_hit_unchanged(tmp_path, monkeypatch):
     cmd = _fake(tmp_path)
     p1, i1 = runner.run_cached("fake", "m" * 20, cmd, tmp_path, "--out", 60)
     p2, i2 = runner.run_cached("fake", "m" * 20, cmd, tmp_path, "--out", 60)
-    assert i1["cache"] == "miss" and i2["cache"] == "hit" and p1 == p2 and p1.name == f"fake-v{runner.fsutil.CACHE_VERSION}-{'m' * 20}.scip"
+    assert i1["cache"] == "miss" and i2["cache"] == "hit" and p1 == p2 and p1.name == f"fake-v{runner.fsutil.CACHE_VERSION}-{runner.cache.root_key(tmp_path)}-{'m' * 20}.scip"
     assert "lock_wait_seconds" not in i2
 
 

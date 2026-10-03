@@ -27,6 +27,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from ...core.model import EXACT, HEURISTIC
+from ...core import cache, fsutil
 from ..native import runner
 from . import indexstore as ix
 
@@ -87,7 +88,7 @@ def _build(root: Path, files: list[str], swift: str, lib: str) -> tuple[Path | N
     srcs = list(files) + [f for f in ("Package.swift", "Package.resolved") if (root / f).exists()]
     srcs += [p.name for p in root.glob("Package@swift-*.swift")]
     key = runner.fingerprint(root, srcs, f"swift-index|{runner.tool_version(swift, ('--version',))}")
-    build = runner.cache_dir().parent / "swift-build" / runner.fingerprint(root, [], "swift-build-dir")[:16]
+    build = cache.subdir("swift-build") / cache.swift_build_key(root)
     stamp = build / "codegraph-stamp.json"
     info = {"source": "swift build", "toolchain": swift, "lib": lib, "build_path": str(build)}
     timeout = int(os.environ.get("CODEGRAPH_INDEXER_TIMEOUT", "3600"))
@@ -105,6 +106,7 @@ def _build(root: Path, files: list[str], swift: str, lib: str) -> tuple[Path | N
             return stores[0], info
         info["cache"] = "miss"
         build.mkdir(parents=True, exist_ok=True)
+        cache.note_project(root)
         cmd = [swift, "build", "--enable-index-store", "--build-path", str(build)]
         info["command"] = " ".join(cmd[1:])
         t0 = time.time()
@@ -134,7 +136,7 @@ def _build(root: Path, files: list[str], swift: str, lib: str) -> tuple[Path | N
             info["partial"] = True
             info["build_error"] = first
         else:
-            stamp.write_text(json.dumps({"key": key}))
+            stamp.write_text(json.dumps({"key": key, "cache_version": fsutil.CACHE_VERSION}))
         return (stores[0] if stores else None), info
 
 
