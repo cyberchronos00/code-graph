@@ -101,7 +101,11 @@ Properties are attribute reads, not references. A call through the table (`for c
 table can hold, at `resolved` confidence; it replaces the unique-name guess cg made before. The table's elements are
 followed through copies and the functions that build it: `copy.copy()` / `copy.deepcopy()` / `.copy()`, `list()` /
 `sorted()`, filtering comprehensions, a project function that returns the collection, and a constant key or index of
-a dict or tuple it returns (`plan = setup(); for p in plan["plugins"]: p.index()`). A local decorator also
+a dict or tuple it returns (`plan = setup(); for p in plan["plugins"]: p.index()`), also when these steps chain
+(a deep copy of a module list, filtered in a setup helper, returned in a dict and filtered again inside the loop that
+calls it). A call on the items of a list of instances goes to the method each item's class has (inherited or
+overridden), and `impact` on an override or on the base lists the loop. Items of an unknown type add no edge.
+A local decorator also
 gets `CALLS owner -> decorator` with `via="decorator"`. Function-local imports (`from . import routes as R` inside a
 def) resolve per function.
 

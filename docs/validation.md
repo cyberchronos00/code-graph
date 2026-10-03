@@ -35,6 +35,14 @@ fastapi/full-stack-fastapi-template, opentelemetry-python, ansible, flask, pytes
 [python.md](python.md#validation). Test indexing (pytest, unittest, fixtures, Django / DRF test clients) is validated on
 the same projects: see [python.md](python.md#tests-pytest-and-unittest).
 
+`tests.py` modules and collection chains, checked on django (211 `tests.py` files), netbox, saleor, ansible,
+opentelemetry-python, mkdocs, flake8, httpie, beets, sphinx and pylint: every graph is identical before and after (same
+nodes, edges and attributes; index time within noise, for example django 50.5 s -> 52.2 s, saleor 62.8 s -> 62.7 s).
+The Django `tests.py` files hold test cases and stay test code, and no collection call gained or lost an edge. On cg's
+own source, the two plugin modules named `tests.py` that application code imports became application code (136
+nodes, 148 test edges back to calls), and `index_project` gained the 9 calls through its framework and language plugin
+lists (every framework plugin's `contribute`, the SCIP indexer plugins' `index`), all correct.
+
 ## Flutter / Dart
 
 | Project | What it exercises | .dart files | Index | Nodes / edges | HTTP call sites (endpoints) | Pages | Parse failures |

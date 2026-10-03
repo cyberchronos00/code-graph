@@ -32,6 +32,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - Python: a module named `tests.py` that application code imports and that defines no test case is application code,
   so its calls count as callers in `impact` and its functions are no longer test code. A Django app's `tests.py` with
   test cases stays test code ([#49](https://github.com/cyberchronos00/code-graph/issues/49)).
+- Python: calls on the items of a list of instances are followed through longer chains: a copy of a module-level
+  list, filtered in a setup helper, returned in a dict and filtered again before the loop (`for fw in fws:
+  fw.contribute()`) now gets `CALLS` (via collection) to each item's method, so `impact` and `tests` on the base
+  method and its overrides find the loop ([#50](https://github.com/cyberchronos00/code-graph/issues/50)).
 - Python files that use Python 3.14's unparenthesized `except A, B:` are parsed on older interpreters too (re-parsed
   with the parentheses added) instead of counting as parse failures
   ([#16](https://github.com/cyberchronos00/code-graph/issues/16)).

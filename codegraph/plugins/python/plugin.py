@@ -260,6 +260,9 @@ class PyProgram:
         self.classes: dict[str, ClassInfo] = {}   # qual -> ClassInfo
         self.funcs: dict[str, FuncInfo] = {}      # qual -> FuncInfo (functions + methods)
         self.method_index: dict[str, list[FuncInfo]] = {}
+        self._elements_active: set = set()        # (id(expr), mode) being followed by elements(): cycle guard
+        self._collection_steps: int | None = None  # steps left for the call site dispatch_targets is resolving
+        self._returns: dict = {}                  # id(FuncInfo) -> [(return expr, ctx)]
         self.parse_errors: list[dict] = []
         self.attr_rules: list[Callable] = []      # (prog, base_type, attr, ctx) -> type | None
         self.call_rules: list[Callable] = []      # (prog, call, func_type, ctx) -> type | None
@@ -936,7 +939,14 @@ class PyProgram:
     # ---- calls through a collection (dispatch tables, plugin lists, callback registries)
     def dispatch_targets(self, fn, ctx: "Ctx") -> list:
         """Callee drawn from a collection of known functions / classes / instances: `for check in CHECKS: check(x)`,
-        `HANDLERS[kind](x)`, `HANDLERS.get(kind)(x)`, `for p in PLUGINS: p.index()`. -> [(target, RESOLVED, "collection")]"""
+        `HANDLERS[kind](x)`, `HANDLERS.get(kind)(x)`, `for p in PLUGINS: p.index()`. -> [(target, RESOLVED, "collection")]
+        Following the collection back to its literals takes at most COLLECTION_STEPS steps per call site."""
+        if self._collection_steps is None:
+            self._collection_steps = COLLECTION_STEPS
+            try:
+                return self.dispatch_targets(fn, ctx)
+            finally:
+                self._collection_steps = None
         out, seen = [], set()
 
         def add(tgt):
@@ -1000,9 +1010,29 @@ class PyProgram:
         keys, values -> dict values) behind names, module constants, class attributes, `*spread`, `+`,
         list()/tuple()/sorted(), `copy.copy()` / `copy.deepcopy()`, filtering comprehensions, the return value of a
         project function and a constant key of a dict / tuple it returns (`setup()["plugins"]`); module-level
-        `.append()` / `.extend()` / `[k] = v` / `.update()` / `.add()` count too."""
-        if e is None or depth > 6:
+        `.append()` / `.extend()` / `[k] = v` / `.update()` / `.add()` count too. Each hop (a local name, a copy, a
+        filter, a returned value) costs one level of depth; a hop back to an expression already being followed (`x = x
+        + [...]`) is a cycle and adds nothing."""
+        if e is None or depth > COLLECTION_DEPTH or not self._collection_step():
             return []
+        key = (id(e), mode)
+        active = self._elements_active
+        if key in active:
+            return []
+        active.add(key)
+        try:
+            return self._elements(e, ctx, mode, depth)
+        finally:
+            active.discard(key)
+
+    def _collection_step(self) -> bool:
+        """Spend one step of the current call site's budget (unlimited outside dispatch_targets)."""
+        if self._collection_steps is None:
+            return True
+        self._collection_steps -= 1
+        return self._collection_steps >= 0
+
+    def _elements(self, e, ctx: "Ctx", mode: str, depth: int) -> list:
         if isinstance(e, (ast.List, ast.Tuple, ast.Set)):
             out = []
             for x in e.elts:
@@ -1090,22 +1120,36 @@ class PyProgram:
         if not t or t[0] not in ("func", "bound") or not isinstance(t[1], FuncInfo):
             return []
         f = t[1]
-        fctx = Ctx(f.module, f, f.cls)
-        out, stack = [], list(f.node.body)
-        while stack:
-            n = stack.pop()
-            if isinstance(n, ast.Return):
-                if n.value is not None:
-                    out.append((n.value, fctx))
-            elif not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
-                stack.extend(ast.iter_child_nodes(n))
-        return out
+        got = self._returns.get(id(f))
+        if got is None:
+            fctx = Ctx(f.module, f, f.cls)
+            got, stack = [], list(f.node.body)
+            while stack:
+                n = stack.pop()
+                if isinstance(n, ast.Return):
+                    if n.value is not None:
+                        got.append((n.value, fctx))
+                elif not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                    stack.extend(ast.iter_child_nodes(n))
+            self._returns[id(f)] = got
+        return got
 
     def values_of(self, e, ctx: "Ctx", depth: int) -> list:
         """(expr, ctx) for the values `e` may hold: through local and module names and the returns of a called
-        project function; `e` itself otherwise."""
-        if depth > 6:
+        project function; `e` itself otherwise. A value that leads back to itself (recursive helpers) adds nothing."""
+        if depth > COLLECTION_DEPTH or not self._collection_step():
             return []
+        key = (id(e), "value")
+        active = self._elements_active
+        if key in active:
+            return []
+        active.add(key)
+        try:
+            return self._values_of(e, ctx, depth)
+        finally:
+            active.discard(key)
+
+    def _values_of(self, e, ctx: "Ctx", depth: int) -> list:
         if isinstance(e, ast.Name):
             if ctx.func is not None:
                 lv = self.local_vars(ctx)
@@ -1185,6 +1229,12 @@ class Ctx:
 
 
 COPY_FUNCS = {"copy.copy", "copy.deepcopy", "copy", "deepcopy"}
+# hops elements() / values_of() follow from a collection use back to its literal: `for fw in fws` -> a filter ->
+# `plan["plugins"]` -> the helper's return -> another filter -> a copy -> the module constant takes about ten
+COLLECTION_DEPTH = 16
+# steps (elements() / values_of() calls) one call site may spend: chains through helpers with many returns branch,
+# and the budget keeps that linear; the deepest chain in the tests and OSS validation takes a few hundred
+COLLECTION_STEPS = 2000
 BUILTINS = {"len", "str", "int", "float", "dict", "list", "set", "tuple", "print", "isinstance", "getattr", "setattr",
             "hasattr", "super", "open", "range", "enumerate", "zip", "map", "filter", "sorted", "min", "max", "sum",
             "any", "all", "bool", "type", "repr", "iter", "next", "round", "abs", "format", "id", "vars", "callable",
