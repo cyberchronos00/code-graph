@@ -10,6 +10,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Python web routes: apps / routers received as a parameter (`def register_routes(app)`, bound through the call
+  that passes a known app or the pytest fixture of that name), returned by a factory (`app = create_app()`,
+  `app.mount("/admin", make_admin())`) or built from a Flask subclass defined in a function; fastapi-utils
+  `@cbv` / `InferringRouter`, classy-fastapi `Routable`, flask-restful / flask-restx resources; Flask
+  `MethodView` / `View` `methods`, endpoint-only `add_url_rule`, `@app.endpoint`, `view_functions[...]`, werkzeug
+  `Rule` / `Submount`, `subdomain=` / `defaults=`, blueprints registered twice and the built-in static route;
+  Starlette `Host` / `app.host()` as a `host` attribute instead of a path. FastAPI dependencies now record what
+  they check (statuses raised, security schemes, nested dependencies), and one that rejects with 401 / 403 counts as
+  an auth guard in `cg routes`. pallets/flask: 223 -> 305 of 331 test requests linked.
+
 - Swift exact mode: the compiler's index store, read through the toolchain's `libIndexStore` (Linux included), replaces
   the heuristic call / constructor edges of every file it covers. cg runs `swift build --enable-index-store` into its
   cache for a SwiftPM package with `CODEGRAPH_SWIFT_INDEX=1` (reused while sources, manifests and toolchain are

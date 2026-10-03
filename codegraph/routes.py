@@ -142,23 +142,36 @@ def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
     """Every guard-like fact recorded on a route, deduplicated by name, each with kind, source and an auth flag."""
     out, seen = [], set()
 
-    def add(name, kind, source, display=None, auth=None):
+    def add(name, kind, source, display=None, auth=None, checks=None):
         k = (name or "").lower()
         if not name or k in seen:
             return
         seen.add(k)
         why = (is_auth.why(name) if hasattr(is_auth, "why") else ("name pattern" if is_auth(name) else None)) \
             if auth is None else ("framework" if auth else None)
+        if why is None and checks and checks.get("effect") == "rejects":
+            # a FastAPI dependency whose source rejects the request (HTTPException 401 / 403, a security scheme,
+            # or a nested dependency that does), whatever its name
+            how = f"security scheme {checks['scheme']}" if checks.get("scheme") else \
+                f"via {checks['rejects_via']}" if checks.get("rejects_via") and not checks.get("rejects") else \
+                "raises " + "/".join(str(x) for x in checks.get("rejects", []))
+            why = f"dependency check ({how})"
         g = {"name": display or name, "kind": kind, "source": source, "auth": why is not None,
              "secret": is_auth.secret(name) if hasattr(is_auth, "secret") else bool(SECRET_RE.search(tokens(name)))}
         if why:
             g["auth_by"] = why
+        if checks:
+            g["checks"] = checks
         out.append(g)
     if attrs.get("broadcast_auth"):
         add("channel callbacks", "broadcast-auth", "Laravel BroadcastController: authenticated user + Broadcast::channel callback",
             auth=True)
     for key, kind in GUARD_ATTRS:
-        for n in _names(attrs.get(key)):
+        v = attrs.get(key)
+        for x in (v if isinstance(v, list) else [v]):
+            if isinstance(x, dict) and x.get("checks"):
+                add(_names(x)[0] if _names(x) else None, kind, f"attrs.{key}", checks=x["checks"])
+        for n in _names(v):
             add(n, kind, f"attrs.{key}")
     for c in attrs.get("conditions") or []:
         if isinstance(c, str) and c.startswith("wrapped:"):

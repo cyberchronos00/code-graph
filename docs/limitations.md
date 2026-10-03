@@ -119,12 +119,16 @@ Issues and pull requests that extend it are welcome.
     entry point, and console scripts declared only in a `setup.py` built at run time (entry points computed by code)
     are not read;
   - FastAPI / Starlette and Flask routes are modelled from the app / router / blueprint objects a module or function
-    assigns. Routes on an object passed in from elsewhere (`def register(app): @app.get(...)`), class-based routers
-    (fastapi-utils `@cbv`), Starlette `Host` routing, Flask `MethodView` `methods` overrides and `url_defaults` are not;
-    a view defined inside an app factory routes to the factory (nested defs collapse into the enclosing def). An
-    `APIRouter` / `Blueprint` that no app includes gets route nodes that are not entry points (`mounted: false`).
-    Route access lists `Depends()` / `Security()` dependencies and Flask view decorators by name; what a dependency
-    checks is not evaluated;
+    assigns, returns, or receives as a parameter. A parameter counts as an app when its annotation says so, or when
+    it is used for route registration and the module imports one framework; one received from code cg cannot see
+    (no call with a known app, no pytest fixture of that name) is a root app of its own. A view defined inside a
+    function routes to that function (nested defs collapse into the enclosing def). An `APIRouter` / `Blueprint`
+    that no app includes gets route nodes that are not entry points (`mounted: false`). Route nodes are keyed by
+    method and path, so a Starlette `Host` / Flask `subdomain` route shares its node with a same-path route on
+    another host (the `host` / `subdomain` attribute is the first one seen). Not read: Flask-Classful `FlaskView`,
+    `url_value_preprocessor`-based URL parts, custom converters (`<path:x>` matches one segment), routes added in
+    loops. A `Depends()` dependency's checks are read from its own source (statuses it raises, security schemes,
+    nested dependencies up to 4 levels); checks made in middleware or in called helpers are not;
   - web frameworks without a plugin (Sanic, Litestar, Bottle, …): their route decorators are reported as blind spots
     (detector `python_decorator_routes`) instead of routes;
   - URL confs built in loops/functions (e.g. plugin registries that generate `path()` lists at import time) and views
