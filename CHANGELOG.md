@@ -8,7 +8,40 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-03
+
+Enum cases and constants as nodes with `USES_VALUE` references (#84), `cg parity` port gap reports (#85), scoped
+`cg tests` (#87), Swift `#if` type variants and SwiftPM module visibility (#86, #90), Apple platforms from the Xcode
+project (#74), CLI output cleanup (#75), Python host-aware routes (#59), tests that run programs in a subprocess
+(#60), more bridges (#61), receiver-aware dispatch in Kotlin / Swift / Dart / PHP (#62), fewer platform divergence
+false positives (#63), packaging housekeeping (#65) and Kotlin navigation constants (#67).
+
+**Upgrade notes**
+
+- The cache version goes from 2 to 3 (#84): the first index after the upgrade re-runs every indexer instead of
+  reusing cached results. `cg clean --stale` removes the version-2 entries.
+- CLI output changed (see **Changed**): `cg coverage` prints a summary by default (`--details` for the full
+  report); `cg stats` and `cg node` print text, with one JSON document under `--json`; `cg search` paths are
+  root-relative; `cg tests` scopes and sections its list; `cg platforms divergence` adds a "not listed" line and
+  the counts JSON gains `missing_callee_skipped_no_target`; `cg doctor <root>` adds `project:` lines. The JSON that
+  `cg index` prints and the `cg link --report` Markdown are unchanged.
+- Graph ids: Python routes registered for a host or subdomain carry ` @<host>` in their id (#59); a Swift type
+  defined in a second `#if` branch is `class:T@<line>` (#86).
+
 ### Added
+
+- Enum cases and constants (#84): Swift, Kotlin, TypeScript / JavaScript, Python and PHP index enum cases as
+  `enum_case` and constants as `constant` nodes (CONTAINS from their type or module), with `USES_VALUE` edges where
+  the binding is certain (`Type.case`, `.case` with a known contextual type, `Type.NAME`, imports, `self::NAME`, ...).
+  Rust and C / C++ keep their kind names; docs/schema.md maps them. `cg coverage --details` gains a `values:` line
+  (`values` in `--json`); the web view gets enum_case / constant kind chips.
+- `cg parity --db SRC --against TGT` (#85): the types, functions, enum cases and constants of one graph with no
+  counterpart in another (an iOS app and its Android port), grouped by folder, with explicit / exact / normalized /
+  fuzzy / moved match confidence, a `--map` rename file and `--strip-prefix`. docs/parity.md.
+- Python web routes (#59): host-aware route ids for Flask `host=` / `subdomain=` and Starlette `Host` routes, `<path:p>`
+  / `{p:path}` as `{p*}`, test linking narrowed by request host and by the routes a test registers,
+  `app.dependency_overrides` on `TEST_HTTP` edges, `Depends(Class(...))` reading `__call__`, `app.add_middleware`,
+  Flask-Classful views and registrations in loops over literal lists.
 
 - Kotlin (#67): Compose Navigation routes held in string constants (`composable(Destinations.TASKS_ROUTE)`, constants
   inside route and `navigate("${Screens.TASKS}/$id")` strings) become pages and `NAVIGATES_TO` edges; `cg doctor
@@ -50,6 +83,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- `cg tests` and the MCP `tests_covering` (#87) keep transitive tests near the target: `--max-depth` (default 3)
+  hops through application code, UI / snapshot tests in their own section (`--unit-only` leaves them out), tests
+  through app roots (`@main`, Kotlin `*Activity`, `--exclude-root`) left out unless `--through-roots`, and a
+  "not listed:" line counting what was left out.
 - CLI output (#75):
   - `cg coverage` prints a short summary by default: one line per language that isn't fully indexed, syntax error
     counts, files per platform target and blind spots. `--details` gives the full report, which is what `--all-files`
@@ -60,6 +97,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Swift `#if` variants (#86): a type defined once per `#if` / `#elseif` / `#else` branch keeps each definition as
+  its own node (`class:T@<line>`) with its own members, instead of dropping or merging the second; `#if` conditions
+  with parentheses and `!( ... )` are parsed as written; a member a variant gets from a protocol requirement or from
+  its SDK superclass is not reported missing. Kotlin common code binds to the `expect` class, and per-platform test
+  source sets carry their platform. Divergence missing_callee: Kingfisher 148 → 37, SwiftUIX 220 → 42.
+- SwiftPM module visibility (#90): code in a SwiftPM package target binds only to its own module and its dependencies
+  (`plugins/swift/packages.py` reads every local `Package.swift`), not to declarations that exist only in an app,
+  extension, preview or test target. Index-store precision: isowords 0.938 → 0.970, Alamofire 0.964 → 0.967.
 - Specs (#75): `Class.method` and `Class::method` both work in every language, and the `cg tests` help example no
   longer suggests a form that matches nothing in Swift or Kotlin. Other fixes:
   - The coverage install hint for a tree-sitter language names only the modules that are missing.
@@ -628,7 +673,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/cyberchronos00/code-graph/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/cyberchronos00/code-graph/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/cyberchronos00/code-graph/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/cyberchronos00/code-graph/compare/v0.7.1...v0.8.0
