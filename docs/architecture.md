@@ -145,7 +145,11 @@ Dispatch: trait and virtual method calls land on the declaring method. IMPLEMENT
 fan out to every impl or override, so `reaches` on an impl method includes the callers that go through the trait.
 `impact` reads these hops as the override relation, not as calls: the base method is shown as `overrides:` instead
 of a caller, its callers count `via base`, and `impact` on a base method adds the callers of its overrides
-(`via override`), the calls that a plugin loop or a base-typed value make on the concrete overrides.
+(`via override`), the calls that a plugin loop or a base-typed value make on the concrete overrides. `tests` and
+`reaches` seed their walk the same way (the override's tests and dependents, marked `via override`). TypeScript
+classes get the same edges from the extractor: EXTENDS / IMPLEMENTS between project classes, OVERRIDDEN_BY from the
+nearest base class member to the override, IMPLEMENTED_BY from a class used with `implements` to the method that
+implements it.
 
 ## How `reaches` works
 1. A recursive CTE walks propagating edges in reverse from the target(s), with an optional minimum confidence, and

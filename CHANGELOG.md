@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- `tests` and `reaches` follow overrides like `impact`: on a base or interface method they include the tests and the
+  dependents of its overrides, marked `via override` (`via_override` in JSON and MCP). `Sub.method` for a method a
+  class inherits without redefining it resolves through its ancestors to the inherited definition (`B.run ->
+  inherited from Base.run`), following only the overrides below `Sub`. TypeScript classes get EXTENDS / IMPLEMENTS
+  and OVERRIDDEN_BY / IMPLEMENTED_BY edges, so the override relation works for them too
+  ([#53](https://github.com/cyberchronos00/code-graph/issues/53)).
+
 - Web / native bridges: Capacitor plugin calls (`registerPlugin`, `Plugins.X`, `@capacitor/*` package exports,
   `nativePromise`), React Native / Expo native module calls (`NativeModules`, `TurboModuleRegistry`,
   `requireNativeModule`) and Flutter method / event channel calls link through a shared

@@ -361,7 +361,10 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
         return "\n".join(pline) + ("\n" if pline else "") + (f"targets: {tl}\nnothing depends on the target(s) over dependency edges (min_confidence={min_confidence}). "
                 f"try: node() for its direct edges; downstream() for what it reaches; a lower min_confidence")
     live_e = sum(1 for e in entries if e.get("gate_status", "live") == "live")
-    out = pline + [f"targets: {tl} | gate={res.get('gate')} | conf>={min_confidence}",
+    extra = Q.inherited_lines(res) + ([f"overrides followed (their dependents count, marked via override): "
+                                       f"{', '.join(short(x) for x in res['overrides_followed'][:8])}"]
+                                      if res.get("overrides_followed") else [])
+    out = pline + [f"targets: {tl} | gate={res.get('gate')} | conf>={min_confidence}", *extra,
            f"dependents: {len(code)} code ({', '.join(f'{k.lower()} {len(v)}' for k, v in groups.items())}); "
            f"entry points {len(entries)} ({live_e} live): " + ", ".join(f"{k}×{n}" for k, n in sorted(
                defaultdict(int, {k: sum(1 for e in entries if _ekind(e) == k) for k in {_ekind(e) for e in entries}}).items()))]
@@ -388,6 +391,8 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
             out.append(f"[{k}]")
             for i in sorted(buckets[k], key=lambda x: (x["depth"], x.get("fqn") or "")):
                 line = f"  {short(i.get('fqn') or i['id'])}{Q.platform_label(i)}  {ek_str(i['entry_kinds'])} d{i['depth']}"
+                if i.get("via_override"):
+                    line += f" (via override {short(i['via_override'])})"
                 if gname == "GATED":
                     ev = i.get("gate_evidence") or {}
                     line += f"  {i['gate_status']} guard {at(ev.get('guard') or '')} hop {ev.get('kind')}@{at(ev.get('at') or '')}"
@@ -627,7 +632,9 @@ def tests_covering(target: str, min_confidence: str = "heuristic", paths: bool =
     HTTP request to the route ($this->getJson('/x'), Playwright request.get). TRANSITIVE: through application code
     (test -> route -> controller -> service -> target). target: Class::method | Class | route:VERB /uri | `VERB /path`
     or /path (matched against route URIs) | table.column | any node id. Tests are PHPUnit / Pest (tests/), Vitest / Jest
-    / Playwright / Cypress spec files; they never count as callers in the other queries."""
+    / Playwright / Cypress spec files; they never count as callers in the other queries. A base / interface method
+    also lists the tests of its overrides, marked `via override X`; `Sub.method` for an inherited method resolves to
+    the definition it inherits (noted)."""
     res = Q.tests_covering(_st(), target, min_conf=min_confidence)
     _scope(res.get("targets") or [])
     return Q.render_tests_covering(res, show_paths=paths)

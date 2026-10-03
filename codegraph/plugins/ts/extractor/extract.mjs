@@ -1056,6 +1056,75 @@ function addEdge(src, dst, kind, file, line, conf, attrs) {
   edges.push({ src, dst, kind, file, line, confidence: conf, attrs: attrs || undefined })
 }
 const callSites = []
+
+// ---------- class hierarchy: EXTENDS / IMPLEMENTS between project classes, OVERRIDDEN_BY base method -> override ----------
+// (a call on a base-typed value resolves to the base declaration; the override edge lets impact / tests reach the
+// callers of the base from an override and the callers of the overrides from the base)
+{
+  const memberNode = (cls, name) => {
+    for (const m of cls.members || []) {
+      if (m.name && (ts.isIdentifier(m.name) || ts.isPrivateIdentifier(m.name) || ts.isStringLiteralLike(m.name)) && m.name.text === name
+          && (ts.isMethodDeclaration(m) || ts.isGetAccessor(m) || ts.isSetAccessor(m) || ts.isPropertyDeclaration(m)) && declId.has(m)) return declId.get(m)
+    }
+    return null
+  }
+  const baseClassOf = cls => {
+    for (const h of cls.heritageClauses || []) {
+      if (h.token !== ts.SyntaxKind.ExtendsKeyword || !h.types.length) continue
+      let sym = null
+      try { sym = checker.getSymbolAtLocation(h.types[0].expression) } catch { }
+      for (let i = 0; sym && (sym.flags & ts.SymbolFlags.Alias) && i < 6; i++) { try { sym = checker.getAliasedSymbol(sym) } catch { sym = null } }
+      const d = sym && (sym.declarations || []).find(x => ts.isClassDeclaration(x) || ts.isClassExpression(x))
+      return d && projectDecl(d) ? d : null
+    }
+    return null
+  }
+  const implementedClasses = cls => {
+    const out = []
+    for (const h of cls.heritageClauses || []) {
+      if (h.token !== ts.SyntaxKind.ImplementsKeyword) continue
+      for (const t of h.types) {
+        let sym = null
+        try { sym = checker.getSymbolAtLocation(t.expression) } catch { }
+        for (let i = 0; sym && (sym.flags & ts.SymbolFlags.Alias) && i < 6; i++) { try { sym = checker.getAliasedSymbol(sym) } catch { sym = null } }
+        const d = sym && (sym.declarations || []).find(x => ts.isClassDeclaration(x))
+        if (d && projectDecl(d)) out.push(d)
+      }
+    }
+    return out
+  }
+  let nh = 0, no = 0
+  for (const [decl, id] of declId) {
+    if (!ts.isClassDeclaration(decl) || !id.startsWith('class:')) continue
+    const sf = decl.getSourceFile()
+    if (!projectSf(sf)) continue
+    const r = rel(realFile(sf))
+    for (const h of decl.heritageClauses || []) {
+      const kind = h.token === ts.SyntaxKind.ExtendsKeyword ? 'EXTENDS' : 'IMPLEMENTS'
+      for (const t of h.types) {
+        let sym = null
+        try { sym = checker.getSymbolAtLocation(t.expression) } catch { }
+        const tgt = sym && resolveSymbol(sym)
+        if (tgt && /^(class|type):/.test(tgt.id) && tgt.id !== id) { addEdge(id, tgt.id, kind, r, lineOf(t, sf), tgt.conf); nh++ }
+      }
+    }
+    // each method overrides the nearest base class declaring a member of that name
+    for (const m of decl.members || []) {
+      if (!(ts.isMethodDeclaration(m) || ts.isGetAccessor(m) || ts.isSetAccessor(m)) || !declId.has(m) || !m.name || !ts.isIdentifier(m.name)) continue
+      if (m.modifiers && m.modifiers.some(x => x.kind === ts.SyntaxKind.StaticKeyword)) continue
+      let b = baseClassOf(decl), hit = null
+      for (let i = 0; b && !hit && i < 12; i++) { hit = memberNode(b, m.name.text); if (!hit) b = baseClassOf(b) }
+      if (hit && hit !== declId.get(m)) { addEdge(hit, declId.get(m), 'OVERRIDDEN_BY', r, lineOf(m, sf), 'exact'); no++ }
+      // `implements AbstractRepo` (a class used as an interface): its declared methods are implemented here
+      for (const ic of implementedClasses(decl)) {
+        const im = memberNode(ic, m.name.text)
+        if (im && im !== declId.get(m) && im !== hit) { addEdge(im, declId.get(m), 'IMPLEMENTED_BY', r, lineOf(m, sf), 'exact'); no++ }
+      }
+    }
+  }
+  if (nh) stats.class_heritage_edges = nh
+  if (no) stats.override_edges = no
+}
 const deferredParamCalls = []   // api calls whose URL depends on an enclosing-function parameter
 const subscriptions = []        // realtime channel subscriptions (laravel-echo, pusher-js, useEcho hooks)
 const visits = []               // browser tests opening a page: page.goto('/x'), cy.visit('/x')

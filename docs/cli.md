@@ -31,6 +31,8 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   page with the largest backend reach, the most-called functions). The visual view's preset menu offers them too.
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
+  On a base or interface method it also follows the overrides (listed as `overrides followed`), and the dependents
+  reached only through one are marked `(via override A.m)`.
 - `impact METHOD [--plans-dir DIR]`: reverse walk from a method up to its entry points. A caller that holds the
   function as a value instead of calling it is marked `(ref: collection | callback | assignment | decorator)`, and a
   call through a dispatch table or plugin list `(call through a collection)`. The override relation has its own
@@ -84,6 +86,10 @@ the filter and how many conditions could not be evaluated ([platforms.md](platfo
   registered via `Config::set('database.connections.…')`.
 - `env:WAREHOUSE_DB_HOST`, `config:database.connections.warehouse`: env / config keys.
 - `Class::method`, `Class`, short or FQN: code symbols (suffix match).
+- `Sub.method` / `Sub::method` for a method `Sub` inherits without redefining it: resolves through the class's
+  ancestors (EXTENDS / IMPLEMENTS / trait use, nearest first) to the definition, and the answer says so
+  (`B.run -> inherited from Base.run`). The callers are those of the inherited definition (calls are not narrowed to
+  `Sub` instances); of its overrides only those in `Sub` and its subclasses are followed.
 - `page:/reports/:id`: a Nuxt page by its route path. `app/pages/x.vue`, `app/composables/useX.ts`: a TS module or Vue
   SFC by file (repo-relative, suffix match). `useX`, `useX.fn`, `fn`: a TS composable, store or function.
 - `src/app.ts#listOrders`, `app.ts#listOrders`, `src/svc.ts#OrderService.create`: a TypeScript / JavaScript / Vue

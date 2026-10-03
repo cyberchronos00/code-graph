@@ -180,6 +180,9 @@ Targets: `Class::method`, `Class`, `route:VERB /uri`, `` `VERB /path` `` or `/pa
 `table.column`, or any node id. **Direct** means the test code itself calls or requests the target; **transitive**
 means through application code (test → route → controller → service → target). Both lists start with the closest
 tests (lowest depth). `--no-paths` drops the evidence chains, `--min-confidence` filters by the weakest edge.
+On a base or interface method the tests of its overrides count too, as in `impact` (a plugin loop or a base-typed
+value calls the overrides): those tests are marked `(via override A.m)` (`via_override` in `--json` and MCP), and
+`Sub.method` for an inherited method resolves to the definition it inherits.
 
 MCP: `tests_covering(target, min_confidence?, paths?)`.
 

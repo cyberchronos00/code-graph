@@ -330,3 +330,31 @@ What the findings are, from spot checks:
   `if (Platform.OS !== 'ios') return`). The senderless methods are view-ref methods (`GifView.playAsync`) and
   notification-extension preferences.
 - **immich:** the mobile app talks to native code through Pigeon-generated APIs only, which are not modelled yet.
+
+## Overrides in `tests` / `reaches`, inherited specs, TypeScript class hierarchy
+
+`cg index <repo>` before and after (#53), no flags. TypeScript graphs gain only class hierarchy edges (no node and no
+other edge changes); Python graphs are identical (the change is in the queries).
+
+| Project | Commit | Edges before → after | Added |
+|---|---|---|---|
+| brocoders/nestjs-boilerplate | 9620f15 | 2097 → 2147 | EXTENDS 8, IMPLEMENTS 6, IMPLEMENTED_BY 36 (repositories `implements` an abstract repository class) |
+| bluesky-social/social-app | db23528 | 47632 → 47650 | IMPLEMENTS 13, EXTENDS 2, OVERRIDDEN_BY 3 |
+| mattermost/mattermost-mobile | e5be311 | 81297 → 81308 | IMPLEMENTS 8, EXTENDS 3 |
+| calcom/cal.com `apps/api/v2` | 54343aa | 12304 → 12322 | EXTENDS 9, IMPLEMENTS 9 |
+| elk-zone/elk, breeze-nuxt, node-express-boilerplate | | unchanged | (no class hierarchies) |
+| sphinx-doc/sphinx (Python) | b04a210 | 33264 → 33264 | none |
+
+Spot checks: every added edge was a real `extends` / `implements` / override. On social-app,
+`impact MergeFeedSource_Following._getFeed` had no callers and now lists `MergeFeedSource._fetchNextInner` (via the
+base `_getFeed`) up to `fetchNext`; on nestjs-boilerplate the repository implementations were already reached through
+Nest's BOUND_TO edges and now also state `overrides: FileRepository.create`. Calls on a TypeScript **interface** type
+(`api.fetch()` with `api: FeedAPI`) still have no target node, because interface members are not nodes.
+
+Queries on sphinx (graph unchanged): `reaches` on `ASTBaseBase._stringify` (135 overrides) 26 → 31 dependents (5 via
+override), on `Builder.write_doc` 25 → 26; `tests` counts unchanged there, since sphinx's calls land on the base
+declarations. `DirectoryHTMLBuilder.write_doc` (inherited) answered "no method matches" and now resolves to
+`StandaloneHTMLBuilder.write_doc` (27 callers, 504 tests). On cg itself `tests FrameworkPlugin.contribute` goes from 0
+to 226 tests (via the plugins' overrides) and `impact FlaskPlugin.contribute` resolves to the inherited
+`_PyWebPlugin.contribute`. Index times are unchanged within noise (social-app 18.4 → 16.8 s, mattermost 25.7 → 26.4 s,
+cal.com api v2 7.2 → 7.0 s, sphinx 7.9 → 7.8 s; single runs).

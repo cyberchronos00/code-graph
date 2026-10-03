@@ -31,7 +31,120 @@ CLASS_KINDS = ("class", "interface", "trait", "enum")
 def resolve_targets(st: GraphStore, spec: str) -> list[str]:
     """spec: kind:key (glob * allowed) | table.column | Class::method | Class (short or FQN)
     | page:/route/path | a source file path (repo-relative, or repo/... in a combined DB)
-    | TS symbol (useX, useX.fn, fn)."""
+    | TS symbol (useX, useX.fn, fn). `Sub.method` for a method Sub inherits without redefining it resolves to the
+    inherited definition (inherited_targets has the details)."""
+    out = _resolve_direct(st, spec)
+    if out:
+        return out
+    return [i["method"] for i in inherited_targets(st, spec)]
+
+
+INHERIT_KINDS = ("EXTENDS", "IMPLEMENTS", "USES_TRAIT")
+_INHERITED: dict = {}
+
+
+def inherited_targets(st: GraphStore, spec: str) -> list[dict]:
+    """`Sub.method` / `Sub::method` where Sub defines no `method` but an ancestor class does: one entry per matching
+    class, {spec, class, class_fqn, method, method_fqn, defined_in}: the nearest ancestor's definition (breadth-first
+    over EXTENDS / IMPLEMENTS / USES_TRAIT, in declaration order). [] when the spec names a defined symbol or no
+    ancestor defines the method."""
+    path = getattr(st, "path", None)
+    try:
+        key = (path, os.path.getmtime(path), spec) if path else None
+    except OSError:
+        key = None
+    if key is None:
+        return _inherited_uncached(st, spec)
+    if key not in _INHERITED:
+        if len(_INHERITED) > 256:
+            _INHERITED.clear()
+        _INHERITED[key] = _inherited_uncached(st, spec)
+    return _INHERITED[key]
+
+
+def _inherited_uncached(st: GraphStore, spec: str) -> list[dict]:
+    out: list[dict] = []
+    m = re.fullmatch(r"(.+?)(?:\.|::)([A-Za-z_$][\w$]*)", spec)
+    if m and not spec.startswith(("page:", "/")) and not _resolve_direct(st, spec):
+        cls_spec, meth = m.group(1), m.group(2)
+        classes = [c for c in _resolve_direct(st, cls_spec) if c.split(":", 1)[0] in CLASS_KINDS]
+        for cid in dict.fromkeys(classes):
+            seen, frontier, hit = {cid}, [cid], None
+            while frontier and not hit:
+                nxt = []
+                for c in frontier:
+                    for r in st.q(f"SELECT dst FROM edges WHERE src=? AND kind IN ({','.join('?' * len(INHERIT_KINDS))}) "
+                                  "ORDER BY line, dst", (c, *INHERIT_KINDS)):
+                        if r["dst"] not in seen:
+                            seen.add(r["dst"])
+                            nxt.append(r["dst"])
+                for a in nxt:
+                    hit = _member_of(st, a, meth)
+                    if hit:
+                        hit = (a, hit)
+                        break
+                frontier = nxt
+            if hit:
+                fq = _fqn_of(st, [cid, hit[0], hit[1]])
+                out.append({"spec": spec, "class": cid, "class_fqn": fq.get(cid, cid), "method": hit[1],
+                            "method_fqn": fq.get(hit[1], hit[1]), "defined_in": hit[0]})
+    return out
+
+
+def _member_of(st: GraphStore, cls: str, name: str) -> str | None:
+    """The method `name` a class node contains (Python `Base.run`, TS `Shape.area`, PHP `X::run`)."""
+    for r in st.q("SELECT n.id, n.name FROM edges e JOIN nodes n ON n.id=e.dst WHERE e.src=? AND e.kind='CONTAINS' "
+                  "AND n.kind IN ('method','function')", (cls,)):
+        nm = r["name"] or ""
+        if nm == name or nm.endswith("." + name) or nm.endswith("::" + name):
+            return r["id"]
+    fq = st.q("SELECT fqn FROM nodes WHERE id=?", (cls,))
+    if fq and fq[0]["fqn"]:          # PHP classes hold their methods by fqn (Class::method), not CONTAINS
+        r = st.q("SELECT id FROM nodes WHERE kind='method' AND fqn=?", (fq[0]["fqn"] + "::" + name,))
+        if r:
+            return r[0]["id"]
+    return None
+
+
+def _descendants(st: GraphStore, classes: list[str]) -> set[str]:
+    seen, frontier = set(classes), list(classes)
+    kq = ",".join("?" * len(INHERIT_KINDS))
+    while frontier:
+        nxt = []
+        for c in frontier:
+            for r in st.q(f"SELECT src FROM edges WHERE dst=? AND kind IN ({kq})", (c, *INHERIT_KINDS)):
+                if r["src"] not in seen:
+                    seen.add(r["src"])
+                    nxt.append(r["src"])
+        frontier = nxt
+    return seen
+
+
+def override_seeds(st: GraphStore, spec_or_specs, targets: list[str], min_conf: str) -> list[str]:
+    """The overrides / implementations below method targets (impact, tests and reaches follow them: a call through a
+    base-typed value or a collection lands on an override). For an inherited spec (`Sub.method` resolved to
+    `Base.method`) only the overrides in Sub and its subclasses count: a Sub instance never dispatches to a sibling's."""
+    if not targets or _has_class_target(targets):
+        return []
+    below = _all_overrides(st, targets, min_conf)
+    specs = [spec_or_specs] if isinstance(spec_or_specs, str) else list(spec_or_specs or [])
+    inh = [i for s in specs for i in inherited_targets(st, s)]
+    if below and inh:
+        sub = _descendants(st, [i["class"] for i in inh])
+        owner = {r["dst"]: r["src"] for i in range(0, len(below), 500) for r in st.q(
+            f"SELECT src, dst FROM edges WHERE kind='CONTAINS' AND dst IN ({','.join('?' * len(below[i:i + 500]))})",
+            below[i:i + 500])}
+        below = [b for b in below if owner.get(b) in sub]
+    return below
+
+
+def inherited_lines(res: dict) -> list[str]:
+    """'B.run -> inherited from Base.run' notes for a result whose spec resolved through a class's ancestors."""
+    return [f"{i['spec']} -> inherited from {i['method_fqn']} (callers of {i['method_fqn']} on any instance; calls are "
+            f"not narrowed to {i['class_fqn']})" for i in res.get("inherited") or []]
+
+
+def _resolve_direct(st: GraphStore, spec: str) -> list[str]:
     if spec.startswith("page:/"):
         rows = st.q("SELECT id FROM nodes WHERE kind='page' AND json_extract(attrs,'$.route')=?", (spec[5:],))
         return [r["id"] for r in rows]
@@ -501,13 +614,17 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
         targets += t
     si = _has_class_target(targets)
     pf = platform
-    depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, seed_inst=si, platform=pf)
+    # the dependents of a base / interface method include those of its overrides (as in impact), marked via_override
+    below = override_seeds(st, specs, targets, min_conf)
+    seeds = targets + [b for b in below if b not in targets]
+    depth = reverse_closure(st, seeds, min_conf=min_conf, max_depth=max_depth, seed_inst=si, platform=pf)
+    own = set(reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, seed_inst=si, platform=pf)) if below else None
     paths = shortest_paths(st, depth, min_conf=min_conf, seed_inst=si, platform=pf)
     ids = list(depth)
     ents = _platform_entries(st, depth, pf, min_conf) if pf else entry_info(st, ids)
     if pf and gate:
         gate = None      # one filter at a time: the platform view replaces the gate scenario split
-    live_depth = reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, exclude_gate=gate, seed_inst=si) if gate else depth
+    live_depth = reverse_closure(st, seeds, min_conf=min_conf, max_depth=max_depth, exclude_gate=gate, seed_inst=si) if gate else depth
     live_ents = entry_info(st, ids, gate=gate) if gate else ents
     live_paths = shortest_paths(st, live_depth, min_conf=min_conf, exclude_gate=gate, seed_inst=si) if gate else paths
     nodes = {}
@@ -517,6 +634,7 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
         for r in st.q(f"SELECT id,kind,name,fqn,file,line,module,entry_kind,attrs FROM nodes WHERE id IN ({q})", chunk):
             nodes[r["id"]] = with_generated(dict(r))
     items = []
+    tset, bfq = set(targets), (_fqn_of(st, below) if below else {})
     for nid, d in depth.items():
         n = nodes.get(nid, {"id": nid, "kind": nid.split(":")[0]})
         ek = {k: v[0] for k, v in ents.get(nid, {}).items()}
@@ -525,6 +643,11 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
         it = {**n, "depth": d, "entry_kinds": ek, "class": classify(ek),
               "path": paths.get(nid, []), "path_confidence": path_confidence(paths.get(nid, [])),
               "is_target": d == 0, "gate_status": "live"}
+        if nid in bfq and nid not in tset:
+            it["override_seed"] = True       # an override followed from a base / interface target, not a dependent
+        elif own is not None and nid not in own and it["path"]:
+            end = it["path"][-1]["to"]
+            it["via_override"] = bfq.get(end, end)
         if gate and d > 0:
             lek = {k: v[0] for k, v in live_ents.get(nid, {}).items()}
             if n.get("entry_kind"):
@@ -544,6 +667,11 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
         items.append(it)
     items.sort(key=lambda x: (x["class"], x.get("module") or "", x.get("fqn") or x["id"]))
     out = {"targets": resolved, "min_confidence": min_conf, "gate": gate, "items": items}
+    if below:
+        out["overrides_followed"] = sorted(bfq.get(b, b) for b in below)
+    inh = [i for s in specs for i in inherited_targets(st, s)]
+    if inh:
+        out["inherited"] = inh
     if pf:
         from .platforms import filter_info
         out["platform"] = filter_info(st, pf)
@@ -578,6 +706,11 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
     out.append("targets:")
     for s, t in res["targets"].items():
         out.append(f"  {s} -> {len(t)} node(s): {', '.join(t[:6])}{' ...' if len(t) > 6 else ''}")
+    out += ["  " + x for x in inherited_lines(res)]
+    if res.get("overrides_followed"):
+        ov = res["overrides_followed"]
+        out.append(f"  overrides followed (their dependents count, marked via override): {', '.join(ov[:8])}"
+                   + (f" …+{len(ov) - 8}" if len(ov) > 8 else ""))
     items = [i for i in res["items"] if not i["is_target"]]
     code = [i for i in items if i["kind"] in CODE_KINDS]
     entries = [i for i in items if i["kind"] in ENTRY_NODE_KINDS or (i.get("entry_kind") and i["kind"] in CODE_KINDS)]
@@ -607,7 +740,8 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
                 out.append(f"    {i.get('fqn') or i['id']}  depth={i['depth']} conf={i['path_confidence']}  {ek}"
                            + (f"  [{i['kind']} @ {i.get('file')}]" if i['kind'] in TS_CODE_KINDS or (i.get('file') or '').endswith(('.ts', '.vue')) else "")
                            + (f"  @ {i.get('file')}:{i.get('line')}" if NATIVE_FILE_RE.search(i.get('file') or '') else "")
-                           + generated_label(i) + platform_label(i))
+                           + generated_label(i) + platform_label(i)
+                           + (f"  (via override {i['via_override']})" if i.get("via_override") else ""))
                 if show_paths:
                     out.append(f"        path: {fmt_path(i['path'])}")
     if gated:
@@ -778,7 +912,7 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
     targets = resolve_targets(st, spec)
     si = _has_class_target(targets)
     rel = override_relations(st, targets, min_conf)
-    below = [] if si else _all_overrides(st, targets, min_conf)
+    below = override_seeds(st, spec, targets, min_conf)
     seeds = targets + below
     depth = reverse_closure(st, seeds, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
     own = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform) if below else depth
@@ -819,6 +953,11 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
         callers.append(c)
     out = {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
            "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or "")), **rel}
+    inh = inherited_targets(st, spec)
+    if inh:
+        out["inherited"] = inh
+        keep = set(below)   # a sibling class's override is not a Sub instance's method
+        out["overridden_by"] = [x for x in out["overridden_by"] if x["id"] in keep]
     if platform:
         from .platforms import filter_info
         out["platform"] = filter_info(st, platform)
@@ -828,7 +967,7 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
 
 def override_lines(res: dict, limit: int = 8) -> list[str]:
     """'overrides: Base.m' / 'overridden by: A.m, B.m' lines for an impact result (the relation, not callers)."""
-    out = []
+    out = inherited_lines(res)
     for key, label in (("overrides", "overrides"), ("overridden_by", "overridden by")):
         xs = list(dict.fromkeys(x["fqn"] for x in res.get(key) or []))
         if xs:
@@ -1409,9 +1548,19 @@ def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30
     # a cross-repo hop (frontend http call -> backend route) is still the test's own request
     tk = list(TEST_EDGE_KINDS) + ["MATCHES_ROUTE"]
     si = _has_class_target(targets)
-    direct = reverse_closure(st, targets, kinds=tk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
+    # a base / interface method: the tests of its overrides exercise it too (calls through a collection or a
+    # base-typed value land on the overrides), as in impact; they are marked via_override
+    below = override_seeds(st, spec, targets, min_conf)
+    seeds = targets + below
+    direct = reverse_closure(st, seeds, kinds=tk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
     allk = CALL_LIKE + tk
-    trans = reverse_closure(st, targets, kinds=allk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
+    trans = reverse_closure(st, seeds, kinds=allk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
+    if below:
+        own = (set(reverse_closure(st, targets, kinds=tk, min_conf=min_conf, max_depth=max_depth, seed_inst=si))
+               | set(reverse_closure(st, targets, kinds=allk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)))
+        bfq = _fqn_of(st, below)
+    else:
+        own, bfq = None, {}
     ids = list(set(direct) | set(trans))
     tests = {}
     for i in range(0, len(ids), 500):
@@ -1423,15 +1572,23 @@ def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30
     dpaths = shortest_paths(st, {k: v for k, v in direct.items()}, kinds=tk, min_conf=min_conf, seed_inst=si)
     tpaths = shortest_paths(st, trans, kinds=allk, min_conf=min_conf, seed_inst=si)
     out = {"targets": targets, "direct": [], "transitive": []}
+    inh = inherited_targets(st, spec)
+    if inh:
+        out["inherited"] = inh
     for tid, t in sorted(tests.items(), key=lambda x: (x[1]["file"] or "", x[1]["line"] or 0)):
         a = json.loads(t["attrs"] or "{}")
         it = {"test": tid, "name": t["name"], "framework": a.get("framework"), "file": t["file"], "line": t["line"]}
         if tid in direct:
-            out["direct"].append({**it, "depth": direct[tid], "path": dpaths.get(tid, []),
-                                  "path_confidence": path_confidence(dpaths.get(tid, []))})
+            it.update(depth=direct[tid], path=dpaths.get(tid, []))
+            key = "direct"
         else:
-            out["transitive"].append({**it, "depth": trans[tid], "path": tpaths.get(tid, []),
-                                      "path_confidence": path_confidence(tpaths.get(tid, []))})
+            it.update(depth=trans[tid], path=tpaths.get(tid, []))
+            key = "transitive"
+        it["path_confidence"] = path_confidence(it["path"])
+        if own is not None and tid not in own:    # reaches the target only through an override
+            end = it["path"][-1]["to"] if it["path"] else None
+            it["via_override"] = [bfq.get(end, end)] if end in bfq else sorted(set(bfq.values()))[:3]
+        out[key].append(it)
     for k in ("direct", "transitive"):     # closest tests first
         out[k].sort(key=lambda t: (t["depth"], CONFIDENCE_RANK.get(t["path_confidence"], 0) * -1, t["file"] or "", t["line"] or 0))
     by_fw = {(r["fw"] or "test"): r["c"] for r in
@@ -1458,6 +1615,7 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
     st = res["stats"]
     fws = st.get("tests_by_framework") or {}
     per = (": " + ", ".join(f"{k} {v}" for k, v in fws.items())) if fws else ""
+    L += inherited_lines(res)
     L.append(f"tests: {st['direct']} direct, {st['transitive']} transitive (of {st['tests_in_graph']} test cases in the graph{per})")
     for label, key in (("DIRECT (the test code itself calls / requests the target)", "direct"),
                        ("TRANSITIVE (through application code)", "transitive")):
@@ -1466,7 +1624,9 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
             continue
         L += ["", f"== {label}: {len(group)}"]
         for t in group[:limit]:
-            L.append(f"  {t['name']}  [{t.get('framework') or 'test'}] {t['file']}:{t['line']}  depth={t['depth']} conf={t['path_confidence']}")
+            vo = t.get("via_override")
+            L.append(f"  {t['name']}  [{t.get('framework') or 'test'}] {t['file']}:{t['line']}  depth={t['depth']} conf={t['path_confidence']}"
+                     + (f"  (via override {vo[0]}" + (f" +{len(vo) - 1}" if len(vo) > 1 else "") + ")" if vo else ""))
             if show_paths and t["path"]:
                 L.append(f"      {_path_short(t['path'][:8])}{' ...' if len(t['path']) > 8 else ''}")
         if len(group) > limit:
