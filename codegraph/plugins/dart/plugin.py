@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from ... import presets
@@ -196,6 +197,54 @@ class DartPlugin(LanguagePlugin):
                                    "configs": [(c["name"], c.get("value"), c["lib"].file if c["lib"] is not None else None)
                                                for c in imp["configs"]]})
 
+    @staticmethod
+    def _variant_reexports(prog, b: GraphBuilder) -> None:
+        """A library that is one alternative of a conditional import / export defines the names it re-exports
+        (`export 'src/x.dart' show f`) and its public top-level tear-offs (`const f = Impl.f`) too: recorded as
+        module attrs.reexports (name -> node id) for the platform divergence checks (codegraph/platforms.py)."""
+        files = set()
+        for pi in b.platform_imports:
+            if pi.get("default"):
+                files.add(pi["default"])
+            files |= {c[2] for c in pi.get("configs") or () if c[2]}
+
+        def tearoff(lib, e):
+            if not isinstance(e, dict):
+                return None
+            if e.get("k") == "id":
+                v = prog.lookup(lib, e.get("v") or "")
+                return getattr(v, "id", None) if isinstance(v, DFunc) else None
+            t = e.get("t") or {}
+            if e.get("k") == "prop" and t.get("k") == "id":
+                c = prog.lookup(lib, t.get("v") or "")
+                if isinstance(c, DClass):
+                    m = c.methods.get(e.get("n"))
+                    return m.id if m is not None else None
+                for imp in prog.prefix_imports(lib, t.get("v") or ""):
+                    v = prog.namespace(imp["lib"]).get(e.get("n")) if imp["lib"] is not None else None
+                    if isinstance(v, DFunc):
+                        return v.id
+            return None
+        own_vars = defaultdict(list)
+        for v in prog.vars:
+            if v.cls is None and not v.name.startswith("_"):
+                own_vars[v.file].append(v)
+        for lib in prog.libs.values():
+            if lib.file not in files or lib.id not in b.nodes:
+                continue
+            rex = {}
+            for k, v in prog.namespace(lib).items():
+                vid = getattr(v, "id", None)
+                if getattr(v, "file", lib.file) != lib.file and vid in b.nodes:
+                    rex[k] = vid
+            for v in own_vars.get(lib.file, ()):
+                tid = tearoff(lib, v.init)
+                if tid in b.nodes:
+                    rex[v.name] = tid
+            if rex:
+                n = b.nodes[lib.id]
+                n.attrs = {**(n.attrs or {}), "reexports": rex}
+
     # ------------------------------------------------------------------ index
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
         t0 = time.time()
@@ -263,8 +312,10 @@ class DartPlugin(LanguagePlugin):
                     self._conditional(b, ex, "export")
                 elif ex["lib"] is not None:     # re-exported unconditionally (lib/x.dart: export 'src/x.dart'): built everywhere
                     b.platform_imports.append({"plain": ex["lib"].file})
+                    b.add_edge(f"module:{ex['file']}", ex["lib"].id, "IMPORTS", ex["file"], ex.get("l"), EXACT, via="export")
             for p in lib.parts:
                 b.add_edge(lib.id, f"module:{p}", "CONTAINS", lib.file, 1, EXACT, via="part")
+        self._variant_reexports(prog, b)
         # ---- inheritance / dispatch
         n_ext = 0
         for c in prog.classes.values():

@@ -28,7 +28,7 @@ from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Projec
 from ..native import gates as G
 from ..native import runner, scipread
 from ..native.ts import TreeSitterMissing
-from .syntax import CFile, CItem, annotation_macros, annotation_regex, extract
+from .syntax import CFile, CItem, annotation_macros, annotation_regex, extract, generated_names
 
 C_EXT = {".c"}
 CPP_EXT = {".cc", ".cpp", ".cxx", ".c++", ".cp", ".C"}
@@ -170,7 +170,9 @@ class CFamilyPlugin(LanguagePlugin):
             lang = "c" if ext in C_EXT or (ext == ".h" and not is_cpp) else "cpp"
             mod = os.path.dirname(rel) or "."
             self.files[rel] = extract(rel, src, lang, mod, blank)
+        self._macro_generated(srcs, blank, is_cpp, stats)
         stats["files"] = len(self.files)
+        stats["recovered_definitions"] = sum(f.recovered for f in self.files.values())
         stats["files_c"] = sum(1 for f in self.files.values() if f.lang == "c")
         stats["files_cpp"] = sum(1 for f in self.files.values() if f.lang == "cpp")
         self._finalize_items(stats)
@@ -236,6 +238,41 @@ class CFamilyPlugin(LanguagePlugin):
                     pass
             out[rel] = {"includes": inc_rel, "defines": defs}
         return out
+
+    def _macro_generated(self, srcs, blank, is_cpp, stats):
+        """Functions defined by expanding a project macro at file level (`#define DEFINE_GETTER(n) int get_##n(void)
+        {...}` + `DEFINE_GETTER(width)` -> get_width): a node at the expansion line (attrs.macro_generated). The
+        expansion lines are blanked and the file parsed again, so tree-sitter does not read the definitions after
+        them as part of one bogus function."""
+        gens = {}
+        for f in self.files.values():
+            for k, v in f.generators.items():
+                gens.setdefault(k, v)
+        if not gens:
+            return
+        for rel, f in list(self.files.items()):
+            hits = [tc for tc in f.top_calls if tc[0] in gens]
+            if not hits:
+                continue
+            src = bytearray(srcs[rel])
+            starts = [0] + [i + 1 for i, ch in enumerate(src) if ch == 10]
+            for _name, _args, line, _col, end in hits:
+                for ln in range(line, end + 1):
+                    a = starts[ln - 1]
+                    z = starts[ln] - 1 if ln < len(starts) else len(src)
+                    src[a:z] = b" " * (z - a)
+            lines = f.lines
+            f2 = extract(rel, bytes(src), f.lang, os.path.dirname(rel) or ".", blank)
+            f2.lines = lines
+            f2.generators = f.generators
+            mod = os.path.dirname(rel) or "."
+            for name, args, line, col, _end in hits:
+                params, value = gens[name]
+                for fname, static, sig in generated_names(params, value, _split_args(args)):
+                    f2.items.append(CItem("function", fname, f"{rel}#{fname}" if static else fname, rel, line, col, line, _end,
+                                          mod, fname, static=static, attrs={"macro_generated": name}, sig=sig))
+                    stats["macro_generated_functions"] += 1
+            self.files[rel] = f2
 
     # ------------------------------------------------------------------ items
     def _finalize_items(self, stats):
@@ -588,7 +625,9 @@ class CFamilyPlugin(LanguagePlugin):
             return bool(f) and any(a <= it.start and it.end <= z and c_relevant(c) for a, z, c, _l, _b in f.regions)
 
         def _alternatives(cands):
-            if (1 < len(cands) <= 8 and len({c.key.split("@", 1)[0] for c in cands}) == 1 and len({c.kind for c in cands}) == 1
+            # same symbol: keys equal up to the collision suffix (`@file:line`) or file prefix (`src/win/x.c#name`)
+            if (1 < len(cands) <= 8 and len({c.key.split("@", 1)[0].rsplit("#", 1)[-1] for c in cands}) == 1
+                    and len({c.kind for c in cands}) == 1
                     and all(_platform_scoped(c) for c in cands)):
                 return list(cands)
             return []
@@ -845,3 +884,17 @@ class CFamilyPlugin(LanguagePlugin):
                         n += 1
                         break
         stats["gated_edges"] = n
+
+
+def _split_args(args: str) -> list[str]:
+    out, depth, cur = [], 0, ""
+    for ch in args:
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+            continue
+        depth += ch in "([{"
+        depth -= ch in ")]}"
+        cur += ch
+    out.append(cur)
+    return [x.strip() for x in out]

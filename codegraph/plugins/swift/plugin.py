@@ -195,6 +195,7 @@ class SwiftPlugin(LanguagePlugin):
                 self.st["files_with_syntax_errors"] += 1
             sfiles.append(SFile(rel, src, tree))
         self._fd: dict[str, list[Decl]] = defaultdict(list)
+        self._avail_regions: dict[str, list] = {}
         for sf in sfiles:            # pass 1: declarations
             self.cur = sf
             for c in sf.tree.root_node.children:
@@ -228,6 +229,7 @@ class SwiftPlugin(LanguagePlugin):
                 self.st["routes_unresolved_handler"] += 1
         self.file_report = {"seen": [sf.rel for sf in sfiles] + failed, "parse_failed": failed}
         mode = self._exact(project, [sf.rel for sf in sfiles])
+        self._apply_available()
         st = dict(self.st)
         st.update({"mode": mode, "files": len(sfiles), "declarations": len(self.decls),
                    "source_files": sum(1 for sf in sfiles if not re.match(r"(.*/)?Package(@swift-[\d.]+)?\.swift$", sf.rel)),
@@ -667,21 +669,124 @@ class SwiftPlugin(LanguagePlugin):
         self.http.append({"src": d.id, "method": (mm.group(1) if mm else "GET").upper(), "url": url, "client": "urlsession",
                           "file": sf.rel, "line": d.line})
 
-    # ---- @available(macOS, unavailable): the declaration (and its members) does not exist on that platform.
-    # Version-only forms (`@available(iOS 17, *)`, `#available`) keep the code on every target.
+    # ---- @available(macOS, unavailable): the declaration (and its members) does not exist on that platform;
+    # @available(*, unavailable): on none. Version forms (`@available(iOS 17, *)`, `@available(iOS, introduced: 15)`,
+    # `if #available(iOS 17, *)`, `guard #available`, `if #unavailable`) keep the code on every target and record the
+    # minimum OS versions: node attrs.available on the declaration (members inherit the type's), edge attrs.available
+    # on the references in the guarded branch. `deprecated` is kept as attrs.deprecated.
     AVAILABLE = re.compile(r"@available\s*\(\s*(iOS|macOS|OSX)\s*,\s*unavailable\b")
+    AVAIL_ATTR = re.compile(r"@available\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)")
+    AVAIL_VER = re.compile(r"\b(iOS|iPadOS|macOS|OSX|watchOS|tvOS|visionOS|macCatalyst)(?:ApplicationExtension)?\s*"
+                           r"(?:,\s*introduced\s*:\s*)?(\d+(?:\.\d+)*)")
+
+    @staticmethod
+    def _vmax(a: dict, b: dict) -> dict:
+        out = dict(a)
+        for k, v in b.items():
+            if k not in out or tuple(int(x) for x in v.split(".")) > tuple(int(x) for x in out[k].split(".")):
+                out[k] = v
+        return out
 
     def _available(self, sf: SFile):
-        if b"unavailable" not in sf.src:
+        if b"available" not in sf.src:
             return
-        from ...platforms import Cond, _plat_atom, mark
+        from ...platforms import KNOWN, Cond, _plat_atom, mark
         lines = sf.src.decode("utf-8", "replace").split("\n")
-        for d in self._fd.get(sf.rel, ()):
+        decl_av = []
+        for d in sorted(self._fd.get(sf.rel, ()), key=lambda d: d.line - d.end):     # outer declarations first
             head = "\n".join(lines[d.line - 1:d.end]).split("{", 1)[0]
             for m in self.AVAILABLE.finditer(head):
                 plat = OS_PLATFORM[m.group(1)]
                 mark(self.b, sf.rel, d.line, d.end, Cond("tree", ("not", _plat_atom(plat)), m.group(0) + ")"))
                 self.st["platform_unavailable"] += 1
+            av, dep = {}, None
+            for m in self.AVAIL_ATTR.finditer(head):
+                args = m.group(1)
+                if re.match(r"\s*\*\s*,\s*unavailable\b", args):
+                    mark(self.b, sf.rel, d.line, d.end, Cond("tree", ("all", [("not", _plat_atom(p)) for p in KNOWN]),
+                                                             "@available(*, unavailable)"))
+                    self.st["platform_unavailable_everywhere"] += 1
+                    continue
+                if re.search(r"\bdeprecated\b", args):
+                    mm = re.search(r'message\s*:\s*"((?:[^"\\]|\\.)*)"', args)
+                    dep = mm.group(1)[:160] if mm else True
+                if "unavailable" not in args and "obsoleted" not in args:
+                    for v in self.AVAIL_VER.finditer(args):
+                        av = self._vmax(av, {"macOS" if v.group(1) == "OSX" else v.group(1): v.group(2)})
+            for a, z, pav in decl_av:                      # members inherit the enclosing type's availability
+                if a <= d.line and d.end <= z and (a, z) != (d.line, d.end):
+                    av = self._vmax(pav, av)
+            if av:
+                decl_av.append((d.line, d.end, av))
+            n = self.b.nodes.get(d.id)
+            if n is not None and (av or dep):
+                n.attrs = dict(n.attrs or {})
+                if av:
+                    n.attrs["available"] = av
+                    self.st["available_declarations"] += 1
+                if dep:
+                    n.attrs["deprecated"] = dep
+        if b"#available" not in sf.src and b"#unavailable" not in sf.src:
+            return
+        regions = self._avail_regions.setdefault(sf.rel, [])
+
+        def walk(n):
+            for c in n.children:
+                if c.type == "availability_condition":
+                    self._avail_branch(c, regions)
+                walk(c)
+        walk(sf.tree.root_node)
+
+    def _avail_branch(self, c, regions: list):
+        txt = self.t(c)
+        av = {}
+        for v in self.AVAIL_VER.finditer(txt):
+            av = self._vmax(av, {"macOS" if v.group(1) == "OSX" else v.group(1): v.group(2)})
+        if not av:
+            return
+        neg = "#unavailable" in txt.replace(" ", "")
+        p = c.parent
+        if p is None:
+            return
+        kids = p.children
+        i = next((k for k, x in enumerate(kids) if x.id == c.id), None)
+        if i is None:
+            return
+        if p.type == "if_statement":
+            opens = [k for k in range(i + 1, len(kids)) if kids[k].type == "{"]
+            closes = [k for k in range(i + 1, len(kids)) if kids[k].type == "}"]
+            if not opens or not closes:
+                return
+            if not neg:
+                a, z = kids[opens[0]].start_point[0] + 1, kids[closes[0]].start_point[0] + 1
+            else:                              # `if #unavailable(iOS 17) { old } else { new }`: the else branch
+                if len(opens) < 2:
+                    return
+                a, z = kids[opens[1]].start_point[0] + 1, p.end_point[0] + 1
+        elif p.type == "guard_statement" and not neg:
+            stmts = p.parent
+            a, z = p.end_point[0] + 2, (stmts.end_point[0] + 1 if stmts is not None else p.end_point[0] + 1)
+        else:
+            return
+        if z >= a:
+            regions.append((a, z, av))
+            self.st["available_branches"] += 1
+
+    def _apply_available(self):
+        """References inside `if #available(...)` / after `guard #available(...)`: edge attrs.available."""
+        if not any(self._avail_regions.values()):
+            return
+        for e in self.b.edges.values():
+            regs = self._avail_regions.get(e.file)
+            if not regs or e.line is None:
+                continue
+            av = {}
+            for a, z, v in regs:
+                if a <= e.line <= z:
+                    av = self._vmax(av, v)
+            if av:
+                e.attrs = {**(e.attrs or {}), "available": av}
+                self.st["available_references"] += 1
 
     # ---- #if os(...)
     def _directives(self, sf: SFile):

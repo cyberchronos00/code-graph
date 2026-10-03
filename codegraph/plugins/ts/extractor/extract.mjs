@@ -515,6 +515,7 @@ const isModuleExports = e => { e = unwrap(e); return !!e && ts.isPropertyAccessE
 const nodes = []                  // {id, kind, name, file, line, end_line, doc, parent, attrs}
 const declId = new Map()          // ts.Node (declaration) -> node id
 const fileNode = new Map()        // abs real path -> node id
+const modNode = new Map()   // module node id -> node object (re-export attrs)
 const usedIds = new Set()
 function mkId(kind, key) { let id = `${kind}:${key}`, i = 2; while (usedIds.has(id)) id = `${kind}:${key}~${i++}`; usedIds.add(id); return id }
 
@@ -601,6 +602,7 @@ for (const sf of sourceFiles) {
   usedIds.add(fid)
   fileNode.set(real, fid)
   nodes.push({ id: fid, kind: real.endsWith('.vue') ? fk : 'module', name: r, file: r, line: 1, end_line: sf.getLineAndCharacterOfPosition(sf.end).line + 1, attrs: { file_kind: fk, ...(isTestSf ? { test: true } : {}) } })
+  modNode.set(fid, nodes[nodes.length - 1])
   if (real.endsWith('.vue')) continue // SFC: references are attributed to the component node
   const visit = (node, qual, parentId, inObj) => {
     let name = null, kind = null, body = null, wrapped = null
@@ -1768,6 +1770,42 @@ for (const sf of sourceFiles) {
       const ms = checker.getSymbolAtLocation(node.moduleSpecifier)
       const d = ms && (ms.declarations || [])[0]
       if (d && ts.isSourceFile(d) && projectSf(d)) addEdge(fid, fileNode.get(realFile(d)), 'IMPORTS', r, lineOf(node, sf), 'exact')
+    }
+    // re-exports (`export {a as b} from './m'`, `export {x}`, `export * from './m'`): the module defines those names
+    // too (attrs.reexports: exported name -> node id; reexports_all: modules re-exported whole), and depends on './m'
+    if (!isVue && ts.isExportDeclaration(node)) {
+      let target = null
+      if (node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+        const ms = checker.getSymbolAtLocation(node.moduleSpecifier)
+        const d = ms && (ms.declarations || [])[0]
+        if (d && ts.isSourceFile(d) && projectSf(d)) {
+          target = fileNode.get(realFile(d))
+          addEdge(fid, target, 'IMPORTS', r, lineOf(node, sf), 'exact', { reexport: true })
+        }
+      }
+      const mo = modNode.get(fid)
+      if (mo && node.exportClause && ts.isNamedExports(node.exportClause)) {
+        for (const el of node.exportClause.elements) {
+          let s = null
+          try { s = node.moduleSpecifier ? checker.getSymbolAtLocation(el.propertyName || el.name) : checker.getExportSpecifierLocalTargetSymbol(el) } catch { }
+          const res = s && resolveSymbol(s)
+          if (res && res.id && res.id !== fid) (mo.attrs.reexports ||= {})[el.name.text] = res.id
+          else if (!res && !(node.isTypeOnly || el.isTypeOnly)) (mo.attrs.reexports_external ||= []).push(el.name.text)   // from a package
+        }
+      } else if (mo && target && !node.exportClause) (mo.attrs.reexports_all ||= []).push(target)
+    }
+    // `export const X = Imported` / `= ns.member`: an alias the module defines (re-export of a project or package symbol)
+    if (!isVue && ts.isVariableStatement(node) && node.parent === sf && (node.modifiers || []).some(m => m.kind === ts.SyntaxKind.ExportKeyword)) {
+      const mo = modNode.get(fid)
+      for (const d of node.declarationList.declarations) {
+        const init = d.initializer && unwrap(d.initializer)
+        if (!mo || !ts.isIdentifier(d.name) || !init || !(ts.isIdentifier(init) || ts.isPropertyAccessExpression(init)) || declId.get(d)) continue
+        let s = null
+        try { s = checker.getSymbolAtLocation(init) } catch { }
+        const res = s && resolveSymbol(s)
+        if (res && res.id && res.id !== fid) (mo.attrs.reexports ||= {})[d.name.text] = res.id
+        else if (!res) (mo.attrs.reexports_external ||= []).push(d.name.text)
+      }
     }
     if (ts.isCallExpression(node) || ts.isNewExpression(node)) handleCall(node, cur, sf, r, fnStack[fnStack.length - 1])
     // literal fallbacks: `a ?? b ?? 'X'` / `a || 'X'` (outermost operator only)

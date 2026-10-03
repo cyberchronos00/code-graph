@@ -636,6 +636,26 @@ def _slot(n, f: str):
     return None
 
 
+def _reexported(builder, f: str, depth: int = 0) -> dict[str, str]:
+    """Names a file defines by re-exporting them: module attrs.reexports (TS `export {a as b} from './m'`,
+    `export {x}`; Dart `export 'src/x.dart' show f` and `const f = Impl.f` tear-offs in a variant library) and
+    attrs.reexports_all (TS `export * from './m'`: the exported symbols of that module)."""
+    n = builder.nodes.get(f"module:{f}")
+    a = (n.attrs or {}) if n is not None else {}
+    out = {k: v for k, v in (a.get("reexports") or {}).items() if v in builder.nodes}
+    if depth < 3:
+        for mid in a.get("reexports_all") or ():
+            mf = mid.split(":", 1)[1] if ":" in mid else mid
+            for x in builder.nodes.values():
+                if x.file == mf and (x.attrs or {}).get("exported"):
+                    sl = _slot(x, mf)
+                    if sl and sl[1] and "." not in sl[1] and "#" not in sl[1]:
+                        out.setdefault(sl[1], x.id)
+            for k, v in _reexported(builder, mf, depth + 1).items():
+                out.setdefault(k, v)
+    return out
+
+
 def _mirror(builder, groups: list[dict], nvals: dict) -> int:
     """Edges into one member of a variant group -> the same edge into the matching symbol of every other member."""
     adds = []
@@ -650,6 +670,15 @@ def _mirror(builder, groups: list[dict], nvals: dict) -> int:
                 if s is not None:
                     by_slot[s][n.file] = n.id
         idx = {nid: (s, f) for s, fm in by_slot.items() for f, nid in fm.items()}
+        # a name a member re-exports from elsewhere: its variant is the re-exported symbol (not in idx: references
+        # to that symbol from outside the group do not go through the group)
+        kinds = defaultdict(set)
+        for kd, nm in by_slot:
+            kinds[nm].add(kd)
+        for f in files:
+            for nm, nid in _reexported(builder, f).items():
+                for kd in kinds.get(nm) or (builder.nodes[nid].kind,):    # a tear-off of a method stands for a function
+                    by_slot[(kd, nm)].setdefault(f, nid)
         slot_maps.append((fset, by_slot, idx))
     # Rust / C / C++ / Swift: alternative definitions of one symbol (`key` + `key@line` / `key@file:line`) on different targets
     alts = _alt_groups(builder, nvals)
@@ -738,7 +767,8 @@ def _vkey(nid: str, n, nvals: dict | None = None) -> str:
     if n is None:
         return b
     if n.lang in ("c", "cpp") and n.kind in ("function", "macro") and n.name:
-        return f"c-fn:{n.file}#{n.name}" if "#" in b else f"c-fn:{n.name}"     # `#`: a static, file-local function
+        # `file#name`: a static, file-local function (a non-static one defined in several files is one symbol)
+        return f"c-fn:{n.file}#{n.name}" if "#" in b and (n.attrs or {}).get("static") else f"c-fn:{n.name}"
     if n.lang == "rust" and nvals and ":" in b:
         kind, path = b.split(":", 1)
         parts = path.split("::")
@@ -765,6 +795,9 @@ def _alt_groups(builder, nvals: dict) -> dict[str, list[str]]:
         if g in alts and any(builder.nodes[i].file == file or builder.nodes[i].kind == "macro" for i in alts[g]):
             alts[g] += alts.pop(k)
     return alts
+
+
+API_KINDS = ("function", "method", "class", "component", "composable", "store")
 
 
 def _public(n, group_files: set, ext_refs: dict, users: set) -> bool:
@@ -814,15 +847,25 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
         # anything referenced from outside the group)
         files = {f for f, _ in g["members"]}
         users = {u.rsplit(":", 1)[0] for u in importers_of(g)} - files     # files that import the group
-        defs = {}
+        defs, anyname = {}, {}
         for f, c in g["members"]:
             defs[f] = {(_slot(n, f) or ("?", n.id))[1]: n for n in builder.nodes.values() if n.file == f
-                       and n.kind in ("function", "method", "class", "component", "composable", "store") and _slot(n, f)
+                       and n.kind in API_KINDS and _slot(n, f)
                        and _public(n, files, ext_refs, users)}
+            # every name the file defines in any form (also private / non-function symbols and re-exports): a
+            # sibling lacks a symbol only when it defines nothing of that name
+            anyname[f] = {sl[1] for n in builder.nodes.values() if n.file == f for sl in [_slot(n, f)] if sl and sl[1]}
+            mn = builder.nodes.get(f"module:{f}")
+            anyname[f] |= set(((mn.attrs or {}) if mn is not None else {}).get("reexports_external") or ())
+            for nm, nid in _reexported(builder, f).items():
+                anyname[f].add(nm)
+                tn = builder.nodes[nid]
+                if tn.kind in API_KINDS and (not users or ext_refs.get(nid, set()) & users):
+                    defs[f].setdefault(nm, tn)
         allnames = set().union(*[set(d) for d in defs.values()]) if defs else set()
         for nm in sorted(allnames):
             have = [f for f in defs if nm in defs[f]]
-            lack = [f for f in defs if nm not in defs[f]]
+            lack = [f for f in defs if nm not in defs[f] and nm not in anyname.get(f, ())]
             if have and lack and "#" not in nm and "." not in nm:
                 lack_pl = sorted({p for f, c in g["members"] if f in lack for p, v in c.values().items() if v is not False and p in tset})
                 if lack_pl:
@@ -847,6 +890,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                                 "used_at": sorted(importers.get(ids[0], ()))[:5]})
     # references on a target where the callee does not exist (a reference to any variant counts for the group)
     gslot = {}
+    gmembers = {g["name"]: g["members"] for g in groups}
     for g in groups:
         files = {f for f, _ in g["members"]}
         for n in builder.nodes.values():
@@ -854,10 +898,16 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                 sl = _slot(n, n.file)
                 if sl is not None:
                     gslot[n.id] = ("group", g["name"], sl)
+    group_of = {f: g["name"] for g in groups for f, _ in g["members"]}
     sites = defaultdict(list)
     for e in builder.edges.values():
         if e.kind in ("CALLS", "REFERENCES_FN", "USES_TYPE", "USES_VALUE", "IMPORTS", "INSTANTIATES", "RENDERS",
                       "USES_COMPOSABLE", "USES_STORE") and (e.dst in nvals or e.attrs.get("platform_variant_of") in nvals):
+            if e.kind == "IMPORTS" and e.file in group_of:
+                dn = builder.nodes.get(e.dst)
+                if dn is not None and dn.lang != "dart" and group_of.get(dn.file) == group_of[e.file]:
+                    # a platform file naming its sibling explicitly (`export * from './X.ios'`): bundled as written
+                    continue
             if e.kind == "USES_VALUE" and (e.confidence == "heuristic" or e.dst.startswith("macro:")):
                 # a global matched by name only, or a macro tested by #ifdef: too weak to call a target broken
                 continue
@@ -890,6 +940,12 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                 have |= set(KNOWN)
         if isinstance(base, str) and base in alts:        # any definition of the symbol on that target will do
             have |= {p for i in alts[base] for p in KNOWN if _avail(nvals.get(i), p)}
+        if isinstance(base, tuple) and base[0] == "group" and base[2][1]:
+            # a member that re-exports the name from a package (`export {x} from 'react-dom'`, `export const X = Y`)
+            for mf, c in gmembers.get(base[1], ()):
+                mn = builder.nodes.get(f"module:{mf}")
+                if mn is not None and base[2][1] in ((mn.attrs or {}).get("reexports_external") or ()):
+                    have |= {p for p, v in c.values().items() if v is not False}
         miss = [p for p in live if p not in have]
         if miss:
             dst = es[0].attrs.get("platform_variant_of") or es[0].dst
@@ -991,13 +1047,15 @@ def render_filter(info: dict | None) -> str:
 
 
 def node_platforms(attrs_json: str | None) -> dict:
-    if not attrs_json or '"platforms"' not in attrs_json:
+    if not attrs_json or ('"platforms"' not in attrs_json and '"available"' not in attrs_json):
         return {}
     try:
         a = json.loads(attrs_json) or {}
     except ValueError:
         return {}
     out = {}
+    if isinstance(a.get("available"), dict):
+        out["available"] = a["available"]
     if "platforms" in a:
         out["platforms"] = a["platforms"]
         if a.get("platform_unknown"):
@@ -1010,10 +1068,14 @@ def node_platforms(attrs_json: str | None) -> dict:
 def label(n: dict) -> str:
     """'  [ios, android]' for platform-specific code, '' for code on every target."""
     ps = n.get("platforms")
-    if ps is None:
-        return ""
-    unk = n.get("platform_unknown") or []
-    return "  [" + (", ".join(p + ("?" if p in unk else "") for p in ps) or "no known target") + "]"
+    av = n.get("available") if isinstance(n.get("available"), dict) else None
+    out = ""
+    if ps is not None:
+        unk = n.get("platform_unknown") or []
+        out = "  [" + (", ".join(p + ("?" if p in unk else "") for p in ps) or "no known target") + "]"
+    if av:                                  # Swift @available minimum OS versions
+        out += "  [" + ", ".join(f"{k} {v}+" for k, v in av.items()) + "]"
+    return out
 
 
 def divergence(st, kind: str | None = None, target: str | None = None) -> dict:

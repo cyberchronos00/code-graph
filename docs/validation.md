@@ -499,3 +499,41 @@ declarations. `DirectoryHTMLBuilder.write_doc` (inherited) answered "no method m
 to 226 tests (via the plugins' overrides) and `impact FlaskPlugin.contribute` resolves to the inherited
 `_PyWebPlugin.contribute`. Index times are unchanged within noise (social-app 18.4 → 16.8 s, mattermost 25.7 → 26.4 s,
 cal.com api v2 7.2 → 7.0 s, sphinx 7.9 → 7.8 s; single runs).
+
+## Exact index per target, Swift availability, re-exports in variant files, C macro gaps (#56)
+
+`cg index <repo>` before and after, no flags (Rust in exact mode with rust-analyzer, `CODEGRAPH_RUST_TARGETS`
+default `auto`); `cg platforms divergence` counts are variants / API surface / missing callee. Index times are one
+run each on a shared box.
+
+| Project | Commit | Edges before → after | Divergence before → after | Notes |
+|---|---|---|---|---|
+| BurntSushi/ripgrep | 3fce3b5 | 25812 → 25845 | | extra runs windows + web: 47 exact references; `cfg-inactive` edges 16 → 2; 16.9 → 33.8 s |
+| alacritty/alacritty | d692748 | 23303 → 23586 | | windows 275 + macos 126 exact references; `cfg-inactive` 123 → 5; 14.5 → 41.0 s |
+| tauri-apps/tauri | 30da1fd | 47065 → 48953 | | windows 787 / macos 1869 / android 301 exact references; `cfg-inactive` 1208 → 137; target runs 149 + 108 + 59 s cold |
+| libuv/libuv (C, heuristic) | 49b1c06 | 61235 → 70877 | 235 / 0 / 85 → 496 / 0 / 43 | 33 macro-generated functions, 29 recovered definitions; calls into `src/unix` + `src/win` pairs; 3.4 → 3.5 s |
+| dart-lang/http | 47c57df | 11448 → 11529 | 30 / 1 / 1 → 30 / 0 / 0 | `export` IMPORTS edges; the `connect` tear-off |
+| bluesky-social/social-app | db23528 | 47724 → 47887 | 108 / 9 / 102 → 108 / 5 / 88 | +163 re-export IMPORTS edges |
+| clash-verge-rev/clash-verge-rev | 3607e66 | 15720 → 15747 | | +27 re-export IMPORTS edges |
+| expo/expo (full monorepo) | c0cac77 | 245593 → 246979 | 738 / 188 / 886 → 738 / 177 / 879 | 88030 nodes; +1376 re-export IMPORTS edges; 105 → 110 s |
+
+- **Rust:** every lost edge was a `cfg-inactive` name match the per-target index contradicts (ripgrep 6, alacritty
+  22, tauri 343: e.g. a call matched to another type's `load` / `height`), and owner attribution improved (tauri's
+  Windows event loop `new_any_thread` now owns its Windows-only calls). The extra runs roughly double a cold Rust
+  index; rust-analyzer's cache makes later runs cheaper. `CODEGRAPH_RUST_TARGETS=0` turns them off.
+- **libuv:** `UV_LOOP_WATCHER_DEFINE` / `SOCKOPT_SETTER` expansions are functions now; `kqueue.c`'s `uv__io_poll` had
+  swallowed 6 following definitions and `win/tty.c` 14. Calls to a function defined once in `src/unix/` and once in
+  `src/win/` (`uv_close`, `uv_tty_reset_mode`, ...) had no edge at all, since the file-qualified keys of the two
+  definitions were not seen as one symbol; they now reach both (+9,600 CALLS, mostly from tests and docs examples).
+  261 more per-platform definition groups (163 unix/win pairs; 2 are same-named functions of separate docs
+  programs). 62 edges were lost: references inside a recovered definition that kept its head only, and calls the
+  main parse had attributed to a swallowing function.
+- **Re-exports:** the findings removed on social-app (4 API surface, 14 missing callee), dart-lang/http and expo (15
+  API surface, 7 missing callee) were re-exports (`export {LockScroll} from 'react-remove-scroll'`,
+  `export { SymbolView } from './SymbolView.ios'`, `const connect = IOWebSocketChannel.connect`). Expo gains 4
+  API-surface findings, all web-only named exports the native variant does not have (`AudioPlayerWeb` re-exported
+  by `AudioModule.web.ts`).
+- **Swift (expo):** 194 declarations with `@available` versions (iOS 17: 53, iOS 18: 41, tvOS 17: 33, iOS 26: 30),
+  13 deprecated, 316 `#available` branches with 254 references in them, 1 declaration unavailable everywhere
+  (`BaseModule.init`). Spot checks of 8 matched the source.
+- Expo's targets come from `apps/bare-expo/app.json` (`macos, ios, android, web`).

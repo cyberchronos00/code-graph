@@ -17,6 +17,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
+import posixpath
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -44,6 +46,10 @@ starts_with ends_with parse fmt write write_all read read_to_string flush lock s
 first last keys values entry or_insert or_default with_capacity capacity reserve truncate drain retain append
 is_some is_none is_ok is_err as_str as_bytes as_ptr to_vec cmp eq ne partial_cmp hash drop deref deref_mut index
 call build run close open start stop find position any all display debug copied cloned""".split())
+# rust-analyzer `cargo.target` per platform (CODEGRAPH_RUST_TARGETS also takes triples)
+TRIPLES = {"windows": "x86_64-pc-windows-msvc", "macos": "aarch64-apple-darwin", "linux": "x86_64-unknown-linux-gnu",
+           "ios": "aarch64-apple-ios", "android": "aarch64-linux-android", "web": "wasm32-unknown-unknown"}
+TARGET_ORDER = ("windows", "macos", "linux", "android", "ios", "web")
 SCIP_KIND = {17: "function", 26: "method", 70: "method", 66: "method", 80: "method", 49: "struct", 11: "enum",
              59: "union", 53: "trait", 55: "type_alias", 54: "type_alias", 8: "const", 82: "static", 25: "macro",
              15: "field", 12: "variant", 29: "mod"}
@@ -109,6 +115,9 @@ class RustPlugin(LanguagePlugin):
             if scip_path:
                 self._import_scip(scip_path, stats)
                 mode = "scip"
+                tinfo = self._target_scips(stats)
+                if tinfo:
+                    scip_info["targets"] = tinfo
         if mode == "heuristic":
             self._heuristic_refs(stats)
         else:
@@ -164,7 +173,12 @@ class RustPlugin(LanguagePlugin):
                         if hit is None:
                             stats["unresolved_mod_decls"] += 1
                             continue
-                        todo.append((hit.as_posix(), md.module, md.cfgs, md.in_test, md.pub_chain, False))
+                        # `#[path = "../../x.rs"]`: one path per file (src/../../x.rs is x.rs); outside the root: skipped
+                        hrel = posixpath.normpath(hit.as_posix())
+                        if hrel == ".." or hrel.startswith("../"):
+                            stats["mod_path_outside_root"] += 1
+                            continue
+                        todo.append((hrel, md.module, md.cfgs, md.in_test, md.pub_chain, False))
 
     def _indexes(self):
         self.items: list[RItem] = [it for rf in self.files.values() for it in rf.items]
@@ -359,16 +373,18 @@ class RustPlugin(LanguagePlugin):
         stats["duplicate_keys"] = self.dupes
 
     # ------------------------------------------------------------------ SCIP
-    def _run_scip(self):
+    def _run_scip(self, triple: str | None = None):
         ra = runner.find_tool("CODEGRAPH_RUST_ANALYZER", ["rust-analyzer"], [Path.home() / ".cargo" / "bin"])
         pre = os.environ.get("CODEGRAPH_RUST_SCIP_FILE")
-        if pre:
+        if pre and triple is None:
             return (Path(pre) if Path(pre).exists() else None), {"source": "CODEGRAPH_RUST_SCIP_FILE", "path": pre}
         if not ra:
             return None, {"status": "rust-analyzer not installed; heuristic mode (see docs/native.md)"}
         unsafe_ok = os.environ.get("CODEGRAPH_RUST_BUILD_SCRIPTS") == "1"
         cfg = {"cargo": {"buildScripts": {"enable": unsafe_ok}, "features": "all"},
                "procMacro": {"enable": unsafe_ok}}
+        if triple:
+            cfg["cargo"]["target"] = triple
         cfg_text = json.dumps(cfg, sort_keys=True)
         # named by content and written atomically: a concurrent run never reads a half-written config
         cfg_path = runner.cache_dir() / f"ra-config-{hashlib.sha256(cfg_text.encode()).hexdigest()[:12]}.json"
@@ -386,6 +402,51 @@ class RustPlugin(LanguagePlugin):
         info.update({"indexer": ver, "build_scripts_and_proc_macros": unsafe_ok})
         return path, info
 
+    def _target_scips(self, stats) -> dict:
+        """One more rust-analyzer run per target the cfg conditions name but the host does not build (Windows / macOS
+        code on a Linux host): the references under those conditions get exact edges instead of the syntactic
+        fallback (`via: cfg-inactive`). CODEGRAPH_RUST_TARGETS=0 turns it off, `windows,macos` (or target triples)
+        picks the targets; default `auto`: up to 3 targets named by the project's cfg conditions."""
+        want = os.environ.get("CODEGRAPH_RUST_TARGETS", "auto").strip()
+        if want in ("0", "", "off", "none") or os.environ.get("CODEGRAPH_RUST_SCIP_FILE"):
+            return {}
+        from ...platforms import KNOWN, cfg_cond, norm
+        host = norm(platform.system()) or "linux"
+        if want == "auto":
+            need = []
+            for rf in self.files.values():
+                preds = [p for p, _ in self.file_meta[rf.path]["cfgs"] + rf.inner_cfgs]
+                preds += [p for it in rf.items for p, _ in it.cfgs] + [r[2] for r in rf.cfg_regions]
+                for pred in preds:
+                    try:
+                        v = cfg_cond(pred).values()
+                    except Exception:      # pragma: no cover - a cfg the parser does not take
+                        continue
+                    if v.get(host) is False:
+                        need += [p for p in KNOWN if v.get(p) is True and p != host and p not in need]
+            order = [p for p in TARGET_ORDER if p in need][:3]
+        else:
+            order = [x.strip() for x in want.split(",") if x.strip()]
+        out = {}
+        for p in order:
+            triple = TRIPLES.get(norm(p) or "", p if "-" in p else None)
+            name = norm(p) or p
+            if not triple or name == host:
+                continue
+            t0 = time.time()
+            path, info = self._run_scip(triple)
+            before = stats.get("target_scip_refs", 0)
+            if path:
+                try:
+                    self._import_scip(path, stats, target=name)
+                except Exception as e:  # pragma: no cover - a broken index: keep the host layer
+                    info["error"] = f"import failed: {e}"
+            out[name] = {"triple": triple, "cache": info.get("cache"), "refs_added": stats.get("target_scip_refs", 0) - before,
+                         "seconds": round(time.time() - t0, 2)}
+            if info.get("error"):
+                out[name]["error"] = info["error"]
+        return out
+
     def _scope_painter(self, rel: str):
         """line -> innermost item (by syntactic range) for a file."""
         rf = self.files.get(rel)
@@ -399,12 +460,22 @@ class RustPlugin(LanguagePlugin):
                 paint[ln] = it
         return paint
 
-    def _import_scip(self, path: Path, stats):
+    def _import_scip(self, path: Path, stats, target: str | None = None):
+        """Import a rust-analyzer SCIP index. `target` (a platform name): an index built for another target
+        (cargo.target); only its definitions missing from the host index and its references at positions the host
+        index did not resolve (code under a cfg that is false on the host) are added, tagged `exact_target`."""
         idx = scipread.load(path)
-        stats["scip_documents"] = len(idx.docs)
+        if target is None:
+            stats["scip_documents"] = len(idx.docs)
+            self.sym_nodes = defaultdict(list)
+            self.pos_sym: dict[tuple, str] = {}
         # symbol -> [(file, nid)]
-        sym_nodes: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        sym_nodes = self.sym_nodes
+        host_pos = set(self.pos_sym) if target else ()
+        known = set(sym_nodes) if target else ()
         for sym, defs in idx.defs.items():
+            if sym in known:
+                continue
             for rel, o in defs:
                 d = scipread.descriptors(sym)
                 if not d or not d[1]:
@@ -415,13 +486,12 @@ class RustPlugin(LanguagePlugin):
                     nid = self._synthetic_node(rel, o, sym, d, idx)
                     if nid is None:
                         continue
-                    stats["scip_defs_synthetic"] += 1
+                    stats["scip_defs_synthetic" if target is None else "target_scip_defs_synthetic"] += 1
                 else:
                     nid = self.nid(it)
-                    stats["scip_defs_matched"] += 1
+                    stats["scip_defs_matched" if target is None else "target_scip_defs_matched"] += 1
                 sym_nodes[sym].append((rel, nid))
-        self.sym_nodes = sym_nodes
-        self.pos_sym: dict[tuple, str] = {}
+        attrs = {"exact_target": target} if target else {}
         for rel, doc in idx.docs.items():
             rf = self.files.get(rel)
             if rf is None:
@@ -432,6 +502,8 @@ class RustPlugin(LanguagePlugin):
             lines = rf.lines
             target = self.file_meta[rel]["target"].crate
             for o in doc.occs:
+                if target and (rel, o.line + 1, o.col) in host_pos:
+                    continue
                 self.pos_sym[(rel, o.line + 1, o.col)] = o.symbol
                 if o.roles & scipread.DEFINITION:
                     continue
@@ -455,7 +527,9 @@ class RustPlugin(LanguagePlugin):
                 after = line_txt[o.end_col:].lstrip()
                 for _, dst in cands2:
                     conf = HEURISTIC if len(cands2) > 1 else (RESOLVED if before.endswith(".") else EXACT)
-                    self._ref_edge(self.nid(owner), dst, rel, ln, conf, after, stats)
+                    self._ref_edge(self.nid(owner), dst, rel, ln, conf, after, stats, **attrs)
+                    if target:
+                        stats["target_scip_refs"] += 1
 
     def _ref_edge(self, src: str, dst: str, rel: str, ln: int, conf: str, after: str, stats, **attrs):
         kind = dst.split(":", 1)[0]

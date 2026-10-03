@@ -77,6 +77,9 @@ class CFile:
     bases: list = field(default_factory=list)         # (class key, base name text, line, access)
     decl_pos: set = field(default_factory=set)        # (line, col) of declaration names (not references)
     lines: list = field(default_factory=list)
+    generators: dict = field(default_factory=dict)    # function-like macro -> (params, value) when it defines functions
+    top_calls: list = field(default_factory=list)     # (name, args, line, col, end line): `NAME(args)` at column 0
+    recovered: int = 0                                # definitions recovered after a region tree-sitter could not parse
 
 
 def _first(n, *types):
@@ -153,7 +156,99 @@ class Extractor:
         self.f.lines = self.src.decode("utf-8", "replace").split("\n")
         self.scan_directives()
         self.container(tree.root_node, {"ns": [], "cls": None, "access": None, "anon": False, "extern_c": False})
+        lines = self.f.lines
+        for i, ln in enumerate(lines):
+            if (ln[:1].isalpha() or ln[:1] == "_") and "(" in ln:
+                m = TOP_CALL.match(ln)
+                if m and m.group(1) not in C_KEYWORDS:
+                    self.f.top_calls.append((m.group(1), m.group(2), i + 1, 0, i + 1))
+                    continue
+                # `NAME(a,` continued on the next lines (up to 12)
+                if re.match(r"[A-Za-z_]\w*\s*\(", ln) and ln.count("(") > ln.count(")") and not ln.rstrip().endswith(("{", ";")):
+                    j, buf = i, ln
+                    while buf.count("(") > buf.count(")") and j + 1 < len(lines) and j - i < 12:
+                        j += 1
+                        buf += " " + lines[j].strip()
+                    m = TOP_CALL.match(buf)
+                    if m and m.group(1) not in C_KEYWORDS:
+                        self.f.top_calls.append((m.group(1), m.group(2), i + 1, 0, j + 1))
+        if tree.root_node.has_error:
+            self.recover()
         return self.f
+
+    # ---------------------------------------------------------------- error recovery
+    def recover(self):
+        """Top-level definitions in or after a region tree-sitter could not parse (unbalanced macro arguments,
+        unknown syntax): every brace block at file level that no extracted item starts in is parsed again on its own
+        (same line / column positions); a block that still fails gives a function from its head (calls by name)."""
+        txt = self.src.decode("utf-8", "replace")
+        spans = [(it.start, it.end) for it in self.f.items if it.kind != "macro"]
+        names = {it.name for it in self.f.items if it.kind in ("function", "method")}
+        line_at = _line_index(txt)
+        rec_spans = []
+        for a, z in _toplevel_blocks(txt):
+            sl, el = line_at(a), line_at(z)
+            # covered: an item starts in the block (or just before it: a macro / attribute line on top)
+            if any(sl - 3 <= x <= el and y >= sl for x, y in spans):
+                continue
+            scol = a - txt.rfind("\n", 0, a) - 1
+            chunk = "\n" * (sl - 1) + " " * scol + _unwrap(txt[a:z + 1])
+            sub = Extractor(self.path, chunk.encode("utf-8"), self.f.lang, self.module, self.blank)
+            sub.f = self.f
+            n0 = len(self.f.items)
+            t = parser(self.f.lang).parse(mask_annotations(sub.src, self.blank) if self.blank is not None else sub.src)
+            if not t.root_node.has_error:
+                sub.container(t.root_node, {"ns": [], "cls": None, "access": None, "anon": False, "extern_c": False})
+            if len(self.f.items) == n0:
+                self._head_fn(txt, a, z, sl, el, line_at)
+            new = self.f.items[n0:]
+            # a name the file already defines (the main parse placed it elsewhere): keep the first
+            keep = [it for it in new if not (it.kind in ("function", "method") and it.name in names)]
+            if len(keep) != len(new):
+                drop = {id(it) for it in new} - {id(it) for it in keep}
+                self.f.items[n0:] = keep
+                self.f.calls = [c for c in self.f.calls if id(c[0]) not in drop]
+                self.f.idents = [c for c in self.f.idents if id(c[0]) not in drop]
+                self.f.type_refs = [c for c in self.f.type_refs if id(c[0]) not in drop]
+            for it in keep:
+                it.attrs.setdefault("recovered", True)
+                names.add(it.name)
+                rec_spans.append((it.start, it.end, id(it)))
+            self.f.recovered += len(keep)
+        if rec_spans:
+            # a definition the main parse ran on into the recovered ones: clipped, and the references inside the
+            # recovered definitions belong to them only
+            rec_ids = {r[2] for r in rec_spans}
+            first = min(r[0] for r in rec_spans)
+            for it in self.f.items:
+                if id(it) not in rec_ids and it.start < first <= it.end and it.kind in ("function", "method"):
+                    it.end = max(it.start, max((y for x, y in _block_spans_before(txt, line_at, first)), default=it.start))
+
+            def inside(line, owner):
+                return id(owner) not in rec_ids and any(x <= line <= y for x, y, _ in rec_spans)
+            self.f.calls = [c for c in self.f.calls if not inside(c[4], c[0])]
+            self.f.idents = [c for c in self.f.idents if not inside(c[2], c[0])]
+            self.f.type_refs = [c for c in self.f.type_refs if not inside(c[2], c[0])]
+
+    def _head_fn(self, txt, a, z, sl, el, line_at):
+        b = txt.find("{", a, z + 1)
+        head = re.sub(r"\s+", " ", _unwrap(txt[a:b])).strip()
+        m = HEAD_FN.search(head)
+        if not m or m.group(1) in C_KEYWORDS or re.match(r"(typedef|struct|union|enum|class|namespace|extern)\b", head) or "=" in head:
+            return
+        name = m.group(1)
+        npos = txt.find(name, a, b)
+        ln = line_at(npos)
+        col = npos - txt.rfind("\n", 0, npos) - 1
+        static = head.startswith("static ") or " static " in head[:m.start()]
+        it = CItem("function", name, f"{self.path}#{name}" if static else name, self.path, ln, col, sl, el, self.module,
+                   name, static=static, attrs={"recovered": "head"})
+        self.f.items.append(it)
+        for c in CALL_RE.finditer(txt, b, z):
+            nm = c.group(1)
+            if nm not in C_KEYWORDS:
+                p = c.start(1)
+                self.f.calls.append((it, "name", nm, nm, line_at(p), p - txt.rfind("\n", 0, p) - 1))
 
     # ---------------------------------------------------------------- preprocessor regions (line based)
     def scan_directives(self):
@@ -247,6 +342,20 @@ class Extractor:
     def decl(self, n, ctx):
         t = n.type
         src = self.src
+        if t == "ERROR":
+            # a `#define` tree-sitter gave up on (a comment inside a continued macro body): the macro still exists
+            kids = n.children
+            for i, c in enumerate(kids):
+                if c.type == "#define" and i + 1 < len(kids) and kids[i + 1].type == "identifier":
+                    name = text(src, kids[i + 1])
+                    if name not in self.f.guards:
+                        fl = i + 2 < len(kids) and kids[i + 2].type == "preproc_params"
+                        it = self._add("macro", name, name, name, c, kids[i + 1], attrs={"function_like": fl})
+                        ln = c.start_point[0]
+                        body = self.f.lines[ln].split(name, 1)[-1] if ln < len(self.f.lines) else ""
+                        if fl:
+                            body = re.sub(r"^\s*\([^()]*\)", "", body)
+                        it.attrs["value"] = body.strip().rstrip("\\").strip()[:120] or None
         if t in ("preproc_if", "preproc_ifdef", "preproc_elif", "preproc_else", "preproc_elifdef", "ERROR", "declaration_list"):
             self.container(n, ctx)
             return
@@ -264,6 +373,11 @@ class Extractor:
                     it = self._add("macro", name, name, name, n, nm, attrs={"function_like": t == "preproc_function_def"})
                     val = n.child_by_field_name("value")
                     it.attrs["value"] = text(src, val)[:120] if val is not None else None
+                    ps = n.child_by_field_name("parameters")
+                    if val is not None and ps is not None and "{" in text(src, val):
+                        params = [x.strip() for x in text(src, ps).strip("()").split(",") if x.strip()]
+                        if generated_names(params, text(src, val), params):
+                            self.f.generators[name] = (params, text(src, val))
             return
         if t == "namespace_definition":
             nm = n.child_by_field_name("name")
@@ -573,6 +687,120 @@ class Extractor:
             elif t in ("lambda_expression",):
                 pass
             stack.extend(x.children)
+
+
+C_KEYWORDS = {"if", "while", "for", "switch", "return", "sizeof", "do", "else", "case", "defined", "_Alignof",
+              "alignof", "decltype", "typeof", "__typeof__", "__attribute__", "__declspec", "static_assert",
+              "_Static_assert", "catch", "noexcept", "throw", "new", "delete", "operator"}
+TOP_CALL = re.compile(r"([A-Za-z_]\w*)\s*\(((?:[^()]|\([^()]*\))*)\)\s*;?\s*(?://.*|/\*.*\*/)?$")
+HEAD_FN = re.compile(r"([A-Za-z_]\w*)\s*\((?:[^()]|\([^()]*\))*\)\s*(?:const\s*)?$")
+CALL_RE = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+# a function definition inside a macro value: `int get_##name(void) {`, `static void fn(int x) {`
+GEN_DEF = re.compile(r"(?:^|[\s*;}])((?:[A-Za-z_]\w*)(?:\s*##\s*[A-Za-z_]\w*)*)\s*\(([^;{}()]*(?:\([^()]*\)[^;{}()]*)*)\)\s*\{")
+LEX = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'|^[ \t]*#(?:\\\n|[^\n])*|[{};]", re.S | re.M)
+
+
+def generated_names(params: list[str], value: str, args: list[str]) -> list[tuple[str, bool, str]]:
+    """Functions a function-like macro defines when expanded with `args`: [(name, static, parameter types)]. `##`
+    pastes tokens, parameters are replaced by their argument."""
+    sub = dict(zip(params, (a.strip() for a in args)))
+    out = []
+    for m in GEN_DEF.finditer(value):
+        expr = m.group(1)
+        parts = [x.strip() for x in expr.split("##")]
+        if len(parts) == 1 and parts[0] in C_KEYWORDS:
+            continue
+        if not any(p in sub for p in parts) or (len(parts) == 1 and m.start(1) == len(value) - len(value.lstrip())):
+            continue                 # a name that does not depend on the arguments, or no return type before it
+        name = "".join(sub.get(p, p) for p in parts)
+        if re.fullmatch(r"[A-Za-z_]\w*", name) and name not in C_KEYWORDS:
+            ptxt = re.sub(r"\s*##\s*", "", re.sub(r"[A-Za-z_]\w*", lambda q: sub.get(q.group(0), q.group(0)), m.group(2)))
+            sig = []
+            for prm in (x.strip() for x in ptxt.split(",") if x.strip()):
+                if prm == "void":
+                    continue
+                prm = re.sub(r"\s*([*&])\s*", r"\1 ", prm).strip()
+                ws = prm.split()
+                ty = " ".join(ws[:-1]) if len(ws) > 1 and re.fullmatch(r"\w+", ws[-1]) else prm
+                sig.append(re.sub(r"\b(const|struct|volatile)\b\s*", lambda q: q.group(0) if q.group(1) == "struct" else "", ty).replace(" *", "*").replace("* ", "*").strip())
+            out.append((name, "static" in value[:m.start(1)].split(";")[-1].split("}")[-1], ",".join(sig)))
+    return out
+
+
+def _unwrap(chunk: str) -> str:
+    """`HEAP_EXPORT(void heap_insert(struct heap* h)) {` -> the wrapper macro and its parentheses blanked (same
+    length), so the declaration inside parses as the definition's head."""
+    m = re.match(r"\s*([A-Z][A-Z0-9_]*)\s*\(", chunk)
+    b = chunk.find("{")
+    if not m or b < 0:
+        return chunk
+    depth, close = 0, None
+    for i in range(m.end() - 1, b):
+        if chunk[i] == "(":
+            depth += 1
+        elif chunk[i] == ")":
+            depth -= 1
+            if depth == 0:
+                close = i
+                break
+    inner = chunk[m.end():close] if close else ""
+    if close is None or "(" not in inner or chunk[close + 1:b].strip():
+        return chunk
+    return " " * m.end() + inner + " " + chunk[close + 1:]
+
+
+def _block_spans_before(txt: str, line_at, line: int):
+    """Line spans of the file-level blocks that end before `line`."""
+    for a, z in _toplevel_blocks(txt):
+        if line_at(z) < line:
+            yield line_at(a), line_at(z)
+
+
+def _line_index(txt: str):
+    import bisect
+    nl = [i for i, ch in enumerate(txt) if ch == "\n"]
+    return lambda pos: bisect.bisect_right(nl, pos - 1) + 1
+
+
+def _toplevel_blocks(txt: str):
+    """(start, end) offsets of file-level constructs that contain a brace block (a definition: head ... `}`),
+    skipping comments, strings and preprocessor lines; stray closing braces are ignored."""
+    depth, start, last_end = 0, None, 0
+    pp = []                    # per #if level: True while inside an #elif / #else branch (its braces are not counted)
+    for m in LEX.finditer(txt):
+        tok = m.group(0)
+        if tok.lstrip().startswith("#"):
+            d = re.match(r"\s*#\s*(\w*)", tok).group(1)
+            if d in ("if", "ifdef", "ifndef"):
+                pp.append(False)
+            elif d in ("elif", "else", "elifdef", "elifndef") and pp:
+                pp[-1] = True
+            elif d == "endif" and pp:
+                pp.pop()
+        if any(pp):
+            continue
+        if len(tok) != 1 or tok not in "{};":            # comment, string, preprocessor line
+            if depth == 0 and start is None:
+                if tok[:1] in "\"'":
+                    start = m.start()
+                else:
+                    last_end = m.end()
+            continue
+        if depth == 0 and start is None:
+            seg = txt[last_end:m.start()]
+            start = last_end + len(seg) - len(seg.lstrip())
+        if tok == "{":
+            depth += 1
+        elif tok == "}":
+            if depth == 0:
+                start, last_end = None, m.end()
+                continue
+            depth -= 1
+            if depth == 0:
+                yield start, m.end() - 1
+                start, last_end = None, m.end()
+        elif depth == 0:
+            start, last_end = None, m.end()
 
 
 def extract(path: str, src: bytes, lang: str, module: str, blank: re.Pattern | None = None) -> CFile:

@@ -890,7 +890,7 @@ def with_generated(row: dict) -> dict:
     """A node row without its raw attrs, plus `generated` (the reason) for a node from a generated / copied / vendored
     file (indexed with --include-generated)."""
     raw = row.pop("attrs", None)
-    if raw and '"platforms"' in raw:
+    if raw and ('"platforms"' in raw or '"available"' in raw):
         from .platforms import node_platforms
         row.update(node_platforms(raw))
     if raw and '"generated"' in raw:

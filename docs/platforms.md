@@ -53,9 +53,9 @@ aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's o
 A guard clause (`if (Platform.OS !== 'ios') return`, `if (!Platform.isIOS) return;`) tags the rest of the enclosing
 block with the negated condition, and a JS / TS branch without braces or semicolons ends at its line (automatic
 semicolon insertion). Swift `#if os(iOS)`, `canImport(UIKit)` (ios), `canImport(AppKit)` (macos),
-`targetEnvironment(macCatalyst)` (macos) and `@available(iOS, unavailable)` / `@available(macOS, unavailable)` on a
-declaration are platform conditions; `targetEnvironment(simulator)` and version-only `@available(iOS 17, *)` /
-`#available` are not (see [swift.md](swift.md)). Kotlin Multiplatform source sets (`iosMain`, `androidMain`, ...) are platform conditions on
+`targetEnvironment(macCatalyst)` (macos) and `@available(iOS, unavailable)` / `@available(macOS, unavailable)` / `@available(*, unavailable)` on a
+declaration are platform conditions; `targetEnvironment(simulator)` is not, and version forms (`@available(iOS 17, *)`,
+`#available`) are recorded as minimum OS versions (`attrs.available`, see [swift.md](swift.md)). Kotlin Multiplatform source sets (`iosMain`, `androidMain`, ...) are platform conditions on
 their files, and `expect` declarations link to each `actual` ([kotlin.md](kotlin.md)). Electron and Tauri process
 roles (main, preload, renderer; webview, core) are recorded on module nodes by the
 [bridges](bridges.md#desktop-process-boundaries-electron-and-tauri) pass. Native files that receive [web / native bridge](bridges.md) calls are tagged with the platform of
@@ -76,8 +76,15 @@ target's view. `cg platforms` and `cg coverage` list how many conditions are unk
 - Variant links: a call that resolves to one variant (`storage.ios.ts`, the stub of a conditional import, the
   host's `cfg` in rust-analyzer, a Swift function defined once per `#if os(...)` branch) is also linked to its sibling variants, with `attrs.platform_variant_of`. `impact`
   on `storage.android.ts#save` finds the callers that import `./storage`.
-- Rust exact mode: rust-analyzer resolves the host configuration. Calls into items gated for another target are added
-  from the syntax layer (`via: cfg-inactive`), so every target's callers are in the graph.
+- Rust exact mode: rust-analyzer resolves the host configuration, then runs once per other target the `cfg` conditions
+  name (up to 3; `CODEGRAPH_RUST_TARGETS`), so references under another target's `cfg` are exact
+  (`attrs.exact_target`). What none resolves is added from the syntax layer (`via: cfg-inactive`), so every target's
+  callers are in the graph.
+- Re-exports in a variant file count as its definitions: TS `export {a as b} from './m'`, `export {x}`, `export *`,
+  `export const X = Y` (module `attrs.reexports`: name -> node id, `reexports_external` for package symbols,
+  `reexports_all`), Dart `export 'src/x.dart' show f` and top-level tear-offs (`const f = Impl.f`) in a
+  conditional-import library. A call through the variant also reaches the re-exported definition, and API surface /
+  missing-callee findings count it.
 
 `cg index` records a summary in the index stats (`platforms`: targets, conditions, tagged symbols and references,
 per-target counts, divergence findings, the pass's seconds).
