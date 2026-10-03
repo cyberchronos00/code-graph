@@ -823,7 +823,100 @@ class PyTests:
                 if not self.is_client(sub.func.value, ctx):
                     continue
                 vals = self.url_values(ua, ctx)
-                self.pending.append((f, verb, vals, sub.lineno, f"{_text(sub.func, 40)}"))
+                self.pending.append((f, verb, vals, sub.lineno, f"{_text(sub.func, 40)}", self.request_host(sub, ctx, ua)))
+
+    @staticmethod
+    def _overrides_in(node) -> list[str]:
+        """`app.dependency_overrides[get_current_user] = fake` / `.update({dep: fake})` in a body: the overridden
+        dependency names (#59)."""
+        from .plugin import dotted
+        out = []
+        for sub in ast.walk(node):
+            keys = []
+            if isinstance(sub, ast.Assign):
+                for t in sub.targets:
+                    if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Attribute) and \
+                            t.value.attr == "dependency_overrides":
+                        keys.append(t.slice)
+            elif isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr == "update" and \
+                    isinstance(sub.func.value, ast.Attribute) and sub.func.value.attr == "dependency_overrides" and \
+                    sub.args and isinstance(sub.args[0], ast.Dict):
+                keys += [k for k in sub.args[0].keys if k is not None]
+            for k in keys:
+                n = (dotted(k) or "").rsplit(".", 1)[-1]
+                if n and n not in out:
+                    out.append(n)
+        return out
+
+    def overrides_for(self, f) -> list[str]:
+        """Dependency overrides in effect for a test: in the test itself, the fixtures it requests (and theirs, two
+        levels, conftest included), and its module's top level."""
+        cache = self.__dict__.setdefault("_ovr", {})
+        if f.id in cache:
+            return cache[f.id]
+        out = list(self._overrides_in(f.node))
+        chain = self.scope_chain(f.cls, f.module)
+        todo, seen = [(n, 0) for n in self.requested(f.node)], set()
+        while todo:
+            n, d = todo.pop()
+            fx = self.lookup_fixture(n, chain)
+            if fx is None or fx.id in seen or d > 2:
+                continue
+            seen.add(fx.id)
+            out += [x for x in self._overrides_in(fx.node) if x not in out]
+            todo += [(m, d + 1) for m in self.requested(fx.node)]
+        for st in getattr(f.module, "tree", ast.Module(body=[], type_ignores=[])).body:
+            if not isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                out += [x for x in self._overrides_in(st) if x not in out]
+        cache[f.id] = out
+        return out
+
+    def request_host(self, call, ctx, ua) -> tuple | None:
+        """The host a test request names (#59): Flask `subdomain="api"`, `base_url="http://api.example.com"`,
+        `headers={"Host": ...}`, or an absolute URL: ("subdomain", "api") / ("host", "api.example.com")."""
+        sd = _kw(call, "subdomain")
+        v = str_value(self.prog, sd, ctx) if sd is not None else None
+        if v:
+            return ("subdomain", v)
+        hosts = []
+        bu = _kw(call, "base_url")
+        if bu is not None:
+            hosts.append(str_value(self.prog, bu, ctx))
+        hd = _kw(call, "headers")
+        if isinstance(hd, ast.Dict):
+            for k, val in zip(hd.keys, hd.values):
+                if isinstance(k, ast.Constant) and str(k.value).lower() == "host":
+                    hosts.append(str_value(self.prog, val, ctx))
+        if isinstance(ua, ast.Constant) and isinstance(ua.value, str) and "://" in ua.value:
+            hosts.append(ua.value)
+        for h in hosts:
+            if h:
+                h = re.sub(r"^\w+://", "", h).split("/")[0]
+                h = h if h.startswith("[") else h.split(":")[0]
+                if h and not LOCAL_HOSTS.match("http://" + h.split("]:")[0] + ("]" if "]:" in h else "")):
+                    return ("host", h)
+        return None
+
+    @staticmethod
+    def nearest_routes(f, cands: list[dict]) -> set:
+        """Same path on several apps (#59): a test that builds its own app and registers routes on it (pallets/flask:
+        `@app.route("/")` inside the test, on the `app` fixture) requests those, not the same path another test
+        registered. Prefer routes declared in the test function itself, then in its test module."""
+        node = getattr(f, "node", None)
+        lo, hi = getattr(node, "lineno", 0), getattr(node, "end_lineno", 0) or 0
+        same_fn = {r["id"] for r in cands if r.get("file") == f.file and lo <= (r.get("line") or 0) <= hi}
+        if same_fn:
+            return same_fn
+        return {r["id"] for r in cands if r.get("file") == f.file}
+
+    @staticmethod
+    def host_fits(route: dict, rh: tuple | None) -> bool:
+        if rh is None:
+            return not route.get("host") and not route.get("subdomain")
+        kind, v = rh
+        if kind == "subdomain":
+            return route.get("subdomain") == v or (route.get("host") or "").split(".")[0] == v
+        return route.get("host") == v or (bool(route.get("subdomain")) and v.split(".")[0] == route["subdomain"])
 
     def match_http(self) -> dict:
         """TEST_HTTP edges for the requests collect_http() found, against the route nodes in the graph."""
@@ -839,11 +932,13 @@ class PyTests:
             if a["uri"].startswith("/{?}") and len(a["uri"]) > 4:
                 # a prefix cg could not evaluate (f'{settings.BASE_PATH}...'): tests usually run with it empty
                 uris.append(("without unresolved prefix", "/" + a["uri"][4:].lstrip("/")))
-            routes.append({"id": nid, "uri": a["uri"], "method": a["method"], "uris": uris})
+            routes.append({"id": nid, "uri": a["uri"], "method": a["method"], "uris": uris, "host": a.get("host"),
+                           "subdomain": a.get("subdomain"), "file": n.file, "line": n.line or 0})
             if a.get("name"):
                 by_name[a["name"]].append(n)
         unmatched = []
-        for f, verb, vals, line, via in self.pending:
+        by_id = {r["id"]: r for r in routes}
+        for f, verb, vals, line, via, rhost in self.pending:
             st["requests"] += 1
             if not vals:
                 st["url_unknown"] += 1
@@ -876,10 +971,38 @@ class PyTests:
                                        and (r["method"] in (verb, "ANY") or (verb == "HEAD" and r["method"] == "GET"))]}
                 else:
                     res = match_endpoint(verb, path, routes, "api") if routes else {"matched": []}
+                if not res["matched"]:
+                    # a test that registers an all-parameter rule on its own app and requests it (pallets/flask:
+                    # `@app.route("/<list:args>")` + `client.get("/1,2,3")`, `/<lang_code>/` + `/de/`): the
+                    # one-literal-segment rule is waived for routes declared in the same test function (#59)
+                    from ...link import match_path
+                    own = self.nearest_routes(f, routes)
+                    loc = [r for r in routes if r["id"] in own and r.get("file") == f.file
+                           and (r["method"] in (verb, "ANY") or (verb == "HEAD" and r["method"] == "GET"))
+                           and getattr(f.node, "lineno", 0) <= (r.get("line") or 0) <= (getattr(f.node, "end_lineno", 0) or 0)
+                           and match_path(path, r["uri"])[0]]
+                    if loc:
+                        st["own_param_routes"] += 1
+                        res = {"matched": [{"route": r["id"], "confidence": HEURISTIC} for r in loc[:3]]}
+                fit = [mm for mm in res["matched"] if self.host_fits(by_id.get(mm["route"], {}), rhost)]
+                if not fit and rhost is not None:   # a host no host-bound route serves: the default-host routes
+                    fit = [mm for mm in res["matched"] if self.host_fits(by_id.get(mm["route"], {}), None)]
+                if fit and len(fit) < len(res["matched"]):        # same path on several hosts: the request's host
+                    st["host_narrowed"] += 1
+                    res["matched"] = fit
+                if len(res["matched"]) > 1:
+                    near = self.nearest_routes(f, [by_id.get(mm["route"], {}) for mm in res["matched"]])
+                    if near and len(near) < len(res["matched"]):
+                        st["app_narrowed"] += 1
+                        res["matched"] = [mm for mm in res["matched"] if mm["route"] in near]
                 if len(res["matched"]) > 3 and all(mm["confidence"] == HEURISTIC for mm in res["matched"]):
                     res["matched"] = []
+                ovr = self.overrides_for(f) if res["matched"] else []
                 for mm in res["matched"]:
-                    b.add_edge(f.id, mm["route"], "TEST_HTTP", f.file, line, mm["confidence"], via=via, path=path)
+                    b.add_edge(f.id, mm["route"], "TEST_HTTP", f.file, line, mm["confidence"], via=via, path=path,
+                               **({"dependency_overrides": ovr} if ovr else {}))
+                if ovr:
+                    st["with_dependency_overrides"] += 1
                 hit_any = hit_any or bool(res["matched"])
             if hit_any:
                 st["matched"] += 1

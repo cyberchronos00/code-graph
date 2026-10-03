@@ -155,6 +155,8 @@ def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
             how = f"security scheme {checks['scheme']}" if checks.get("scheme") else \
                 f"via {checks['rejects_via']}" if checks.get("rejects_via") and not checks.get("rejects") else \
                 "raises " + "/".join(str(x) for x in checks.get("rejects", []))
+            if checks.get("checked_in") and not checks.get("scheme"):
+                how += f" in {checks['checked_in'][0]}"       # a helper the dependency / middleware calls (#59)
             why = f"dependency check ({how})"
         g = {"name": display or name, "kind": kind, "source": source, "auth": why is not None,
              "secret": is_auth.secret(name) if hasattr(is_auth, "secret") else bool(SECRET_RE.search(tokens(name)))}

@@ -264,16 +264,23 @@ inside a function too, as in Flask's `create_app()` factory):
   `HTTPEndpoint` classes (one route per method the class defines). `{id:int}` becomes `{id}`.
 - Flask: `@bp.route(..., methods=...)`, `@bp.get` / `.post` / ..., `add_url_rule()` (also `MethodView.as_view()`),
   `register_blueprint(bp, url_prefix=...)` (the registration's prefix replaces the blueprint's own), nested blueprints,
-  `<int:id>` → `{id}`. Route names are the endpoints `url_for()` takes (`auth.login`).
+  `<int:id>` → `{id}`. Route names are the endpoints `url_for()` takes (`auth.login`). A multi-segment converter
+  (`<path:p>`, Starlette `{p:path}`) becomes `{p*}`, which matches any number of segments.
 - Route access (`cg routes --unguarded`): `Depends()` / `Security()` dependencies of the handler (parameter defaults,
   `Annotated[..., Depends(f)]` aliases such as `CurrentUser`), of `dependencies=` on the route, router or
-  `include_router`, and the non-framework decorators of a Flask view (`@login_required`).
+  `include_router`, and the non-framework decorators of a Flask view (`@login_required`). Dependencies built by
+  calling a class (`Depends(RoleChecker("admin"))`) are read from the class's `__call__`. `app.add_middleware(X)`
+  adds an access entry with `via: middleware` to every route of that app when `X` is a project class (its
+  `dispatch` / `__call__` is read for checks) or a library class named like access control (`auth`, `session`,
+  `permission`, `jwt`, `token`, `login`); CORS, GZip and other library middleware are skipped.
 - What a dependency checks (`attrs.access[].checks`), read from its source: the statuses it raises
   (`HTTPException(status_code=401)`, `status.HTTP_403_FORBIDDEN`, an exception held in a variable), the security
   scheme it is (`OAuth2PasswordBearer`, `HTTPBearer`, `APIKeyHeader` ...; `auto_error=False` does not reject), the
   headers / cookies / request it reads, and its own nested dependencies (followed 4 levels). `effect` is `rejects`
   (401 / 403 here or in a nested dependency, `rejects_via` names it), `raises` (other statuses) or `reads`. A
-  dependency that rejects counts as an auth guard whatever its name (`auth_by: dependency check (...)`).
+  dependency that rejects counts as an auth guard whatever its name (`auth_by: dependency check (...)`). Statuses
+  raised in a project helper the dependency calls count too (`checks.checked_in` names the helper, and `auth_by`
+  ends in `in <helper>`).
 - Objects that are not assigned in the module: an app / router received as a parameter
   (`def register_routes(app): @app.get(...)`, `def init_app(app): app.add_url_rule(...)`) hangs under the app passed
   to it (`register_routes(app)`), or under the object the pytest fixture of that name returns
@@ -291,10 +298,34 @@ inside a function too, as in Flask's `create_app()` factory):
   `static_folder=` under their prefix), marked `static: true`.
 - Starlette `Host("api.example.com", routes=[...] | app=...)` and `app.host(...)`: the host is the route's `host`
   attribute, not part of its path.
+- Host-aware route keys: a route with a `host` or `subdomain` gets ` @<host>` (`route:GET / @api.example.org`) or
+  ` @<subdomain>.*` (`route:GET / @api.*`) in its node id, so routes with the same method and path on different
+  hosts are separate nodes. The route name stays `GET /`.
+- Flask-Classful `FlaskView` subclasses registered with `X.register(app | bp, route_base=, route_prefix=)`: `index`,
+  `get`, `post`, `put`, `patch` and `delete` follow Flask-Classful's rules, other public methods route under their
+  name, and `@route(...)` overrides apply.
+- Registration calls inside a `for` loop over a literal list or tuple
+  (`for path, view in [("/a", a), ("/b", b)]: app.add_url_rule(path, view_func=view)`) are unrolled, one
+  registration per element.
 - A router or blueprint no app includes still gets its routes, with `mounted: false` and no entry point.
 
 The `python_decorator_routes` blind spot no longer fires for these frameworks. Test requests through `TestClient(app)`,
 `app.test_client()` and fixtures returning one link to the routes (`TEST_HTTP`), so `cg tests <handler>` lists them.
+When several routes fit a request, cg narrows them in this order before dropping a request with more than 3
+candidates:
+
+- by host: the request's host from `subdomain=`, `base_url=`, a `Host` header or an absolute URL, matched against the
+  route's host / subdomain (routes without one stay candidates when no hosted route fits);
+- by app: routes registered in the same test function, then in the same test module;
+- a route made only of parameters (`/<a>/<b>`) needs one literal segment to match, except when the same test
+  function registers it.
+
+A test that sets `app.dependency_overrides[dep] = fake` (in the test, in a fixture it uses, two levels deep, or at
+module level) gets `dependency_overrides: ["dep"]` on its `TEST_HTTP` edges, which marks the link as a test that
+bypasses that dependency.
+
+Not modelled: view registries built by a plugin system (pluggy-style hooks that return views), because they have no
+common API to read, and routes added by calling an unknown library function with the app.
 
 Measured on shallow clones (before -> after):
 
@@ -304,6 +335,7 @@ Measured on shallow clones (before -> after):
 | fastapi/full-stack-fastapi-template `backend` | 0 -> 23 | 0 / 53 -> 53 / 53 | 23 -> 0 | 0.13 s -> 0.2 s |
 | pallets/flask (whole repo, apps built inside its own tests) | 0 -> 156 | 0 / 331 -> 223 / 331 | 13 -> 0 | 0.6 s -> 0.9 s |
 | pallets/flask, routes on received apps / fixtures, endpoints, static routes (#48) | 156 -> 443 | 223 / 331 -> 305 / 331 | 0 -> 0 | 1.0 s -> 1.4 s |
+| pallets/flask, host-aware keys, per-app test linking, `{p*}`, loops (#59; route **nodes**) | 188 -> 200 | 305 / 331 -> 310 / 331 | 0 -> 0 | 1.9 s -> 1.8 s (wall, whole `cg index`) |
 
 In the template, 17 of 23 routes carry an auth dependency (`CurrentUser`, `get_current_active_superuser`); the 6 without
 are login, signup, password recovery, the health check and the private user route. The template's `deps.py` uses
@@ -311,9 +343,13 @@ Python 3.14's unparenthesized `except A, B:`; cg re-parses such files with the p
 older interpreters too. In the flask repository most unlinked requests targeted routes a test registers on the `app`
 fixture it receives as a parameter (`def test_x(app, client): @app.route(...)`); with those modelled (186 fixture
 parameters), 305 of 331 requests link. Of the 93 new links, 68 land on a route the same test registers, 5 on the
-built-in static route and 20 on a same-path route registered elsewhere (route nodes are keyed by method and path). Of
-the 14 still unlinked, 7 are requests the test expects to fail (404 / 405); the rest use `url_value_preprocessor`
-language prefixes (`/de/`), custom converters or multi-segment `<path:...>` static paths. The FastAPI template,
+built-in static route and 20 on a same-path route registered elsewhere (route nodes were keyed by method and path).
+With #59, routes on other hosts or subdomains are separate nodes (188 -> 200 route nodes, where the #48 row counts
+route entries), requests narrow by host (140 requests) and by the test's own app (11), and requests that fit more
+than one route fall from 18 to 7 (`TEST_HTTP` edges 323 -> 319, no request lost its link). Newly linked: `/de/`
+and `/1,2,3` (all-parameter routes the test registers itself), `/admin/static/css/test.css` (multi-segment static
+path) and a `{path*}` catch-all; 21 requests stay unlinked. #59 leaves the FastAPI template and opentelemetry-python
+unchanged (same route attributes and edges). Before #59, the FastAPI template,
 the tutorial example (+1 node, its static route), opentelemetry-python (+1, a Flask test app's static route), pylint
 and pytest index as before; in the template the 17 guarded routes now also carry what their dependencies check
 (`get_current_user` rejects through `reusable_oauth2`, an `OAuth2PasswordBearer`).

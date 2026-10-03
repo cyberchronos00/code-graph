@@ -107,10 +107,14 @@ def _mentions(project: Project, pkgs: tuple[str, ...]) -> bool:
 
 
 def flask_path(rule: str) -> str:
+    """`<int:id>` -> `{id}`; `<path:rest>` -> `{rest*}` (one or more segments, #59)."""
+    rule = re.sub(r"<path:(\w+)>", r"{\1*}", rule)
     return re.sub(r"<(?:[^:<>]+:)?(\w+)>", r"{\1}", rule)
 
 
 def starlette_path(p: str) -> str:
+    """`{id:int}` -> `{id}`; `{rest:path}` -> `{rest*}` (one or more segments, #59)."""
+    p = re.sub(r"\{(\w+):path\}", r"{\1*}", p)
     return re.sub(r"\{(\w+):[^{}]+\}", r"{\1}", p)
 
 
@@ -237,7 +241,10 @@ class Routes:
         pfuncs = {k[1].rsplit(".", 1)[-1] for k, o in self.objs.items() if o.param}
         for m, f, stmts in self._scopes():
             ctx = Ctx(m, f, f.cls if f else None)
-            for st in stmts:
+            extra, skip = _unroll_loops(stmts)
+            for st in stmts + extra:
+                if id(st) in skip:
+                    continue
                 if isinstance(st, ast.Call) and isinstance(st.func, ast.Attribute):
                     self._call(st, ctx)
                 if isinstance(st, ast.Call) and pfuncs and (dotted(st.func) or "").rsplit(".", 1)[-1] in pfuncs:
@@ -550,6 +557,8 @@ class Routes:
     def dep_name(self, x, ctx, depth=0):
         """`Depends(get_current_user)` / `Security(scheme, scopes=...)` -> 'get_current_user'."""
         a = self.dep_expr(x)
+        if isinstance(a, ast.Call):          # Depends(RoleChecker("admin")): an instance, named by its class (#59)
+            a = a.func
         return (dotted(a) or "").rsplit(".", 1)[-1] or None if a is not None else None
 
     def dep_entry(self, x, ctx, via) -> dict | None:
@@ -666,6 +675,9 @@ class Routes:
                         statuses.add(st)
                     elif nm:
                         raises.append(nm)
+        helper_st, helpers = self._helper_statuses(fn, fctx, depth, seen)
+        if helper_st:
+            statuses |= helper_st
         for p, x, cx in self._param_deps(fn):
             sub_e = self.dep_expr(x)
             nn = (dotted(sub_e) or "").rsplit(".", 1)[-1] if sub_e is not None else ""
@@ -700,9 +712,85 @@ class Routes:
             out["nested"] = nested
         if rejects_via:
             out["rejects_via"] = rejects_via
+        if helpers:
+            out["checked_in"] = helpers
         out["effect"] = "rejects" if (statuses & REJECT_STATUS or rejects_via) else ("raises" if statuses or raises else "reads")
         self.stats["dependencies_evaluated"] += 1
         return out
+
+    def middleware_entry(self, e, ctx) -> dict | None:
+        """An access entry for a middleware class: what its `dispatch` / `__call__` rejects (`raise
+        HTTPException(401)`, `return JSONResponse(..., status_code=401)`), statuses from helpers it calls included."""
+        name = (dotted(e) or "").rsplit(".", 1)[-1] if e is not None else ""
+        if not name:
+            return None
+        ent = {"name": name, "via": "middleware"}
+        try:
+            t = self.prog.infer(e, ctx)
+        except RecursionError:
+            t = None
+        if not (t and t[0] == "type") and not re.search(r"auth|login|session|permission|jwt|token", name, re.I):
+            return None          # a library middleware that is not access control (CORS, GZip, HTTPS redirect)
+        if t and t[0] == "type":
+            statuses, helpers = set(), []
+            for mname in ("dispatch", "__call__"):
+                m = self.prog.find_method(t[1], mname)
+                if m is None or m.cls is not t[1]:
+                    continue
+                for sub in walk_body(m.node):
+                    if isinstance(sub, ast.Raise) and isinstance(sub.exc, ast.Call):
+                        st = self._status(kwarg(sub.exc, "status_code") or (sub.exc.args[0] if sub.exc.args else None))
+                        if st is not None:
+                            statuses.add(st)
+                    elif isinstance(sub, ast.Call) and kwarg(sub, "status_code") is not None:
+                        st = self._status(kwarg(sub, "status_code"))
+                        if st is not None:
+                            statuses.add(st)
+                hs, hn = self._helper_statuses(m, Ctx(m.module, m, m.cls), 0, {m.qual})
+                statuses |= hs
+                helpers += hn
+            if statuses:
+                chk = {"effect": "rejects" if statuses & REJECT_STATUS else "raises"}
+                if statuses & REJECT_STATUS:
+                    chk["rejects"] = sorted(statuses & REJECT_STATUS)
+                if statuses - REJECT_STATUS:
+                    chk["raises_status"] = sorted(statuses - REJECT_STATUS)
+                if helpers:
+                    chk["checked_in"] = helpers
+                ent["checks"] = chk
+        return ent
+
+    def _helper_statuses(self, fn: FuncInfo, fctx, depth: int, seen: set) -> tuple[set, list]:
+        """HTTP statuses raised by project functions the dependency calls (#59): `def get_user(...): return
+        check_token(token)` with `check_token` raising `HTTPException(401)`. Two levels of helpers."""
+        statuses, names = set(), []
+        if depth > 3:
+            return statuses, names
+        for sub in walk_body(fn.node):
+            if not isinstance(sub, ast.Call):
+                continue
+            try:
+                t = self.prog.infer(sub.func, fctx)
+            except RecursionError:
+                continue
+            h = t[1] if t and t[0] in ("func", "bound") and isinstance(t[1], FuncInfo) else None
+            if h is None or h.qual in seen or h.file is None:
+                continue
+            seen = seen | {h.qual}
+            hctx = Ctx(h.module, h, h.cls)
+            found = set()
+            for r in walk_body(h.node):
+                if isinstance(r, ast.Raise) and isinstance(r.exc, ast.Call):
+                    st = self._status(kwarg(r.exc, "status_code") or (r.exc.args[0] if r.exc.args else None))
+                    if st is not None:
+                        found.add(st)
+            deeper, dn = self._helper_statuses(h, hctx, depth + 1, seen)
+            found |= deeper
+            if found:
+                statuses |= found
+                names.append(h.name)
+                names += [x for x in dn if x not in names]
+        return statuses, names
 
     def handler_deps(self, f: FuncInfo) -> list[dict]:
         out = []
@@ -748,6 +836,55 @@ class Routes:
         self.ops.append({"obj": obj, "path": path, "methods": methods, "handler": h, "file": ctx.mod.file, "line": line,
                          "how": how, "name": name, "deps": list(extra_deps), "ws": ws,
                          **{k: v for k, v in ext.items() if v}})
+
+    CLASSFUL = {"index": ("GET", False), "get": ("GET", True), "post": ("POST", False), "put": ("PUT", True),
+                "patch": ("PATCH", True), "delete": ("DELETE", True)}
+
+    def _classful(self, c: ast.Call, ctx) -> bool:
+        """Flask-Classful `QuotesView.register(app)` (#59): `route_base` (default: the class name without `View`,
+        lower case) + `route_prefix`; index / get / post / put / patch / delete by their HTTP method, any other
+        public method as `GET /base/name/`, its parameters as path parts; `@route("/x", methods=[...])` overrides."""
+        try:
+            t = self.prog.infer(c.func.value, ctx)
+        except RecursionError:
+            return False
+        if not (t and t[0] == "type" and self.prog.subclass_of(t[1], "FlaskView")):
+            return False
+        obj = self.obj_of(c.args[0], ctx)
+        if obj is None or obj.fw != "flask":
+            return False
+        cls = t[1]
+        cctx = Ctx(cls.module, None, cls)
+
+        def cattr(name):
+            v = cls.attrs.get(name)
+            return str_value(self.prog, v[0], cctx) if v and v[0] is not None else None
+        base = str_value(self.prog, kwarg(c, "route_base"), ctx) or cattr("route_base")
+        if base is None:
+            nm = cls.name[:-4] if cls.name.endswith("View") and len(cls.name) > 4 else cls.name
+            base = "/" + nm.lower()
+        prefix = str_value(self.prog, kwarg(c, "route_prefix"), ctx) or cattr("route_prefix") or ""
+        base = join(prefix, base)
+        for mname, f in cls.methods.items():
+            if mname.startswith("_") or mname in ("before_request", "after_request", "register"):
+                continue
+            if any(mname.startswith(p) for p in ("before_", "after_")):
+                continue
+            params = [a.arg for a in f.node.args.args[1:]]
+            custom = None
+            for d in f.decorators:
+                if isinstance(d, ast.Call) and (dotted(d.func) or "").rsplit(".", 1)[-1] == "route" and d.args:
+                    custom = (str_value(self.prog, d.args[0], Ctx(cls.module, f, cls)), self._methods(kwarg(d, "methods"), ctx))
+            if custom is not None:
+                path, methods = join(base, custom[0] or UNKNOWN), custom[1]
+            elif mname in self.CLASSFUL:
+                verb, with_id = self.CLASSFUL[mname]
+                path, methods = join(base, *[f"<{p}>" for p in params]) + "/", [verb]
+            else:
+                path, methods = join(base, mname, *[f"<{p}>" for p in params]) + "/", ["GET"]
+            self._op(obj, path, methods, f, ctx, c.lineno, "FlaskView.register", f"{cls.name}:{mname}")
+            self.stats["classful_routes"] += 1
+        return True
 
     def _flask_ext(self, c, ctx) -> dict:
         """Flask `subdomain=` / `host=` (host matching) / `defaults=` of a rule."""
@@ -817,14 +954,22 @@ class Routes:
             if obj is not None and obj.fw == "flask" and c.args:
                 self._werkzeug_rule(obj, c.args[0], ctx, "")
             return
+        if attr == "register" and c.args:
+            if self._classful(c, ctx):
+                return
         if attr not in ("include_router", "register_blueprint", "mount", "add_api_route", "add_route", "add_url_rule",
                         "add_websocket_route", "add_api_websocket_route", "host", "add_resource", "add_namespace",
-                        "init_app"):
+                        "init_app", "add_middleware"):
             return
         obj = self.obj_of(c.func.value, ctx)
         if obj is None:
             return
         prog = self.prog
+        if attr == "add_middleware":       # Starlette / FastAPI `app.add_middleware(AuthMiddleware)` (#59)
+            ent = self.middleware_entry(c.args[0] if c.args else kwarg(c, "middleware_class"), ctx)
+            if ent and not any(d["name"] == ent["name"] for d in obj.deps):
+                obj.deps.append(ent)
+            return
         if attr in ("include_router", "register_blueprint"):
             child = self.obj_of(c.args[0], ctx) if c.args else None
             if child is None:
@@ -1068,6 +1213,50 @@ class Routes:
         return rows
 
 
+LOOP_CALLS = {"add_url_rule", "add_api_route", "add_route", "add_websocket_route", "register", "include_router",
+              "register_blueprint", "add_resource"}
+
+
+def _unroll_loops(stmts) -> tuple[list, set]:
+    """Registration calls inside `for name, view in [("a", AView), ("b", BView)]: app.add_url_rule(f"/{name}",
+    view_func=view.as_view(name))` (#59): one copy of each call per literal element, the loop names replaced by the
+    element's parts. Returns the copies and the ids of the originals they replace (at most 30 elements a loop)."""
+    import copy
+    extra, skip = [], set()
+    for loop in stmts:
+        if not isinstance(loop, ast.For) or not isinstance(loop.iter, (ast.List, ast.Tuple)) or len(loop.iter.elts) > 30:
+            continue
+        tgt = loop.target
+        names = [tgt.id] if isinstance(tgt, ast.Name) else \
+            [x.id for x in tgt.elts if isinstance(x, ast.Name)] if isinstance(tgt, ast.Tuple) else []
+        if not names or (isinstance(tgt, ast.Tuple) and len(names) != len(tgt.elts)):
+            continue
+        calls = [c for st in loop.body for c in ast.walk(st) if isinstance(c, ast.Call)
+                 and isinstance(c.func, ast.Attribute) and c.func.attr in LOOP_CALLS]
+        if not calls:
+            continue
+        binds = []
+        for el in loop.iter.elts:
+            if isinstance(tgt, ast.Name):
+                binds.append({names[0]: el})
+            elif isinstance(el, (ast.Tuple, ast.List)) and len(el.elts) == len(names):
+                binds.append(dict(zip(names, el.elts)))
+        if len(binds) != len(loop.iter.elts):
+            continue
+
+        class Sub(ast.NodeTransformer):
+            def __init__(self, b):
+                self.b = b
+
+            def visit_Name(self, n):
+                return copy.deepcopy(self.b[n.id]) if n.id in self.b and isinstance(n.ctx, ast.Load) else n
+        for c in calls:
+            skip.add(id(c))
+            for b in binds:
+                extra.append(Sub(b).visit(copy.deepcopy(c)))
+    return extra, skip
+
+
 def _module_level(tree):
     stack = list(ast.iter_child_nodes(tree))
     while stack:
@@ -1090,18 +1279,22 @@ def emit(b: GraphBuilder, rows: list[dict]) -> int:
     n = 0
     for r in rows:
         uri = re.sub(r"/{2,}", "/", r["uri"])
-        key = f"{r['method']} {uri}"
+        name = f"{r['method']} {uri}"
+        # host-aware key (#59): a Starlette `Host` / Flask `host=` (host matching) / `subdomain=` route does not merge
+        # with a same-path route on another host; the name stays `METHOD /path`, the host is in attrs
+        hk = r.get("host") or (f"{r['subdomain']}.*" if r.get("subdomain") else None)
+        key = f"{name} @{hk}" if hk else name
         h = r["handler"]
         attrs = {"uri": uri, "method": r["method"], "framework": r["framework"], "name": r["name"],
                  "mounted": r["mounted"], "registration": r["how"], "router_chain": r["chain"] or None,
-                 "trailing_slash": uri.endswith("/") and uri != "/", "path_params": re.findall(r"\{(\w+)\}", uri),
+                 "trailing_slash": uri.endswith("/") and uri != "/", "path_params": re.findall(r"\{(\w+)\*?\}", uri),
                  "host": r.get("host"), "subdomain": r.get("subdomain"), "defaults": r.get("defaults"),
                  "endpoint_alias": True if r.get("endpoint_only") else None, "static": r.get("static")}
         if r["access"]:
             attrs["access"] = r["access"]
         if isinstance(h, (FuncInfo, ClassInfo)):
             attrs["handler"] = h.id
-        rid = b.add_node("route", key, name=key, file=r["file"], line=r["line"], module=mod_of(r["file"]), lang="python",
+        rid = b.add_node("route", key, name=name, file=r["file"], line=r["line"], module=mod_of(r["file"]), lang="python",
                          entry_kind="websocket" if r["method"] == "WS" else ("http_route" if r["mounted"] else None),
                          attrs={k: v for k, v in attrs.items() if v is not None})
         if isinstance(h, (FuncInfo, ClassInfo)):

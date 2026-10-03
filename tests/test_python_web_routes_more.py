@@ -170,9 +170,9 @@ def test_flask_method_views_endpoints_and_rule_options(tmp_path):
     assert handler_of(st, r["GET /docs/intro"]["id"]) == ["function:app.views.init_app"]   # @app.endpoint
     adm = r["GET /admin"]
     assert adm["subdomain"] == "admin" and adm["defaults"] == ["page"]
-    st_route = r["GET /assets/{filename}"]                                     # built-in static route
+    st_route = r["GET /assets/{filename*}"]                                    # built-in static route (<path:>)
     assert st_route["static"] is True and st_route["name"] == "static"
-    assert "GET /static/{filename}" not in r
+    assert "GET /static/{filename*}" not in r and st_route["path_params"] == ["filename"]
 
 
 def test_flask_restful_and_restx_resources(tmp_path):
