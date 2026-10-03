@@ -203,6 +203,7 @@ syntax layer (`via: cfg-inactive`). See [platforms.md](platforms.md).
 | `CODEGRAPH_JOBS` | scip-clang worker count |
 | `CODEGRAPH_INDEXER_TIMEOUT` | seconds (default 3600; also the Kotlin scip-java run) |
 | `CODEGRAPH_KOTLIN_SCIP=1`, `CODEGRAPH_KOTLIN_SCIP_FILE`, `CODEGRAPH_SCIP_JAVA` | Kotlin exact mode: run scip-java (it runs the Gradle / Maven build), use an existing index, scip-java binary ([kotlin.md](kotlin.md#exact-mode)) |
+| `CODEGRAPH_SWIFT_INDEX=1`, `CODEGRAPH_SWIFT_INDEX_STORE`, `CODEGRAPH_SWIFT`, `CODEGRAPH_LIBINDEXSTORE` | Swift exact mode: run `swift build --enable-index-store` for a SwiftPM package, use an existing index store (Xcode DerivedData, CI), toolchain and `libIndexStore` paths ([swift.md](swift.md#exact-mode)) |
 | `CODEGRAPH_NO_CACHE=1`, `CODEGRAPH_CACHE_DIR` | SCIP cache control |
 | `CODEGRAPH_NO_CARGO=1`, `CODEGRAPH_CARGO` | skip `cargo metadata` / cargo binary |
 | `CODEGRAPH_EXCLUDE_DIRS`, `CODEGRAPH_INCLUDE_DIRS` | C/C++ directory filters (comma-separated names) |

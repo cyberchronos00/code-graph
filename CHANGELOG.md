@@ -10,6 +10,17 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Swift exact mode: the compiler's index store, read through the toolchain's `libIndexStore` (Linux included), replaces
+  the heuristic call / constructor edges of every file it covers. cg runs `swift build --enable-index-store` into its
+  cache for a SwiftPM package with `CODEGRAPH_SWIFT_INDEX=1` (reused while sources, manifests and toolchain are
+  unchanged), or reads an existing store (Xcode DerivedData, CI) with `CODEGRAPH_SWIFT_INDEX_STORE`; a failed build
+  keeps what compiled, inactive `#if` code keeps its heuristic edges (`via: "not-compiled"`), and `cg coverage` reports
+  `exact` or the reason for heuristic mode. Moya `TargetType` enums give one endpoint per case plus
+  `provider.request(.case)` call sites; Fluent models, migrations and `query` / `find` / `save` give tables with reads
+  and writes. `@available(macOS, unavailable)` / `@available(iOS, unavailable)` are platform conditions, and calls to a
+  function defined per `#if os(...)` branch reach every branch (`platform_variant_of`). Overloaded methods now own their bodies' calls in heuristic mode, and `cg coverage` skips SwiftPM /
+  Xcode build directories (`.build`, `.swiftpm`, `DerivedData`, `Carthage`). Measured on Alamofire, isowords and the
+  Vapor template in docs/validation.md.
 - Kotlin exact mode: a scip-java index of the Gradle / Maven build (`--scip`, `CODEGRAPH_KOTLIN_SCIP_FILE`, or an
   opted-in `scip-java index` run with `CODEGRAPH_KOTLIN_SCIP=1` through the native runner cache) replaces the
   name-based call edges with compiler-resolved ones on the syntax layer's ids; `cg coverage` reports which mode ran

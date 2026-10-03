@@ -357,7 +357,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Flutter | resolved + heuristic fallback | widgets/State, bloc/cubit events → handlers → states → UI, Navigator/go_router/auto_route pages, HTTP calls (package:http, Dio, dart:io, Retrofit/Chopper), WebSockets, json_serializable/freezed and hand-written JSON keys |
 | Rust | **exact** with rust-analyzer (SCIP); **heuristic** without | crates, modules, `pub` API, traits → impls (dyn/generic dispatch), bins, tests, benches, examples, `build.rs`, FFI, `unsafe`, `#[cfg(feature)]` gates, env keys, `#[tokio::main]`, axum/actix routes ([docs/native.md](docs/native.md)) |
 | Kotlin | **heuristic** (tree-sitter-kotlin); **exact** calls with a scip-java index | classes, objects, functions / extension functions, calls by name or compiler-resolved (scip-java); Ktor (incl. type-safe resources) and Spring routes with guards (`SecurityFilterChain` rules too), Spring Data / Exposed table access, Retrofit / Ktor client / OkHttp endpoints, Compose Navigation (typed, Navigation 3) pages, AndroidManifest components and deep links, workers, KMP source sets and `expect` / `actual` ([docs/kotlin.md](docs/kotlin.md)) |
-| Swift | **heuristic** (tree-sitter-swift, no Xcode needed) | classes, structs, enums, actors, protocols, extensions, calls by name; Vapor routes with groups and guards, URLSession / Alamofire endpoints, SwiftUI / UIKit navigation pages, `@main` / app-delegate / background-task entries, `#if os(...)` / `canImport(...)` platform tags ([docs/swift.md](docs/swift.md)) |
+| Swift | **heuristic** (tree-sitter-swift, no Xcode needed); **exact** calls from the compiler's index store (`swift build`, Xcode DerivedData) | classes, structs, enums, actors, protocols, extensions, calls by name or compiler-resolved; Vapor routes with groups and guards, Fluent models / migrations / queries as tables, URLSession / Alamofire / Moya `TargetType` endpoints, SwiftUI / UIKit navigation pages, `@main` / app-delegate / background-task entries, `#if os(...)` / `canImport(...)` platform tags ([docs/swift.md](docs/swift.md)) |
 | C | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | translation units, includes, `main` and test entry points, exported API, `#if` gates, `getenv` keys, macros ([docs/native.md](docs/native.md#c-and-c)) |
 | C++ | **exact** with scip-clang + `compile_commands.json`; **heuristic** without | the C facts plus namespaces, classes, overloads, virtual dispatch (overrides and implementations) ([docs/native.md](docs/native.md#c-and-c)) |
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
@@ -381,7 +381,7 @@ Python 3.11+ (tested with 3.13) runs the indexer, CLI and MCP server for every s
 | Rust | tree-sitter packages; rust-analyzer for exact mode (any 2024+ release) | `.venv/bin/pip install tree-sitter tree-sitter-rust`, `rustup component add rust-analyzer` |
 | C / C++ | tree-sitter packages; scip-clang 0.4+ and a `compile_commands.json` for exact mode | `.venv/bin/pip install tree-sitter tree-sitter-c tree-sitter-cpp`; scip-clang and compile database: [docs/native.md](docs/native.md#c-and-c) |
 | Kotlin | tree-sitter packages; a JDK and scip-java 0.12+ for exact mode (Kotlin ≤ 2.1 builds) | `.venv/bin/pip install tree-sitter tree-sitter-kotlin`; scip-java and opt-in: [docs/kotlin.md](docs/kotlin.md#exact-mode) |
-| Swift | tree-sitter packages | `.venv/bin/pip install tree-sitter tree-sitter-swift` |
+| Swift | tree-sitter packages; a Swift toolchain (5.9+, Linux or Xcode) for exact mode | `.venv/bin/pip install tree-sitter tree-sitter-swift`; toolchain and opt-in: [docs/swift.md](docs/swift.md#exact-mode) |
 | Go, Java | an existing SCIP index | `cg index <root> --scip index.scip` |
 
 ## How it works
@@ -584,9 +584,9 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Completeness: per-file reports for TypeScript / JavaScript, more blind-spot detectors (Express routers passed
   through containers, Nest `SetMetadata`-based job and event systems), and acknowledging known blind spots in a
   project config file.
-- Swift exact mode from the compiler's index store, Moya / Fluent support
-  ([#23](https://github.com/cyberchronos00/code-graph/issues/23)); Electron `MessagePort` / `utilityProcess` and
-  Tauri events (`emit` / `listen`) between processes.
+- Electron `MessagePort` / `utilityProcess` and Tauri events (`emit` / `listen`) between processes.
+- Swift: `URLComponents` and helper-built URLs, `Info.plist` / `.xcconfig` base URLs, OS-version conditions, App Intents /
+  widget entries, `navigationDestination(for:)` values ([docs/swift.md](docs/swift.md#not-covered-yet)).
 - Web / native bridges beyond Capacitor, React Native and Flutter channels: Pigeon APIs, native → Dart / JS calls,
   Cordova plugins and native UI components ([docs/bridges.md](docs/bridges.md#not-covered-yet)).
 - More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.

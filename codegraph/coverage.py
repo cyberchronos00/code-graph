@@ -70,7 +70,9 @@ HINTS = {
               "build with scip-java: set CODEGRAPH_KOTLIN_SCIP=1 (runs scip-java on the Gradle / Maven build; needs a JDK) or "
               "pass `--scip index.scip` (docs/kotlin.md#exact-mode)",
     "swift": "heuristic mode (tree-sitter syntax layer, name-based call resolution; runs on Linux without Xcode); "
-             "the layer needs `pip install tree-sitter tree-sitter-swift` (docs/swift.md)",
+             "the layer needs `pip install tree-sitter tree-sitter-swift`. For compiler-resolved calls set "
+             "CODEGRAPH_SWIFT_INDEX=1 (SwiftPM: runs `swift build --enable-index-store`; needs a Swift toolchain) or "
+             "CODEGRAPH_SWIFT_INDEX_STORE to an existing index store (docs/swift.md#exact-mode)",
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
     "java": "no native plugin: index with scip-java and pass `--scip index.scip`",
 }
@@ -211,8 +213,16 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
                                  + "); heuristic layer used")
         return "heuristic", None
     if lang == "swift" and mode == "heuristic":
-        return "heuristic", ("tree-sitter syntax layer with name-based call resolution (no compiler index; works "
-                             "without Xcode or a Swift toolchain)")
+        why = (st.get("index") or {}).get("status") if isinstance(st.get("index"), dict) else None
+        return "heuristic", ("tree-sitter syntax layer with name-based call resolution; no compiler index"
+                             + (f": {why}" if why else " (works without Xcode or a Swift toolchain)"))
+    if lang == "swift" and mode == "indexstore":
+        ix = st.get("index") if isinstance(st.get("index"), dict) else {}
+        n, k = st.get("index_files"), st.get("source_files") or st.get("files")
+        part = f"; {k - n} of {k} Swift files not in the index store keep heuristic calls" if n is not None and k and n < k else ""
+        if ix.get("partial"):
+            part += f"; the build failed part-way ({ix.get('build_error') or ix.get('error')})"
+        return "exact", f"Swift index store ({ix.get('source', '?')}){part}"
     if lang == "kotlin" and mode == "heuristic":
         why = (st.get("scip") or {}).get("status") if isinstance(st.get("scip"), dict) else None
         return "heuristic", ("tree-sitter syntax layer with name-based call resolution; no compiler index"
@@ -481,7 +491,7 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
             if e.get("hint"):
                 out.append(f"    fix: {e['hint']}")
         for e in (cov or {}).get("languages", []):     # which mode an exact-capable language ran in, and why
-            if e["language"] == "kotlin" and not _is_gap(e) and e.get("reason"):
+            if e["language"] in ("kotlin", "swift") and not _is_gap(e) and e.get("reason"):
                 out.append(f"  {e['language']}: {e['files']} files {e['status']}: {e['reason']}")
         if all_files:
             for e in (cov or {}).get("languages", []):

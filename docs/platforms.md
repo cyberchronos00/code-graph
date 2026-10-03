@@ -53,8 +53,9 @@ aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's o
 A guard clause (`if (Platform.OS !== 'ios') return`, `if (!Platform.isIOS) return;`) tags the rest of the enclosing
 block with the negated condition, and a JS / TS branch without braces or semicolons ends at its line (automatic
 semicolon insertion). Swift `#if os(iOS)`, `canImport(UIKit)` (ios), `canImport(AppKit)` (macos),
-`targetEnvironment(macCatalyst)` (macos) are platform conditions; `targetEnvironment(simulator)` is unknown (see
-[swift.md](swift.md)). Kotlin Multiplatform source sets (`iosMain`, `androidMain`, ...) are platform conditions on
+`targetEnvironment(macCatalyst)` (macos) and `@available(iOS, unavailable)` / `@available(macOS, unavailable)` on a
+declaration are platform conditions; `targetEnvironment(simulator)` and version-only `@available(iOS 17, *)` /
+`#available` are not (see [swift.md](swift.md)). Kotlin Multiplatform source sets (`iosMain`, `androidMain`, ...) are platform conditions on
 their files, and `expect` declarations link to each `actual` ([kotlin.md](kotlin.md)). Electron and Tauri process
 roles (main, preload, renderer; webview, core) are recorded on module nodes by the
 [bridges](bridges.md#desktop-process-boundaries-electron-and-tauri) pass. Native files that receive [web / native bridge](bridges.md) calls are tagged with the platform of
@@ -73,7 +74,7 @@ target's view. `cg platforms` and `cg coverage` list how many conditions are unk
 - `edges.attrs.platforms`: the same for a call or reference inside a platform branch (`if (Platform.OS === 'ios')
   { openIosSettings() }`).
 - Variant links: a call that resolves to one variant (`storage.ios.ts`, the stub of a conditional import, the
-  host's `cfg` in rust-analyzer) is also linked to its sibling variants, with `attrs.platform_variant_of`. `impact`
+  host's `cfg` in rust-analyzer, a Swift function defined once per `#if os(...)` branch) is also linked to its sibling variants, with `attrs.platform_variant_of`. `impact`
   on `storage.android.ts#save` finds the callers that import `./storage`.
 - Rust exact mode: rust-analyzer resolves the host configuration. Calls into items gated for another target are added
   from the syntax layer (`via: cfg-inactive`), so every target's callers are in the graph.

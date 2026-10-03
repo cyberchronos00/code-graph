@@ -255,6 +255,20 @@ Issues and pull requests that extend it are welcome.
   from string patterns in source order (beans with custom `RequestMatcher`s or several chains with `securityMatcher`
   are not separated). Navigation routes built from constants (`composable(Routes.TASKS)`) give no page.
 
+## Swift
+
+- **Exact mode is opt-in and limited to what compiles:** `swift build` runs the package manifest and plugins, so cg
+  only starts it with `CODEGRAPH_SWIFT_INDEX=1` (or reads an existing store via `CODEGRAPH_SWIFT_INDEX_STORE`). A Linux
+  build indexes only the targets that compile there (no SwiftUI / UIKit, no iOS-only apps); Xcode projects without
+  `Package.swift` need a store from Xcode. Files outside the store, and code in inactive `#if` branches, keep heuristic
+  edges. Only call / constructor edges come from the index; declarations and framework facts stay those of the syntax
+  layer.
+- **Heuristic facts by pattern:** Moya paths and methods are read from string literals and `.get` / `.post` values in
+  the `TargetType` (`MultiTarget`, paths built in helpers and per-environment base URLs are not followed); Fluent
+  writes need the model variable typed by a parameter, property or a `let` in the same function, and relations or raw
+  SQL are not tables. OS versions (`@available(iOS 17, *)`, `#available`) are not platform conditions. URLComponents, typed endpoint enums other than Moya and `Info.plist` / `.xcconfig` base URLs are
+  not read yet.
+
 ## Platform-specific code
 
 - **Conditions are read from the source text and evaluated per target.** Conditions on feature flags, build

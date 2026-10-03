@@ -6,6 +6,11 @@ properties) become nodes; calls are resolved by name: the enclosing type, its ex
 parameter / property type (`api.book(id)` with `let api: BooksAPI`), then a project-wide unique name. Every resolved
 reference is labelled `heuristic`. Extensions are merged into the type they extend.
 
+Exact mode (exact.py, indexstore.py): the compiler's index store (`swift build --enable-index-store`, run with
+CODEGRAPH_SWIFT_INDEX=1 for a SwiftPM package, or an existing store / Xcode DerivedData via
+CODEGRAPH_SWIFT_INDEX_STORE) read through libIndexStore replaces the call / constructor edges of every file the store
+covers; files it does not cover keep heuristic edges, and `cg coverage` names the mode and the reason.
+
 Framework facts read from the same syntax tree:
   entry points  `@main` types (main), `UIApplicationDelegate` / `UISceneDelegate` / `App` lifecycle callbacks,
                 `BGTaskScheduler.shared.register(forTaskWithIdentifier:)` handlers (queue_job), XCTest `test*` methods
@@ -19,6 +24,11 @@ Framework facts read from the same syntax tree:
   Vapor         `app.get("orders", ":id") { }`, `routes.post("x", use: handler)`, `grouped("v1")` / `group("v1") { }`
                 prefixes, middleware passed to `grouped(...)` (`User.authenticator()`, `User.guardMiddleware()`) as
                 route guards, `RouteCollection.boot(routes:)` -> route:<METHOD> <uri>
+  Moya          `TargetType` enums (baseURL + per-case path / method) -> one http node per case (HTTP_CALLS from the
+                enum), `provider.request(.case)` / `requestPublisher` call sites -> HTTP_CALLS from the caller
+  Fluent        `Model` classes with `static let schema = "todos"` -> table:todos (MAPS_TO_TABLE); migrations'
+                `database.schema("todos")...create()` -> WRITES_TABLE; `Todo.query(on:)` / `Todo.find` -> READS_TABLE
+                (WRITES_TABLE when the chain deletes / updates); `todo.save(on:)` / `.delete(on:)` -> WRITES_TABLE
   platforms     `#if os(iOS)` / `#elseif os(macOS)` / `#else` blocks feed the platform tags (docs/platforms.md)
 """
 from __future__ import annotations
@@ -31,7 +41,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ...core.fsutil import keep_file
-from ...core.model import EXACT, HEURISTIC
+from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.paths import rules as path_rules
 from ...core.plugin import GraphBuilder, LanguagePlugin, Project
 from ..native.ts import TreeSitterMissing
@@ -164,6 +174,7 @@ class SwiftPlugin(LanguagePlugin):
         if files is None:
             files = source_files(project.root, project)
         self.decls: dict[str, Decl] = {}
+        self._overloads: dict[tuple, Decl] = {}
         self.by_name: dict[str, list[Decl]] = defaultdict(list)
         self.types: dict[str, Decl] = {}
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
@@ -192,14 +203,19 @@ class SwiftPlugin(LanguagePlugin):
             self._decls(sf.tree.root_node, sf, None)
         for d in self.decls.values():
             self._fd[d.file].append(d)
+        self._moya_targets(sfiles)
+        self._fluent_models(sfiles)
         for sf in sfiles:            # pass 2: references and framework facts
             self.cur = sf
             fid = self.b.add_node("file", f"swift:{sf.rel}", name=sf.rel, file=sf.rel, line=1, lang="swift",
                                   attrs={"test": True} if sf.test else {})
             self._refs(sf.tree.root_node, sf, fid, None, {})
             self._directives(sf)
+            self._available(sf)
         self._resolve_calls()
         self._hierarchy()
+        self._fluent_migrations(sfiles)
+        self._moya_endpoints()
         self._emit_http()
         self._link_navs()
         for rid, mname, tfq, file, line in self.handler_refs:
@@ -211,10 +227,34 @@ class SwiftPlugin(LanguagePlugin):
             else:
                 self.st["routes_unresolved_handler"] += 1
         self.file_report = {"seen": [sf.rel for sf in sfiles] + failed, "parse_failed": failed}
+        mode = self._exact(project, [sf.rel for sf in sfiles])
         st = dict(self.st)
-        st.update({"mode": "heuristic", "files": len(sfiles), "declarations": len(self.decls),
+        st.update({"mode": mode, "files": len(sfiles), "declarations": len(self.decls),
+                   "source_files": sum(1 for sf in sfiles if not re.match(r"(.*/)?Package(@swift-[\d.]+)?\.swift$", sf.rel)),
                    "seconds": round(time.time() - t0, 2)})
         return st
+
+    def _exact(self, project: Project, files: list[str]) -> str:
+        """Exact layer from the Swift index store (exact.py); the heuristic graph stays when there is none or it
+        cannot be read."""
+        from . import exact
+        t0 = time.time()
+        try:
+            store, info = exact.find_store(project, files)
+        except Exception as e:  # noqa: BLE001 - a toolchain problem must not lose the heuristic graph
+            store, info = None, {"status": f"index store lookup failed: {e}"}
+        mode = "heuristic"
+        if store is not None:
+            try:
+                if exact.ExactLayer(self).apply(store, info["lib"], project.root, files, self.st):
+                    mode = "indexstore"
+                else:
+                    info["status"] = "the index store has no units for this project's files"
+            except Exception as e:  # noqa: BLE001
+                info["status"] = f"index store import failed: {type(e).__name__}: {e}"
+        info["seconds"] = round(time.time() - t0, 2)
+        self.st["index"] = info
+        return mode
 
     # ------------------------------------------------------------------ pass 1
     def _in_directive(self, sf: SFile, n) -> bool:
@@ -314,6 +354,7 @@ class SwiftPlugin(LanguagePlugin):
                     prev = self.decls[did]
                     if prev.file != sf.rel or not self._in_directive(sf, c):  # overloads share one node
                         prev.types.update(params)
+                        self._overloads[(sf.rel, c.start_point[0] + 1, nm)] = prev    # its body's calls are prev's
                         continue
                     did = f"{did}@{c.start_point[0] + 1}"                     # per-platform definition (#if os)
                 d = Decl(did, kind, nm, fq, sf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
@@ -374,6 +415,9 @@ class SwiftPlugin(LanguagePlugin):
         for d in self._fd.get(sf.rel, ()):
             if d.line == line and d.kind in kinds and d.name == nm:
                 return d
+        ov = self._overloads.get((sf.rel, line, nm))
+        if ov is not None and ov.kind in kinds:
+            return ov
         if name and kinds == ("class",):
             d = self.types.get(name)
             return d
@@ -458,6 +502,10 @@ class SwiftPlugin(LanguagePlugin):
             if url is not None:
                 self.http.append({"src": owner, "method": meth, "url": url, "client": "alamofire", "file": sf.rel,
                                   "line": line})
+        # ---- Moya: provider.request(.case) -> the TargetType case's endpoint
+        self._moya_call(name, recv, al, owner, sf, line)
+        # ---- Fluent: Todo.query(on:) / .find / todo.save(on:)
+        self._fluent_call(name, recv, owner, decl, sf, line, c)
         # ---- BGTaskScheduler
         if name == "register" and "BGTaskScheduler" in (recv or "") and lam is not None:
             hid = self.b.add_node("function", f"<bgtask>@{sf.rel}:{line}", name="background task handler", file=sf.rel,
@@ -619,6 +667,22 @@ class SwiftPlugin(LanguagePlugin):
         self.http.append({"src": d.id, "method": (mm.group(1) if mm else "GET").upper(), "url": url, "client": "urlsession",
                           "file": sf.rel, "line": d.line})
 
+    # ---- @available(macOS, unavailable): the declaration (and its members) does not exist on that platform.
+    # Version-only forms (`@available(iOS 17, *)`, `#available`) keep the code on every target.
+    AVAILABLE = re.compile(r"@available\s*\(\s*(iOS|macOS|OSX)\s*,\s*unavailable\b")
+
+    def _available(self, sf: SFile):
+        if b"unavailable" not in sf.src:
+            return
+        from ...platforms import Cond, _plat_atom, mark
+        lines = sf.src.decode("utf-8", "replace").split("\n")
+        for d in self._fd.get(sf.rel, ()):
+            head = "\n".join(lines[d.line - 1:d.end]).split("{", 1)[0]
+            for m in self.AVAILABLE.finditer(head):
+                plat = OS_PLATFORM[m.group(1)]
+                mark(self.b, sf.rel, d.line, d.end, Cond("tree", ("not", _plat_atom(plat)), m.group(0) + ")"))
+                self.st["platform_unavailable"] += 1
+
     # ---- #if os(...)
     def _directives(self, sf: SFile):
         from ...platforms import Cond, _plat_atom, mark
@@ -734,6 +798,10 @@ class SwiftPlugin(LanguagePlugin):
                 t = self.types.get(name)
                 return [t] if t is not None else []
             cands = [d for d in self.by_name.get(name, []) if d.kind == "function"]
+            if len(cands) > 1 and len({d.id.split("@")[0] for d in cands}) == 1:
+                # one function defined per `#if os(...)` branch: the call reaches the base definition, and the
+                # platform pass links its sibling variants (attrs.platform_variant_of)
+                return [min(cands, key=lambda d: ("@" in d.id, d.line))]
             return cands if len(cands) == 1 else []
         rname = re.sub(r"[?!]|\(.*\)$", "", recv).split(".")[-1].strip()
         tyname = None
@@ -782,6 +850,194 @@ class SwiftPlugin(LanguagePlugin):
                     self.b.add_edge(d.id, m.id, "REFERENCES_FN", m.file, m.line, EXACT, how="framework lifecycle")
         self.st[f"entries_{kind}"] += 1
 
+    # ------------------------------------------------------------------ Moya / Fluent (whole-file facts)
+    @staticmethod
+    def _block(txt: str, start: int) -> str:
+        """The brace-balanced block whose `{` is at or after `start`."""
+        i = txt.find("{", start)
+        if i < 0:
+            return ""
+        depth = 0
+        for j in range(i, len(txt)):
+            if txt[j] == "{":
+                depth += 1
+            elif txt[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return txt[i:j + 1]
+        return txt[i:]
+
+    def _prop_block(self, body: str, name: str) -> str | None:
+        m = re.search(r"\bvar\s+" + name + r"\s*:\s*[\w.]+\s*\{", body)
+        return self._block(body, m.start()) if m else None
+
+    def _per_case(self, block: str | None, value_rx: str) -> tuple[dict, str | None]:
+        """`switch self { case .a, .b(let x): return "..." }` -> ({case: value}, default value)."""
+        if not block:
+            return {}, None
+        out, default = {}, None
+        parts = re.split(r"\n\s*(case\s+[^\n:]*?:|default\s*:)", block)
+        if len(parts) == 1:
+            m = re.search(value_rx, block)
+            return {}, (m.group(1) if m else None)
+        for head, body in zip(parts[1::2], parts[2::2]):
+            m = re.search(value_rx, body)
+            if not m:
+                continue
+            if head.startswith("default"):
+                default = m.group(1)
+                continue
+            for c in re.findall(r"\.(\w+)", head.split("case", 1)[1]):
+                out.setdefault(c, m.group(1))
+        return out, default
+
+    def _moya_targets(self, sfiles):
+        """Moya `TargetType` enums: baseURL + per-case path / method -> endpoint templates per case."""
+        self.moya: dict[str, dict] = {}            # enum name -> {"base", "cases": {case: (METHOD, path)}, decl}
+        texts = {sf.rel: sf.src.decode("utf-8", "replace") for sf in sfiles if b"TargetType" in sf.src}
+        names = set()
+        for txt in texts.values():
+            names.update(re.findall(r"\b(?:enum|extension|struct)\s+(\w+)\s*:[^{]*\bTargetType\b", txt))
+        for name in sorted(names):
+            body = ""
+            for txt in texts.values():
+                for m in re.finditer(r"\b(?:enum|extension)\s+" + name + r"\b[^{]*\{", txt):
+                    body += self._block(txt, m.start()) + "\n"
+            d = self.types.get(name)
+            if d is not None:
+                sf = next((s for s in sfiles if s.rel == d.file), None)
+                if sf is not None:
+                    lines = sf.src.decode("utf-8", "replace").split("\n")[d.line - 1:d.end]
+                    body += "\n".join(lines)
+            cases = re.findall(r"^\s*case\s+(\w+(?:\s*\([^)]*\))?(?:\s*,\s*\w+(?:\s*\([^)]*\))?)*)\s*$", body, re.M)
+            case_names = []
+            for c in cases:
+                case_names += [re.match(r"\w+", x.strip()).group(0) for x in re.split(r",(?![^(]*\))", c) if x.strip()]
+            bb = self._prop_block(body, "baseURL") or ""
+            mb = re.search(r'URL\s*\(\s*string\s*:\s*("(?:[^"\\]|\\.)*")', bb)
+            base = template(mb.group(1)) if mb else "{baseURL}"
+            paths, pdef = self._per_case(self._prop_block(body, "path"), r'("(?:[^"\\]|\\.)*")')
+            meths, mdef = self._per_case(self._prop_block(body, "method"), r"\.(get|post|put|delete|patch|head|options)\b")
+            out = {}
+            for c in dict.fromkeys(case_names or list(paths)):
+                p = paths.get(c) or pdef
+                if p is None:
+                    continue
+                out[c] = ((meths.get(c) or mdef or "get").upper(), template(p))
+            if out:
+                self.moya[name] = {"base": base, "cases": out, "decl": d}
+                self.st["moya_targets"] += 1
+        # provider variables: `let provider = MoyaProvider<GitHub>()` / `var api: MoyaProvider<GitHub>`
+        self.moya_vars: dict[str, str] = {}
+        for txt in (sf.src.decode("utf-8", "replace") for sf in sfiles if b"Provider<" in sf.src):
+            for m in re.finditer(r"\b(\w+)\s*(?::\s*\w*Provider\s*<\s*(\w+)\s*>|=\s*\w*Provider\s*<\s*(\w+)\s*>)", txt):
+                self.moya_vars.setdefault(m.group(1), m.group(2) or m.group(3))
+
+    def _moya_call(self, name, recv, al, owner, sf, line) -> bool:
+        if not self.moya or name not in ("request", "requestPublisher", "requestWithProgress") or not al:
+            return False
+        arg = self.t(al[0][1]) if al[0][1] is not None else ""
+        m = re.match(r"\s*(?:(\w+))?\.(\w+)", arg)
+        if not m:
+            return False
+        case, tname = m.group(2), m.group(1)
+        if tname is None:
+            rv = re.sub(r"\.(rx|reactive)$", "", recv or "").split(".")[-1]
+            tname = self.moya_vars.get(rv)
+        targets = [tname] if tname in self.moya else [t for t, v in self.moya.items() if case in v["cases"]]
+        if len(targets) != 1 or case not in self.moya[targets[0]]["cases"]:
+            return False
+        t = self.moya[targets[0]]
+        meth, path = t["cases"][case]
+        self.http.append({"src": owner, "method": meth, "url": join_path(t["base"], path), "client": "moya",
+                          "file": sf.rel, "line": line, "target": f"{targets[0]}.{case}"})
+        self.st["moya_calls"] += 1
+        return True
+
+    def _moya_endpoints(self):
+        """Every Moya case is an endpoint of its TargetType, called or not (the enum -> http edge)."""
+        for name, t in self.moya.items():
+            d = t["decl"]
+            if d is None:
+                continue
+            for case, (meth, path) in t["cases"].items():
+                self.http.append({"src": d.id, "method": meth, "url": join_path(t["base"], path), "client": "moya",
+                                  "file": d.file, "line": d.line, "target": f"{name}.{case}", "declared": True})
+
+    def _fluent_models(self, sfiles):
+        """Fluent `Model` classes (`static let schema = "todos"`) -> table nodes (MAPS_TO_TABLE)."""
+        self.fluent: dict[str, str] = {}
+        if not any(b"Fluent" in sf.src for sf in sfiles):
+            return
+        bysrc = {sf.rel: sf.src.decode("utf-8", "replace").split("\n") for sf in sfiles if b"schema" in sf.src}
+        for d in list(self.types.values()):
+            if "Model" not in d.supers or d.file not in bysrc:
+                continue
+            body = "\n".join(bysrc[d.file][d.line - 1:d.end])
+            m = re.search(r'static\s+(?:let|var)\s+schema\s*(?::\s*String)?\s*(?:=\s*|\{\s*(?:return\s+)?)"([^"]+)"', body)
+            if not m:
+                continue
+            self.fluent[d.name] = m.group(1)
+            tid = self.b.add_node("table", m.group(1), lang="sql", attrs={"via": "fluent"})
+            self.b.add_edge(d.id, tid, "MAPS_TO_TABLE", d.file, d.line, EXACT, via="Fluent schema")
+            self.st["fluent_models"] += 1
+
+    def _local_types(self, decl, sf) -> dict:
+        """`let todo = Todo(...)`, `guard let todo = try await Todo.find(...)`, `let t: Todo = ...` in a function."""
+        key = (decl.id, decl.line) if decl is not None else None
+        if key is None:
+            return {}
+        cache = self.__dict__.setdefault("_lt_cache", {})
+        if key not in cache:
+            lines = sf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:decl.end]
+            out = {}
+            for m in re.finditer(r"\b(?:let|var)\s+(\w+)\s*(?::\s*(\w+))?\s*=\s*(?:try\s*[?!]?\s+)?(?:await\s+)?([A-Z]\w*)\s*[.(]",
+                                 "\n".join(lines)):
+                out.setdefault(m.group(1), m.group(2) or m.group(3))
+            cache[key] = out
+        return cache[key]
+
+    def _fluent_call(self, name, recv, owner, decl, sf, line, c):
+        if not self.fluent or recv is None:
+            return
+        rv = re.sub(r"[?!]|\(.*\)$", "", recv).split(".")[-1].strip()
+        if rv in self.fluent and name in ("query", "find"):                    # Todo.query(on:) / Todo.find(id, on:)
+            whole = c
+            while whole.parent is not None and whole.parent.type in ("navigation_expression", "call_expression",
+                                                                     "call_suffix", "await_expression", "try_expression"):
+                whole = whole.parent
+            chain = self.t(whole)
+            kind = "WRITES_TABLE" if re.search(r"\.(delete|update|set|create)\s*\(", chain) else "READS_TABLE"
+            tid = f"table:{self.fluent[rv]}"
+            self.b.add_edge(owner, tid, kind, sf.rel, line, RESOLVED, via=f"{rv}.{name}")
+            self.st["fluent_queries"] += 1
+            return
+        if name in ("save", "create", "update", "delete", "forceDelete", "restore"):  # todo.save(on: req.db)
+            ty = (decl.types.get(rv) if decl is not None else None) or self._local_types(decl, sf).get(rv)
+            if ty in self.fluent:
+                self.b.add_edge(owner, f"table:{self.fluent[ty]}", "WRITES_TABLE", sf.rel, line, RESOLVED,
+                                via=f"{ty}.{name}")
+                self.st["fluent_writes"] += 1
+            return
+
+    def _fluent_migrations(self, sfiles):
+        """`database.schema("todos")....create()` / `.delete()` / `.update()` in a Migration -> WRITES_TABLE
+        (via migration) from the prepare / revert method."""
+        for sf in sfiles:
+            if b".schema(" not in sf.src:
+                continue
+            for d in self._fd.get(sf.rel, ()):
+                if d.kind != "method" or d.name not in ("prepare", "revert"):
+                    continue
+                body = "\n".join(sf.src.decode("utf-8", "replace").split("\n")[d.line - 1:d.end])
+                for m in re.finditer(r'\.schema\s*\(\s*"([^"]+)"\s*\)', body):
+                    tail = body[m.end():m.end() + 600]
+                    op = re.search(r"\.(create|update|delete)\s*\(\s*\)", tail)
+                    tid = self.b.add_node("table", m.group(1), lang="sql", attrs={"via": "fluent"})
+                    self.b.add_edge(d.id, tid, "WRITES_TABLE", d.file, d.line, EXACT,
+                                    via=f"migration {op.group(1) if op else 'schema'}")
+                    self.st["fluent_migrations"] += 1
+
     def _emit_http(self):
         for r in self.http:
             origin, path = split_url(r["url"])
@@ -791,7 +1047,9 @@ class SwiftPlugin(LanguagePlugin):
                                   attrs={"method": r["method"], "path": path, "client": r["client"], "origin": origin,
                                          "origin_kind": okind})
             self.b.add_edge(r["src"], nid, "HTTP_CALLS", r["file"], r["line"], HEURISTIC if okind != "api" else EXACT,
-                            client=r["client"], url=r["url"], origin=origin)
+                            client=r["client"], url=r["url"], origin=origin,
+                            **({"target": r["target"]} if "target" in r else {}),
+                            **({"how": "moya target"} if r.get("declared") else {}))
             self.st[f"http_{r['client']}"] += 1
 
     def _page(self, view: Decl, how: str) -> str:

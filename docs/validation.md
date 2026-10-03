@@ -314,7 +314,7 @@ Heuristic mode (tree-sitter-swift 0.7.3) on Linux without Xcode, shallow clones,
 
 | Repository | Swift files | Declarations | Calls resolved / unresolved | Framework facts | Index time |
 |---|---|---|---|---|---|
-| Alamofire/Alamofire | 101 | 2,019 | 3,825 / 8,162 | 198 extensions, 33 `#if` platform blocks, 5 `AF.request` endpoints (the example apps) | 1.1 s |
+| Alamofire/Alamofire | 101 | 2,019 | 3,817 / 8,170 | 198 extensions, 33 `#if` platform blocks, 5 `AF.request` endpoints (the example apps) | 1.1 s |
 | Dimillian/IceCubesApp | 428 | 2,156 | 3,537 / 8,174 | 21 SwiftUI pages, 21 navigations, 14 `@main` entries (app, extensions, widgets), 259 `#if` platform blocks | 1.2 s |
 | pointfreeco/isowords | 388 | 1,729 | 2,606 / 7,794 | 17 SwiftUI pages, 12 navigations, 12 `@main` entries, 1 URLSession endpoint | 1.1 s |
 | vapor/template | 9 | 16 | 20 / 81 | 3 Vapor routes with their `RouteCollection` handlers | < 0.1 s |
@@ -322,7 +322,46 @@ Heuristic mode (tree-sitter-swift 0.7.3) on Linux without Xcode, shallow clones,
 Unresolved calls are mostly SDK calls (SwiftUI modifiers, Foundation, Combine), which have no node in the graph.
 IceCubesApp and isowords call their APIs through typed endpoint enums and a swift-parsing router, which are not HTTP
 client forms the plugin reads yet. The Vapor template's `routes.swift` contains Mustache markup, so its two
-closure routes do not parse. The exact-mode comparison (compiler index store) is on the roadmap in [swift.md](swift.md).
+closure routes do not parse. Since exact mode, the body of an overloaded method is owned by its (merged) method node
+rather than the enclosing type: Alamofire 3,825 → 3,817 resolved calls (overloads calling each other became self
+calls), isowords gained one URLSession endpoint (built inside an overloaded `request`).
+
+Moya and Fluent: none of the four corpora uses Moya (the fixture `tests/swift_facts_fixture` covers it, including a
+`TargetType` with a relative base linked to Vapor routes). The Vapor template rendered with Fluent (`fluent: true`,
+SQLite, no Leaf) gives `table:todos` (`MAPS_TO_TABLE` from `Todo`), 2 migration writes, 2 reads (`Todo.query`,
+`Todo.find`) and 1 write (`todo.delete(on:)`) from `TodoController`, and 2 test uses; the unrendered template gives
+the same. `create` saves the model returned by `TodoDTO.toModel()`, whose type is not inferred. No corpus has
+`@available(iOS / macOS, unavailable)` or a call to a function defined per `#if os(...)` branch (the fixture covers
+both). Apart from these and the overload change above, the four corpora index as before.
+
+### Swift exact mode (index store)
+
+Swift 6.3.2 for Linux (Debian 12 build), `libIndexStore.so` from the same toolchain, `swift build
+--enable-index-store` (debug). Precision: share of heuristic call edges (`CALLS` / `INSTANTIATES`, same source and
+target) in the files the store covers that the index confirms; recall: share of compiler edges the heuristic layer
+found.
+
+| Project | Swift files in store | Defs matched / unmatched | Heuristic edges | Exact edges | Agree | Precision | Recall | Build |
+|---|---|---|---|---|---|---|---|---|
+| Alamofire/Alamofire (`swift build`, via `CODEGRAPH_SWIFT_INDEX=1`) | 44 / 96 | 868 / 15 | 655 | 833 | 544 | 0.83 | 0.65 | 7 s cold, cache hit 0.4 s |
+| pointfreeco/isowords (`swift build --product server`, existing store) | 104 / 384 | 424 / 17 | 246 | 345 | 157 | 0.64 | 0.46 | 41 s (dependencies built) |
+| vapor/template (rendered with Fluent + SQLite, existing store) | 7 / 8 | 17 / 0 | 11 | 10 | 9 | 0.82 | 0.90 | ~2 min cold with dependencies |
+| **Total** | 155 | 1,309 / 32 | 912 | 1,188 | 710 | **0.78** | **0.60** | |
+
+What a Linux build covers: Alamofire's `Source/` (tests and example apps need Apple frameworks); isowords' server
+modules (the full `swift build` stops at SwiftUI; the server product needs `libsqlite3-dev`), the rest of its 384 files
+keep heuristic edges and `cg coverage` counts them; the Vapor app's `App` target (its test target was not built). Not
+run: Dimillian/IceCubesApp (iOS-only SwiftUI app, no Linux build; heuristic, with the reason in `cg coverage`).
+
+Where they disagree: the heuristic layer links initializers of SDK types the project extends (`URL(...)`,
+`Date(...)`, `UUID(...)` → the extension's class node, while the compiler resolves them to Foundation) and picks
+same-named methods (a Fluent migration's `.create()` matched `TodoController.create`); it misses initializer calls
+through `Self(...)` / `.init(...)` / nested types, calls to explicit `init` declarations (the index adds a `CALLS` to
+`T.init` next to `INSTANTIATES`), and members reached through inferred types (`.live`, closure parameters). In
+Alamofire, 247 heuristic edges sit in inactive `#if` branches (Apple-only code); they are kept with
+`via: "not-compiled"`. Without the opt-in or a toolchain the index completes in heuristic mode and `cg coverage`
+names the reason (`Swift toolchain found but the package was not built ...`, `no Package.swift ...`,
+`swift build failed (exit 1: ...)`).
 
 ## Web / native bridges
 

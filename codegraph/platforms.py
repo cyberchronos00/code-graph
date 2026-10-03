@@ -651,7 +651,7 @@ def _mirror(builder, groups: list[dict], nvals: dict) -> int:
                     by_slot[s][n.file] = n.id
         idx = {nid: (s, f) for s, fm in by_slot.items() for f, nid in fm.items()}
         slot_maps.append((fset, by_slot, idx))
-    # Rust / C / C++: alternative definitions of one symbol (`key` + `key@line` / `key@file:line`) on different targets
+    # Rust / C / C++ / Swift: alternative definitions of one symbol (`key` + `key@line` / `key@file:line`) on different targets
     alts = _alt_groups(builder, nvals)
     alt_of = {}
     for base, ids in alts.items():
@@ -753,10 +753,10 @@ ALT_KINDS = ("function", "method", "struct", "enum", "type_alias", "typedef", "c
 
 
 def _alt_groups(builder, nvals: dict) -> dict[str, list[str]]:
-    """Rust / C / C++ alternative definitions of one symbol, keyed by _vkey."""
+    """Rust / C / C++ / Swift alternative definitions of one symbol (one per `cfg` / `#if` branch), keyed by _vkey."""
     alts: dict[str, list[str]] = defaultdict(list)
     for nid, n in builder.nodes.items():
-        if n.lang in ("rust", "c", "cpp") and n.kind in ALT_KINDS:
+        if n.lang in ("rust", "c", "cpp", "swift") and n.kind in ALT_KINDS:
             alts[_vkey(nid, n, nvals)].append(nid)
     # a static C function and a macro / function of the same name visible in its file are variants too
     for k in [k for k in alts if k.startswith("c-fn:") and "#" in k]:

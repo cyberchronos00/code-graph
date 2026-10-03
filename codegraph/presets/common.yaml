@@ -18,7 +18,7 @@ secret:
 skip_dirs: [.git, node_modules, __pycache__]
 # the coverage scan (`cg coverage`: which source files exist) also skips these dependency / build / IDE directories
 scan_skip_dirs: [vendor, target, build, dist, .dart_tool, .venv, venv, .tox, .mypy_cache, .pytest_cache, .next, .output,
-                 out, .gradle, .idea, Pods]
+                 out, .gradle, .idea, Pods, .build, .swiftpm, DerivedData, Carthage]
 # generated files (codegraph/core/generated.py): kept out of the graph by default and listed by `cg coverage`
 generated:
   # framework build output directories (names at any depth) -> reason
