@@ -388,6 +388,8 @@ class TypeScriptPlugin(LanguagePlugin):
             builder.add_edge(fb["owner"], rid, "HAS_RESOLUTION", file=fb["file"], line=fb["line"], confidence="exact")
             n_fb += 1
         st = dict(facts["stats"])
+        # files the parser had to recover (#73): their error lines for coverage (no per-file buckets for TypeScript)
+        self.file_report = {"syntax_errors": st.pop("syntax_errors", None) or {}}
         if facts.get("skipped_links"):
             st["skipped_dangling_symlinks"] = facts["skipped_links"]
             print(f"typescript: skipped {len(facts['skipped_links'])} dangling symlink(s): "

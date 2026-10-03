@@ -17,6 +17,19 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `cg tests` now reach code and tests that go through a computed property. A Swift / Kotlin type node that calls the
   target itself (a stored property's initializer, a Kotlin custom getter) is listed by `impact` as a caller, labelled
   `(in a property)` (#72).
+- `cg coverage` lists every file that parsed with syntax errors, in every language (Swift, Kotlin, Rust, C / C++,
+  TypeScript, Dart, Python, PHP), with its error line spans and the declarations lost there (`--json`:
+  `syntax_errors`, `syntax_error_files`, `parsed_with_errors`, `decls_lost`). An answer that involves such a file is
+  marked partial and names it (#73).
+
+### Fixed
+
+- Swift: tests whose suite has a `sourceLocation: SourceLocation = #_sourceLocation` default, tests between
+  `#sourceLocation(...)` directives and an `@Test` inside `#if os(...)` / `#endif` are tests of their suite again
+  (the last with its platform). `()` values and patterns, `@convention(c)`, `x as? T ?? y`, `if let x = try? await f()`
+  and continuation lines that start with a binary operator no longer break the parse, and members after a macro the
+  grammar does not know are recovered into their type. On IceCubesApp the `EditorStore` class is whole again (31
+  free functions are 50 methods). Files with syntax errors: IceCubesApp 7 → 3, isowords 18 → 5, Alamofire 8 → 1 (#73).
 
 ### Changed
 

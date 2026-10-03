@@ -40,10 +40,12 @@ from __future__ import annotations
 import os
 import re
 import time
+from types import SimpleNamespace
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ...core.syntax_errors import tree_spans
 from ...core.fsutil import keep_file
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.paths import rules as path_rules
@@ -262,11 +264,131 @@ def _raw_identifiers(src: bytes) -> bytes:
     return RAW_IDENT.sub(_raw_span, src)
 
 
+SOURCE_LOCATION_DIRECTIVE = re.compile(rb"^[ \t]*#sourceLocation\s*\([^)\n]*\)[ \t]*$", re.M)
+UNDERSCORE_MACRO = re.compile(rb"(?<![\w#])#_[A-Za-z]\w*\b")
+IF_BLOCK = re.compile(rb"^[ \t]*#if\b[^\n]*\n(?:(?![ \t]*#if\b)[^\n]*\n)*?[ \t]*#endif\b[^\n]*$", re.M)
+DIRECTIVE_LINE = re.compile(rb"^[ \t]*#(?:if|elseif|else|endif)\b[^\n]*$", re.M)
+ATTRIBUTES_ONLY = re.compile(rb"\s*(?:@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?\s*)+")
+
+
+# `typealias Client = A.Client` / `  & B.Client`, `let total = base` / `  * word.count`: a binary operator that starts a
+# continuation line (the grammar closes the statement at the line end, and a type alias then takes the enclosing type
+# with it); the operator moves to the end of the line before, same byte length and line count
+CONTINUATION = re.compile(rb"(?<=[\w)\]}?!>\"])([ \t]*)\n([ \t]*)(&&|\|\||\?\?|==|!=|<=|>=|\.\.<|\.\.\.|[&|+*/%<>-])([ \t]+)(?=\S)")
+
+
+# `()` as a value (`.right(())`, `const(())`, `{ _ in () }`, `cond ? x : ()`) and as an empty associated-value
+# pattern (`case .right():`); `@convention(c)` in a type: not in the grammar, rewritten to a same-length `0` / blanks
+EMPTY_TUPLE_VALUE = re.compile(rb"(?:(?<=\()|(?<=,)|(?<=\bin)|(?<=\breturn)|(?<=\?\?)|(?<=[^:]:))([ \t]*)\(\)"
+                               rb"(?=[ \t]*(?:[),}\]\n]|//))(?![ \t]*\)[ \t]*(?:->|throws|async|rethrows))")
+EMPTY_CASE_PATTERN = re.compile(rb"(\bcase[ \t]+\.\w+)\(\)(?=[ \t]*[:,])")
+CONVENTION = re.compile(rb"@convention\(\w+\)")
+# `if let x = try? await f()`, `while try await g()`: `try` before `await` in a condition does not parse; `try` is blanked
+TRY_AWAIT = re.compile(rb"(?<![\w.])try[?!]?(?=[ \t]+await\b)")
+# `x as? String ?? ""`: a cast before `??` does not parse; the cast is blanked (`x            ?? ""`)
+CAST_COALESCE = re.compile(rb"(?<![\w.])as[?!]?[ \t]+(?:[\w.]+(?:<[^<>\n]*>)?|\[[^\[\]\n]*\])\??(?=[ \t]*\?\?)")
+
+
+def _empty_tuple(m, src: bytes) -> bytes:
+    """`0 ` for a `()` value; unchanged inside generic arguments (`Tagged<((), email: ()), String>` is a type)."""
+    pre = src[src.rfind(b"\n", 0, m.start()) + 1:m.start()].replace(b"->", b"")
+    if pre.count(b"<") > pre.count(b">") or b"typealias" in pre:
+        return m.group(0)
+    return m.group(1) + b"0 "
+
+
+def _continuation(m) -> bytes:
+    trail, indent, op, gap = m.group(1), m.group(2), m.group(3), m.group(4)
+    return b" " + op + trail + b"\n" + indent + gap[:-1] if gap else m.group(0)
+
+
+def _blank(m) -> bytes:
+    return re.sub(rb"[^\n]", b" ", m.group(0))
+
+
+def _attribute_block(m, src: bytes, blocks: list) -> bytes:
+    """`#if os(macOS)` / `@Test` / `#endif` above a declaration: the directive lines are blanked so the attribute
+    attaches to the declaration that follows; (first line, last line, `#if` line text) goes to `blocks`."""
+    block = m.group(0)
+    if not ATTRIBUTES_ONLY.fullmatch(DIRECTIVE_LINE.sub(b"", block)):
+        return block
+    first = src.count(b"\n", 0, m.start()) + 1
+    dirs = DIRECTIVE_LINE.findall(block)
+    blocks.append((first, first + block.count(b"\n"),
+                   dirs[0].strip().decode("utf-8", "replace") if len(dirs) == 2 else None))
+    return DIRECTIVE_LINE.sub(_blank, block)
+
+
+def _join_continuations(src: bytes) -> bytes:
+    """Apply CONTINUATION, except after a line that ends in a `//` comment (the operator would be commented out)."""
+    if b"\n" not in src:
+        return src
+    def sub(m):
+        line_start = src.rfind(b"\n", 0, m.start()) + 1
+        if b"//" in src[line_start:m.start()] or b"/*" in src[line_start:m.start()]:
+            return m.group(0)
+        return _continuation(m)
+    return CONTINUATION.sub(sub, src)
+
+
+def _preprocess(src: bytes, blocks: list | None = None) -> tuple[bytes, list[str]]:
+    """Valid Swift the tree-sitter grammar does not parse, rewritten in place with the same byte length (offsets and
+    line numbers stay those of the file; names are read from the original source): raw identifiers, a
+    `#sourceLocation(...)` directive (blanked), a `#_sourceLocation`-style macro expression (a same-length `#line`),
+    and an `#if` block holding only attributes (its directive lines blanked, #73). Returns the source to parse and
+    what was rewritten."""
+    out, what = _raw_identifiers(src), []
+    if out is not src:
+        what.append("raw_identifiers")
+    if b"#sourceLocation" in out:
+        new = SOURCE_LOCATION_DIRECTIVE.sub(_blank, out)
+        if new != out:
+            out = new
+            what.append("source_location_directives")
+    if b"#_" in out:
+        new = UNDERSCORE_MACRO.sub(lambda m: b"#line" + b" " * (len(m.group(0)) - 5) if len(m.group(0)) >= 5
+                                   else m.group(0), out)
+        if new != out:
+            out = new
+            what.append("underscore_macros")
+    if b"()" in out:
+        new = EMPTY_CASE_PATTERN.sub(lambda m: m.group(1) + b"  ", EMPTY_TUPLE_VALUE.sub(lambda m: _empty_tuple(m, out), out))
+        if new != out:
+            out = new
+            what.append("empty_tuples")
+    if b"@convention" in out:
+        out = CONVENTION.sub(_blank, out)
+        what.append("convention_attributes")
+    if b"await" in out:
+        new = TRY_AWAIT.sub(_blank, out)
+        if new != out:
+            out = new
+            what.append("try_await")
+    if b"??" in out:
+        new = CAST_COALESCE.sub(_blank, out)
+        if new != out:
+            out = new
+            what.append("cast_coalesce")
+    new = _join_continuations(out)
+    if new != out:
+        out = new
+        what.append("continuation_operators")
+    if b"#if" in out and b"@" in out:
+        found = [] if blocks is None else blocks
+        new = IF_BLOCK.sub(lambda m: _attribute_block(m, out, found), out)
+        if new != out:
+            out = new
+            what.append("attributes_in_if_blocks")
+    assert len(out) == len(src)
+    return out, what
+
+
 class SFile:
     def __init__(self, rel: str, src: bytes, tree):
         self.rel, self.src, self.tree = rel, src, tree
         self.test = bool(TEST_PATH.search(rel))
         self.imports: set[str] = set()
+        self.attr_blocks: list = []      # attribute-only `#if` blocks blanked before parsing (_preprocess)
 
 
 class SwiftPlugin(LanguagePlugin):
@@ -307,19 +429,23 @@ class SwiftPlugin(LanguagePlugin):
         self.handler_refs: list[tuple] = []  # (route id, method name, type fqn, file, line)
         self.st = defaultdict(int)
         sfiles, failed = [], []
+        errs: dict[str, list] = {}
         for rel in files:
             try:
                 src = (project.root / rel).read_bytes()
             except OSError:
                 failed.append(rel)
                 continue
-            psrc = _raw_identifiers(src)
-            if psrc is not src:
-                self.st["files_with_raw_identifiers"] += 1
+            blocks: list = []
+            psrc, what = _preprocess(src, blocks)
+            for w in what:
+                self.st[f"files_with_{w}"] += 1
             tree = p.parse(psrc)
             if tree.root_node.has_error:
                 self.st["files_with_syntax_errors"] += 1
+                errs[rel] = tree_spans(tree.root_node)
             sfiles.append(SFile(rel, src, tree))
+            sfiles[-1].attr_blocks = blocks
         self._fd: dict[str, list[Decl]] = defaultdict(list)
         self._avail_regions: dict[str, list] = {}
         for sf in sfiles:            # pass 1: declarations
@@ -360,7 +486,7 @@ class SwiftPlugin(LanguagePlugin):
                 self.b.nodes[rid].attrs.setdefault("handler", ms[0].fqn)
             else:
                 self.st["routes_unresolved_handler"] += 1
-        self.file_report = {"seen": [sf.rel for sf in sfiles] + failed, "parse_failed": failed}
+        self.file_report = {"seen": [sf.rel for sf in sfiles] + failed, "parse_failed": failed, "syntax_errors": errs}
         mode = self._exact(project, [sf.rel for sf in sfiles])
         self._apply_available()
         st = dict(self.st)
@@ -429,8 +555,57 @@ class SwiftPlugin(LanguagePlugin):
         m = re.match(r"\s*(?:some\s+|any\s+)?\[?([A-Za-z_][\w.]*)", self.t(n))
         return m.group(1).split(".")[-1] if m else None
 
+    @staticmethod
+    def _orphans(n) -> dict:
+        """Declarations tree-sitter put after a type whose body it closed early (a MISSING `}`, e.g. after a line the
+        grammar does not know), up to the stray `}` that really closes it (an ERROR at the same level), or the end:
+        node id -> the type declaration node they belong to (#73)."""
+        out = {}
+        kids = n.children
+        i = 0
+        while i < len(kids):
+            c = kids[i]
+            body = next((x for x in c.children if x.type in ("class_body", "enum_class_body", "protocol_body")), None) \
+                if c.type in TYPE_DECLS else None
+            if body is None or not body.children or not body.children[-1].is_missing:
+                i += 1
+                continue
+            j = i + 1
+            while j < len(kids) and not (kids[j].type == "ERROR" and
+                                         kids[j].children and kids[j].children[0].type == "}"):
+                if kids[j].is_named and kids[j].type not in ("comment", "multiline_comment"):
+                    out[kids[j].id] = c
+                j += 1
+            if j < len(kids):
+                out[kids[j].id] = c       # the closing `}`: marks where the type ends
+            i = j + 1
+        return out
+
+    def _adopter(self, t, sf: SFile, cls: Decl | None) -> Decl | None:
+        nm = self._name(t)
+        if not nm:
+            return None
+        head = self.t(t).split("{", 1)[0]
+        if re.search(r"\bextension\b", head):
+            return self.types.get(nm)
+        return self.types.get(f"{cls.fqn}.{nm}" if cls and cls.kind == "class" else nm)
+
     def _decls(self, n, sf: SFile, cls: Decl | None):
+        adopt = self._orphans(n) if n.children and getattr(n, "has_error", False) else {}
         for c in n.children:
+            if c.id in adopt:
+                d = self._adopter(adopt[c.id], sf, cls)
+                if d is not None and d.file == sf.rel:
+                    end = c.end_point[0] + 1
+                    if end > d.end:          # the type reaches its real closing brace
+                        d.end = self.b.nodes[d.id].end_line = end
+                    if c.type != "ERROR":
+                        one = SimpleNamespace(children=[c])
+                        self._props(one, d, sf)
+                        self._decls(one, sf, d)
+                        self.st["declarations_recovered_into_type"] += 1 if c.type in (
+                            "function_declaration", "init_declaration", "property_declaration") + TYPE_DECLS else 0
+                    continue
             ty = c.type
             if ty in TYPE_DECLS:
                 nm = self._name(c)
@@ -687,7 +862,13 @@ class SwiftPlugin(LanguagePlugin):
         return None
 
     def _refs(self, n, sf: SFile, owner: str, decl: Decl | None, ctx: dict):
+        adopt = self._orphans(n) if n.children and getattr(n, "has_error", False) else {}
         for c in n.children:
+            if c.id in adopt and c.type != "ERROR":
+                d = self._adopter(adopt[c.id], sf, decl if decl is not None and decl.kind == "class" else None)
+                if d is not None:
+                    self._refs(SimpleNamespace(children=[c]), sf, d.id, d, ctx)
+                    continue
             ty = c.type
             if ty in ("function_declaration", "init_declaration"):
                 d = self._decl_at(sf, c, ("function", "method"), "init" if ty == "init_declaration" else None)
@@ -1187,6 +1368,16 @@ class SwiftPlugin(LanguagePlugin):
                 stack.append((line + 1, new, prev, txt))
             elif k == "if":
                 stack.append((line + 1, self._os_expr(expr), [], txt))
+        for first, last, iftxt in sf.attr_blocks:
+            # `#if os(macOS)` / `@Test` / `#endif` / `func f()`: f is declared under that condition
+            kw = re.match(r"#if\b\s*(.*)", iftxt or "")
+            cond = self._os_expr(kw.group(1)) if kw else None
+            if cond is None:
+                continue
+            for d in self._fd.get(sf.rel, ()):
+                if first < d.line < last:
+                    mark(self.b, sf.rel, d.line, d.end, Cond("tree", cond, iftxt))
+                    self.st["platform_blocks"] += 1
 
     def _os_expr(self, expr: str):
         from ...platforms import _plat_atom

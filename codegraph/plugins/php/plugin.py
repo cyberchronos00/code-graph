@@ -547,7 +547,10 @@ class PhpPlugin(LanguagePlugin):
         records = self.extract(project)
         t_extract = time.time() - t0
         self.file_report = {"seen": [r["file"] for r in records if r.get("file")],
-                            "parse_failed": [r["file"] for r in records if r.get("error") and r.get("file")]}
+                            "parse_failed": [r["file"] for r in records if r.get("error") and r.get("file")],
+                            # `Syntax error, unexpected '}' on line 12`: the line for coverage (#73)
+                            "syntax_errors": {r["file"]: [[int(m.group(1))] * 2] if (m := re.search(r"on line (\d+)", r["error"])) else []
+                                              for r in records if r.get("error") and r.get("file")}}
         prog = PhpProgram(project, records, builder)
         self.program = prog
         for fw in frameworks:

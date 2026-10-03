@@ -78,6 +78,7 @@ class CFile:
     decl_pos: set = field(default_factory=set)        # (line, col) of declaration names (not references)
     lines: list = field(default_factory=list)
     generators: dict = field(default_factory=dict)    # function-like macro -> (params, value) when it defines functions
+    error_spans: list = field(default_factory=list)   # [first, last] lines tree-sitter could not parse (#73)
     top_calls: list = field(default_factory=list)     # (name, args, line, col, end line): `NAME(args)` at column 0
     recovered: int = 0                                # definitions recovered after a region tree-sitter could not parse
 
@@ -154,6 +155,9 @@ class Extractor:
     def run(self) -> CFile:
         tree = parser(self.f.lang).parse(mask_annotations(self.src, self.blank) if self.blank is not None else self.src)
         self.f.lines = self.src.decode("utf-8", "replace").split("\n")
+        if tree.root_node.has_error:
+            from ...core.syntax_errors import tree_spans
+            self.f.error_spans = tree_spans(tree.root_node)
         self.scan_directives()
         self.container(tree.root_node, {"ns": [], "cls": None, "access": None, "anon": False, "extern_c": False})
         lines = self.f.lines

@@ -118,7 +118,8 @@ class RustPlugin(LanguagePlugin):
                    and "/target/" not in f and not f.startswith("target/")]
         stats["orphan_rs_files"] = len(orphans)
         # coverage: .rs files outside every crate's module tree are not in the graph
-        self.file_report = {"seen": list(self.files) + orphans, "unmapped": orphans}
+        self.file_report = {"seen": list(self.files) + orphans, "unmapped": orphans,
+                            "syntax_errors": {r: f.error_spans for r, f in self.files.items() if f.error_spans}}
         self._indexes()
         self._reexports()
         self._emit_structure(stats)

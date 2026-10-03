@@ -99,6 +99,31 @@ Since [#83](https://github.com/cyberchronos00/code-graph/issues/83):
 - A call on a continuation line after a binary operator keeps its edge, on its own line. Lines starting with `<` / `>`
   are a parse error in the grammar. `a + f(x)` parses as `(a + f)(x)`; that call used to be dropped.
 
+Since [#73](https://github.com/cyberchronos00/code-graph/issues/73), valid Swift that tree-sitter-swift 0.7.3 does not
+parse is rewritten in place before parsing. The rewrite keeps the byte length and the line count, so every offset and
+line stays the file's, and names are read from the original source. `index` stats count the files per rewrite
+(`files_with_<rewrite>`):
+- `#sourceLocation(file:line:)` / `#sourceLocation()` directive lines are blanked (`source_location_directives`). A
+  test between them stays a method of its suite.
+- A `#_name` macro expression (`sourceLocation: SourceLocation = #_sourceLocation`) parses as `#line`
+  (`underscore_macros`). The `@Test` functions after such a default are tests again.
+- An `#if` block that holds only attributes (`#if os(macOS)` / `@Test` / `#endif` above a `func`) loses its directive
+  lines, so the attribute reaches the declaration. The declaration gets the block's platform (`platforms: ["macos"]`).
+- `()` as a value (`.done(())`, `{ _ in () }`) and as an empty pattern (`case .done():`), `@convention(c)`, a cast
+  before `??` (`x as? String ?? ""`), `try` before `await` in a condition (`if let n = try? await f()`) and a binary
+  operator at the start of a continuation line (`typealias Client = A` / `  & B`, `let t = a` / `  * b`). `()` inside
+  `<...>` generic arguments and typealias lines is a type and stays.
+- Members after a construct the grammar still rejects (an unknown `#warningx(...)` macro between members, which
+  closes the type early) are recovered into their type: the type's body ends in a MISSING `}`, and the declarations
+  up to the stray `}` that follows become its members again (`declarations_recovered_into_type`).
+
+Whatever still does not parse is listed by `cg coverage`, per file with its line spans and the declarations lost
+there ([completeness.md](completeness.md#syntax-errors)). On IceCubesApp, isowords and Alamofire, the files with
+syntax errors went from 7 / 18 / 8 to 3 / 5 / 1, with no declaration lost. The forms left: a function type as a
+value (`(@Sendable (T) -> V).self`, `(@convention(c) (Any?) -> NSObject).self`, `os_log as (...) -> Void`),
+`isolated deinit`, `if await store.isEmpty {`, a `case .a where x, .b where y:` with several guarded patterns, a
+`/Enum.case` case-path literal and `#error(...)` inside `#if`.
+
 `index` stats: `index_files`, `index_defs_matched` / `index_defs_unmatched`, `index_references`, `index_refs_external`
 (SDK and dependency symbols), `heuristic_kept_not_compiled` and `exact_vs_heuristic` (precision and recall of the
 heuristic call edges against the store, for the covered files).

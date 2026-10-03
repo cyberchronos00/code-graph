@@ -327,7 +327,8 @@ class PyProgram:
         files = self.files()
         n_skipped = 0
         # per-file outcome for coverage (codegraph/coverage.py): which discovered files did not become graph nodes, and why
-        self.file_report = rep = {"seen": files, "parse_failed": [], "skipped_oversize": [], "excluded": [], "unmapped": []}
+        self.file_report = rep = {"seen": files, "parse_failed": [], "skipped_oversize": [], "excluded": [], "unmapped": [],
+                                  "syntax_errors": {}}
         parsed: dict[str, tuple] = {}
         for rel in files:
             parts = Path(rel).parts
@@ -347,6 +348,8 @@ class PyProgram:
                 self.parse_errors.append({"file": rel, "error": f"{type(ex).__name__}: {getattr(ex, 'msg', str(ex))}",
                                           "line": getattr(ex, "lineno", None)})
                 rep["parse_failed"].append(rel)
+                ln = getattr(ex, "lineno", None)
+                rep["syntax_errors"][rel] = [[ln, getattr(ex, "end_lineno", None) or ln]] if isinstance(ln, int) and ln > 0 else []
                 continue
             parsed[rel] = (tree, [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))])
         configured, origin = self.configured_roots()

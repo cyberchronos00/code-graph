@@ -251,6 +251,18 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
             if nid not in builder.nodes:
                 kind, key = nid.split(":", 1)
                 builder.add_node(kind, key, attrs={"placeholder": True})
+    # files parsed with syntax errors (#73): their error spans and the declarations the graph lost there
+    from .core.syntax_errors import summarize as summarize_syntax_errors
+    raw_err = {lang: rep["syntax_errors"] for lang, rep in file_reports.items() if rep.get("syntax_errors")}
+    if raw_err:
+        want = {f for raw in raw_err.values() for f in raw}
+        names_by_file: dict = {}
+        for n in builder.nodes.values():
+            if n.file in want and n.name:
+                names_by_file.setdefault(n.file, set()).add(n.name.split(".")[-1].split("(")[0])
+        for lang, raw in raw_err.items():
+            file_reports[lang]["syntax_errors"] = summarize_syntax_errors(
+                lang, project.root, raw, names_by_file, file_reports[lang].get("parse_failed"))
     # completeness: one file scan for coverage + the blind-spot detectors (patterns no plugin models)
     from .coverage import compute
     from .blindspots import detect as detect_blind_spots

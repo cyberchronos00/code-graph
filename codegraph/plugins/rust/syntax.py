@@ -92,6 +92,7 @@ class RFile:
     calls: list = field(default_factory=list)           # (owner, form, path text, name, line, col)
     type_refs: list = field(default_factory=list)       # (owner, name, line, col)
     inner_cfgs: list = field(default_factory=list)      # #![cfg(..)] at file top
+    error_spans: list = field(default_factory=list)     # [first, last] lines tree-sitter could not parse (#73)
     file_doc: str | None = None
     lines: list = field(default_factory=list)
 
@@ -191,6 +192,9 @@ class Extractor:
     def run(self) -> RFile:
         tree = parser("rust").parse(self.src)
         root = tree.root_node
+        if root.has_error:
+            from ...core.syntax_errors import tree_spans
+            self.f.error_spans = tree_spans(root)
         self.f.lines = self.src.decode("utf-8", "replace").split("\n")
         # pass 1: string consts (for env::var(CONST))
         for n in root.children:

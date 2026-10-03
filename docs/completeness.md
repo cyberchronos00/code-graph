@@ -45,6 +45,30 @@ The first five paths per bucket are shown; `cg coverage --all-files` (MCP: `cove
 path, excluded files included. Per-file reports come from the Python, PHP, Dart, Rust and C/C++ plugins; TypeScript /
 JavaScript report the parser mode and file counts.
 
+## Syntax errors
+
+A file can be indexed and still have parsed with syntax errors: tree-sitter (Swift, Kotlin, Rust, C / C++) recovers
+around an ERROR node, the TypeScript and Dart parsers report diagnostics but still build the file, and a Python or PHP
+file that does not parse is `parse_failed`. Since [#73](https://github.com/cyberchronos00/code-graph/issues/73) each
+plugin records the error line spans per file. After indexing, cg reads the declaration heads in those spans (the whole
+file for a parse failure) and counts as **lost** each one the graph has no node of that name for in that file (a Swift
+`extension` is not counted, its members are). `cg coverage` lists the files, most declarations lost first (5 per
+language; all with `--all-files`):
+
+```console
+$ cg coverage --db out/app.db
+coverage app: not fully covered: swift 8 heuristic, 2 parsed with syntax errors
+  ...
+  swift: syntax errors in 2 files, 1 declaration lost (declarations and calls there may be missing or misplaced):
+    Sources/App/Invalid.swift:6 (1 declaration lost: broken:6)
+    Tests/AppTests/OrphanTests.swift:4, 9
+```
+
+`cg coverage --json` has them per language: `syntax_errors` (`[{file, spans, errors, decls_lost, lost, parse_failed}]`,
+up to 500 files), `syntax_error_files`, `parsed_with_errors` (parsed, not failed) and `decls_lost`. The coverage note
+on answers mentions the count, and an answer whose nodes are in such a file is not `complete`: its `completeness` has
+`syntax_errors` (`[{language, file, spans, decls_lost}]`) and the note names the file and its first error line.
+
 ## Unsupported source types
 
 Files are counted as unsupported source by a generic rule instead of a fixed language list: the extension of a

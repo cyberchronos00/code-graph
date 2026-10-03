@@ -172,6 +172,7 @@ class CFamilyPlugin(LanguagePlugin):
             self.files[rel] = extract(rel, src, lang, mod, blank)
         self._macro_generated(srcs, blank, is_cpp, stats)
         stats["files"] = len(self.files)
+        self.file_report["syntax_errors"] = {r: f.error_spans for r, f in self.files.items() if f.error_spans}
         stats["recovered_definitions"] = sum(f.recovered for f in self.files.values())
         stats["files_c"] = sum(1 for f in self.files.values() if f.lang == "c")
         stats["files_cpp"] = sum(1 for f in self.files.values() if f.lang == "cpp")

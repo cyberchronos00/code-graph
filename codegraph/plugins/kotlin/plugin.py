@@ -40,6 +40,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ...core.syntax_errors import tree_spans
 from ...core.fsutil import keep_file
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.paths import rules as path_rules
@@ -208,6 +209,7 @@ class KotlinPlugin(LanguagePlugin):
         self.build_config = self._build_config(project.root, files)
         self.st = defaultdict(int)
         kfiles, failed = [], []
+        errs: dict[str, list] = {}
         for rel in files:
             try:
                 src = (project.root / rel).read_bytes()
@@ -218,6 +220,7 @@ class KotlinPlugin(LanguagePlugin):
             kf = KFile(rel, src, tree)
             if tree.root_node.has_error:
                 self.st["files_with_syntax_errors"] += 1
+                errs[rel] = tree_spans(tree.root_node)
             kfiles.append(kf)
         for kf in kfiles:            # pass 1: declarations
             self.cur = kf
@@ -238,7 +241,7 @@ class KotlinPlugin(LanguagePlugin):
         self._emit_http()
         self._link_navs()
         self._manifests(project)
-        self.file_report = {"seen": [kf.rel for kf in kfiles] + failed, "parse_failed": failed}
+        self.file_report = {"seen": [kf.rel for kf in kfiles] + failed, "parse_failed": failed, "syntax_errors": errs}
         mode = self._exact(project, files)
         st = dict(self.st)
         st.update({"mode": mode, "files": len(kfiles), "kt_files": sum(1 for kf in kfiles if kf.rel.endswith(".kt")),

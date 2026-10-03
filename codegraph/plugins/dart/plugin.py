@@ -127,6 +127,14 @@ def normalize_url(url: str) -> tuple[str, dict]:
     return u, info
 
 
+def _error_spans(f: dict) -> list:
+    """[[line, line]] per analyzer error of a file (`error_lines`, else the line of `first_error`), #73."""
+    lines = f.get("error_lines") or []
+    if not lines and isinstance(f.get("first_error"), str):
+        m = re.search(r"@(\d+)$", f["first_error"])
+        lines = [int(m.group(1))] if m else []
+    return [[ln, ln] for ln in lines]
+
 class DartPlugin(LanguagePlugin):
     name = "dart"
 
@@ -272,7 +280,8 @@ class DartPlugin(LanguagePlugin):
         prog = DartProgram(project.root, facts)
         prog.load()
         failed = [x.get("file") if isinstance(x, dict) else str(x) for x in facts.get("failures") or []]
-        self.file_report = {"seen": list(prog.files) + [f for f in failed if f], "parse_failed": [f for f in failed if f]}
+        self.file_report = {"seen": list(prog.files) + [f for f in failed if f], "parse_failed": [f for f in failed if f],
+                            "syntax_errors": {rel: _error_spans(f) for rel, f in prog.files.items() if f.get("errors")}}
         self.program = prog
         prog.models = ModelIndex(prog)
         prog.env_values = load_env_files(project.root, [p.dir for p in prog.pkg_dirs])

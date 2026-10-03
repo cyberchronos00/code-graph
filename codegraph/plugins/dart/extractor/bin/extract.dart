@@ -497,6 +497,7 @@ Map<String, dynamic> fileFacts(String rel, String content) {
     'file': rel,
     'errors': res.errors.length,
     if (res.errors.isNotEmpty) 'first_error': '${res.errors.first.message} @${li.getLocation(res.errors.first.offset).lineNumber}',
+    if (res.errors.isNotEmpty) 'error_lines': [for (final e in res.errors.take(20)) li.getLocation(e.offset).lineNumber],
     'imports': [],
     'exports': [],
     'parts': [],

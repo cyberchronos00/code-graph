@@ -268,7 +268,7 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
                 e["hint"] = ("check the tsconfig's `include` / `files` (they match no file under the indexed root), or "
                              "list the source directories in .cg.yaml `include`")
         rep = reports.get(lang)
-        if rep is not None and status not in ("skipped", "not_indexed"):
+        if rep is not None and "seen" in rep and status not in ("skipped", "not_indexed"):
             fc = file_completeness(sc.files(exts), rep)
             e.update({k: v for k, v in fc.items() if k != "paths"})
             if fc["paths"]:
@@ -276,6 +276,13 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             e["files_complete"] = missing_files(e) == 0
             if not e["files_complete"] and lang == "python" and e.get("unmapped"):
                 e["hint"] = _python_unmapped_hint(st)
+        se = (rep or {}).get("syntax_errors")
+        if isinstance(se, list) and se and status not in ("skipped", "not_indexed"):
+            # files parsed with syntax errors (#73): error spans and the declarations lost there
+            e["syntax_errors"] = se[:MAX_PATHS]
+            e["syntax_error_files"] = len(se)
+            e["parsed_with_errors"] = sum(1 for x in se if not x.get("parse_failed"))
+            e["decls_lost"] = sum(x.get("decls_lost", 0) for x in se)
         if lang == "python" and st:
             for k in ("roots_mode", "source_roots", "roots_warnings", "roots_ambiguous", "module_name_collisions"):
                 if st.get(k):
@@ -427,12 +434,32 @@ def blind_spots(cov: dict | None) -> list[dict]:
 
 
 def _entry_text(e: dict) -> str:
-    """'php 18 exact' / 'python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped'."""
+    """'php 18 exact' / 'python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped' /
+    'swift 101 heuristic, 8 parsed with syntax errors'."""
+    pe = e.get("parsed_with_errors")
+    errs = f", {pe} parsed with syntax errors" if pe else ""
     if e.get("files_complete") is False:
         parts = [f"{e[b]} {BUCKET_SHORT[b]}" for b in ("parse_failed", "skipped_oversize", "unmapped") if e.get(b)]
         return (f"{e['language']} {e['files']} discovered, {e['indexed']} indexed ({e['status'].replace('_', ' ')} parser)"
-                + (": " + ", ".join(parts) if parts else ""))
-    return f"{e['language']} {e['files']} {e['status'].replace('_', ' ')}"
+                + (": " + ", ".join(parts) if parts else "") + errs)
+    return f"{e['language']} {e['files']} {e['status'].replace('_', ' ')}{errs}"
+
+
+def syntax_error_lines(e: dict, all_files: bool = False, indent: str = "  ") -> list[str]:
+    """'swift: syntax errors in 8 files, 12 declarations lost (most first):' and one line per file with its error
+    line spans and the declarations lost there (5 files unless all_files), #73."""
+    from .core.syntax_errors import span_text
+    se = e.get("syntax_errors") or []
+    if not se:
+        return []
+    n, lost = e.get("syntax_error_files", len(se)), e.get("decls_lost", 0)
+    out = [f"{indent}{e['language']}: syntax errors in {n} file{'s' if n != 1 else ''}, {lost} declaration"
+           f"{'s' if lost != 1 else ''} lost (declarations and calls there may be missing or misplaced):"]
+    show = se if all_files else se[:SHOW_PATHS]
+    out += [f"{indent}  {span_text(x)}" for x in show]
+    if n > len(show):
+        out.append(f"{indent}  … +{n - len(show)} more (--all-files)")
+    return out
 
 
 def summary_line(cov: dict | None, repo: str | None = None) -> str:
@@ -535,6 +562,8 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
             out += _paths_lines(e, all_files)
             if e.get("hint"):
                 out.append(f"    fix: {e['hint']}")
+        for e in (cov or {}).get("languages", []):
+            out += syntax_error_lines(e, all_files)
         for e in (cov or {}).get("languages", []):     # which mode an exact-capable language ran in, and why
             if e["language"] in ("kotlin", "swift") and not _is_gap(e) and e.get("reason"):
                 out.append(f"  {e['language']}: {e['files']} files {e['status']}: {e['reason']}")
@@ -598,6 +627,9 @@ def note(covs: dict[str, dict | None]) -> str:
             bad.append(f"{e['language']} ({what}{', ' + r if len(covs) > 1 else ''})")
     bs = [b for c in covs.values() for b in blind_spots(c)]
     bs_txt = f"; blind spots: {_bs_count(bs)} (see coverage)" if bs else ""
+    nerr = sum(e.get("syntax_error_files", 0) for c in covs.values() for e in (c or {}).get("languages", []))
+    if nerr:     # a declaration in a file that did not parse cleanly may be missing (#73)
+        bs_txt += f"; {nerr} file{'s' if nerr != 1 else ''} with syntax errors (`cg coverage` lists them)"
     if bad:
         return "coverage: not fully covered here: " + "; ".join(bad) + bs_txt + ". If the code you mean is there, " + FALLBACK + "."
     if unknown:
@@ -627,7 +659,7 @@ def _top(f: str | None) -> str:
 
 def scope_of(store, node_ids) -> dict:
     """Languages, repos and top-level directories of the nodes an answer is about (for a scoped completeness note)."""
-    langs, dirs, repos = set(), set(), set()
+    langs, dirs, repos, files = set(), set(), set(), set()
     try:
         repo_names = set((store.meta() or {}).get("repos") or [])
     except Exception:  # noqa: BLE001
@@ -646,11 +678,12 @@ def scope_of(store, node_ids) -> dict:
                 langs.add(lang)
             if f:
                 dirs.add(_top(f))
-    return {"languages": langs, "dirs": dirs, "repos": repos}
+                files.add(f)
+    return {"languages": langs, "dirs": dirs, "repos": repos, "files": files}
 
 
 def completeness(covs: dict[str, dict | None], languages=None, dirs=None, repos=None,
-                 categories=("route", "handler"), unsupported: bool | None = None, ids=None) -> dict:
+                 categories=("route", "handler"), unsupported: bool | None = None, ids=None, files=None) -> dict:
     """Machine-readable completeness of an answer, scoped to the languages / top-level directories / repos it
     involves (None = the whole index). {"complete": bool, "languages": {...}, "unsupported": {...},
     "blind_spots": [...]}. Route blind spots apply to every answer in their language (a route registered anywhere can
@@ -660,7 +693,7 @@ def completeness(covs: dict[str, dict | None], languages=None, dirs=None, repos=
     multi = len(covs) > 1
     whole = languages is None
     unsupported = whole if unsupported is None else unsupported
-    langs_out, uns_out, bs_out = {}, {}, []
+    langs_out, uns_out, bs_out, se_out = {}, {}, [], []
     known = True
     for repo, cov in covs.items():
         if repos and repo not in repos and multi:
@@ -688,6 +721,11 @@ def completeness(covs: dict[str, dict | None], languages=None, dirs=None, repos=
                 d["reason"] = e["reason"]
             d["complete"] = not _is_gap(e)
             langs_out[key] = d
+            if files:           # the answer involves a file that parsed with syntax errors (#73)
+                for x in e.get("syntax_errors") or ():
+                    if x["file"] in files:
+                        se_out.append({"language": e["language"], "file": x["file"], "spans": x.get("spans", [])[:3],
+                                       "decls_lost": x.get("decls_lost", 0), **({"repo": repo} if multi and repo else {})})
         for b in blind_spots(cov):
             if b["category"] not in categories or (not whole and b["language"] not in languages):
                 continue
@@ -705,8 +743,10 @@ def completeness(covs: dict[str, dict | None], languages=None, dirs=None, repos=
                            "count": b["count"] if samples is None else len(samples),
                            "sample": (samples or b["samples"])[0],
                            **({"repo": repo} if multi and repo else {})})
-    complete = known and all(v["complete"] for v in langs_out.values()) and not uns_out and not bs_out
+    complete = known and all(v["complete"] for v in langs_out.values()) and not uns_out and not bs_out and not se_out
     out = {"complete": complete, "languages": langs_out}
+    if se_out:
+        out["syntax_errors"] = se_out
     if uns_out:
         out["unsupported"] = uns_out
     if bs_out:
@@ -727,7 +767,7 @@ def completeness_for(store, node_ids=None, categories=("route", "handler"), whol
     if not sc["languages"]:
         return completeness(covs, categories=categories, unsupported=False, **kw)
     return completeness(covs, languages=sc["languages"], dirs=sc["dirs"], repos=sc["repos"] or None,
-                        categories=categories, ids=set(node_ids), **kw)
+                        categories=categories, ids=set(node_ids), files=sc["files"], **kw)
 
 
 def possibly_more(comp: dict) -> str:
@@ -753,6 +793,12 @@ def possibly_more(comp: dict) -> str:
             parts.append(f"{label} heuristic only")
         else:
             parts.append(f"{label} {v['mode'].replace('_', ' ')}")
+    se = comp.get("syntax_errors") or []
+    if se:
+        x = se[0]
+        pos = f":{x['spans'][0][0]}" if x.get("spans") else ""
+        parts.append(f"{len(se)} file{'s' if len(se) != 1 else ''} with syntax errors ({x['file']}{pos}"
+                     + (f" +{len(se) - 1}" if len(se) > 1 else "") + ")")
     if comp.get("unsupported"):
         parts.append("unsupported: " + ", ".join(f"{k} {v}" for k, v in sorted(comp["unsupported"].items())))
     if comp.get("recorded") is False:

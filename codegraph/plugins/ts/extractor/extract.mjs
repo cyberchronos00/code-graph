@@ -597,6 +597,14 @@ for (const sf of sourceFiles) {
   if (sf.parseDiagnostics && sf.parseDiagnostics.length) {   // the parser recovers; count files that needed recovery
     stats.syntax_error_files = (stats.syntax_error_files || 0) + 1
     if ((stats.syntax_error_samples ||= []).length < 5) stats.syntax_error_samples.push(r)
+    // error lines per file for `cg coverage` (#73); in a .vue file only those of its <script> blocks (the template
+    // stubs are appended after the file's own lines)
+    let maxLine = Infinity
+    if (real.endsWith('.vue')) { try { maxLine = fs.readFileSync(real, 'utf8').split('\n').length } catch (e) { maxLine = 0 } }
+    const lines = [...new Set(sf.parseDiagnostics.map(d => sf.getLineAndCharacterOfPosition(d.start || 0).line + 1))]
+      .filter(l => l <= maxLine).slice(0, 20)
+    const se = (stats.syntax_errors ||= {})
+    if (lines.length && Object.keys(se).length < 500) se[r] = lines.map(l => [l, l])
   }
   const fid = real.endsWith('.vue') ? `${fk}:${r}` : `module:${r}`
   usedIds.add(fid)
