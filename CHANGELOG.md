@@ -8,6 +8,23 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-03
+
+What the graph sees beyond code calling code: AI harnesses (LLM tools, MCP servers and clients, agents) and external
+systems (databases, caches, brokers, mail, directories, object stores) become nodes; Swift heuristic calls match full
+selectors; `cg tests` counts Swift Testing, XCTest and Kotlin tests; `cg clean` manages the cache.
+
+### Changed
+
+- Cache file names: SCIP outputs and their locks, rust-analyzer configs and the TS / Dart facts caches now carry the
+  project key (and the TS / Dart facts the cache version) in their names, so `cg clean` can find a project's entries.
+  Each project's SCIP output and TS / Dart facts are rebuilt once on the first index after the update; the entries
+  written by 0.7.1 and earlier are left behind until `cg clean --stale` removes them (#80).
+- The cache root is resolved the same way everywhere: the TS / Dart caches and the SCIP runner now honour
+  `$XDG_CACHE_HOME` and `%LOCALAPPDATA%` like the extractors, and `$CODEGRAPH_CACHE_DIR` everywhere (#80).
+- `cg tests`: the test-case total includes test functions (Swift, Kotlin), and the empty-result hint names the actual
+  reason instead of "tests/ or *.spec files were not indexed" (#71).
+
 ### Added
 
 - AI harnesses: LLM tools and MCP primitives as protocol endpoints (`endpoint:llm_tool:<name>`,
@@ -17,7 +34,6 @@ commands, output and the graph schema; such changes are listed under **Changed**
   loops (dict registries, `if` / `match` on the name; dynamic dispatch reported, not linked), model calls recorded
   for #40; `cg tools` / MCP `llm_tools`; cg's own MCP tools are endpoints now instead of decorator references
   ([docs/ai-tools.md](docs/ai-tools.md), [#66](https://github.com/cyberchronos00/code-graph/issues/66)).
-
 - External systems: `external:<protocol>:<target>` nodes for databases, caches, brokers, mail relays, directories,
   file-transfer hosts and object stores from Laravel connections, env keys read by code, Python settings dicts and
   URLs, `.env.example` values, docker-compose services and DSNs (CONNECTS_TO, CONFIGURED_BY, CREDENTIAL_FROM with
@@ -469,7 +485,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/cyberchronos00/code-graph/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/cyberchronos00/code-graph/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/cyberchronos00/code-graph/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cyberchronos00/code-graph/compare/v0.5.0...v0.6.0
