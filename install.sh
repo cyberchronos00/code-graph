@@ -120,11 +120,8 @@ install_cg() {
     run uv tool update-shell >/dev/null 2>&1 || true
   else
     [ -n "$py" ] || die "Python >= $MIN_PY not found (install it, or install uv: https://docs.astral.sh/uv/)"
-    if [ "$ACTION" = update ] && [ -z "$SOURCE" ] && [ -z "$VERSION" ] && [ "$(installed_with)" = pipx ]; then
-      run pipx upgrade "$PKG"
-    else
-      run pipx install --force --python "$py" "$s"
-    fi
+    # pipx upgrade only reinstalls a git install when its version changed: --update reinstalls to get the latest commit
+    run pipx install --force --python "$py" "$s"
   fi
 }
 

@@ -12,7 +12,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 - Packaging: `pyproject.toml` with the `cg` and `cg-mcp` commands (version from `codegraph.__version__`), so
   `uv tool install git+https://github.com/cyberchronos00/code-graph` / `pipx install git+...` install cg without a
-  checkout and `uv tool upgrade codegraph` / `pipx upgrade codegraph` update it. `install.sh` / `install.ps1`
+  checkout and `uv tool upgrade codegraph` / `pipx upgrade codegraph` (releases) / `install.sh --update` update it. `install.sh` / `install.ps1`
   (install, `--update`, `--version`, `--with rust,c,kotlin,swift`, `--uninstall`; no sudo). The TypeScript / PHP /
   Dart extractor dependencies install into the user cache on first use or with `cg setup`. `cg doctor` (CLI and MCP):
   tool versions, extractor dependencies, exact or heuristic mode per language with the reason and the install command.

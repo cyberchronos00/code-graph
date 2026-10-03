@@ -189,7 +189,7 @@ def report(root: str | Path | None = None) -> dict:
         "extractors": {k: extractors.status(k) for k in extractors.SPECS}, "cache": str(extractors.cache_root()),
         "tools": tools, "python_modules": {m: _module(m) for m in (*PIP_NAMES, "yaml", "mcp")},
         "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
-        "update": "pipx upgrade codegraph  |  uv tool upgrade codegraph  |  install.sh --update",
+        "update": "uv tool upgrade codegraph  |  pipx upgrade codegraph (releases)  |  install.sh --update",
     }
 
 

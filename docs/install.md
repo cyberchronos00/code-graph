@@ -26,7 +26,9 @@ server has the same report as the `doctor` tool.
 | pipx | `pipx upgrade codegraph` | `pipx uninstall codegraph` |
 | script | `install.sh --update` (`install.ps1 -Update`) | `install.sh --uninstall` (`install.ps1 -Uninstall`) |
 
-`--update` upgrades with whichever of uv / pipx installed cg; with `--version vX.Y.Z` it installs that tag instead
+`uv tool upgrade` installs the latest commit of the branch it was installed from; `pipx upgrade` reinstalls a git
+install only when the version changed (a release), so `install.sh --update` reinstalls with `pipx install --force`
+to get the latest commit. `--update` uses whichever of uv / pipx installed cg; with `--version vX.Y.Z` it installs that tag instead
 (tags after v0.6.0: earlier ones have no `pyproject.toml`).
 `--uninstall` also removes the extractor dependencies from the cache; the index caches stay (the directory is
 printed).

@@ -90,8 +90,8 @@ if ($installer -eq "uv") {
     try { uv tool update-shell | Out-Null } catch { }
 } else {
     if (-not $py) { throw "Python >= $MinPy not found (install it from python.org, or install uv)" }
-    if ($Update -and -not $Source -and -not $Version -and (Installed-With) -eq "pipx") { Run "pipx" @("upgrade", $Pkg) }
-    else { Run "pipx" @("install", "--force", $spec) }
+    # pipx upgrade only reinstalls a git install when its version changed: reinstall to get the latest commit
+    Run "pipx" @("install", "--force", $spec)
 }
 
 $cg = (Get-Command cg -ErrorAction SilentlyContinue).Source
