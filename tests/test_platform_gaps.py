@@ -318,3 +318,87 @@ def test_c_platform_directory_pair_is_one_symbol(tmp_path):
     }), CODEGRAPH_C_SCIP="0")
     calls = {d for s, d in rows(db, "select src, dst from edges where kind='CALLS' and src='function:main'")}
     assert calls == {"function:src/unix/a.c#f", "function:src/win/a.c#f"}
+
+
+RN_63 = {
+    "package.json": '{"name": "rn63", "dependencies": {"react": "18.2.0", "react-native": "0.74.0", "react-native-web": "~0.19.10"}}',
+    "app.json": '{"expo": {"name": "rn63", "platforms": ["ios", "android", "web"]}}',
+    "tsconfig.json": '{"compilerOptions": {"strict": true, "module": "esnext", "moduleResolution": "bundler", "target": "es2020"}, "include": ["src"]}',
+    "src/x/Cam.ios.ts": "export function snap(): string { return 'ios'; }\n",
+    "src/x/Cam.android.ts": "export function snap(): string { return 'android'; }\n",
+    "src/useCam.ts": """
+        import { snap } from './x/Cam.ios';
+
+        export function iosOnlyDebug() {
+          return snap();
+        }
+        """,
+    "src/web.ts": "export function webOnly() { return 1; }\n",
+    "src/web.web.ts": "export function webOnly() { return 2; }\nexport function webExtra() { return 3; }\n",
+    "src/release.web.test.ts": """
+        import { webExtra } from './web';
+        test('x', () => { webExtra(); });
+        """,
+}
+
+
+def test_ts_explicit_platform_import_and_platform_test_files(tmp_path):
+    """#63: `from './x/Cam.ios'` gets that file on every target (no mirrored edge to Cam.android, no missing-callee on
+    web); `release.web.test.ts` is a web test, so its call into web-only code is no finding."""
+    db, _ = index(write(tmp_path, RN_63))
+    assert not rows(db, "select 1 from edges where src like '%useCam.ts%' and dst like '%Cam.android%'")
+    assert attrs(db, "module:src/release.web.test.ts")["platforms"] == ["web"]
+    d = findings(db)
+    assert d["missing_callee"] == [], d["missing_callee"]
+
+
+def test_swift_initializer_added_to_sdk_type(tmp_path):
+    """#63: `Image(systemName:)` bound by name to a project `extension Image { init(systemName:) }` under
+    `#if os(macOS)` is not a call into macOS-only code on iOS (the SDK has its own initializer)."""
+    pytest.importorskip("tree_sitter_swift")
+    db, _ = index(write(tmp_path, {
+        "Package.swift": """
+            // swift-tools-version:5.9
+            import PackageDescription
+            let package = Package(name: "App", platforms: [.iOS(.v15), .macOS(.v12)], targets: [.target(name: "App")])
+            """,
+        "Sources/App/Ext.swift": """
+            import SwiftUI
+
+            #if os(macOS)
+            extension Image {
+                init(systemName: String) {
+                    self.init(nsImage: NSImage())
+                }
+            }
+            #endif
+            """,
+        "Sources/App/V.swift": """
+            import SwiftUI
+
+            struct V: View {
+                var body: some View {
+                    Image(systemName: "star")
+                }
+            }
+            """,
+    }))
+    assert rows(db, "select 1 from edges where src='method:V.body' and dst='method:Image.init'")
+    assert findings(db)["missing_callee"] == []
+
+
+def test_c_separate_programs_and_callees_on_no_target(tmp_path):
+    """#63: same-named functions of separate programs (each file with main()) are no per-platform definition group;
+    a call into a definition built for no declared target (a sunos.c fallback) is not listed."""
+    db, _ = index(write(tmp_path, {
+        "docs/a/main.c": "static int n;\nvoid alloc_buffer(void) {\n}\nint main(void) {\n  alloc_buffer();\n  return 0;\n}\n",
+        "docs/b/main.c": "void alloc_buffer(void) {\n}\nint main(void) {\n  alloc_buffer();\n  return 0;\n}\n",
+        "test/t.c": "#ifndef _WIN32\nvoid alloc_buffer(void) {\n}\n#endif\nvoid t(void) {\n  alloc_buffer();\n}\n",
+        "src/unix/sunos.c": "unsigned long strnlen(const char* s, unsigned long n) {\n  return 0;\n}\n",
+        "src/unix/core.c": "unsigned long strnlen(const char* s, unsigned long n);\nvoid use(void) {\n  strnlen(\"a\", 1);\n}\n",
+        "src/win/core.c": "void wuse(void) {\n}\n",
+    }), CODEGRAPH_C_SCIP="0")
+    d = findings(db)
+    assert not [v for v in d["variants"] if v["name"] == "alloc_buffer"], d["variants"]
+    assert not [m for m in d["missing_callee"] if "strnlen" in m["to"]], d["missing_callee"]
+    assert d["counts"].get("missing_callee_skipped_no_target", 0) >= 1

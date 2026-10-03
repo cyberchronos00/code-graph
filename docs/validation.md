@@ -259,6 +259,15 @@ What the findings are, from spot checks:
 Index time on netbox (no platform-specific code), best of three alternating runs on a shared box: 43.2 s before and
 42.7 s after (spread 42.7–45.4 s); nodes and edges are identical (38028 / 140181).
 
+Divergence false positives removed in #63 (before → after on the same commits):
+
+| Project | Commit | missing_callee | variants | Edges | What changed |
+|---|---|---|---|---|---|
+| libuv | 49b1c06 | 38 → 35 (+3 counted, built for no target) | 496 → 495 | 70889 → 70826 | `alloc_buffer` of the separate `docs/code/*` programs is no variant group (63 mirrored edges between programs gone); `strnlen` (sunos.c) ×2 and an aix.c helper not listed |
+| SwiftUIX | 3a99044 | 51 → 49 | 103 → 103 | unchanged | `Path(...)` bound to a project `extension Path { init }` under `#if canImport(UIKit)` |
+| social-app | db23528 | 155 → 155 | 108 → 108 | 60563 → 60559 | `bootstrap.test.ts` imports `./index.web` explicitly: its 4 test edges to `index.ts` are gone |
+| mattermost-mobile, IceCubesApp | e5be311, 9efcb16 | unchanged | unchanged | unchanged | |
+
 ## Kotlin
 
 Heuristic mode (tree-sitter-kotlin 1.1.0), shallow clones, `cg index` on the default branch:

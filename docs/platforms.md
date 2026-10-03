@@ -151,6 +151,15 @@ An unknown platform name exits with status 2 and lists the known targets.
 | API SURFACE DIFFERS | a variant lacks a symbol its siblings define and the importers use (`cachePath` in the io library but not in the web one) |
 | REFERENCED WHERE THE CALLEE IS NOT BUILT | a call, import or type use that is live on a target where the referenced code and all its variants are absent: a build or runtime failure on that target |
 
+Not findings (#63): an import that spells a platform file out from outside its group (`from './Cam.ios'`, a test
+importing `./index.web`) gets that file on every target the importer is built for, so no sibling is linked and no
+target is missing it; a test file naming a platform before its test part (`release.web.test.ts`, `x.ios-spec.tsx`) is
+that target's test; a Swift call bound by name to an initializer the project adds to an SDK type
+(`extension Image { init(systemName:) }` under `#if os(macOS)`) uses the SDK's own initializer elsewhere; C functions
+of the same name in separate programs (files with their own `main()`, libuv `docs/code/*/main.c` `alloc_buffer`) are
+not one per-platform symbol; and a reference to code built for no declared target (a `sunos.c` / `aix.c` fallback) is
+counted (`missing_callee_skipped_no_target`) but not listed, since the targets use a system or another definition.
+
 `--target ios` keeps the findings that affect one target, `--kind variants|api_surface|missing_callee` one kind,
 `--json` gives the structured findings. MCP: `platforms` and `platform_divergence(target, kind)`.
 

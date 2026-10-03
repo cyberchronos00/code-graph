@@ -31,6 +31,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
   already did for TypeScript and Python. `overrides:` / `overridden by:` lines show the file when two declarations
   share a name (two `FeedAPI` interfaces).
 
+- Platforms (#63): fewer false `cg platforms divergence` findings. Explicit platform-file imports (`from './X.ios'`)
+  no longer link the sibling variants; platform test files (`x.web.test.ts`) are tagged with their platform; Swift
+  calls bound by name to a project initializer on an SDK type, C functions of separate programs (files with their
+  own `main()`) and references to code built for no declared target are not reported as missing callees.
+
 ### Changed
 
 - CLI output (#75):

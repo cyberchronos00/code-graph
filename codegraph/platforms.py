@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -237,6 +238,8 @@ def _combine(vals: list[dict]) -> dict:
 
 
 # ------------------------------------------------------------------ file conventions
+RN_TEST_SUFFIX_RE = re.compile(r"^(?P<stem>.+?)\.(?P<plat>ios|android|native|web|windows|macos)[.-](?:test|spec)\.[cm]?[jt]sx?$")
+RN_EXPLICIT_IMPORT_RE = re.compile(r"""(?:from|import|require\s*\()\s*['"](\.{1,2}/[^'"]*\.(?:ios|android|native|web|windows|macos))['"]""")
 RN_SUFFIX_RE = re.compile(r"^(?P<stem>.+?)\.(?P<plat>ios|android|native|web|windows|macos)\.(?P<ext>[cm]?[jt]sx?)$")
 RN_DEPS = ("react-native", "expo", "react-native-web", "react-native-windows", "react-native-macos")
 C_EXT = re.compile(r"\.(c|h|cc|cpp|cxx|hh|hpp|hxx|ipp|inl|m|mm)$")
@@ -565,6 +568,15 @@ def apply(project, builder) -> dict:
                 members.append((bf, c))
                 mark(builder, bf, 1, BIG, c, line=1)
             groups.append({"kind": "platform files", "name": pre, "members": members})
+        # test files naming a platform before the test part (`release.web.test.ts`, `x.ios-spec.tsx`): that target's
+        # tests, not a variant of anything (#63)
+        for f in mods:
+            mm = RN_TEST_SUFFIX_RE.match(f.rpartition("/")[2])
+            if mm:
+                plat = mm.group("plat")
+                mark(builder, f, 1, BIG, Cond("tree", _plat_atom(plat), f".{plat} test file"), line=1)
+        # `import x from './X.ios'` names one variant: Metro bundles that file wherever the importer is built (#63)
+        builder.explicit_variant_imports = _explicit_variant_imports(root, builder, groups)
     # Dart conditional imports / exports
     imp_sites = [s for s in builder.platform_imports if "plain" not in s]
     if imp_sites:
@@ -698,10 +710,34 @@ def _reexported(builder, f: str, depth: int = 0) -> dict[str, str]:
     return out
 
 
+def _explicit_variant_imports(root: Path, builder, groups: list[dict]) -> set[tuple[str, str]]:
+    """(importer file, member file) for imports that spell a platform file out (`from './X.ios'`) from outside its
+    variant group: the importer gets exactly that file on every target it is built for."""
+    members = {f for g in groups if g["kind"] == "platform files" for f, _ in g["members"]}
+    if not members:
+        return set()
+    by_noext = {re.sub(r"\.[cm]?[jt]sx?$", "", f): f for f in members}
+    importers = {e.file for e in builder.edges.values() if e.kind == "IMPORTS" and e.file
+                 and e.dst.startswith("module:") and e.dst[7:] in members}
+    out = set()
+    for f in importers:
+        try:
+            src = (root / f).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        d = os.path.dirname(f)
+        for m in RN_EXPLICIT_IMPORT_RE.finditer(src):
+            tgt = os.path.normpath(os.path.join(d, m.group(1))).replace(os.sep, "/")
+            if tgt in by_noext and by_noext[tgt] != f:
+                out.add((f, by_noext[tgt]))
+    return out
+
+
 def _mirror(builder, groups: list[dict], nvals: dict) -> int:
     """Edges into one member of a variant group -> the same edge into the matching symbol of every other member."""
     adds = []
     slot_maps = []
+    explicit = getattr(builder, "explicit_variant_imports", None) or set()
     for g in groups:
         files = [f for f, _ in g["members"]]
         fset = set(files)
@@ -744,6 +780,8 @@ def _mirror(builder, groups: list[dict], nvals: dict) -> int:
             if sn is not None and sn.file in fset:
                 continue
             s, f = hit
+            if (e.file, f) in explicit:
+                continue                   # the importer names this platform file: no sibling is reached
             for f2, nid in by_slot[s].items():
                 if f2 != f:
                     adds.append((e, nid))
@@ -905,6 +943,20 @@ def _alt_groups(builder, nvals: dict) -> dict[str, list[str]]:
         g = f"c-fn:{name}"
         if g in alts and any(builder.nodes[i].file == file or builder.nodes[i].kind == "macro" for i in alts[g]):
             alts[g] += alts.pop(k)
+    # same-named functions of separate programs (libuv docs/code/*/main.c `alloc_buffer`, each file with its own
+    # main()) are not one symbol: members in two or more files that define main() leave the group (#63)
+    mains = {n.file for n in builder.nodes.values() if n.lang in ("c", "cpp") and n.kind == "function" and n.name == "main"}
+    if mains:
+        for k, ids in list(alts.items()):
+            if not k.startswith("c-fn:"):
+                continue
+            prog = [i for i in ids if builder.nodes[i].file in mains]
+            if len({builder.nodes[i].file for i in prog}) >= 2:
+                rest = [i for i in ids if i not in prog]
+                if rest:
+                    alts[k] = rest
+                else:
+                    del alts[k]
     return alts
 
 
@@ -933,6 +985,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
     tset = [p for p in KNOWN if p in targets]
     shown = tset or list(KNOWN)          # platforms listed per member: the project's targets (#74)
     out = {"variants": [], "api_surface": [], "missing_callee": []}
+    explicit = getattr(builder, "explicit_variant_imports", None) or set()
     importers = defaultdict(set)
     ext_refs = defaultdict(set)          # node -> files referring to it
     for e in builder.edges.values():
@@ -1029,6 +1082,14 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                 continue
             base = e.attrs.get("platform_variant_of") or e.dst
             dn = builder.nodes.get(base)
+            if dn is not None and (e.file, dn.file) in explicit:
+                continue                   # `from './X.ios'`: that file is bundled wherever the importer is
+            if dn is not None and dn.lang == "swift" and dn.name == "init" and e.confidence == "heuristic":
+                cn = builder.nodes.get("class:" + (dn.fqn or "").rpartition(".")[0])
+                if cn is not None and (cn.attrs or {}).get("swift_kind") == "extension":
+                    # an initializer the project adds to an SDK type (`extension Image { init(systemName:) }` under
+                    # `#if os(macOS)`): elsewhere the call uses the SDK's own initializer (#63)
+                    continue
             if base in gslot:
                 base = gslot[base]
             elif dn is not None and dn.lang in ("rust", "c", "cpp", "swift"):
@@ -1045,6 +1106,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
     for e in builder.edges.values():
         if e.kind == "IMPORTS" and e.attrs.get("conditional") and not e.attrs.get("condition"):
             outside_default.discard((e.src, e.file, e.line))
+    skipped_no_target = 0
     for (src, f, line, kind, base), es in sites.items():
         sv = nvals.get(src)
         ev = es[0].attrs
@@ -1065,6 +1127,11 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                 if mn is not None and base[2][1] in ((mn.attrs or {}).get("reexports_external") or ()):
                     have |= {p for p, v in c.values().items() if v is not False}
         miss = [p for p in live if p not in have]
+        if miss and not have:
+            # the callee exists on no known target (sunos.c `strnlen`, aix.c helpers): the targets' builds use a system
+            # or another definition the index does not see; that is no finding about them (#63)
+            skipped_no_target += 1
+            continue
         if miss:
             dst = es[0].attrs.get("platform_variant_of") or es[0].dst
             out["missing_callee"].append({"from": src, "to": dst, "kind": kind, "at": f"{f}:{line}", "missing_on": miss,
@@ -1074,6 +1141,8 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                                               if e.dst in builder.nodes)) or None})
     out["variants"] = [v for v in out["variants"]]
     out["counts"] = {k: len(v) for k, v in out.items()}
+    if skipped_no_target:
+        out["counts"]["missing_callee_skipped_no_target"] = skipped_no_target
     for k in ("variants", "api_surface", "missing_callee"):
         out[k] = out[k][:limit]
     return out
@@ -1238,6 +1307,9 @@ def render_divergence(res: dict, limit: int = 40) -> str:
                        f"  (callee: {', '.join(m['callee_platforms']) or 'no known target'}"
                        + (f", {m['callee_condition']}" if m.get("callee_condition") else "") + ")")
     c = res.get("counts") or {}
+    if c.get("missing_callee_skipped_no_target"):
+        out.append(f"  ({c['missing_callee_skipped_no_target']} reference(s) to code built for no declared target not listed:"
+                   f" the targets use a system or unindexed definition)")
     if any(c.get(k, 0) > len(res.get(k) or []) for k in ("variants", "api_surface", "missing_callee")):
         out.append(f"\n(lists capped; totals: {', '.join(f'{k} {v}' for k, v in c.items())})")
     return "\n".join(out)
