@@ -8,6 +8,18 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Kotlin exact mode on Kotlin 2.2 and mixed Kotlin / Java builds: the Java documents of the scip-java index the Kotlin
+  plugin consumes become `java` nodes with exact Kotlin -> Java, Java -> Kotlin (file facades `AppKt.f()` included)
+  and Java -> Java call / constructor edges, and `cg coverage` reports Java as `scip`. cg reads the build's Kotlin
+  version and picks between installed scip-java releases (0.12 for Kotlin <= 2.1, 0.13 for 2.2.0 - 2.2.10; several
+  side by side, the next one tried when the compiler plugin does not load); newer Kotlin versions keep the heuristic
+  layer with a reason naming the version. SCIP 0.9 typed ranges (scip-java 0.13) are read, also by the generic `--scip`
+  importer. Android modules (Android Gradle plugin) are listed and named in the coverage reason, as skipped modules
+  when the rest of the build was indexed, and a build whose settings forbid project repositories gets that reason
+  ([docs/kotlin.md](docs/kotlin.md#exact-mode), [#57](https://github.com/cyberchronos00/code-graph/issues/57)).
+
 ## [0.7.0] - 2026-10-03
 
 ### Added

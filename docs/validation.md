@@ -308,6 +308,24 @@ configure with the pinned plugin), httpbin (needs Kotlin 2.2 language features),
 unpinned Kotlin 2.4 build, the index completes in heuristic mode and `cg coverage` names the reason (`no JDK`, or
 `scip-java run failed (exit 1: ...)`).
 
+Kotlin 2.2 and mixed Kotlin / Java (scip-java 0.13.1 launcher next to 0.12.3, `CODEGRAPH_KOTLIN_SCIP=1`, build not
+edited): statsig-io/java-server-sdk 9edc7ca, Kotlin 2.2.10, Gradle 8.5 wrapper, 86 Kotlin + 12 Java (test) files. cg
+read Kotlin 2.2.10 from the build, ran 0.13.1 (93 s cold): 84 Kotlin files exact, 944 / 59 definitions matched /
+unmatched (compiler-generated members such as data class `copy` / `componentN` and anonymous objects not counted),
+2,207 references resolved to project code; heuristic precision 0.91, recall 0.81 (1,434 of 1,573 heuristic edges
+confirmed, 1,779 exact). Java: 13 documents, 30 classes and 192 methods as `java` nodes, 358 exact Java -> Kotlin / Java edges;
+coverage `kotlin 86 exact; java 12 scip` (heuristic mode: `java 12 unsupported`). Graph 1,003 -> 1,097 nodes,
+3,226 -> 3,852 edges. The same Gradle fixture on Kotlin 2.1.20 (0.12.3) and 2.2.10 (0.13.1) gives identical edges;
+on 2.2.21, 2.3.21 and 2.4.20 neither release loads (`NoSuchMethodError` / `AnalyzerRegistrar is incompatible`) and
+coverage names the version.
+
+Android: android/architecture-samples ee66e15 (Kotlin 2.1.10, modules `app`, `shared-test`) with an Android SDK
+installed in the user's home (command-line tools + `sdkmanager "platforms;android-35" "build-tools;35.0.0"`, no
+sudo). The default scip-java run fails on the settings' `FAIL_ON_PROJECT_REPOS`; cg reports that and names both
+Android modules. With an init script switching the mode to `PREFER_SETTINGS` and the variant tasks requested
+explicitly (`:app:compileDebugKotlin`), the build compiles (1 min 27 s) but scip-java 0.12.3's Gradle plugin attaches
+no compiler plugin to Android variant tasks: no SemanticDB output, so the index stays heuristic (61 Kotlin files).
+
 ## Swift
 
 Heuristic mode (tree-sitter-swift 0.7.3) on Linux without Xcode, shallow clones, `cg index` on the default branch:

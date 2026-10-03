@@ -231,6 +231,9 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
         sc = st.get("scip") if isinstance(st.get("scip"), dict) else {}
         n, k = st.get("scip_files"), st.get("kt_files") or st.get("files")
         part = f"; {k - n} of {k} Kotlin files not in the index keep heuristic calls" if n is not None and k and n < k else ""
+        if sc.get("skipped_modules"):
+            part += ("; skipped modules: " + ", ".join(m["module"] for m in sc["skipped_modules"][:5])
+                     + f" ({sc['skipped_modules'][0]['reason']})")
         return "exact", f"scip-java index ({sc.get('source', 'scip')}){part}"
     if lang == "typescript" and st.get("program_files") == 0 and not st.get("nodes"):
         return "not_indexed", "the TypeScript plugin ran but found no source files (tsconfig include / source dirs)"
@@ -300,6 +303,10 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
                 other[lang]["reason"] = st.get("reason")
             elif "status" not in st:
                 other[lang]["status"] = "exact"  # a SCIP indexer ran
+    kj = ((plugins.get("kotlin") or {}).get("java") or {})
+    if kj.get("documents") and "java" in other and other["java"]["status"] == "unsupported":
+        other["java"].update(status="scip", reason=f"{kj['documents']} Java file(s) imported from the Kotlin build's "
+                                                   "scip-java index (Kotlin exact mode)")
     for o in other.values():
         if o["status"] == "unsupported":
             if scip_imported and o["language"] in ("go", "java"):

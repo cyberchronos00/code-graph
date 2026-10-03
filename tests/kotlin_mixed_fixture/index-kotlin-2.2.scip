@@ -1,0 +1,169 @@
+
+B
+	scip-java0.0.0-SNAPSHOT!file:///tmp/kotlin-mixed-fixture/ Í
+
+src/main/kotlin/demo/App.kt!scip-java maven . . demo/B5!scip-java maven . . demo/build().B	Z ,"scip-java maven . . demo/Registry#Blocal 0BR7-scip-java maven . . demo/Registry#`<init>`().Blocal 0B2(scip-java maven . . demo/Registry#add().B5+scip-java maven . . demo/Circle#`<init>`().Blocal 0B4*scip-java maven . . demo/Registry#add(+1).Blocal 0B4 scip-java maven . . demo/main().B	Z	 local 1B
+R
+ 5+scip-java maven . . demo/Report#`<init>`().B
+4*scip-java maven . . demo/Store#`<init>`().B
+2(scip-java maven . . kotlin/io/println().Blocal 1B3)scip-java maven . . demo/Report#render().B+!scip-java maven . . demo/build().BX
+!scip-java maven . . demo/build().2build:,"kotlin*"public final fun build(): Registry;
+local 02registry:&"kotlin*local val registry: RegistryQ
+ scip-java maven . . demo/main().2main:'"kotlin*public final fun main(): Unit5
+local 12report:""kotlin*local val report: Report"kotlin*ãpackage demo
+
+fun build(): Registry {
+    val registry = Registry()
+    registry.add(Circle(1.0))
+    registry.add(2.0)
+    return registry
+}
+
+fun main() {
+    val report = Report(Store())
+    println(report.render(build()))
+}
+•
+src/main/kotlin/demo/Summary.kt!scip-java maven . . demo/B7#scip-java maven . . demo/summary().BZ ,"scip-java maven . . kotlin/String#Blocal 0B	R8.scip-java maven . . demo/Formatter#`<init>`().B4*scip-java maven . . demo/Formatter#bold().Blocal 0B4*scip-java maven . . demo/Formatter#area().B 5+scip-java maven . . demo/Circle#`<init>`().B!'3)scip-java maven . . kotlin/String#plus().B/0local 0B125+scip-java maven . . demo/Formatter#fresh().B388.scip-java maven . . demo/Registry#getShapes().B;D;1scip-java maven . . kotlin/collections/List#size.BGK@6scip-java maven . . kotlin/collections/List#getSize().BGK\
+#scip-java maven . . demo/summary().2summary:,"kotlin*"public final fun summary(): String.
+local 02f: "kotlin*local val f: Formatter"kotlin*Œpackage demo
+
+fun summary(): String {
+    val f = Formatter()
+    return Formatter.bold(f.area(Circle(3.0))) + f.fresh().getShapes().size
+}
+›
+!src/main/java/demo/Formatter.java7#scip-java maven . . demo/Formatter#BZ :.scip-java maven . . demo/Formatter#`<init>`().B2(scip-java maven jdk 17 java/lang/String#B@*scip-java maven . . demo/Formatter#bold().BZ 2(scip-java maven jdk 17 java/lang/String#B$local 0B%&R&local 0B2(scip-java maven jdk 17 java/lang/String#B@*scip-java maven . . demo/Formatter#area().BZ	 )scip-java maven . . demo/Shape#Blocal 1B"R"4*scip-java maven . . demo/Formatter#bold().B2(scip-java maven jdk 17 java/lang/String#B>4scip-java maven jdk 17 java/lang/String#valueOf(+8).B"local 1B#(0&scip-java maven . . demo/Shape#area().B)-,"scip-java maven . . demo/Registry#BA+scip-java maven . . demo/Formatter#fresh().BZ ,"scip-java maven . . demo/Registry#Blocal 2BR$7-scip-java maven . . demo/Registry#`<init>`().B!local 2B	2(scip-java maven . . demo/Registry#add().B
+5+scip-java maven . . demo/Circle#`<init>`().Blocal 2B2(scip-java maven jdk 17 java/lang/String#BA+scip-java maven . . demo/Formatter#built().BZ 2(scip-java maven jdk 17 java/lang/String#B<2scip-java maven jdk 17 java/lang/String#valueOf().B)scip-java maven . . demo/AppKt#B#1'scip-java maven . . demo/AppKt#build().B$)='scip-java maven . . demo/Formatter#Box#BZ >2scip-java maven . . demo/Formatter#Box#`<init>`().B-#scip-java maven . . demo/Formatter#BB.scip-java maven . . demo/Formatter#Box#make().BR48.scip-java maven . . demo/Formatter#`<init>`().B&/R
+#scip-java maven . . demo/Formatter#(2	Formatter:"java*public class FormatterV
+.scip-java maven . . demo/Formatter#`<init>`().(	2<init>:"java*public Formatter()a
+*scip-java maven . . demo/Formatter#bold().(P2bold:+"java*#public static String bold(String s)J
+local 02s:"java*String sB*scip-java maven . . demo/Formatter#bold().]
+*scip-java maven . . demo/Formatter#area().(2area:'"java*public String area(Shape shape)Q
+local 12shape:"java*Shape shapeB*scip-java maven . . demo/Formatter#area().W
++scip-java maven . . demo/Formatter#fresh().(2fresh:"java*public Registry fresh()O
+local 2(=2r:"java*
+Registry rB+scip-java maven . . demo/Formatter#fresh().U
++scip-java maven . . demo/Formatter#built().(2built:"java*public String built()J
+'scip-java maven . . demo/Formatter#Box#(2Box:"java*static class BoxM
+2scip-java maven . . demo/Formatter#Box#`<init>`().(	2<init>:"java*Box()R
+.scip-java maven . . demo/Formatter#Box#make().(2make:"java*Formatter make()"java÷
+src/main/kotlin/demo/Store.kt!scip-java maven . . demo/B3scip-java maven . . demo/Cache#BZ >*scip-java maven . . demo/Cache#`<init>`().BZ :&scip-java maven . . demo/Cache#load().BR'?+scip-java maven . . demo/Cache#load().(key)BR,"scip-java maven . . kotlin/String#B,"scip-java maven . . kotlin/String#B!5+scip-java maven . . demo/Cache#load().(key)B$'3scip-java maven . . demo/Store#BZ >*scip-java maven . . demo/Store#`<init>`().BZ :&scip-java maven . . demo/Store#load().BR3?+scip-java maven . . demo/Store#load().(key)BR,"scip-java maven . . kotlin/String#B,"scip-java maven . . kotlin/String#B!5+scip-java maven . . demo/Store#load().(key)B$'8.scip-java maven . . kotlin/text/uppercase(+2).B(13!scip-java maven . . demo/label().B
+
+R
+-,"scip-java maven . . kotlin/String#B
+3)scip-java maven . . kotlin/String#plus().B
+%&0&scip-java maven . . demo/Shape#area().B
+'+4 scip-java maven . . demo/Report#BZ ?+scip-java maven . . demo/Report#`<init>`().BR&F2scip-java maven . . demo/Report#`<init>`().(store)BR%:&scip-java maven . . demo/Report#store.BR%<2scip-java maven . . demo/Report#`<init>`().(store)B?+scip-java maven . . demo/Report#getStore().BR%)scip-java maven . . demo/Store#B %?)scip-java maven . . demo/Report#render().BZ G3scip-java maven . . demo/Report#render().(registry)BR!,"scip-java maven . . demo/Registry#B!,"scip-java maven . . kotlin/String#B$*local 0BR0=3scip-java maven . . demo/Report#render().(registry)B8.scip-java maven . . demo/Registry#getShapes().B&<2scip-java maven . . kotlin/collections/first(+19).B).0&scip-java maven . . demo/Report#store.B5+scip-java maven . . demo/Report#getStore().B0&scip-java maven . . demo/Store#load().Blocal 0B+!scip-java maven . . demo/label().B %R
+scip-java maven . . demo/Cache#2Cache:("kotlin*public final class Cache : AnyZ
+*scip-java maven . . demo/Cache#`<init>`().2Cache:%"kotlin*public constructor(): Cached
+&scip-java maven . . demo/Cache#load().2load:4"kotlin**public final fun load(key: String): StringI
++scip-java maven . . demo/Cache#load().(key)2key:"kotlin*key: StringR
+scip-java maven . . demo/Store#2Store:("kotlin*public final class Store : AnyZ
+*scip-java maven . . demo/Store#`<init>`().2Store:%"kotlin*public constructor(): Stored
+&scip-java maven . . demo/Store#load().2load:4"kotlin**public final fun load(key: String): StringI
++scip-java maven . . demo/Store#load().(key)2key:"kotlin*key: String\
+!scip-java maven . . demo/label().2label:0"kotlin*&public final fun Shape.label(): StringU
+ scip-java maven . . demo/Report#2Report:)"kotlin*public final class Report : Anyi
++scip-java maven . . demo/Report#`<init>`().2Report:2"kotlin*(public constructor(store: Store): ReportS
+2scip-java maven . . demo/Report#`<init>`().(store)2store:"kotlin*store: StoreY
+&scip-java maven . . demo/Report#store.2store:("kotlin*private final val store: StoreT
++scip-java maven . . demo/Report#getStore().2store:"kotlin*private get(): Storer
+)scip-java maven . . demo/Report#render().2render:="kotlin*3public final fun render(registry: Registry): String]
+3scip-java maven . . demo/Report#render().(registry)2registry:"kotlin*registry: Registry2
+local 02first: "kotlin*local val first: Shape"kotlin*ópackage demo
+
+class Cache {
+    fun load(key: String): String = key
+}
+
+class Store {
+    fun load(key: String): String = key.uppercase()
+}
+
+fun Shape.label(): String = "shape " + area()
+
+class Report(private val store: Store) {
+    fun render(registry: Registry): String {
+        val first = registry.getShapes().first()
+        return store.load(first.label())
+    }
+}
+§8
+src/main/kotlin/demo/Shapes.kt!scip-java maven . . demo/B3scip-java maven . . demo/Shape#B
+Z :&scip-java maven . . demo/Shape#area().BR,"scip-java maven . . kotlin/Double#B4 scip-java maven . . demo/Circle#BZ ?+scip-java maven . . demo/Circle#`<init>`().BRB.scip-java maven . . demo/Circle#`<init>`().(r)BR6"scip-java maven . . demo/Circle#r.BR8.scip-java maven . . demo/Circle#`<init>`().(r)B;'scip-java maven . . demo/Circle#getR().BR,"scip-java maven . . kotlin/Double#B)scip-java maven . . demo/Shape#B#;'scip-java maven . . demo/Circle#area().BR.,"scip-java maven . . kotlin/Double#B6,scip-java maven . . kotlin/Double#times(+5).B'(,"scip-java maven . . demo/Circle#r.B)*1'scip-java maven . . demo/Circle#getR().B)*6,scip-java maven . . kotlin/Double#times(+5).B+,,"scip-java maven . . demo/Circle#r.B-.1'scip-java maven . . demo/Circle#getR().B-.4 scip-java maven . . demo/Square#B
+Z
+ ?+scip-java maven . . demo/Square#`<init>`().B
+R
+E1scip-java maven . . demo/Square#`<init>`().(side)B
+R
+9%scip-java maven . . demo/Square#side.B
+R
+;1scip-java maven . . demo/Square#`<init>`().(side)B
+>*scip-java maven . . demo/Square#getSide().B
+R
+,"scip-java maven . . kotlin/Double#B
+)scip-java maven . . demo/Shape#B
+!&;'scip-java maven . . demo/Square#area().BR-,"scip-java maven . . kotlin/Double#B/%scip-java maven . . demo/Square#side.B"&4*scip-java maven . . demo/Square#getSide().B"&6,scip-java maven . . kotlin/Double#times(+5).B'(/%scip-java maven . . demo/Square#side.B)-4*scip-java maven . . demo/Square#getSide().B)-?+scip-java maven . . demo/Square#describe().BR+,"scip-java maven . . kotlin/String#B/%scip-java maven . . demo/Square#side.B&*4*scip-java maven . . demo/Square#getSide().B&*6"scip-java maven . . demo/Registry#BZ A-scip-java maven . . demo/Registry#`<init>`().BZ =)scip-java maven . . demo/Registry#shapes.BR1B.scip-java maven . . demo/Registry#getShapes().BR1B.scip-java maven . . demo/Registry#setShapes().BR1I5scip-java maven . . demo/Registry#setShapes().(value)BR1<2scip-java maven . . kotlin/collections/MutableSet#B!?5scip-java maven . . kotlin/collections/linkedSetOf().B$/B.scip-java maven . . demo/Registry#getShapes().BR@6,scip-java maven . . kotlin/collections/List#B 3)scip-java maven . . demo/Registry#shapes.B#)8.scip-java maven . . demo/Registry#getShapes().B#)8.scip-java maven . . demo/Registry#setShapes().B#)>4scip-java maven . . kotlin/collections/sortedBy(+9).B*2local 0B3@R3@local 0B570&scip-java maven . . demo/Shape#area().B8<>(scip-java maven . . demo/Registry#add().BZ C/scip-java maven . . demo/Registry#add().(shape)BR)scip-java maven . . demo/Shape#B3)scip-java maven . . demo/Registry#shapes.B8.scip-java maven . . demo/Registry#getShapes().B8.scip-java maven . . demo/Registry#setShapes().BB8scip-java maven . . kotlin/collections/MutableSet#add().B9/scip-java maven . . demo/Registry#add().(shape)B@*scip-java maven . . demo/Registry#add(+1).BZ D0scip-java maven . . demo/Registry#add(+1).(side)BR,"scip-java maven . . kotlin/Double#B2(scip-java maven . . demo/Registry#add().B5+scip-java maven . . demo/Square#`<init>`().B:0scip-java maven . . demo/Registry#add(+1).(side)B©
+scip-java maven . . demo/Shape#"&
+ scip-java maven . . demo/Circle#"&
+ scip-java maven . . demo/Square#2Shape:/"kotlin*%public abstract interface Shape : Any»
+&scip-java maven . . demo/Shape#area()."-
+'scip-java maven . . demo/Circle#area()."-
+'scip-java maven . . demo/Square#area().2area:-"kotlin*#public abstract fun area(): Double
+|
+ scip-java maven . . demo/Circle#"#
+scip-java maven . . demo/Shape#2Circle:+"kotlin*!public final class Circle : Shapef
++scip-java maven . . demo/Circle#`<init>`().2Circle:/"kotlin*%public constructor(r: Double): CircleH
+.scip-java maven . . demo/Circle#`<init>`().(r)2r:"kotlin*	r: DoubleM
+"scip-java maven . . demo/Circle#r.2r:$"kotlin*public final val r: DoubleL
+'scip-java maven . . demo/Circle#getR().2r:"kotlin*public get(): DoubleŽ
+'scip-java maven . . demo/Circle#area()."*
+&scip-java maven . . demo/Shape#area().2area:1"kotlin*'public open override fun area(): Double|
+ scip-java maven . . demo/Square#"#
+scip-java maven . . demo/Shape#2Square:+"kotlin*!public final class Square : Shapei
++scip-java maven . . demo/Square#`<init>`().2Square:2"kotlin*(public constructor(side: Double): SquareQ
+1scip-java maven . . demo/Square#`<init>`().(side)2side:"kotlin*side: DoubleV
+%scip-java maven . . demo/Square#side.2side:'"kotlin*public final val side: DoubleR
+*scip-java maven . . demo/Square#getSide().2side:"kotlin*public get(): DoubleŽ
+'scip-java maven . . demo/Square#area()."*
+&scip-java maven . . demo/Shape#area().2area:1"kotlin*'public open override fun area(): Doublef
++scip-java maven . . demo/Square#describe().2describe:-"kotlin*#public final fun describe(): String[
+"scip-java maven . . demo/Registry#2Registry:+"kotlin*!public final class Registry : Anyc
+-scip-java maven . . demo/Registry#`<init>`().2Registry:("kotlin*public constructor(): Registryi
+)scip-java maven . . demo/Registry#shapes.2shapes:4"kotlin**public final var shapes: MutableSet<Shape>c
+.scip-java maven . . demo/Registry#getShapes().2shapes:)"kotlin*public get(): MutableSet<Shape>n
+.scip-java maven . . demo/Registry#setShapes().2shapes:4"kotlin**public set(value: MutableSet<Shape>): Unitb
+5scip-java maven . . demo/Registry#setShapes().(value)2value:""kotlin*value: MutableSet<Shape>"
+local 02it:"kotlin*	it: Shapec
+(scip-java maven . . demo/Registry#add().2add:2"kotlin*(public final fun add(shape: Shape): UnitP
+/scip-java maven . . demo/Registry#add().(shape)2shape:"kotlin*shape: Shapee
+*scip-java maven . . demo/Registry#add(+1).2add:2"kotlin*(public final fun add(side: Double): UnitP
+0scip-java maven . . demo/Registry#add(+1).(side)2side:"kotlin*side: Double"kotlin*™package demo
+
+interface Shape {
+    fun area(): Double
+}
+
+class Circle(val r: Double) : Shape {
+    override fun area(): Double = 3.14 * r * r
+}
+
+class Square(val side: Double) : Shape {
+    override fun area(): Double = side * side
+    fun describe(): String = "square $side"
+}
+
+class Registry {
+    var shapes: MutableSet<Shape> = linkedSetOf()
+
+    fun getShapes(): List<Shape> = shapes.sortedBy { it.area() }
+
+    fun add(shape: Shape) {
+        shapes.add(shape)
+    }
+
+    fun add(side: Double) {
+        add(Square(side))
+    }
+}

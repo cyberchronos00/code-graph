@@ -55,6 +55,29 @@ def _rng(r) -> tuple[int, int, int, int]:
     return (0, 0, 0, 0)
 
 
+def _typed(o, legacy: str, single: str, multi: str) -> tuple[int, int, int, int] | None:
+    """An occurrence range: the legacy packed `range` / `enclosing_range`, else the typed one newer indexers write
+    (SCIP 0.9 `single_line_range` / `multi_line_range`, e.g. scip-java 0.13); None when absent."""
+    r = getattr(o, legacy)
+    if len(r):
+        return _rng(r)
+    if o.HasField(single):
+        t = getattr(o, single)
+        return t.line, t.start_character, t.line, t.end_character
+    if o.HasField(multi):
+        t = getattr(o, multi)
+        return t.start_line, t.start_character, t.end_line, t.end_character
+    return None
+
+
+def occ_range(o) -> tuple[int, int, int, int]:
+    return _typed(o, "range", "single_line_range", "multi_line_range") or (0, 0, 0, 0)
+
+
+def occ_enclosing(o) -> tuple[int, int, int, int] | None:
+    return _typed(o, "enclosing_range", "single_line_enclosing_range", "multi_line_enclosing_range")
+
+
 def load(path: str | Path) -> Index:
     idx = scip_pb2.Index()
     idx.ParseFromString(Path(path).read_bytes())
@@ -69,15 +92,15 @@ def load(path: str | Path) -> Index:
         for o in d.occurrences:
             if o.symbol.startswith("local ") or not o.symbol:
                 continue
-            sl, sc, el, ec = _rng(o.range)
+            sl, sc, el, ec = occ_range(o)
             key = (sl, sc, ec, o.symbol, o.symbol_roles)
             if key in s:
                 continue
             s.add(key)
             enc = ()
-            if len(o.enclosing_range):
-                a, _, b, _ = _rng(o.enclosing_range)
-                enc = (a, b)
+            er = occ_enclosing(o)
+            if er:
+                enc = (er[0], er[2])
             doc.occs.append(Occ(sl, sc, ec, o.symbol, o.symbol_roles, enc))
         for si in d.symbols:
             if not si.symbol.startswith("local "):

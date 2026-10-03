@@ -21,6 +21,7 @@ import scip_pb2  # noqa: E402  (generated from scip.proto with grpc_tools.protoc
 
 from ...core.model import HEURISTIC, RESOLVED  # noqa: E402
 from ...core.plugin import GraphBuilder  # noqa: E402
+from ..native.scipread import occ_enclosing, occ_range  # noqa: E402
 
 NS_SEP = {"php": "\\", "go": "/", "rust": "::", "c_cpp": "::", "typescript": "/", "python": ".", "java": "."}
 
@@ -90,12 +91,13 @@ def import_scip(path: str | Path, builder: GraphBuilder, lang: str = "php", skip
                 if not n:
                     continue
                 kind, key, name = n
-                nid = builder.add_node(kind, key, name=name, fqn=key, file=rel, line=o.range[0] + 1, lang=lang,
+                start = occ_range(o)[0]
+                nid = builder.add_node(kind, key, name=name, fqn=key, file=rel, line=start + 1, lang=lang,
                                        attrs={"scip_symbol": o.symbol})
-                er = list(o.enclosing_range)
-                defs.append((o.range[0], er[2] if len(er) == 4 else (er[0] if len(er) == 3 else None), nid, kind))
+                er = occ_enclosing(o)
+                defs.append((start, er[2] if er else None, nid, kind))
                 stats["definitions"] += 1
-        defs.sort()
+        defs.sort(key=lambda d: (d[0], -1 if d[1] is None else d[1], d[2]))
         callables = [d for d in defs if d[3] in ("method",)]
         for o in doc.occurrences:
             if o.symbol_roles & scip_pb2.SymbolRole.Definition:
@@ -104,7 +106,7 @@ def import_scip(path: str | Path, builder: GraphBuilder, lang: str = "php", skip
             if not n:
                 continue
             kind, key, _ = n
-            line = o.range[0]
+            line = occ_range(o)[0]
             src, conf = None, HEURISTIC
             for (sl, el, nid, k) in callables:
                 if sl <= line and (el is None or line <= el):

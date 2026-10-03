@@ -54,19 +54,51 @@ Running scip-java runs the project's Gradle / Maven build, and so its build scri
 than automatic. It needs a JDK (`JAVA_HOME` or `java` on `PATH`) and scip-java (`CODEGRAPH_SCIP_JAVA`, `PATH`,
 `~/tools`, `~/.local/bin` or the coursier bin directory; `cs install scip-java` or the standalone launcher).
 
+Each scip-java release carries a Kotlin compiler plugin that loads into a narrow range of Kotlin versions:
+
+| scip-java | Kotlin (checked on Gradle builds) | Install |
+|---|---|---|
+| 0.12.x (`com.sourcegraph`) | up to 2.1 | `cs install scip-java` |
+| 0.13.x (`org.scip-code`) | 2.2.0 - 2.2.10 | the launcher from [github.com/scip-code/scip-java/releases](https://github.com/scip-code/scip-java/releases), saved as `~/tools/scip-java-0.13.1/scip-java` (or `~/.local/bin/scip-java-0.13.1`) and made executable |
+| none yet | 2.2.20 and newer | the heuristic layer stays; coverage says which release would be needed |
+
+Several releases can be installed side by side: cg reads the Kotlin version the build declares (`kotlin("jvm") version`,
+`id("org.jetbrains.kotlin.*") version`, the `kotlin` entry of `gradle/libs.versions.toml`, `kotlin_version` in
+`gradle.properties`, `<kotlin.version>` in `pom.xml`), runs the release that supports it first, and tries the next one
+when the compiler plugin does not load. `CODEGRAPH_SCIP_JAVA` takes one path or several joined by `:`. The index
+stats record `kotlin_version`, the `indexer` used and the failed `attempts`. scip-java 0.13 writes SCIP 0.9 typed
+ranges (`single_line_range`, `multi_line_enclosing_range`); cg reads both forms, also in the generic `--scip` importer.
+
+### Mixed Kotlin / Java modules
+
+scip-java indexes the Java sources of the build together with the Kotlin ones. Since the Kotlin plugin takes the
+index, it imports the Java documents too: Java classes (nested ones included) and methods become `java` nodes (ids as
+the generic SCIP importer makes them, `method:demo.Formatter::bold`), and Kotlin -> Java, Java -> Kotlin and Java ->
+Java calls and constructor calls become exact edges. A Java call of a top-level Kotlin function through its file
+facade (`AppKt.build()`) goes to the Kotlin function. The Java caller is the innermost Java method or class around the
+call (SCIP enclosing ranges). `cg coverage` reports Java as `scip` (imported from the Kotlin build's index) and the
+Kotlin stats carry `java: {documents, classes, methods, references, references_external}`. Without an index the Java
+files stay `unsupported`, as before.
+
 `cg coverage` names the mode and the reason: `kotlin: 38 files exact: scip-java index (--scip)`, or for heuristic mode
 why the exact layer did not run (no Gradle / Maven build file, no JDK, scip-java not installed, not opted in, or the
 scip-java run failed, with the last line of its output). Kotlin files the index does not contain keep their heuristic
 calls and are counted in the reason. `cg index` stats carry `exact_vs_heuristic`: how many of the heuristic call edges
 the compiler confirms (precision) and how many compiler edges the heuristic layer had found (recall).
 
-Limitations: scip-java 0.12.3 bundles a semanticdb-kotlinc compiler plugin built for Kotlin 2.1; a build on Kotlin
-2.2 or newer fails with `Plugin com.sourcegraph.semanticdb_kotlinc.AnalyzerRegistrar is incompatible` (coverage says
-so and the heuristic layer is kept). Android application modules need the Android SDK for the build to run. Property
-accessors are not call edges (a property read reports the synthetic getter, which may share its symbol with a declared
-`fun getX()`).
+Limitations: no released scip-java loads into Kotlin 2.2.20 or newer (0.13.x is built against 2.2.0 and fails with
+`NoSuchMethodError` on 2.2.20+ and `AnalyzerRegistrar is incompatible` on 2.3+; 0.12.x fails on 2.2+); the build
+keeps the heuristic layer and coverage names the Kotlin version. Android modules are not indexed: they need the Android SDK for
+the build to run (`SDK location not found` in the reason), and even with the SDK scip-java's Gradle plugin compiles
+no Android variant (`compileDebugKotlin`), so their files keep the heuristic layer. cg lists the modules that apply the
+Android Gradle plugin (`android_modules` in the stats) and names them in the reason, as `skipped modules` when the
+rest of the build was indexed. Builds whose settings use `repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)`
+(the Android template default) reject the repository scip-java's Gradle plugin adds; the reason says so. Java fields and Java-only builds are not covered by this
+layer (index a Java-only build with scip-java and `--scip`). Property accessors are not call edges (a property read
+reports the synthetic getter, which may share its symbol with a declared `fun getX()`).
 
 ## Roadmap
 
-- Exact mode on Kotlin 2.2+ builds (a newer semanticdb-kotlinc) and on Android modules without a full SDK setup.
+- Exact mode on Kotlin 2.2.20+ builds (once a scip-java release supports them) and on Android modules (an init
+  script attaching the compiler plugins to the variant compile tasks, and allowing the plugin's repository).
 - Navigation routes built from `const val` strings (`composable(Destinations.TASKS_ROUTE)`).

@@ -8,6 +8,7 @@ out/
 *.db-shm
 *.scip
 !tests/kotlin_exact_fixture/index.scip
+!tests/kotlin_mixed_fixture/*.scip
 codegraph/plugins/php/extractor/vendor/
 codegraph/plugins/ts/extractor/node_modules/
 codegraph/viz/tools/node_modules/

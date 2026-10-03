@@ -237,21 +237,25 @@ class KotlinPlugin(LanguagePlugin):
 
     def _exact(self, project: Project, files: list[str]) -> str:
         """The scip-java layer when an index is available (codegraph/plugins/kotlin/exact.py), else heuristic."""
-        from .exact import ExactLayer, find_index
+        from .exact import ExactLayer, find_index, skipped_modules
         t1 = time.time()
         path, info = find_index(project, [f for f in files if f.endswith(EXTS)])
         mode = "heuristic"
         if path is not None:
             sst: dict = {}
             try:
-                if ExactLayer(self).apply(path, sst):
+                layer = ExactLayer(self)
+                if layer.apply(path, sst):
                     mode = "scip"
+                    sk = skipped_modules(info.get("android_modules"), layer.doc_paths)
+                    if sk:
+                        info["skipped_modules"] = sk
                 else:
                     info["status"] = "the SCIP index has no Kotlin documents"
             except Exception as e:          # a corrupt / foreign index must not lose the heuristic graph
                 info["status"] = f"SCIP import failed ({type(e).__name__}: {e})"
             for k in ("exact_vs_heuristic", "scip_documents", "scip_files", "scip_defs_matched", "scip_defs_unmatched",
-                      "scip_references", "scip_refs_external"):
+                      "scip_references", "scip_refs_external", "java"):
                 if k in sst:
                     self.st[k] = sst[k]
         info["seconds"] = round(time.time() - t1, 2)
