@@ -237,6 +237,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     from .tests_index import link_local_channels
     if (ch := link_local_channels(builder)):
         stats["channels_linked"] = ch
+    # protocol endpoints (#31): MATCHES_ENDPOINT between senders and receivers of one graph (wildcards, templates)
+    from .protocols import apply as apply_protocols
+    if (pr := apply_protocols(builder)):
+        stats["protocols"] = pr
     # dangling edge targets -> placeholder nodes so every edge resolves
     for e in list(builder.edges.values()):
         for nid in (e.src, e.dst):

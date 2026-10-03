@@ -16,6 +16,7 @@
   python -m codegraph.cli channels [PATTERN] --db ...   (who can join, which events publish, which client code listens)
   python -m codegraph.cli tests <spec> --db ...          (tests covering a symbol / route / table: direct + transitive)
   python -m codegraph.cli bridges [PATTERN] --db ... [--protocol capacitor] [--unmatched]   (web / native bridge calls)
+  python -m codegraph.cli protocols [PATTERN] --db ... [--protocol P] [--side send|receive] [--unmatched]   (every protocol endpoint: senders, receivers, checks)
   python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
   reaches / impact / downstream / path / routes / search take --platform TARGET: only code built for that target
 spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class::method | Class
@@ -123,6 +124,14 @@ def main(argv=None):
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
     p.add_argument("--protocol", choices=["capacitor", "react-native", "flutter", "flutter-event", "electron-ipc", "electron-preload", "tauri"])
     p.add_argument("--unmatched", action="store_true", help="only endpoints with a check: missing on a platform, no receiver, no sender, external")
+    p = sub.add_parser("protocols", help="protocol endpoints (HTTP, Pusher channels, Nest messages, jobs, events, bridges, MQTT / "
+                                          "Socket.IO ...): summary per protocol, or senders, receivers, guards, matches and checks per endpoint")
+    p.add_argument("pattern", nargs="?", help="endpoint name, id, substring or glob (`orders.*`, `http:GET /api/*`); omit for the summary")
+    p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("--protocol", help="one protocol (http, pusher, nest-rpc, bull, laravel-queue, socketio, mqtt, capacitor, ...)")
+    p.add_argument("--side", choices=["send", "receive"]); p.add_argument("--max-items", type=int, default=60)
+    p.add_argument("--unmatched", action="store_true", help="only endpoints with a check (no_receiver, no_sender, ambiguous, "
+                                                            "schema_mismatch, unguarded) or an external peer")
     p = sub.add_parser("tests", help="tests covering a symbol / route / table: direct (test code calls it) and transitive (through app code)")
     p.add_argument("spec", help="Class::method, Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-paths", action="store_true")
@@ -272,6 +281,11 @@ def main(argv=None):
         from .bridges import bridges, render_bridges
         res = bridges(st, a.pattern, protocol=a.protocol, unmatched=a.unmatched)
         print(json.dumps(res, indent=1, default=str) if a.json else render_bridges(res))
+        return
+    if a.cmd == "protocols":
+        from .protocols.view import protocols, render_protocols
+        res = protocols(st, a.pattern, protocol=a.protocol, side=a.side, unmatched=a.unmatched, max_items=max(a.max_items, 200) if a.json else a.max_items)
+        print(json.dumps(res, indent=1, default=str) if a.json else render_protocols(res, max_items=a.max_items))
         return
     if a.cmd == "tests":
         res = Q.tests_covering(st, a.spec, min_conf=a.min_confidence)

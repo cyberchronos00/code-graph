@@ -23,6 +23,9 @@ Records project-specific knowledge once, for the CLI, the MCP server and the vis
       extra_patterns: ["requireTenantMember", "withOrgScope"]   # regexes on guard names that count as auth
     secret:
       extra_patterns: ["verifyStripeSignature"]                 # ... as a shared-secret / signature check
+    protocols:
+      external: ["kafka:audit.*", "http:GET /status"]   # <protocol>:<name glob> handled outside the analysed repos
+                                             # (not reported as no_receiver / no_sender by cg protocols)
     gates: config/gates.json                 # gate scenarios file (cg index --gates)
     plans:
       dir: docs/plans                        # plans directory (--plans-dir)
@@ -49,7 +52,7 @@ SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None:
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
     "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
     "platforms": {"targets", "paths", "file_suffixes", "path_conventions"}, "include": None, "apps": None,
-    "rust": {"targets"},
+    "rust": {"targets"}, "protocols": {"external"},
 }
 APP_KEYS = ("name", "root", "role", "links")
 APP_ROLES = ("backend", "frontend")
@@ -275,6 +278,13 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
         sec = _section(data, key, fname)
         if sec is not None and sec.get("extra_patterns") is not None:
             out[key] = {"extra_patterns": _regexes(sec["extra_patterns"], f"{fname}: {key}.extra_patterns")}
+    pr = _section(data, "protocols", fname)
+    if pr is not None and pr.get("external") is not None:
+        ext = _strings(pr["external"], f"{fname}: protocols.external")
+        bad = [x for x in ext if ":" not in x]
+        if bad:
+            raise ConfigError(f"{fname}: protocols.external: {bad[0]!r} is not <protocol>:<name glob> (e.g. kafka:audit.*)")
+        out["protocols"] = {"external": ext}
     if data.get("gates") is not None:
         out["gates"] = norm_root(data["gates"], f"{fname}: gates")
     pl = _section(data, "plans", fname)

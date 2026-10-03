@@ -3,7 +3,7 @@
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
 Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, starters, index, downstream, path,
-api_calls, resolutions, channels, bridges, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+api_calls, resolutions, channels, bridges, protocol_links, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -631,6 +631,24 @@ def bridges(pattern: str | None = None, protocol: str | None = None, unmatched: 
     tauri; unmatched: only endpoints with a check."""
     from .bridges import bridges as _br, render_bridges
     return render_bridges(_br(_st(), pattern, protocol=protocol, unmatched=unmatched))
+
+
+@tool
+def protocol_links(pattern: str | None = None, protocol: str | None = None, side: str | None = None,
+                   unmatched: bool = False) -> str:
+    """Every protocol endpoint in one view (#31 model): HTTP client endpoints and routes (http / ws / graphql), Pusher
+    broadcast channels and subscriptions, NestJS microservice messages (nest-rpc / nest-event / nest-ws / grpc), job
+    queues (bull, laravel-queue, celery), application events (laravel-event, nest-event-emitter, django-signal), web /
+    native bridges and desktop IPC (capacitor, react-native, flutter, electron-ipc, tauri ...) and the generic
+    endpoint:<protocol>:<name> nodes (code -SENDS_TO-> endpoint -RECEIVED_BY-> handler, MATCHES_ENDPOINT for
+    wildcard / template matches; MQTT, NATS, AMQP, Kafka, Redis pub/sub, Socket.IO). Without arguments: one line per
+    protocol (endpoints, send / receive sides, linked, check counts). With a pattern (name, id, substring or glob) /
+    protocol / side (send | receive) / unmatched: one block per endpoint with senders (and, for a few endpoints, the
+    entry points reaching them), receivers, guards, matches and checks: no_receiver, no_sender, test_sender_only,
+    ambiguous, schema_mismatch, unguarded, external (.cg.yaml protocols.external, third-party origins, bridge
+    packages). impact / reaches / path / downstream follow SENDS_TO / RECEIVED_BY / MATCHES_ENDPOINT as usual."""
+    from .protocols.view import protocols as _pr, render_protocols
+    return render_protocols(_pr(_st(), pattern, protocol=protocol, side=side, unmatched=unmatched))
 
 
 @tool

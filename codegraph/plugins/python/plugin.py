@@ -1378,6 +1378,11 @@ class PythonPlugin(LanguagePlugin):
         sub_st = Subprocesses(prog, b, Ctx, FuncInfo, ClassInfo, dotted, walk_body, rp).link()
         if sub_st:
             refs["subprocess"] = sub_st
+        # python-socketio / Flask-SocketIO events -> endpoint:socketio:<namespace>#<event> (protocol model, #31)
+        from .socketio import index as socketio_index
+        sio_st = socketio_index(prog, b, walk_body)
+        if sio_st:
+            refs["socketio"] = sio_st
         # pytest / unittest: test code marked attrs.test, test cases, fixtures, HTTP test requests (tests.py)
         with gc_paused():
             tests_st = self.tests.index()

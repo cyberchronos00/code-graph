@@ -572,3 +572,42 @@ run each on a shared box.
   13 deprecated, 316 `#available` branches with 254 references in them, 1 declaration unavailable everywhere
   (`BaseModule.init`). Spot checks of 8 matched the source.
 - Expo's targets come from `apps/bare-expo/app.json` (`macos, ios, android, web`).
+
+## Protocol links: shared endpoint model (#31)
+
+`cg index` with no flags and no `.cg.yaml`, then `cg link` for the pairs and `cg protocols`
+([protocols.md](protocols.md)). The existing links are read through adapters, so the graph and the outputs of
+`cg link`, `cg channels` and `cg bridges` were compared before and after on every project below: nodes, edges and all
+three outputs are identical. Index time is one run each on a shared box, within the run-to-run spread.
+
+| Project | Commit | Protocols (endpoints / linked) | Checks | `cg protocols` | Index before → after |
+|---|---|---|---|---|---|
+| immich-app/immich `server/` | c5e06dc | http 297 / 0, nest-event-emitter 36 / 0 | 1 external, 35 no_receiver, 1 no_sender | 0.18 s | 11.7 s → 11.4 s |
+| saleor/saleor | 8385ca6 | celery 75 / 69, django-signal 8 / 7, http 9 / 0 | 6 no_sender, 1 external, 9 unguarded | 0.35 s | 68.3 s → 70.2 s |
+| netbox-community/netbox | 251458b | django-signal 44 / 10, http 956 / 0 | 34 external, 857 unguarded | 0.37 s | 27.4 s → 28.0 s |
+| examples bookstore-nest + bookstore-next | – | http 26 / 6, bull 1 / 1, nest-event 2 / 0, nest-event-emitter 1 / 1, nest-rpc 1, nest-ws 1 | 5 no_receiver, 15 no_sender, 17 unguarded, 1 + 1 nest-event | 0.09 s | |
+| a private Laravel API + Vue client pair (~29k nodes) | – | http 1,007 / 823, pusher 25 / 22, laravel-event 7 / 6, laravel-queue 7 / 7 | 4 external, 3 + 3 no_receiver, 83 test_sender_only, 91 no_sender, 40 unguarded | 0.3 s | identical graph, `cg link` 439 / 441 unchanged |
+
+What the findings are, from spot checks:
+
+- **unguarded** is the same classification as `cg routes --unguarded` (the private pair: 40 = 40; netbox: 857 of
+  `cg routes`' 864, the rest are admin and unmounted routes, which `cg link` leaves out of its uncalled list too).
+  A side is only judged when the graph holds the other side of that protocol, so a server indexed alone reports no
+  `no_sender` for its HTTP routes.
+- **immich:** the 35 events are emitted through immich's own `EventRepository` and received with its own
+  `@OnEvent({ name })` decorator (built on `SetMetadata`, a documented blind spot); the handlers land on one `event:?`
+  endpoint. Its WebSocket gateway only emits (the web client listens through `socket.io-client`) and its jobs use the
+  same `SetMetadata` system, so there are no gateway messages or BullMQ jobs to show yet (#32).
+- **bookstore-nest:** `order.placed` is emitted by `ClientProxy.emit` and the microservice handler listens to
+  `order.shipped`; both ends are reported.
+- **Django signals:** the first run reported netbox's `post_save[Interface]`, `user_logged_in`, `request_finished`
+  ... as `no_sender` (10) or `test_sender_only` (24): Django sends them itself, so a `django.*` signal nobody in the
+  repo sends is `external` ("sent by the framework") now, as is saleor's `post_migrate`. The 10 linked netbox signals
+  are its own (`core.signals.job_start`, ...) and model signals fired by a resolved model write.
+- **saleor:** the 6 senderless Celery tasks are queued from data migrations (`delete_files_from_storage_task`,
+  `update_discounted_prices_task`; migrations are not indexed), by the beat schedule in `settings.py`
+  (`observability_reporter_task`) or through a `.delay` passed as a value (`handle_transaction_request_task.delay`).
+- **Socket.IO (first new protocol):** `tests/protocol_fixtures` (a FastAPI service emitting through an
+  `AsyncClient`, a Django worker with an `AsyncServer`) links `order:created` and the template `order:{status}`,
+  reports the unreceived `order:cancelled`, the external `audit:order` and the unguarded `ping`, and
+  `cg path "route:POST /orders" table:orders` crosses the two services through SENDS_TO / RECEIVED_BY.

@@ -70,6 +70,10 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   Expo modules, Flutter channels) and desktop process boundaries (Electron IPC channels and context-bridge members,
   Tauri commands): senders, receivers per platform or process, methods missing on a platform, without a receiver,
   unregistered or implemented outside the repo. See [bridges.md](bridges.md).
+- `protocols [PATTERN] [--protocol P] [--side send|receive] [--unmatched]`: every protocol endpoint (HTTP calls and
+  routes, Pusher channels, Nest messages, jobs, events, bridges, Socket.IO ...): a summary per protocol, or senders,
+  receivers, guards, matches and checks (no_receiver, no_sender, ambiguous, schema_mismatch, unguarded) per endpoint.
+  See [protocols.md](protocols.md).
 - `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
   [channels-and-tests.md](channels-and-tests.md#tests).
 - `platforms [summary|divergence] [--target T] [--kind K]`: platform-specific code: the project's targets and where
@@ -583,6 +587,31 @@ options:
   --protocol {capacitor,react-native,flutter,flutter-event,electron-ipc,electron-preload,tauri}
   --unmatched           only endpoints with a check: missing on a platform, no
                         receiver, no sender, external
+```
+
+### `protocols`
+
+```
+usage: python -m codegraph.cli protocols [-h] --db DB [--json] [--protocol PROTOCOL]
+                    [--side {send,receive}] [--max-items MAX_ITEMS]
+                    [--unmatched]
+                    [pattern]
+
+positional arguments:
+  pattern               endpoint name, id, substring or glob (`orders.*`,
+                        `http:GET /api/*`); omit for the summary
+
+options:
+  -h, --help            show this help message and exit
+  --db DB
+  --json
+  --protocol PROTOCOL   one protocol (http, pusher, nest-rpc, bull, laravel-
+                        queue, socketio, mqtt, capacitor, ...)
+  --side {send,receive}
+  --max-items MAX_ITEMS
+  --unmatched           only endpoints with a check (no_receiver, no_sender,
+                        ambiguous, schema_mismatch, unguarded) or an external
+                        peer
 ```
 
 ### `tests`

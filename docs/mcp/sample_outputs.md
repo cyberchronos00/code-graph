@@ -12,6 +12,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `writers`: Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
 - `channels`: Broadcast channels (Laravel Broadcast::channel, events' broadcastOn, Echo / pusher-js subscriptions on a combined
 - `bridges`: Web / native bridge calls: Capacitor plugins (registerPlugin / Plugins.X -> @CapacitorPlugin @PluginMethod,
+- `protocol_links`: Every protocol endpoint in one view (#31 model): HTTP client endpoints and routes (http / ws / graphql), Pusher
 - `tests_covering`: Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
 - `node`: Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
 - `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind

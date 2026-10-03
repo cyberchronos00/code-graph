@@ -46,6 +46,8 @@ platforms:
   path_conventions: true               # C / C++ win/ unix/ posix/ directories and *_win.c file names
 rust:
   targets: off                         # extra rust-analyzer runs per target: auto (default), off, or [windows, macos]
+protocols:
+  external: ["kafka:audit.*"]          # <protocol>:<name glob> endpoints handled outside the analysed repos
 ```
 
 | key | meaning | flag |
@@ -57,6 +59,7 @@ rust:
 | `include` | directories (relative to the indexed root) that are indexed although a built-in skip covers them: a skipped directory name (`build/`, `dist/`, `node_modules/@acme/sdk`) or generated files. Only the path down to them is walked, not the rest of the skipped directory; `exclude` globs still apply inside them | |
 | `apps` | monorepo apps `{name, root, role: backend \| frontend, links}` ([below](#monorepo-apps)) | `cg index --no-apps` indexes the root as one project |
 | `generated.paths` / `generated.vendored` / `generated.keep` | globs of generated / vendored files detection misses, and of hand-maintained files it should leave alone ([generated.md](generated.md)) | |
+| `protocols.external` | protocol endpoints a known outside party sends or receives (`kafka:audit.*`, `socketio:/#audit:*`, `http:GET /status`): `cg protocols` marks them external instead of `no_receiver` / `no_sender` ([protocols.md](protocols.md#checks)) | |
 | `generated.include` | index generated, copied and vendored files, labelled `attrs.generated` (default: kept out of the graph and listed by `cg coverage`) | `cg index --include-generated` |
 | `frameworks.add` / `frameworks.remove` | framework layers and presets to turn on or off (`laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `express`; aliases such as `nestjs`, `next`, `fastify`, `drf` work too) | |
 | `auth.extra_patterns` | regexes on guard names that count as auth in `routes` | `--auth-pattern` |

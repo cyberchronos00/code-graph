@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Protocol links: one endpoint model for every sender / receiver pair (`endpoint:<protocol>:<name>`, SENDS_TO /
+  RECEIVED_BY, new MATCHES_ENDPOINT for wildcard and template matches at index and link time), a protocol registry
+  with shared matchers (path, MQTT, NATS, AMQP topic, glob, template) and builder helpers for plugins, checks
+  (no_receiver, no_sender, ambiguous, schema_mismatch, unguarded, `.cg.yaml` `protocols.external`), and
+  `cg protocols` / MCP `protocol_links` over HTTP routes, Pusher channels, Nest messages, jobs, events and bridges
+  with their ids unchanged; first new protocol: python-socketio / Flask-SocketIO events
+  ([docs/protocols.md](docs/protocols.md), [#31](https://github.com/cyberchronos00/code-graph/issues/31)).
+
 - Swift heuristic precision against the index store 0.78 -> 0.94 (Alamofire, isowords, vapor/template): SDK
   initializers on types the project only extends are no longer `INSTANTIATES` edges, initializer calls go to the
   overloads whose argument labels fit, and standard-library collection methods on unknown receivers are not matched to

@@ -36,6 +36,9 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 - `bridges(pattern?, protocol?, unmatched?)`: web / native bridge endpoints with their JS / Dart senders, native
   receivers per platform and the checks (missing on a platform, no receiver, external; see [bridges.md](bridges.md)),
   plus Electron IPC / context-bridge and Tauri command endpoints with the process role of each side;
+- `protocol_links(pattern?, protocol?, side?, unmatched?)`: every protocol endpoint (HTTP, Pusher channels, Nest
+  messages, jobs, events, bridges, Socket.IO ...) with senders, receivers, guards, matches and the checks no_receiver,
+  no_sender, ambiguous, schema_mismatch, unguarded (see [protocols.md](protocols.md));
 - `tests_covering(target, min_confidence?, paths?)`: the tests that exercise a symbol, route or table, direct and
   transitive, closest first, with the test cases in the graph per framework (PHPUnit, Pest, Vitest, Jest,
   Playwright, Cypress, pytest, unittest; see [channels-and-tests.md](channels-and-tests.md#tests));

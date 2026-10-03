@@ -368,6 +368,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Platform-specific code | Rust `#[cfg]` / `cfg!`, C / C++ `#if` and platform paths, Dart `Platform.isX` / `kIsWeb` / conditional imports, React Native `Platform.OS` / `Platform.select` / `.ios.ts` files | every symbol and reference carries the targets it is built for; `--platform ios` views one target's build; `cg platforms divergence` lists variants that leave a target uncovered, API differences and calls into code a target does not build ([docs/platforms.md](docs/platforms.md)) |
 | Web / native bridges | Capacitor plugins, React Native / Expo native modules, Flutter method and event channels, Pigeon APIs | each JS / Dart call (and each native `invokeMethod` / Pigeon `@FlutterApi` call into Dart) linked through a shared `endpoint:<protocol>:<module>#<method>` node to its Kotlin, Java, Swift or Objective-C receiver per platform; `cg bridges` lists methods missing on a platform, without a receiver or implemented outside the repo; `impact` / `tests` / `--platform` cross the bridge ([docs/bridges.md](docs/bridges.md)) |
 | Desktop processes | Electron `ipcMain` / `ipcRenderer` / `webContents.send` and `contextBridge.exposeInMainWorld`; Tauri `invoke` → `#[tauri::command]` | `endpoint:electron-ipc:<channel>`, `endpoint:electron-preload:<key>#<member>`, `endpoint:tauri:<command>` with SENDS_TO / RECEIVED_BY across the processes, process roles (main / preload / renderer, webview / core) on module nodes; checks for channels nobody receives and unregistered commands ([docs/bridges.md](docs/bridges.md#desktop-process-boundaries-electron-and-tauri)) |
+| Protocol links | HTTP calls / routes, Pusher channels, NestJS messages, Bull / Laravel / Celery jobs, application events, bridges and IPC in one view; python-socketio / Flask-SocketIO events | `endpoint:<protocol>:<name>` with SENDS_TO / RECEIVED_BY and MATCHES_ENDPOINT (path, MQTT, NATS, AMQP topic, glob and template matchers in a registry plugins extend); `cg protocols` lists senders, receivers, guards and the checks no_receiver, no_sender, ambiguous, schema_mismatch, unguarded; `.cg.yaml` `protocols.external` for known outside parties ([docs/protocols.md](docs/protocols.md)) |
 | Generated and copied files | detected (`.gitattributes`, generator banners, framework build paths, generator file names, Capacitor / Cordova copy targets, `.openapi-generator/FILES`) | kept out of the graph and listed by `cg coverage` by reason; copies map back to their source; `--include-generated` indexes them labelled `attrs.generated` ([docs/generated.md](docs/generated.md)) |
 
 ## Prerequisites per language
@@ -590,6 +591,8 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Electron `MessagePort` / `utilityProcess` and Tauri events (`emit` / `listen`) between processes.
 - Swift: `URLComponents` and helper-built URLs, `Info.plist` / `.xcconfig` base URLs, OS-version conditions, App Intents /
   widget entries, `navigationDestination(for:)` values ([docs/swift.md](docs/swift.md#not-covered-yet)).
+- Protocol links: extraction for MQTT, NATS, AMQP, Kafka and Redis pub/sub (matchers registered), Socket.IO outside
+  Python, raw WebSocket / SSE message names, gRPC / GraphQL / webhooks (epic #29; [docs/protocols.md](docs/protocols.md#not-covered-yet)).
 - Web / native bridges beyond Capacitor, React Native, Flutter channels and Pigeon: React Native events, Capacitor
   `notifyListeners`, Cordova plugins and native UI components ([docs/bridges.md](docs/bridges.md#not-covered-yet)).
 - More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
@@ -611,6 +614,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`, `cg config show`), framework presets, gates, viz presets and starter queries, plans dir, environment variables |
+| [docs/protocols.md](docs/protocols.md) | protocol links: endpoint model, registry and matchers, adapted kinds, checks, `cg protocols`, Socket.IO |
 | [docs/bridges.md](docs/bridges.md) | web / native bridges: endpoint model, supported registration forms, checks, `cg bridges` |
 | [docs/platforms.md](docs/platforms.md) | platform-specific code: targets, recognised conditions and variants, `--platform`, `cg platforms divergence`, `.cg.yaml` `platforms` |
 | [docs/generated.md](docs/generated.md) | generated, copied and vendored files: detection rules, coverage output, `--include-generated`, `COPY_OF`, `.cg.yaml` `generated` |

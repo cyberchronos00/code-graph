@@ -35,6 +35,11 @@ route, table, column, config (`settings.X`), env, job (Celery task), listener (s
 command), admin, event (signal). See [python.md](python.md#entry-points-and-function-references).
 Dart (lang='dart'): module (library), class (incl. enums, mixins, extensions), method, function, http (client endpoint, incl.
 `WS` for WebSockets), page (Navigator/go_router/auto_route routes, `page:dart:<package>:<path>`), env (`String.fromEnvironment`, dotenv).
+Protocol endpoints ([protocols.md](protocols.md), no lang): endpoint (`endpoint:<protocol>:<name>`; Socket.IO
+`endpoint:socketio:<namespace>#<event>`; attrs `protocol`, `transport`, `pattern`, `side`, `guards`, `namespace`,
+`event`, `schema`, `test_only`; a received endpoint of a network protocol is a `message_handler` entry). Existing kinds
+(http, route, channel, channel_sub, message, job, event) keep their ids and are read as protocol endpoints by
+`cg protocols`.
 Web / native bridges ([bridges.md](bridges.md), no lang): endpoint (`endpoint:<protocol>:<module>#<method>`, protocol
 capacitor, react-native, flutter; `endpoint:flutter-event:<channel>`; desktop processes: `endpoint:electron-ipc:<channel>`,
 `endpoint:electron-preload:<key>#<member>`, `endpoint:tauri:<command>`; attrs `protocol`, `transport`, `namespace`,
@@ -73,6 +78,10 @@ Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (eve
 `visibility_mismatch`), LISTENS_FOR (channel_sub → event).
 Web / native bridges ([bridges.md](bridges.md)): SENDS_TO✓ (JS / Dart code → endpoint; attrs `role` = invoke, `via`,
 `module_at`, `external`, `process`), RECEIVED_BY✓ (endpoint → native handler; attrs `platform`, `via`, `process`).
+Protocol links ([protocols.md](protocols.md)): SENDS_TO✓ (code → endpoint; attrs `role` = send / publish / emit /
+request / invoke / enqueue, `library`, `process`, `room`, `ack`, `schema`), RECEIVED_BY✓ (endpoint → handler),
+MATCHES_ENDPOINT✓ (send-side endpoint → receive-side endpoint matched by wildcard / template; attrs `sender_name`,
+`pattern`, `segments`, `ambiguous`).
 Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind; Python test → fixture and
 fixture → fixture with `via` = fixture / autouse fixture and `attrs.fixture`), TEST_HTTP (test → route),
 TEST_VISITS (browser test → page). None of them propagate, so tests never count as callers.

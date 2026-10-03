@@ -1,0 +1,319 @@
+"""`cg protocols` / MCP `protocol_links`: every protocol endpoint of a graph in one view.
+
+Endpoints come from the generic model (`endpoint:<protocol>:<name>` with SENDS_TO / RECEIVED_BY / MATCHES_ENDPOINT)
+and from the node kinds cg emitted before it, read through adapters with their ids unchanged:
+
+  kind          protocol                         senders (into the node)            receivers                 matches
+  http          http (ws for http:WS ...)        HTTP_CALLS                         -                         MATCHES_ROUTE ->
+  route         http / ws / graphql              (test: TEST_HTTP)                  ROUTES_TO                 <- MATCHES_ROUTE
+  channel       pusher                           BROADCASTS_ON (events)             -                         <- MATCHES_CHANNEL
+  channel_sub   pusher                           -                                  SUBSCRIBES_CHANNEL (code) MATCHES_CHANNEL ->
+  message       nest-rpc / nest-event / nest-ws / grpc   DISPATCHES                 HANDLED_BY
+  job           bull / laravel-queue / celery    DISPATCHES (also to the handler,   HANDLED_BY
+                                                 via=job), SCHEDULES
+  event         laravel-event / nest-event-emitter / django-signal   DISPATCHES     LISTENED_BY / HANDLED_BY
+  endpoint      attrs.protocol (bridges, MQTT, Socket.IO, ...)   SENDS_TO           RECEIVED_BY               MATCHES_ENDPOINT
+
+Checks (per endpoint; a side is judged only when the graph holds some endpoint of that protocol on the other side, so
+a single backend graph does not call every route `no_sender`):
+  no_receiver      sent, nothing receives it here (directly or through a match)
+  no_sender        received, nothing sends it (dead handler, or the producer is outside the analysed repos)
+  test_sender_only received, sent from tests only
+  ambiguous        one sender matched several receivers equally well
+  schema_mismatch  senders and receivers name different message types
+  unguarded        a receiver reachable from outside (http / ws / graphql routes, Socket.IO handlers, ...) with no
+                   auth guard recorded (the same classification as `cg routes --unguarded`)
+  external         declared external in .cg.yaml (protocols.external: ["kafka:audit.*"]), a third-party HTTP origin,
+                   or a bridge module implemented outside the repo
+Bridge endpoints (Capacitor, React Native, Flutter, Electron, Tauri) keep the checks codegraph/bridges.py computed.
+"""
+from __future__ import annotations
+
+import fnmatch
+import json
+from collections import defaultdict
+
+from . import REGISTRY, external_match
+
+KINDS = ("http", "route", "channel", "channel_sub", "message", "job", "event", "endpoint")
+EDGE_ROLE_KINDS = ("HTTP_CALLS", "MATCHES_ROUTE", "ROUTES_TO", "USES_MIDDLEWARE", "TEST_HTTP", "BROADCASTS_ON",
+                   "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL", "DISPATCHES", "HANDLED_BY", "LISTENED_BY", "SCHEDULES",
+                   "SENDS_TO", "RECEIVED_BY", "MATCHES_ENDPOINT", "TEST_CALLS")
+NEST = {"rpc": "nest-rpc", "event": "nest-event", "ws": "nest-ws", "grpc": "grpc"}
+SEND_IN = {"http": ("HTTP_CALLS",), "channel": ("BROADCASTS_ON",), "message": ("DISPATCHES",),
+           "job": ("DISPATCHES", "SCHEDULES"), "event": ("DISPATCHES",), "endpoint": ("SENDS_TO",)}
+RECV_OUT = {"route": ("ROUTES_TO",), "message": ("HANDLED_BY",), "job": ("HANDLED_BY",),
+            "event": ("LISTENED_BY", "HANDLED_BY"), "endpoint": ("RECEIVED_BY",)}
+RECV_IN = {"channel_sub": ("SUBSCRIBES_CHANNEL",)}
+MATCH = ("MATCHES_ROUTE", "MATCHES_CHANNEL", "MATCHES_ENDPOINT")
+TEST_ORIG = ("HTTP_CALLS", "DISPATCHES", "SENDS_TO", "SUBSCRIBES_CHANNEL")
+
+
+def protocol_of(kind: str, nid: str, a: dict, lang: str | None) -> str | None:
+    if kind == "endpoint":
+        return a.get("protocol")
+    if kind == "http":
+        return "ws" if a.get("method") == "WS" else "http"
+    if kind == "route":
+        m = (a.get("method") or "").upper()
+        return "ws" if m == "WS" else "graphql" if m == "GRAPHQL" else "http"
+    if kind in ("channel", "channel_sub"):
+        return "pusher"
+    if kind == "message":
+        return NEST.get(a.get("transport") or nid.split(":")[1], "nest-" + (a.get("transport") or "message"))
+    if kind == "job":
+        fw = a.get("framework") or ""
+        return "bull" if fw.startswith("bull") or lang == "ts" else "laravel-queue" if lang == "php" else "celery"
+    if kind == "event":
+        fw = a.get("framework") or ""
+        if fw == "nest-event-emitter" or lang == "ts":
+            return "nest-event-emitter"
+        return "django-signal" if a.get("signal") or lang == "python" else "laravel-event"
+    return None
+
+
+def name_of(kind: str, nid: str, name: str, a: dict) -> str:
+    key = nid.split(":", 1)[1]
+    if kind == "channel":
+        return a.get("pattern") or key
+    if kind == "channel_sub":
+        return a.get("name") or key
+    if kind == "message":
+        return key.split(":", 1)[1] if ":" in key else key
+    if kind == "endpoint":
+        return name or key.split(":", 1)[-1]
+    return key
+
+
+def _externals(st) -> list[str]:
+    """protocols.external of the indexed repo(s) (.cg.yaml, recorded in the index stats)."""
+    from ..routes import _meta_of
+    try:
+        m = st.meta()
+    except Exception:  # noqa: BLE001
+        return []
+    metas = [_meta_of((m.get("sources") or {}).get(r)) for r in m.get("repos") or []] or [m]
+    out = []
+    for mm in metas:
+        out += (((mm.get("stats") or {}).get("config") or {}).get("protocols") or {}).get("external") or []
+    return list(dict.fromkeys(out))
+
+
+def _load(st):
+    nodes = {}
+    q = ",".join("?" * len(KINDS))
+    for r in st.q(f"SELECT id, kind, name, file, line, lang, attrs, entry_kind FROM nodes WHERE kind IN ({q})", KINDS):
+        a = json.loads(r["attrs"] or "{}") if r["attrs"] else {}
+        proto = protocol_of(r["kind"], r["id"], a, r["lang"])
+        if not proto:
+            continue
+        nodes[r["id"]] = {"id": r["id"], "kind": r["kind"], "protocol": proto, "name": name_of(r["kind"], r["id"], r["name"], a),
+                          "file": r["file"], "line": r["line"], "attrs": a, "entry_kind": r["entry_kind"]}
+    q2 = ",".join("?" * len(EDGE_ROLE_KINDS))
+    edges = [dict(r) for r in st.q(f"SELECT src, dst, kind, file, line, confidence, attrs FROM edges WHERE kind IN ({q2})",
+                                   EDGE_ROLE_KINDS)]
+    return nodes, edges
+
+
+def collect(st) -> dict:
+    """Every endpoint with senders / receivers / matches / guards / checks (no per-endpoint queries)."""
+    from ..routes import AuthMatcher, guard_setup, route_guards
+    nodes, edges = _load(st)
+    ep = {nid: dict(n, senders=[], test_senders=[], receivers=[], matches=[], mw=[]) for nid, n in nodes.items()}
+    job_of_handler = {}
+    for e in edges:
+        if e["kind"] == "HANDLED_BY" and e["src"] in ep and ep[e["src"]]["kind"] == "job":
+            job_of_handler.setdefault(e["dst"], e["src"])
+    for e in edges:
+        k, s, d = e["kind"], e["src"], e["dst"]
+        a = json.loads(e["attrs"] or "{}") if e["attrs"] else {}
+        at = f"{e['file']}:{e['line']}"
+        if k in MATCH:
+            if s in ep and d in ep:
+                ep[s]["matches"].append({"endpoint": d, "confidence": e["confidence"], "dir": "out", "kind": k,
+                                         "ambiguous": a.get("ambiguous")})
+                ep[d]["matches"].append({"endpoint": s, "confidence": e["confidence"], "dir": "in", "kind": k})
+            continue
+        if k == "USES_MIDDLEWARE":
+            if s in ep:
+                ep[s]["mw"].append(e)
+            continue
+        if k in ("TEST_CALLS", "TEST_HTTP"):
+            if d in ep and (k == "TEST_HTTP" or a.get("orig") in TEST_ORIG):
+                ep[d]["test_senders"].append({"fn": s, "at": at, "confidence": e["confidence"]})
+            continue
+        if d in ep and k in SEND_IN.get(ep[d]["kind"], ()):
+            ep[d]["senders"].append({"fn": s, "at": at, "confidence": e["confidence"], "via": a.get("via") or a.get("role"),
+                                     **({"schema": a["schema"]} if a.get("schema") else {})})
+        elif k == "DISPATCHES" and a.get("via") == "job" and d in job_of_handler:
+            ep[job_of_handler[d]]["senders"].append({"fn": s, "at": at, "confidence": e["confidence"], "via": "dispatch"})
+        if s in ep and k in RECV_OUT.get(ep[s]["kind"], ()):
+            ep[s]["receivers"].append({"handler": d, "at": at, "confidence": e["confidence"],
+                                       **({k2: a[k2] for k2 in ("platform", "process", "schema") if a.get(k2)})})
+        if d in ep and k in RECV_IN.get(ep[d]["kind"], ()):
+            ep[d]["receivers"].append({"handler": s, "at": at, "confidence": e["confidence"]})
+    # sides per protocol
+    psend, precv = defaultdict(bool), defaultdict(bool)
+    for n in ep.values():
+        psend[n["protocol"]] |= bool(n["senders"])
+        precv[n["protocol"]] |= bool(n["receivers"])
+    gs = guard_setup(st)
+    is_auth = AuthMatcher(None, gs["applied"], gs["auth_patterns"], gs["secret_patterns"])
+    ext = _externals(st)
+    for n in ep.values():
+        a, p = n["attrs"], REGISTRY.get(n["protocol"])
+        peers = [ep[m["endpoint"]] for m in n["matches"]]
+        sent = bool(n["senders"]) or any(x["senders"] for x in peers)
+        recv = bool(n["receivers"]) or any(x["receivers"] or x["kind"] == "route" for x in peers)   # a matched route receives
+        n["side"] = "both" if n["senders"] and n["receivers"] else "send" if n["senders"] or (n["kind"] == "http") \
+            else "receive" if n["receivers"] or n["kind"] in ("route",) else ("send" if n["test_senders"] else "none")
+        n["linked"] = sent and recv
+        ck = []
+        n["external"] = None
+        if p and p.source == "bridges":
+            ck = list(a.get("checks") or [])
+            n["external"] = a.get("package") or ("implemented outside this repo" if a.get("external") else None)
+        else:
+            hit = external_match(ext, n["protocol"], n["name"])
+            if hit:
+                n["external"] = f".cg.yaml protocols.external {hit}"
+            elif p and not sent and any(fnmatch.fnmatchcase(n["name"], g) for g in p.framework_senders):
+                n["external"] = "sent by the framework"
+            elif n["kind"] == "http" and a.get("origin_kind") == "other":
+                n["external"] = f"other origin {a.get('origin')}"
+            test_only = bool(a.get("test_only"))
+            skip_route = n["kind"] == "route" and (a.get("mounted", True) is False or a.get("framework") == "django-admin")
+            if sent and not recv and precv[n["protocol"]] and not n["external"] and not test_only:
+                ck.append("no_receiver")
+            if recv and not sent and psend[n["protocol"]] and not n["external"] and not skip_route:
+                ck.append("test_sender_only" if n["test_senders"] or any(x["test_senders"] for x in peers) else "no_sender")
+            outs = [m for m in n["matches"] if m["dir"] == "out"]
+            amb = any(m.get("ambiguous") for m in outs)
+            if not amb and len(outs) > 1:
+                if n["kind"] == "http":
+                    amb = True                 # several routes equally specific (cg link keeps the ties, heuristic)
+                elif n["kind"] == "channel_sub":
+                    amb = any(m["confidence"] == "heuristic" for m in outs)
+                elif n["kind"] == "endpoint":
+                    amb = not (p and p.fanout)
+            if amb:
+                ck.append("ambiguous")
+            ss = {x["schema"] for x in n["senders"] + [y for q in peers for y in q["senders"]] if x.get("schema")}
+            rs = {x["schema"] for x in n["receivers"] + [y for q in peers for y in q["receivers"]] if x.get("schema")}
+            if a.get("schema"):
+                (rs if n["receivers"] else ss).add(a["schema"])
+            if ss and rs and not (ss & rs):
+                ck.append("schema_mismatch")
+                n["schemas"] = {"sent": sorted(ss), "received": sorted(rs)}
+        # guards: routes as in `cg routes`, generic receivers from attrs.guards
+        if n["kind"] == "route" or (n["kind"] == "endpoint" and "guards" in a):
+            if n["kind"] == "route":
+                g = route_guards(a, n["mw"], is_auth)
+            else:   # recorded by the plugin as a check that rejects (connect handler, io.use, interceptor): auth
+                g = [{"name": x if isinstance(x, str) else x.get("name"), "auth": True} for x in a.get("guards") or []]
+            n["guards"] = [x["name"] for x in g]
+            has_auth = any(x["auth"] for x in g)
+            secret = any(x.get("secret") for x in g)
+            if (p and p.guards) and (n["receivers"] or n["kind"] == "route") and not has_auth and not secret and not n["external"] \
+                    and not (n["kind"] == "route" and (a.get("mounted", True) is False or a.get("framework") == "django-admin")):
+                ck.append("unguarded")
+        else:
+            n["guards"] = None
+        n["checks"] = ck
+    return ep
+
+
+def protocols(st, pattern: str | None = None, protocol: str | None = None, side: str | None = None,
+              unmatched: bool = False, max_items: int = 200) -> dict:
+    ep = collect(st)
+    summ = defaultdict(lambda: defaultdict(int))
+    for n in ep.values():
+        s = summ[n["protocol"]]
+        s["endpoints"] += 1
+        s["send"] += n["side"] in ("send", "both")
+        s["receive"] += n["side"] in ("receive", "both")
+        s["linked"] += n["linked"]
+        for c in n["checks"]:
+            s[c] += 1
+        s["external"] += bool(n["external"])
+    sel = []
+    listing = bool(pattern or protocol or side or unmatched)
+    if listing:
+        p = pattern[len("endpoint:"):] if pattern and pattern.startswith("endpoint:") else pattern
+        for nid in sorted(ep):
+            n = ep[nid]
+            if protocol and n["protocol"] != protocol:
+                continue
+            if side and n["side"] not in (side, "both"):
+                continue
+            if unmatched and not (n["checks"] or n["external"]):
+                continue
+            if p and not (n["id"] == p or fnmatch.fnmatchcase(n["name"], p) or fnmatch.fnmatchcase(n["id"].split(":", 1)[1], p)
+                          or fnmatch.fnmatchcase(f"{n['protocol']}:{n['name']}", p) or p.lower() in n["name"].lower()):
+                continue
+            sel.append(n)
+    detail = 0 < len(sel) <= 6
+    out = []
+    for n in sel[:max_items]:
+        item = {k: n[k] for k in ("id", "kind", "protocol", "name", "side", "linked", "checks", "external", "guards", "senders",
+                                  "test_senders", "receivers", "matches")}
+        item["at"] = f"{n['file']}:{n['line']}" if n["file"] else None
+        item["transport"] = (REGISTRY.get(n["protocol"]).transport if REGISTRY.get(n["protocol"]) else None)
+        if n.get("schemas"):
+            item["schemas"] = n["schemas"]
+        if n["attrs"].get("test_only"):
+            item["test_only"] = True
+        if detail:
+            for s in item["senders"]:
+                s["entry_kinds"] = {e["entry_kind"]: e["entry_count"] for e in
+                                    st.q("SELECT entry_kind, entry_count FROM node_entry WHERE node_id=?", (s["fn"],))}
+        out.append(item)
+    reg = [{"name": p.name, "transport": p.transport, "matcher": getattr(p.matcher, "__name__", "custom"), "fanout": p.fanout,
+            "source": p.source, "description": p.description} for p in REGISTRY.values()]
+    return {"pattern": pattern, "protocol": protocol, "side": side, "unmatched": unmatched,
+            "summary": {k: dict(v) for k, v in sorted(summ.items())}, "endpoints": out, "selected": len(sel),
+            "listing": listing, "registry": reg}
+
+
+def render_protocols(res: dict, max_items: int = 60) -> str:
+    from ..query import short_id
+    L = []
+    if not res["summary"]:
+        return "no protocol endpoints in this graph (HTTP calls / routes, channels, messages, jobs, events, bridges)"
+    if not res["listing"]:
+        L.append("protocol            endpoints  send  receive  linked  checks")
+        for p, s in res["summary"].items():
+            ck = ", ".join(f"{k} {v}" for k, v in s.items() if k not in ("endpoints", "send", "receive", "linked") and v)
+            L.append(f"{p:<19} {s['endpoints']:>9}  {s.get('send', 0):>4}  {s.get('receive', 0):>7}  {s.get('linked', 0):>6}  {ck or '-'}")
+        L.append("(cg protocols --protocol P | PATTERN | --unmatched for endpoints; cg link / channels / bridges for the "
+                 "HTTP, Pusher and bridge views)")
+        return "\n".join(L)
+    eps = res["endpoints"]
+    if not eps:
+        return "no protocol endpoint matches " + ", ".join(
+            f"{k}={res[k]!r}" for k in ("pattern", "protocol", "side") if res.get(k)) + (" (unmatched only)" if res["unmatched"] else "")
+    detail = len(eps) <= 6
+    for i in eps[:max_items]:
+        flags = list(i["checks"]) + ([f"external ({i['external']})"] if i["external"] else [])
+        L.append(f"[{i['protocol']}] {i['name']}  ({i['side']}{', linked' if i['linked'] else ''})"
+                 + (f"  guards: {', '.join(i['guards']) or 'none'}" if i["guards"] is not None else "")
+                 + (f"  ! {'; '.join(flags)}" if flags else ""))
+        if detail:
+            L.append(f"    node {i['id']}" + (f" @ {i['at']}" if i.get("at") else ""))
+            for s in i["senders"][:8]:
+                ek = ", ".join(f"{k}({v})" for k, v in sorted((s.get("entry_kinds") or {}).items()))
+                L.append(f"    sent by {short_id(s['fn'])} @ {s['at']} [{s['confidence']}]" + (f"  entries: {ek}" if ek else ""))
+            for s in i["test_senders"][:4]:
+                L.append(f"    test {short_id(s['fn'])} @ {s['at']}")
+            for r in i["receivers"][:8]:
+                L.append(f"    received by {short_id(r['handler'])} @ {r['at']} [{r['confidence']}]")
+            for m in i["matches"][:8]:
+                L.append(f"    {'matches' if m['dir'] == 'out' else 'matched by'} {m['endpoint']} [{m['confidence']}]")
+            if i.get("schemas"):
+                L.append(f"    schemas: sent {i['schemas']['sent']} / received {i['schemas']['received']}")
+        else:
+            L.append(f"    senders {len(i['senders'])}" + (f" (+{len(i['test_senders'])} test)" if i["test_senders"] else "")
+                     + f", receivers {len(i['receivers'])}, matches {len(i['matches'])}")
+    if res["selected"] > min(len(eps), max_items):
+        L.append(f"... {res['selected'] - min(len(eps), max_items)} more")
+    return "\n".join(L)

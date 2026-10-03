@@ -256,6 +256,9 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)", new_edges)
     db.commit()
     stats.update(link_channels(db, backend_name))
+    from .protocols import link_db as link_protocols
+    if (pr := link_protocols(db)):      # only graphs with endpoints of the #31 protocols (MQTT, Socket.IO, ...)
+        stats["protocols"] = pr
     test_only = {r[0] for r in db.execute("SELECT id FROM f.nodes WHERE kind='http' AND json_extract(attrs,'$.test_only')=1")}
     test_results = [r for r in results if r["endpoint"] in test_only]
     results = [r for r in results if r["endpoint"] not in test_only]
