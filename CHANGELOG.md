@@ -26,6 +26,22 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - Laravel graphs no longer depend on the hash seed: a property read in a `??` chain on a receiver that can be several
   models (`Income|Expense $document`) went to the column of whichever model came first in a set; it now reads one
   column per model in one step (edges `ambiguous`, `candidates`), narrowed to the tables that declare the column.
+- Swift heuristic calls (#83): a prefix operator is no longer read as part of the receiver
+  (`#expect(!Preview.matches(a, b))` and `if !Chrome.shouldAutoPresent()` were dropped); `Module.function()` reaches
+  a free function of that target folder; a property or local built with a generic initializer (`SlotGate<Image>()`)
+  types its calls; a call on a continuation line after a binary operator keeps its edge, on its own line.
+- Swift heuristic calls (#83): a receiver of a known SDK type (a local `var inside = false` / `let p = Path()`, an
+  initializer call `UIGraphicsPDFRenderer(bounds:).pdfData { }`, the parameter of `Path { p in }` and similar
+  builders) no longer binds by name to a project method or to an extension of another concrete SDK type; a call bound
+  by its selector alone carries `binding: "name"` and is left out of platform divergence.
+- Swift: a `func` and a `static func` of one name in one type are separate nodes (the one declared second gets the id
+  suffix `~static` / `~instance`), so each call reaches its own overload (#83).
+- Swift and Kotlin (#83): a call whose receiver type is unknown and whose name fits two to five project methods gets a
+  low-confidence candidate edge to each (`binding: "candidate"`, `candidates: N`) instead of being dropped; `cg tests`,
+  `impact` and the MCP `callers` mark what they reach through one `(candidate)`, platform divergence leaves them out
+  and `exact_vs_heuristic` counts them separately. Kotlin receivers of a library type (`Headers.build { }`,
+  `client: HttpClient`) no longer bind by name, and a constructor-call receiver (`WishController().add(x)`) binds to
+  that class.
 
 ## [0.8.0] - 2026-10-03
 

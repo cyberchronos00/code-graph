@@ -190,6 +190,11 @@ The header counts the test cases in the graph per framework; `cg coverage` print
 (`python tests: 10 test cases (pytest 5, unittest 5) in 5 files, 5 fixtures; 9 HTTP test requests, 9 linked to
 routes`). A function that only tests call has no callers in `impact` / `callers`, and the answer points to `tests`.
 
+A test marked `(candidate)` reaches the target through a candidate call edge: a Swift or Kotlin call whose receiver
+type is unknown, linked to each of the two to five project methods with that name (`attrs.binding` `candidate`,
+[#83](https://github.com/cyberchronos00/code-graph/issues/83)). It may exercise a same-name sibling instead. `impact`
+and the MCP `callers` mark such callers the same way.
+
 Swift and Kotlin test cases are the test functions themselves (`entry_kind` `test`), counted in the same header:
 
 - **Swift Testing** (`swift-testing`): every `@Test` function or method, free or in a type, a parameterized

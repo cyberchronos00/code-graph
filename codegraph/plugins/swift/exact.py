@@ -286,7 +286,9 @@ class ExactLayer:
         st["exact_vs_heuristic"] = {
             "heuristic_edges": len(heur), "exact_edges": len(exact), "agree": agree,
             "precision": round(agree / len(heur), 3) if heur else None,
-            "recall": round(agree / len(exact), 3) if exact else None}
+            "recall": round(agree / len(exact), 3) if exact else None,
+            # candidate edges (receiver type unknown, one per same-name method, #83) are compared on their own
+            "candidate_edges": len(self.candidates), "candidate_agree": len(self.candidates & exact)}
         return True
 
     def _map_paths(self, occ_by_path: dict, root: Path, files: list[str]) -> dict:
@@ -336,8 +338,9 @@ class ExactLayer:
     def _remove_heuristic(self, covered: set, seen_lines: set) -> tuple[set, int]:
         """Drop the heuristic call edges of the covered files; returns their (src, dst, kind) set. An edge on a line
         without any index occurrence is code the compiler did not see (an inactive `#if` branch on this platform):
-        it is kept, marked `via: not-compiled`, and left out of the comparison."""
-        out, kept = set(), 0
+        it is kept, marked `via: not-compiled`, and left out of the comparison. Candidate edges (#83) go to
+        self.candidates, compared on their own."""
+        out, cand, kept = set(), set(), 0
         for key, e in list(self.b.edges.items()):
             if e.confidence != HEURISTIC or e.file not in covered or e.kind not in CALL_KINDS:
                 continue
@@ -348,6 +351,7 @@ class ExactLayer:
                 e.attrs["via"] = "not-compiled"
                 kept += 1
                 continue
-            out.add((e.src, e.dst, e.kind))
+            (cand if e.attrs.get("binding") == "candidate" else out).add((e.src, e.dst, e.kind))
             del self.b.edges[key]
+        self.candidates = cand
         return out, kept

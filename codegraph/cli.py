@@ -417,9 +417,12 @@ def main(argv=None):
         for e in res["entry_points"]:
             native = Q.NATIVE_FILE_RE.search(e.get("file") or "")
             nm = f"{e.get('fqn') or e['name']}  @ {e['file']}:{e['line']}" if native else e["name"]
-            print(f"  {e['entry_kind']:16} {nm}  conf={e['path_confidence']}{Q.generated_label(e)}{Q.platform_label(e)}")
+            print(f"  {e['entry_kind']:16} {nm}  conf={e['path_confidence']}{Q.CANDIDATE_LABEL if e.get('candidate') else ''}"
+                  f"{Q.generated_label(e)}{Q.platform_label(e)}")
             if not a.no_paths:
                 print(f"        path: {Q.fmt_path(e['path'])}")
+        if any(x.get("candidate") for x in res["callers"] + res["entry_points"]):
+            print(Q.CANDIDATE_NOTE)
         if a.plans_dir:
             from . import plans as P
             hits = P.snapshot_clients(st, [e["id"] for e in res["entry_points"] if e["id"].startswith("route:")], a.plans_dir)

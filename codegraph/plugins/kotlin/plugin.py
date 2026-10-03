@@ -3,7 +3,7 @@
 Heuristic mode: a tree-sitter-kotlin syntax layer. Declarations (packages, classes, interfaces, objects, companion
 objects, top-level / extension functions, methods) become nodes; calls are resolved by name: the enclosing class and
 its supertypes, then a parameter / property type (`api.order()` with `api: OrdersApi`), imports, the same package, and
-finally a project-wide unique name. Every resolved reference is labelled `heuristic`, as for Rust and C / C++ without
+finally the name alone (one method: `binding: name`; two to five: a `candidate` edge to each). Every resolved reference is labelled `heuristic`, as for Rust and C / C++ without
 their indexers. Exact mode (exact.py): a scip-java index of the Gradle / Maven build (`--scip`,
 CODEGRAPH_KOTLIN_SCIP_FILE, or an opted-in scip-java run with CODEGRAPH_KOTLIN_SCIP=1) replaces the call edges with
 compiler-resolved ones; without a JDK / scip-java the heuristic layer stays, and coverage says why.
@@ -47,6 +47,8 @@ from ...core.plugin import GraphBuilder, LanguagePlugin, Project
 from ..native.ts import TreeSitterMissing
 
 EXTS = (".kt", ".kts")
+# an unknown receiver whose method name is declared on more classes than this gets no candidate edges (#83 item 6)
+MAX_CANDIDATES = 5
 VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
 RETROFIT = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
 SPRING_MAP = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE",
@@ -776,11 +778,16 @@ class KotlinPlugin(LanguagePlugin):
     def _resolve_calls(self):
         for owner, name, recv, line, kf, decl in self.calls:
             self._data_access(owner, name, recv, line, kf, decl)
+            self._how = None
             targets = self._targets(name, recv, kf, decl)
             if not targets:
                 self.st["calls_unresolved"] += 1
                 continue
-            for t in targets[:3]:
+            how = {"binding": self._how} if self._how else {}
+            if self._how == "candidate":
+                how["candidates"] = len(targets)
+                self.st["call_candidate_edges"] += len(targets)
+            for t in targets[:MAX_CANDIDATES if self._how == "candidate" else 3]:
                 if t.kind == "class":
                     self.b.add_edge(owner, t.id, "INSTANTIATES", kf.rel, line, HEURISTIC)
                     ctor = [m for m in self.members.get(t.fqn, {}).get("init", [])]
@@ -788,7 +795,7 @@ class KotlinPlugin(LanguagePlugin):
                     for m in ctor:
                         self.b.add_edge(owner, m.id, "CALLS", kf.rel, line, HEURISTIC)
                 else:
-                    self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC)
+                    self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, **how)
             self.st["calls_resolved"] += 1
 
     def _targets(self, name: str, recv: str | None, kf: KFile, decl: Decl | None) -> list[Decl]:
@@ -826,7 +833,7 @@ class KotlinPlugin(LanguagePlugin):
         if tyname is None and cls is not None:
             tyname = self._field_type(cls, rname)
         if tyname is None and rname[:1].isupper():
-            tyname = rname
+            tyname = re.sub(r"\s*[({].*$", "", rname, flags=re.S)     # `WishController().add(x)`: a WishController
         if tyname:
             tc = self._class_of(tyname, kf)
             if tc is not None:
@@ -837,8 +844,24 @@ class KotlinPlugin(LanguagePlugin):
                 if r:
                     return r
                 return []
-        cands = [d for d in self.by_name.get(name, []) if d.kind == "method" and "actual" not in d.modifiers]
-        return cands if len(cands) == 1 and len(name) > 3 else []
+            short = re.sub(r"[<(].*", "", tyname, flags=re.S).rstrip("?! ").split(".")[-1]
+            if len(short) > 1 and short[:1].isupper() and not self.class_short.get(short):
+                # a library type (`DataStoreFactory.create(...)`, `Headers.build { }`, `client: HttpClient`): a known
+                # receiver type binds exactly or not at all (#83), never by name to a project method
+                self.st["calls_library_receiver"] += 1
+                return []
+        # unknown receiver: the name decides. One method of that name is a `name` binding; several (on up to
+        # MAX_CANDIDATES classes) are `candidate` edges to each (#83 item 6): kept, never a confident edge, left out
+        # of divergence and flagged by `cg tests` / impact
+        cands = list({d.id: d for d in self.by_name.get(name, []) if d.kind == "method"
+                      and "actual" not in d.modifiers}.values())
+        if not cands or len(name) <= 3:
+            return []
+        if len(cands) > MAX_CANDIDATES:
+            self.st["calls_too_ambiguous"] += 1
+            return []
+        self._how = "name" if len(cands) == 1 else "candidate"
+        return cands
 
     def _field_type(self, cls: Decl, name: str, depth=0):
         if name in cls.types:

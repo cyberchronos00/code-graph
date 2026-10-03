@@ -111,6 +111,37 @@ APPLE_ONLY = {"Darwin", "Security", "Network", "SystemConfiguration", "UniformTy
               "CoreServices", "CoreLocation", "CoreData", "CoreGraphics", "CoreFoundation", "ObjectiveC", "os",
               "StoreKit", "AVFoundation", "Metal", "CryptoKit", "UserNotifications", "WidgetKit"}
 TYPE_DECLS = ("class_declaration", "protocol_declaration")
+# an unknown receiver whose selector fits more project methods than this gets no candidate edges (#83 item 6)
+MAX_CANDIDATES = 5
+STATIC_MODS = {"static", "class"}
+# a receiver whose SDK type is certain (`let r = UIGraphicsPDFRenderer(...)`, `var inside = false`,
+# `Path { p in }`) does not reach a project extension of one of these other concrete SDK types: value types and
+# final classes no SDK value of another type can be. `r.pdfData { }` does not reach `extension CGImage { func
+# pdfData() }` (#83); an extension of a protocol or open class (`View`, `Reducer`, `UIView`) still can.
+CONCRETE_SDK = {
+    "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt", "UInt8", "UInt16", "UInt32", "UInt64", "Double",
+    "Float", "CGFloat", "Decimal", "String", "Substring", "Character", "Array", "ArraySlice", "Dictionary", "Set",
+    "Optional", "Result", "Range", "ClosedRange", "Data", "Date", "DateComponents", "URL", "URLComponents",
+    "URLRequest", "UUID", "Calendar", "Locale", "TimeZone", "IndexPath", "IndexSet", "AttributedString",
+    "CGRect", "CGPoint", "CGSize", "CGVector", "CGAffineTransform", "CGImage", "CGColor", "CGPath", "CGContext",
+    "Image", "Color", "Font", "Text", "Path", "Angle", "Edge", "EdgeInsets", "Animation", "Binding", "LocalizedStringKey",
+    "UIImage", "UIColor", "UIFont", "UIBezierPath", "NSImage", "NSColor", "NSFont", "NSBezierPath",
+    "NSAttributedString", "UIGraphicsPDFRenderer", "UIGraphicsImageRenderer", "JSONDecoder", "JSONEncoder",
+    "DateFormatter", "NumberFormatter", "URLSession", "FileManager", "UserDefaults", "Bundle", "NotificationCenter",
+    "DispatchQueue", "GeometryProxy", "ScrollViewProxy", "GraphicsContext"}
+# the first closure parameter of these SDK builders (`Path { p in }`, `GeometryReader { proxy in }`): that SDK type
+CLOSURE_PARAM_TYPES = {"Path": "Path", "GeometryReader": "GeometryProxy", "ScrollViewReader": "ScrollViewProxy",
+                       "Canvas": "GraphicsContext"}
+CLOSURE_PARAM = re.compile(r"\b(" + "|".join(CLOSURE_PARAM_TYPES) + r")\s*(?:\([^()]*\))?\s*\{\s*(\w+)\s*(?:,\s*\w+\s*)?in\b")
+# `let x = <literal>`: the literal's standard-library type
+LITERAL_TYPES = (("Bool", r"(?:true|false)\b"), ("Double", r"-?\d+\.\d+\b"), ("Int", r"-?\d+\b"), ("String", r'"'))
+LOCAL_DECL = re.compile(
+    r"\b(?:let|var)\s+(\w+)\s*(?::\s*(?:some\s+|any\s+)?([A-Z][\w.]*))?\s*(?:=\s*(?:try\s*[?!]?\s+)?(?:await\s+)?"
+    r"(?:([A-Z]\w*)\s*(?:<[^=\n]*?>)?\s*\(|((?:true|false)\b|-?\d+\.\d+\b|-?\d+\b|\"))?)?")
+
+
+def _static(d) -> bool:
+    return bool(STATIC_MODS & d.modifiers)
 
 
 def parser():
@@ -443,6 +474,11 @@ class SwiftPlugin(LanguagePlugin):
                         if names:
                             sig.append((names[0], opt))
                 did = f"{kind}:{fq}"
+                if did in self.decls and _static(self.decls[did]) != bool(STATIC_MODS & mods):
+                    # `func weight(forExtraIndex:)` and `static func weight(from:to:)`: two nodes; the one declared
+                    # second carries `~static` / `~instance` (like `~2` for a second TypeScript declaration);
+                    # overloads of one static-ness still share a node
+                    did = f"{did}~{'static' if STATIC_MODS & mods else 'instance'}"
                 if did in self.decls:
                     prev = self.decls[did]
                     if prev.file != sf.rel or not self._in_directive(sf, c):  # overloads share one node
@@ -472,7 +508,7 @@ class SwiftPlugin(LanguagePlugin):
             ta = next((y for y in x.children if y.type == "type_annotation"), None)
             tn = self._type_name(ta.child_by_field_name("name") if ta is not None else None)
             if tn is None:
-                m = re.search(r"=\s*([A-Z]\w*)\s*[.(]", self.t(x))
+                m = re.search(r"=\s*([A-Z]\w*)\s*(?:<[^=]*?>)?\s*[.(]", self.t(x))   # Gate() / Gate<Image>()
                 tn = m.group(1) if m else None
             if nm and tn:
                 d.types[nm] = tn
@@ -607,21 +643,49 @@ class SwiftPlugin(LanguagePlugin):
             self._refs(c, sf, owner, decl, ctx)
 
     def _callee(self, c):
-        """(receiver text, name, value_arguments node, trailing lambda) of a call_expression."""
+        """(receiver text, name, value_arguments node, trailing lambda, line) of a call_expression. The line is the
+        call's own line: that of the receiver's last operand when the expression starts on an earlier line
+        (`let ok = a` / `  + Scorer.score(x)` parses as `(a + Scorer).score(x)`)."""
+        line = c.start_point[0] + 1
         if not c.children:
-            return None, None, None, None
+            return None, None, None, None, line
         f = c.children[0]
+        while f.child_by_field_name("rhs") is not None:
+            # `a + weight(forExtraIndex: 2)` parses as `(a + weight)(forExtraIndex: 2)`: the callee is the right operand
+            f = f.child_by_field_name("rhs")
+            line = f.start_point[0] + 1
         suf = next((x for x in c.children if x.type == "call_suffix"), None)
         args = next((x for x in suf.children if x.type == "value_arguments"), None) if suf is not None else None
         lam = next((x for x in suf.children if x.type in ("lambda_literal", "annotated_lambda")), None) if suf is not None else None
         if f.type == "simple_identifier":
-            return None, self.t(f), args, lam
+            return None, self.t(f), args, lam, line
         if f.type == "navigation_expression":
             target = f.child_by_field_name("target") or f.children[0]
             sfx = next((x for x in f.children if x.type == "navigation_suffix"), None)
             nm = self.t(sfx).lstrip(".").strip() if sfx is not None else None
-            return (self.t(target) if target is not None and target.type != "navigation_suffix" else ""), nm, args, lam
-        return None, None, args, lam
+            if target is None or target.type == "navigation_suffix":
+                return "", nm, args, lam, line
+            err = next((x for x in f.children if x.type == "ERROR"), None)
+            if sfx is not None and (err is not None or target.type in ("<", ">", "<=", ">=")):
+                # `let ok = a` / `  < Scorer.score(x)`: a continuation line starting with `<` / `>` does not parse;
+                # the receiver is the text between the operator and the member name
+                recv = self.cur.src[f.start_byte:sfx.start_byte].decode("utf-8", "replace")
+                if err is not None:
+                    line = err.start_point[0] + 1
+            else:
+                recv = self.t(target)
+                rhs = target
+                while rhs.child_by_field_name("rhs") is not None:      # binary expression: its right operand
+                    rhs = rhs.child_by_field_name("rhs")
+                if rhs is not target:
+                    line = rhs.start_point[0] + 1
+            m = re.match(r"\s*([!~+\-<>=&|*/%^?]+)\s*", recv)
+            if m and not recv.lstrip().startswith(".."):
+                # a prefix operator (`!Preview.matches(a, b)`, `-Offset.value()`) applies to the call's result, not
+                # to the receiver; a leading binary operator is the end of a broken continuation line
+                recv = recv[m.end():]
+            return recv, nm, args, lam, line
+        return None, None, args, lam, line
 
     def _args(self, args) -> list[tuple[str | None, object]]:
         out = []
@@ -633,8 +697,7 @@ class SwiftPlugin(LanguagePlugin):
         return out
 
     def _call(self, c, sf: SFile, owner: str, decl: Decl | None, ctx: dict) -> bool:
-        line = c.start_point[0] + 1
-        recv, name, args, lam = self._callee(c)
+        recv, name, args, lam, line = self._callee(c)
         if not name or not re.match(r"^\w+$", name):
             return False
         al = self._args(args)
@@ -1043,12 +1106,17 @@ class SwiftPlugin(LanguagePlugin):
 
     def _resolve_calls(self):
         for owner, name, recv, line, sf, decl, labels, trailing in self.calls:
+            self._how = None
+            self._at = (sf, line)
             targets = self._targets(name, recv, decl, labels, trailing)
+            how = {"binding": self._how} if self._how else {}
+            if self._how == "candidate":
+                how["candidates"] = len(targets)
             if not targets:
                 self.st["calls_unresolved"] += 1
                 continue
             done = False
-            for t in targets[:3]:
+            for t in targets[:MAX_CANDIDATES if self._how == "candidate" else 3]:
                 if t.kind == "class":
                     hit = self._first_variants([m for m in self.members.get(t.fqn, {}).get("init", [])
                                                 if self._fits(m.id, labels, trailing)])
@@ -1061,7 +1129,9 @@ class SwiftPlugin(LanguagePlugin):
                     for m in hit:
                         self.b.add_edge(owner, m.id, "CALLS", sf.rel, line, HEURISTIC)
                 else:
-                    self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC)
+                    self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, **how)
+                    if how:
+                        self.st["calls_by_name_only" if self._how == "name" else "call_candidate_edges"] += 1
                 done = True
             self.st["calls_resolved" if done else "calls_unresolved"] += 1
 
@@ -1150,11 +1220,43 @@ class SwiftPlugin(LanguagePlugin):
             return "unknown", None
         return "sdk", tn
 
+    def _local(self, decl: Decl | None, ident: str) -> str | None:
+        """The type of a function's local variable at the call being resolved: the nearest declaration of the name
+        above the call (`let g = SlotGate<String>()`, `let p = Path()`, `var inside = false`, `let n: Int = ...`,
+        `var puzzle = Puzzle(archivableCubes: puzzle)` over the parameter); None when that declaration's type is not
+        readable or there is none."""
+        sf, line = getattr(self, "_at", (None, 0))
+        if decl is None or sf is None or decl.kind == "class" or sf.rel != decl.file:
+            return None
+        cache = self.__dict__.setdefault("_loc_cache", {})
+        key = (decl.id, decl.file, decl.line)
+        if key not in cache:
+            txt = "\n".join(sf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:decl.end])
+            out: dict[str, list] = defaultdict(list)
+            found = []
+            for m in LOCAL_DECL.finditer(txt):
+                nm, ann, init, lit = m.group(1), m.group(2), m.group(3), m.group(4)
+                tn = ann.split(".")[-1] if ann else init
+                if tn is None and lit:
+                    tn = next(t for t, rx in LITERAL_TYPES if re.match(rx, lit))
+                found.append((m.start(), nm, tn))
+            for m in CLOSURE_PARAM.finditer(txt):         # `Path { p in p.close() }`: p is a Path
+                found.append((m.start(), m.group(2), CLOSURE_PARAM_TYPES[m.group(1)]))
+            for pos, nm, tn in sorted(found, key=lambda x: x[0]):
+                out[nm].append((decl.line + txt.count("\n", 0, pos), tn))
+            cache[key] = out
+        best = None
+        for ln, tn in cache[key].get(ident, ()):
+            if ln <= line:
+                best = tn
+        return best
+
     def _recv_type(self, recv: str, decl: Decl | None, cls: Decl | None) -> tuple[str, str | None]:
         """What a receiver expression is: ("type", T) a value of project type T, ("meta", T) the project type T itself
         (static members), ("sdk", T | None) a value of an SDK type (T when known; modifier chains on SDK views,
         `Font.body`, `UIApplication.shared`), ("unknown", None). `a?.b` / `a!.b` read as `a.b`."""
         segs = self._segments(recv)
+        self._certain = False
         if not segs:
             return "unknown", None
         state: tuple[str, str | None] = ("unknown", None)
@@ -1178,17 +1280,25 @@ class SwiftPlugin(LanguagePlugin):
                         state = ("type", t.fqn) if called else ("meta", t.fqn)
                     else:                            # an SDK type, its initializer or a value built from it
                         state = ("sdk", ident) if t is not None else self._sdk_or_unknown(ident)
+                        if called and len(segs) == 1 and state[0] == "sdk":
+                            self._certain = True     # `UIGraphicsPDFRenderer(bounds: r).pdfData { }`: that type
                     if sub:
                         state = ("unknown", None)
                     continue
                 if called:                            # a free function's result
                     return "unknown", None
-                tn = (decl.types.get(ident) if decl is not None else None) or (cls.types.get(ident) if cls is not None else None)
+                ltn = self._local(decl, ident)
+                tn = ltn or (decl.types.get(ident) if decl is not None else None) or \
+                    (cls.types.get(ident) if cls is not None else None)
                 if tn is None or sub:
                     return "unknown", None
                 t = self._type(tn)
                 state = ("type", t.fqn) if t is not None and "extension-only" not in t.modifiers else \
                     ("sdk", tn) if t is not None else self._sdk_or_unknown(tn)
+                if ltn and state[0] == "sdk":
+                    if len(segs) > 1:          # a property chain off a local SDK value may reach project types
+                        return "unknown", None
+                    self._certain = True       # `var inside = false`, `let p = Path()`: that type, nothing else
                 continue
             kind, tname = state
             if kind == "sdk":
@@ -1224,7 +1334,11 @@ class SwiftPlugin(LanguagePlugin):
             if cls is not None:
                 own = [d for d in self._member(cls, name) if d.kind != "class"]
                 if own:
-                    return self._fitting(own, labels, trailing)
+                    fit = self._fitting(own, labels, trailing)
+                    want = True if recv == "Self" else False if recv in ("self", "super") else \
+                        bool(decl is not None and decl.kind != "class" and _static(decl))
+                    return [d for d in fit if _static(d) == want] or (fit if recv is None else
+                                                                      [d for d in fit if d.name == "init"])
             if name[:1].isupper():
                 t = self.types.get(name)
                 return [t] if t is not None else []
@@ -1238,11 +1352,18 @@ class SwiftPlugin(LanguagePlugin):
         if kind in ("type", "meta"):
             tc = self._type(tname)
             ms = [d for d in self._member(tc, name) if d.kind != "class"] if tc is not None else []
-            ms = [d for d in ms if ("static" in d.modifiers or "class" in d.modifiers) == (kind == "meta")] or \
+            ms = [d for d in ms if _static(d) == (kind == "meta")] or \
                 ([] if kind == "type" else [d for d in ms if d.name == "init"])
             return self._fitting(ms, labels, trailing)
         sel = self._selector(name, labels, trailing)
         sdk_sel = sel in SDK_SELECTORS or (name in STDLIB_METHODS and all(lab in STDLIB_LABELS for lab in labels))
+        if kind == "sdk" and re.fullmatch(r"[A-Z]\w*", recv.strip()):
+            # `Styleguide.registerFonts()`: a module-qualified free function (the module is a target folder,
+            # `Sources/Styleguide/`)
+            fs = self._fitting([d for d in self.by_name.get(name, []) if d.kind == "function"
+                                and f"/{recv.strip()}/" in "/" + d.file], labels, trailing)
+            if fs:
+                return self._first_variants(fs)
         if kind == "sdk":
             # an SDK value: only members the project declares in an extension of an SDK type (of that type when
             # known, else of any: `Group { ... }.withEnvironments()` reaches `extension View`); never a selector
@@ -1256,7 +1377,8 @@ class SwiftPlugin(LanguagePlugin):
                 if own:
                     return own
             cands = [d for d in self.by_name.get(name, []) if d.kind == "method" and d.cls in self.types
-                     and "extension-only" in self.types[d.cls].modifiers and "static" not in d.modifiers]
+                     and "extension-only" in self.types[d.cls].modifiers and "static" not in d.modifiers
+                     and (not self._certain or d.cls not in CONCRETE_SDK or d.cls == tname)]
             cands = self._fitting(cands, labels, trailing)
             # short unlabelled selectors (`.run()`, `.get(_:)`) are too often the SDK type's own member
             return cands if len(cands) == 1 and (any(lab != "_" for lab in labels) or len(name) > 3) else []
@@ -1267,10 +1389,17 @@ class SwiftPlugin(LanguagePlugin):
         labelled = any(lab != "_" for lab in labels)
         cands = [d for d in self.by_name.get(name, []) if d.kind == "method" and "static" not in d.modifiers
                  and "class" not in d.modifiers]
-        cands = self._fitting(cands, labels, trailing)
-        if len(cands) != 1:
+        cands = self._first_variants(self._fitting(cands, labels, trailing))
+        if not cands or not (labelled or len(name) > 3):
             return []
-        return cands if labelled or len(name) > 3 else []
+        if len(cands) > MAX_CANDIDATES:
+            # `update()` on twenty app types: no useful candidate set
+            self.st["calls_too_ambiguous"] += 1
+            return []
+        # bound by the selector alone (receiver type unknown): one fitting method is a `name` binding, several are
+        # `candidate` edges to each (#83 item 6); both are left out of divergence, `cg tests` / impact flag candidates
+        self._how = "name" if len(cands) == 1 else "candidate"
+        return cands
 
     def _hierarchy(self):
         for d in list(self.decls.values()):
