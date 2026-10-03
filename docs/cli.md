@@ -89,8 +89,13 @@ the filter and how many conditions could not be evaluated ([platforms.md](platfo
 - `Class::method`, `Class`, short or FQN: code symbols (suffix match).
 - `Sub.method` / `Sub::method` for a method `Sub` inherits without redefining it: resolves through the class's
   ancestors (EXTENDS / IMPLEMENTS / trait use, nearest first) to the definition, and the answer says so
-  (`B.run -> inherited from Base.run`). The callers are those of the inherited definition (calls are not narrowed to
-  `Sub` instances); of its overrides only those in `Sub` and its subclasses are followed.
+  (`B.run -> inherited from Base.run`, short names; `--json` has the fqns). The callers are those of the inherited
+  definition, narrowed by receiver type: a call whose receiver is known (the TypeScript checker type, a Python
+  inferred instance, the elements of a collection it loops over; edge `attrs.recv`) to be a class that cannot be a
+  `Sub` (a sibling, neither `Sub`, a subclass nor an ancestor) is left out, and the note counts them
+  (`callers narrowed to B: 2 of 6 calls on other classes left out`). Calls with an unknown receiver, and receivers
+  whose ancestry the graph does not know (a mixin `extends mix(Base)`), are kept. `reaches` and `tests` narrow the
+  same way. Of its overrides only those in `Sub` and its subclasses are followed.
 - `page:/reports/:id`: a Nuxt page by its route path. `app/pages/x.vue`, `app/composables/useX.ts`: a TS module or Vue
   SFC by file (repo-relative, suffix match). `useX`, `useX.fn`, `fn`: a TS composable, store or function.
 - `src/app.ts#listOrders`, `app.ts#listOrders`, `src/svc.ts#OrderService.create`: a TypeScript / JavaScript / Vue

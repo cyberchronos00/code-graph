@@ -149,7 +149,14 @@ of a caller, its callers count `via base`, and `impact` on a base method adds th
 `reaches` seed their walk the same way (the override's tests and dependents, marked `via override`). TypeScript
 classes get the same edges from the extractor: EXTENDS / IMPLEMENTS between project classes, OVERRIDDEN_BY from the
 nearest base class member to the override, IMPLEMENTED_BY from a class used with `implements` to the method that
-implements it.
+implements it. Interface members are nodes too (`method:<file>#FeedAPI.fetch`, `attrs.signature`): method
+signatures of every interface / object type alias, function-typed properties of interfaces a project class
+implements. A call on an interface-typed value (`api.fetch()` with `api: FeedAPI`) targets the member, and
+IMPLEMENTED_BY links it to the class members implementing it: `implements` (also through the class's base classes
+and the interface's `extends`), and structurally (`resolved`, `via: structural`, `at`) where `new X()` is used as
+the interface (a typed variable, an argument, a return value) without `implements`. A method-to-method container
+binding (Nest `{ provide: Abstract, useClass: Impl }`, Laravel `bind`) is a dispatch hop like IMPLEMENTED_BY: the
+abstract method is shown under `overrides:`, not as a caller of the implementation.
 
 ## How `reaches` works
 1. A recursive CTE walks propagating edges in reverse from the target(s), with an optional minimum confidence, and

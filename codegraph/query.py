@@ -1,6 +1,7 @@
 """Graph queries. Traversals are recursive CTEs over the SQLite edge table."""
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import re
@@ -138,10 +139,89 @@ def override_seeds(st: GraphStore, spec_or_specs, targets: list[str], min_conf: 
     return below
 
 
+def _ancestors(st: GraphStore, cls: str) -> set[str]:
+    seen, frontier = {cls}, [cls]
+    kq = ",".join("?" * len(INHERIT_KINDS))
+    while frontier:
+        nxt = []
+        for c in frontier:
+            for r in st.q(f"SELECT dst FROM edges WHERE src=? AND kind IN ({kq})", (c, *INHERIT_KINDS)):
+                if r["dst"] not in seen:
+                    seen.add(r["dst"])
+                    nxt.append(r["dst"])
+        frontier = nxt
+    return seen
+
+
+def narrow_inherited(st: GraphStore, inh: list[dict]) -> set[int]:
+    """For `Sub.method` resolved to an ancestor's definition: the call edges into that definition whose receiver type
+    is known (edge attrs.recv: the TypeScript checker type, a Python inferred instance or collection element) and can
+    not be a Sub (neither Sub, a subclass, nor an ancestor of it). Each entry of `inh` gets `narrowed` counts."""
+    allowed: dict[str, set] = defaultdict(set)
+    known: dict[str, set] = {}
+    for i in inh:
+        allowed[i["method"]] |= _descendants(st, [i["class"]]) | _ancestors(st, i["class"])
+        # receivers whose path to the defining class the graph knows; any other receiver (a mixin `extends mix(B)`,
+        # a merged interface + class declaration) is kept: its hierarchy is incomplete, so it may still be a Sub
+        known.setdefault(i["method"], _descendants(st, [i["defined_in"]]))
+    skip, counts = set(), {}
+    for meth, ok in allowed.items():
+        n = typed = dropped = 0
+        for r in st.q("SELECT id, attrs FROM edges WHERE dst=? AND kind IN ('CALLS','TEST_CALLS')", (meth,)):
+            n += 1
+            try:
+                rc = (json.loads(r["attrs"]) if r["attrs"] else {}).get("recv")
+            except ValueError:
+                rc = None
+            if not rc:
+                continue
+            typed += 1
+            if not set(rc) & ok and set(rc) <= known[meth]:
+                skip.add(r["id"])
+                dropped += 1
+        counts[meth] = {"calls": n, "receiver_typed": typed, "dropped": dropped}
+    for i in inh:
+        i["narrowed"] = counts[i["method"]]
+    return skip
+
+
+class narrowed:
+    """`with narrowed(st, inh):` the traversals of one query leave out the calls `narrow_inherited` drops."""
+
+    def __init__(self, st: GraphStore, inh: list[dict]):
+        self.skip = narrow_inherited(st, inh) if inh else set()
+
+    def __enter__(self):
+        self.tok = _SKIP_EDGES.set(self.skip or None)
+        return self
+
+    def __exit__(self, *a):
+        _SKIP_EDGES.reset(self.tok)
+
+
+def _short(fqn: str) -> str:
+    """`Class.method` of a dotted / `::` / file-qualified fqn (pkg.mod.Class.method -> Class.method)."""
+    tail = re.split(r"[#/\\]", fqn)[-1]
+    parts = re.split(r"\.|::", tail)
+    return ".".join(parts[-2:]) if len(parts) >= 2 else tail
+
+
 def inherited_lines(res: dict) -> list[str]:
-    """'B.run -> inherited from Base.run' notes for a result whose spec resolved through a class's ancestors."""
-    return [f"{i['spec']} -> inherited from {i['method_fqn']} (callers of {i['method_fqn']} on any instance; calls are "
-            f"not narrowed to {i['class_fqn']})" for i in res.get("inherited") or []]
+    """'B.run -> inherited from Base.run' notes for a result whose spec resolved through a class's ancestors, with how
+    the calls into the inherited definition were narrowed to receivers that can be a B (short names; JSON has fqns)."""
+    out = []
+    for i in res.get("inherited") or []:
+        cls = _short(i["class_fqn"]).split(".")[-1]
+        line = f"{i['spec']} -> inherited from {_short(i['method_fqn'])}"
+        nw = i.get("narrowed")
+        if nw and nw["dropped"]:
+            line += f" (callers narrowed to {cls}: {nw['dropped']} of {nw['calls']} calls on other classes left out)"
+        elif nw and nw["receiver_typed"] == nw["calls"]:
+            line += f" (every call is on a receiver that can be a {cls})"
+        else:
+            line += f" (calls with an unknown receiver type count for {cls})"
+        out.append(line)
+    return out
 
 
 def _resolve_direct(st: GraphStore, spec: str) -> list[str]:
@@ -299,6 +379,11 @@ def _px(st: GraphStore, platform: str | None) -> set:
     return exclusions(st, platform)["edges"]
 
 
+# edge ids a query leaves out (calls to an inherited definition on receivers that cannot be the spec's class):
+# set by `narrowed()` for the duration of one impact / reaches / tests query
+_SKIP_EDGES: contextvars.ContextVar = contextvars.ContextVar("cg_skip_edges", default=None)
+
+
 def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="heuristic", max_depth=30,
                     exclude_gate: str | None = None, seed_inst: bool = False, platform: str | None = None) -> dict[str, int]:
     """Reverse transitive closure over `kinds`. seed_inst: code that instantiates a targeted class (`new X`) is a
@@ -324,6 +409,13 @@ def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="he
         WHERE (e.kind IN ({kq}) {inst}) AND e.conf_rank >= ? AND r.depth < ? AND (e.gate IS NULL OR e.gate != ?) {pclause}
     )
     SELECT id, MIN(depth) AS depth FROM r GROUP BY id"""
+    skip = _SKIP_EDGES.get()
+    if skip:
+        st.db.execute("DROP TABLE IF EXISTS temp.t_skip_edges")
+        st.db.execute("CREATE TEMP TABLE t_skip_edges(id INTEGER PRIMARY KEY)")
+        st.db.executemany("INSERT OR IGNORE INTO t_skip_edges VALUES (?)", [(x,) for x in skip])
+        sql = sql.replace(
+            "AND (e.gate IS NULL OR e.gate != ?)", "AND (e.gate IS NULL OR e.gate != ?) AND e.id NOT IN (SELECT id FROM t_skip_edges)")
     rows = st.q(sql, (*kinds, CONFIDENCE_RANK[min_conf], max_depth, exclude_gate or "\x00"))
     return {r["id"]: r["depth"] for r in rows}
 
@@ -333,13 +425,14 @@ def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="
     """For each reached node pick an outgoing edge to a node one step closer to a target."""
     kinds = set(kinds or PROPAGATING)
     px = _px(st, platform)
+    skip = _SKIP_EDGES.get()
     best = {}
     ids = list(depth)
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         q = ",".join("?" * len(chunk))
         for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate,attrs FROM edges WHERE src IN ({q})", chunk):
-            if e["conf_rank"] < CONFIDENCE_RANK[min_conf] or (px and e["id"] in px):
+            if e["conf_rank"] < CONFIDENCE_RANK[min_conf] or (px and e["id"] in px) or (skip and e["id"] in skip):
                 continue
             if e["kind"] not in kinds and not (seed_inst and e["kind"] == "INSTANTIATES" and depth.get(e["dst"]) == 0):
                 continue
@@ -597,6 +690,14 @@ def _platform_entries(st: GraphStore, depth: dict[str, int], platform: str, min_
 
 def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30, gate: str | None = "auto",
             platform: str | None = None) -> dict:
+    """Reverse transitive dependents of the targets (see _reaches). An inherited `Sub.method` spec leaves out the
+    calls into the inherited definition whose receiver cannot be a Sub (narrow_inherited)."""
+    with narrowed(st, [i for s in specs for i in inherited_targets(st, s)]):
+        return _reaches(st, specs, min_conf, max_depth, gate, platform)
+
+
+def _reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30, gate: str | None = "auto",
+             platform: str | None = None) -> dict:
     """Reverse transitive dependents of the targets.
 
     With a gate scenario (default: the one the DB was indexed with), every dependent also gets
@@ -835,8 +936,16 @@ def caller_label(c: dict) -> str:
     return lab + generated_label(c) + platform_label(c)
 
 
-# override / implementation relation between methods (base -> override); a dispatch hop, not a call
+# override / implementation relation between methods (base -> override); a dispatch hop, not a call. A container
+# binding between two methods (Nest `{ provide: AbstractRepo, useClass: Impl }`, Laravel `bind`) is one too
 DISPATCH_KINDS = ("OVERRIDDEN_BY", "IMPLEMENTED_BY")
+_DISPATCH_SQL = ("(kind IN ('OVERRIDDEN_BY','IMPLEMENTED_BY') OR (kind='BOUND_TO' AND src LIKE 'method:%' "
+                 "AND dst LIKE 'method:%'))")
+
+
+def is_dispatch_hop(kind: str, src: str, dst: str) -> bool:
+    """An override / implementation hop, or a method-to-method container binding."""
+    return kind in DISPATCH_KINDS or (kind == "BOUND_TO" and src.startswith("method:") and dst.startswith("method:"))
 
 
 def _fqn_of(st: GraphStore, ids) -> dict[str, str]:
@@ -854,12 +963,13 @@ def override_relations(st: GraphStore, targets: list[str], min_conf="heuristic")
     out = {"overrides": [], "overridden_by": []}
     if not targets:
         return out
-    tq, kq = ",".join("?" * len(targets)), ",".join("?" * len(DISPATCH_KINDS))
+    tq = ",".join("?" * len(targets))
     rank = CONFIDENCE_RANK[min_conf]
-    up = st.q(f"SELECT DISTINCT src, dst, kind FROM edges WHERE dst IN ({tq}) AND kind IN ({kq}) AND conf_rank >= ?",
-              (*targets, *DISPATCH_KINDS, rank))
-    down = st.q(f"SELECT DISTINCT src, dst, kind FROM edges WHERE src IN ({tq}) AND kind IN ({kq}) AND conf_rank >= ?",
-                (*targets, *DISPATCH_KINDS, rank))
+    order = "ORDER BY CASE kind WHEN 'BOUND_TO' THEN 1 ELSE 0 END"     # one entry per pair, the type relation first
+    up = _first_per_pair(st.q(f"SELECT DISTINCT src, dst, kind FROM edges WHERE dst IN ({tq}) AND {_DISPATCH_SQL} "
+                              f"AND conf_rank >= ? {order}", (*targets, rank)))
+    down = _first_per_pair(st.q(f"SELECT DISTINCT src, dst, kind FROM edges WHERE src IN ({tq}) AND {_DISPATCH_SQL} "
+                                f"AND conf_rank >= ? {order}", (*targets, rank)))
     fq = _fqn_of(st, {r["src"] for r in up} | {r["dst"] for r in down})
     tset = set(targets)
     out["overrides"] = sorted(({"id": r["src"], "fqn": fq.get(r["src"], r["src"]), "of": r["dst"], "edge": r["kind"]}
@@ -869,16 +979,24 @@ def override_relations(st: GraphStore, targets: list[str], min_conf="heuristic")
     return out
 
 
+def _first_per_pair(rows) -> list:
+    seen, out = set(), []
+    for r in rows:
+        if (r["src"], r["dst"]) not in seen:
+            seen.add((r["src"], r["dst"]))
+            out.append(r)
+    return out
+
+
 def _all_overrides(st: GraphStore, targets: list[str], min_conf: str) -> list[str]:
     """Every override / implementation below the targets (transitively), not counting the targets themselves."""
     seen, frontier = set(targets), list(targets)
-    kq = ",".join("?" * len(DISPATCH_KINDS))
     while frontier:
         nxt = []
         for i in range(0, len(frontier), 500):
             chunk = frontier[i:i + 500]
-            for r in st.q(f"SELECT dst FROM edges WHERE src IN ({','.join('?' * len(chunk))}) AND kind IN ({kq}) AND conf_rank >= ?",
-                          (*chunk, *DISPATCH_KINDS, CONFIDENCE_RANK[min_conf])):
+            for r in st.q(f"SELECT dst FROM edges WHERE src IN ({','.join('?' * len(chunk))}) AND {_DISPATCH_SQL} AND conf_rank >= ?",
+                          (*chunk, CONFIDENCE_RANK[min_conf])):
                 if r["dst"] not in seen:
                     seen.add(r["dst"])
                     nxt.append(r["dst"])
@@ -890,15 +1008,17 @@ def _dispatch_only(st: GraphStore, depth: dict[str, int], paths: dict[str, list[
                    platform: str | None) -> set[str]:
     """Reached nodes whose every step towards the targets is an override hop (a base / interface method): they do not
     call the target; their callers do, through the base type."""
-    cand = [n for n, d in depth.items() if d > 0 and paths.get(n) and paths[n][0]["kind"] in DISPATCH_KINDS]
+    cand = [n for n, d in depth.items() if d > 0 and paths.get(n)
+            and is_dispatch_hop(paths[n][0]["kind"], paths[n][0]["from"], paths[n][0]["to"])]
     if not cand:
         return set()
-    px, rank, kinds = _px(st, platform), CONFIDENCE_RANK[min_conf], set(CALL_LIKE) - set(DISPATCH_KINDS)
+    px, rank, kinds = _px(st, platform), CONFIDENCE_RANK[min_conf], set(CALL_LIKE)
     calls = set()
     for i in range(0, len(cand), 500):
         chunk = cand[i:i + 500]
         for e in st.q(f"SELECT id, src, dst, kind, conf_rank FROM edges WHERE src IN ({','.join('?' * len(chunk))})", chunk):
-            if e["kind"] in kinds and e["conf_rank"] >= rank and not (px and e["id"] in px) \
+            if e["kind"] in kinds and not is_dispatch_hop(e["kind"], e["src"], e["dst"]) and e["conf_rank"] >= rank \
+                    and not (px and e["id"] in px) \
                     and depth.get(e["dst"]) == depth[e["src"]] - 1:
                 calls.add(e["src"])
     return {n for n in cand if n not in calls}
@@ -909,6 +1029,17 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
     under `overrides`, not as a caller of its override (its callers are, `via_base`), and the callers of a base
     method include the callers of its overrides (`via_override`): calls through a collection or a base-typed value
     land on the concrete overrides."""
+    inh = inherited_targets(st, spec)
+    with narrowed(st, inh):
+        out = _impact(st, spec, min_conf, platform)
+    if inh:
+        out["inherited"] = inh
+        keep = set(override_seeds(st, spec, out["targets"], min_conf))   # a sibling class's override is not a Sub's method
+        out["overridden_by"] = [x for x in out["overridden_by"] if x["id"] in keep]
+    return out
+
+
+def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> dict:
     targets = resolve_targets(st, spec)
     si = _has_class_target(targets)
     rel = override_relations(st, targets, min_conf)
@@ -953,11 +1084,6 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
         callers.append(c)
     out = {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
            "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or "")), **rel}
-    inh = inherited_targets(st, spec)
-    if inh:
-        out["inherited"] = inh
-        keep = set(below)   # a sibling class's override is not a Sub instance's method
-        out["overridden_by"] = [x for x in out["overridden_by"] if x["id"] in keep]
     if platform:
         from .platforms import filter_info
         out["platform"] = filter_info(st, platform)
@@ -1542,7 +1668,13 @@ def route_targets(st: GraphStore, spec: str) -> list[str]:
 
 def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30) -> dict:
     """Tests that exercise a symbol / route / table...: direct (the test code itself calls / requests it) and
-    transitive (through application code: test -> route -> controller -> service -> target)."""
+    transitive (through application code: test -> route -> controller -> service -> target). An inherited
+    `Sub.method` spec leaves out the calls whose receiver cannot be a Sub (narrow_inherited)."""
+    with narrowed(st, inherited_targets(st, spec)):
+        return _tests_covering(st, spec, min_conf, max_depth)
+
+
+def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30) -> dict:
     from .core.model import TEST_EDGE_KINDS
     targets = route_targets(st, spec) or resolve_targets(st, spec)
     # a cross-repo hop (frontend http call -> backend route) is still the test's own request

@@ -192,9 +192,9 @@ def test_inherited_method_spec_python(tmp_path):
     names = {t["name"] for t in Q.tests_covering(st, "B.run")["transitive"]}
     assert names == {"test_use_c"}
     out = cli("impact", "B.run", "--db", str(db), "--no-paths")
-    assert "B.run -> inherited from pkg.core.Base.run" in out and "overridden by: pkg.core.C.run" in out
+    assert "B.run -> inherited from Base.run" in out and "overridden by: pkg.core.C.run" in out
     out = cli("tests", "B.name", "--db", str(db), "--no-paths")
-    assert "B.name -> inherited from pkg.core.Base.name" in out
+    assert "B.name -> inherited from Base.name" in out
     # defined methods and unknown names are unchanged
     assert Q.resolve_targets(st, "pkg.core.C.run") == ["method:pkg.core.C.run"] and not Q.inherited_targets(st, "C.run")
     assert Q.resolve_targets(st, "B.nothing") == []

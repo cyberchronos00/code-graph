@@ -459,7 +459,38 @@ Spot checks: every added edge was a real `extends` / `implements` / override. On
 `impact MergeFeedSource_Following._getFeed` had no callers and now lists `MergeFeedSource._fetchNextInner` (via the
 base `_getFeed`) up to `fetchNext`; on nestjs-boilerplate the repository implementations were already reached through
 Nest's BOUND_TO edges and now also state `overrides: FileRepository.create`. Calls on a TypeScript **interface** type
-(`api.fetch()` with `api: FeedAPI`) still have no target node, because interface members are not nodes.
+(`api.fetch()` with `api: FeedAPI`) still had no target node then; #55 below adds interface members.
+
+## Interface members, receiver-narrowed inherited specs, container bindings as dispatch (#55)
+
+`cg index <repo>` before and after, no flags; queries with the old and the new code on the old and the new graph.
+
+| Project | Commit | Nodes / edges before → after | Interface members | Calls into them | IMPLEMENTED_BY added (structural) | Calls with `recv` |
+|---|---|---|---|---|---|---|
+| bluesky-social/social-app | db23528 | 9933 / 47648 → 9959 / 47724 | 26 | 16 | 34 (8) | 4 |
+| mattermost/mattermost-mobile | e5be311 | 21711 / 81269 → 21735 / 81384 | 24 | 91 | 0 | 224 |
+| immich-app/immich `server/` | c5e06dc | 8028 / 36415 → 8038 / 36450 | 10 | 20 | 5 (0) | 1062 |
+| calcom/cal.com `apps/api/v2` | 54343aa | 3813 / 12322 → 3821 / 12341 | 8 | 0 | 11 (0) | 0 |
+| brocoders/nestjs-boilerplate | 9620f15 | 764 / 2147 → unchanged | 0 | 0 | 0 | 0 |
+
+No edge was lost: the only edges that changed source are 22 REFERENCES_TYPE from an interface to the types its
+member signatures use, which now start at the member. Precision, from spot checks: all 50 added IMPLEMENTED_BY
+edges are real (`implements` declarations; the 8 structural ones are `return new AuthorFeedAPI(...)` etc. in a
+function returning the other `FeedAPI` interface of social-app's `followingV2`), and the 36 sampled calls into
+interface members are calls on values typed with that interface (`api.peekLatest()`, `bulk.getAssetIds(...)`,
+`Intl.formatMessage`, mattermost's REST client mixins). `impact AuthorFeedAPI.peekLatest` (social-app) 0 → 48
+callers via `FeedAPI.peekLatest`; `impact MemoryRepository.getAssetIds` (immich) 0 → 15 callers, 7 entry points via
+`IBulkAsset.getAssetIds`; `impact BaseConfig.getCommand` 0 → 3. mattermost's REST client implements its interfaces
+through mixin class expressions, so those members have callers but no IMPLEMENTED_BY yet.
+
+Inherited specs: `impact AppDataOperator.handleRecords` (mattermost) leaves out 4 of 42 calls into
+`BaseDataOperator.handleRecords`, all `this.handleRecords(...)` in the sibling `ServerDataOperatorBase` (656 → 339
+transitive callers); `ExifTestContext.newUser` (immich tests) 123 of 624 calls on `LibraryTestContext` /
+`SyncTestContext`; `MergeFeedSource_Custom.take` (social-app) the call on `MergeFeedSource_Following`. Calls on
+mattermost's `ServerDataOperator` (a class built with `mix(ServerDataOperatorBase).with(...)` merged with an
+interface) are kept, since the graph does not know that class's ancestry. Container bindings: on
+nestjs-boilerplate all 36 bound repository implementations listed the abstract method as a d=1 caller (284 callers
+in total); now 0, the abstract method is under `overrides:` (248 callers, exactly those 36 fewer).
 
 Queries on sphinx (graph unchanged): `reaches` on `ASTBaseBase._stringify` (135 overrides) 26 → 31 dependents (5 via
 override), on `Builder.write_doc` 25 → 26; `tests` counts unchanged there, since sphinx's calls land on the base

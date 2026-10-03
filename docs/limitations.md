@@ -238,7 +238,11 @@ Issues and pull requests that extend it are welcome.
   function, but where the pointer is later called is not tracked (no dataflow). Callbacks registered at runtime show
   up as referenced, not as called.
 - **Dispatch over-approximates:** a `dyn Trait`, generic or virtual call reaches every impl or override in the graph,
-  not only the ones that can actually flow there.
+  not only the ones that can actually flow there. The same holds for a call on a TypeScript interface-typed value:
+  it reaches every class implementing the interface. Implementations count when a class `implements` the interface
+  or `new X()` is used where the interface is expected; object literals typed as the interface, mixin class
+  expressions (`(base) => class extends base { ... }`) and classes only passed around as values are not linked. An
+  inherited `Sub.method` spec is narrowed only where the receiver type is known.
 - **References outside items** (`use` declarations, file-level code outside any function or type, attribute
   arguments other than serde/clap) are not attributed to a function and are dropped. For ripgrep that is about 5k
   occurrences, mostly `use` lines.

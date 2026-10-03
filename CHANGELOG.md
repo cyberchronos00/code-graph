@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Dispatch through TypeScript interfaces: interface members are nodes (method signatures; function-typed properties
+  of implemented interfaces), so a call on an interface-typed value has a target, linked by IMPLEMENTED_BY to the
+  implementing class members (`implements`, through base classes and interface `extends`, and structurally where
+  `new X()` is used as the interface). `impact` / `reaches` / `tests` on an inherited `Sub.method` leave out the
+  calls whose receiver cannot be a `Sub` (TypeScript checker types, Python inferred instances and collection
+  elements, edge `attrs.recv`), with a shorter note that counts them. A method-to-method container binding (Nest
+  `useClass`, Laravel `bind`) is a dispatch hop: the abstract method is shown under `overrides:`, not as a caller
+  ([#55](https://github.com/cyberchronos00/code-graph/issues/55)).
 - Bridges: Pigeon APIs (`endpoint:pigeon:<Api>#<method>`) from the `@HostApi()` / `@FlutterApi()` definitions: Dart
   calls on the host API (fields, variables, Riverpod `Provider<Api>`) to the Kotlin / Java / Swift implementation,
   including methods inherited from an `ImplBase` superclass, and native `@FlutterApi` calls to the Dart class

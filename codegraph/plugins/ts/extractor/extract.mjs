@@ -536,6 +536,55 @@ function testCallInfo(node) {
   return { name: name.replace(/\s+/g, ' ').slice(0, 160), describe, framework: testFramework }
 }
 const sourceFiles = program.getSourceFiles().filter(projectSf)
+// interfaces some project class `implements` (and the interfaces they extend): their function-typed properties
+// (`fetch: (o: Opts) => Promise<R>`) become member nodes too; method signatures always do
+const aliasTarget = sym => { for (let i = 0; sym && (sym.flags & ts.SymbolFlags.Alias) && i < 6; i++) { try { sym = checker.getAliasedSymbol(sym) } catch { return null } } return sym }
+const ifaceDecls = sym => ((sym && sym.declarations) || []).filter(d => ts.isInterfaceDeclaration(d) || (ts.isTypeAliasDeclaration(d) && ts.isTypeLiteralNode(d.type)))
+const implementedIfaces = new Set()
+{
+  const addIface = (d, depth = 0) => {
+    if (implementedIfaces.has(d) || depth > 8) return
+    implementedIfaces.add(d)
+    for (const h of d.heritageClauses || []) for (const t of h.types) {
+      let sym = null
+      try { sym = aliasTarget(checker.getSymbolAtLocation(t.expression)) } catch { }
+      for (const x of ifaceDecls(sym)) addIface(x, depth + 1)
+    }
+  }
+  const walk = n => {
+    if ((ts.isClassDeclaration(n) || ts.isClassExpression(n)) && n.heritageClauses) {
+      for (const h of n.heritageClauses) if (h.token === ts.SyntaxKind.ImplementsKeyword) for (const t of h.types) {
+        let sym = null
+        try { sym = aliasTarget(checker.getSymbolAtLocation(t.expression)) } catch { }
+        for (const d of ifaceDecls(sym)) addIface(d)
+      }
+    }
+    ts.forEachChild(n, walk)
+  }
+  for (const sf of sourceFiles) if (sf.text.includes('implements')) walk(sf)
+}
+const isFnType = t => t && (ts.isFunctionTypeNode(t) || (ts.isParenthesizedTypeNode(t) && isFnType(t.type)))
+// members of an interface / object type alias: `method:<file>#Iface.member` (attrs.signature; no body). A call on an
+// interface-typed value resolves to it; IMPLEMENTED_BY links it to the class members implementing it
+function ifaceMembers(decl, q, parentId, r, sf) {
+  const members = ts.isInterfaceDeclaration(decl) ? decl.members : decl.type.members
+  const seen = new Map()
+  for (const m of members || []) {
+    if (!m.name || !(ts.isIdentifier(m.name) || ts.isStringLiteralLike(m.name))) continue
+    const isM = ts.isMethodSignature(m), isP = ts.isPropertySignature(m) && isFnType(m.type) && implementedIfaces.has(decl)
+    if (!isM && !isP) continue
+    const mq = `${q}.${m.name.text}`
+    let id = seen.get(mq)          // overloads share one node
+    if (!id) {
+      id = mkId('method', `${r}#${mq}`)
+      seen.set(mq, id)
+      nodes.push({ id, kind: 'method', name: mq, file: r, line: lineOf(m, sf), end_line: sf.getLineAndCharacterOfPosition(m.end).line + 1,
+        doc: docOf(m), parent: parentId, attrs: { signature: true, interface_member: true } })
+      stats.interface_members = (stats.interface_members || 0) + 1
+    }
+    declId.set(m, id)
+  }
+}
 for (const sf of sourceFiles) {
   const real = realFile(sf), r = rel(real), fk = fileKind(r)
   const isTestSf = testFiles.has(real)
@@ -676,6 +725,7 @@ for (const sf of sourceFiles) {
         doc: docOf(node), parent: parentId, attrs })
       declId.set(node, id)
       if (body && body !== node) declId.set(body, id)
+      if (kind === 'type' && (ts.isInterfaceDeclaration(node) || (ts.isTypeAliasDeclaration(node) && ts.isTypeLiteralNode(node.type)))) ifaceMembers(node, q, id, r, sf)
       if (kind === 'type') return
       ts.forEachChild(node, c => visit(c, q, id))
       return
@@ -1204,6 +1254,45 @@ const callSites = []
     }
     return out
   }
+  // interface members: `class X implements I` (also through X's base classes and I's own `extends`)
+  const ifaceMember = (d, name, depth = 0) => {
+    const members = ts.isInterfaceDeclaration(d) ? d.members : (d.type && d.type.members) || []
+    for (const m of members) if (m.name && (ts.isIdentifier(m.name) || ts.isStringLiteralLike(m.name)) && m.name.text === name && declId.has(m)) return declId.get(m)
+    if (depth < 8) for (const h of d.heritageClauses || []) for (const t of h.types) {
+      let sym = null
+      try { sym = aliasTarget(checker.getSymbolAtLocation(t.expression)) } catch { }
+      for (const x of ifaceDecls(sym)) { const hit = ifaceMember(x, name, depth + 1); if (hit) return hit }
+    }
+    return null
+  }
+  const ownIfaces = cls => {
+    const out = []
+    for (const h of cls.heritageClauses || []) {
+      if (h.token !== ts.SyntaxKind.ImplementsKeyword) continue
+      for (const t of h.types) {
+        let sym = null
+        try { sym = aliasTarget(checker.getSymbolAtLocation(t.expression)) } catch { }
+        for (const d of ifaceDecls(sym)) if (projectDecl(d)) out.push(d)
+      }
+    }
+    return out
+  }
+  const memberName = m => m.name && (ts.isIdentifier(m.name) || ts.isStringLiteralLike(m.name)) ? m.name.text : null
+  const implementsIfaces = (decl, r, sf, ifaces, conf, attrs, inherited) => {
+    let n = 0
+    for (const m of decl.members || []) {
+      if (!(ts.isMethodDeclaration(m) || ts.isGetAccessor(m) || ts.isSetAccessor(m) || ts.isPropertyDeclaration(m)) || !declId.has(m)) continue
+      if (!declId.get(m).startsWith('method:') || (m.modifiers && m.modifiers.some(x => x.kind === ts.SyntaxKind.StaticKeyword))) continue
+      const nm = memberName(m)
+      if (!nm) continue
+      for (const [d, inh] of ifaces) {
+        if (inh && inherited(nm)) continue      // the base class's own member implements it
+        const im = ifaceMember(d, nm)
+        if (im && im !== declId.get(m)) { addEdge(im, declId.get(m), 'IMPLEMENTED_BY', r, lineOf(m, sf), conf, attrs); n++ }
+      }
+    }
+    return n
+  }
   let nh = 0, no = 0
   for (const [decl, id] of declId) {
     if (!ts.isClassDeclaration(decl) || !id.startsWith('class:')) continue
@@ -1232,6 +1321,41 @@ const callSites = []
         if (im && im !== declId.get(m) && im !== hit) { addEdge(im, declId.get(m), 'IMPLEMENTED_BY', r, lineOf(m, sf), 'exact'); no++ }
       }
     }
+    // interfaces this class or a base class implements -> their members
+    const ifaces = ownIfaces(decl).map(d => [d, false])
+    for (let b = baseClassOf(decl), i = 0; b && i < 12; b = baseClassOf(b), i++) for (const d of ownIfaces(b)) ifaces.push([d, true])
+    if (ifaces.length) {
+      const inherited = nm => { for (let b = baseClassOf(decl), i = 0; b && i < 12; b = baseClassOf(b), i++) if (memberNode(b, nm)) return true; return false }
+      no += implementsIfaces(decl, r, sf, ifaces, 'exact', undefined, inherited)
+    }
+  }
+  // structural: `new X()` where an interface type is expected (`const api: FeedAPI = new X()`, an argument, a return
+  // value) and X does not declare `implements` it
+  for (const sf of sourceFiles) {
+    if (realFile(sf).endsWith('.vue') || !sf.text.includes('new ')) continue
+    const r = rel(realFile(sf))
+    const done = new Set()
+    const walk = n => {
+      if (ts.isNewExpression(n)) {
+        let ct = null, sym = null
+        try { ct = checker.getContextualType(n) } catch { }
+        const ts0 = ct && (ct.aliasSymbol || ct.getSymbol())
+        const ids = ts0 ? ifaceDecls(ts0).filter(projectDecl) : []
+        if (ids.length) {
+          try { sym = aliasTarget(checker.getSymbolAtLocation(n.expression)) } catch { }
+          const cd = sym && (sym.declarations || []).find(x => ts.isClassDeclaration(x) && projectDecl(x) && declId.has(x))
+          if (cd) for (const d of ids) {
+            const key = `${declId.get(cd)}|${declId.get(d)}`
+            if (done.has(key) || ownIfaces(cd).includes(d)) continue
+            done.add(key)
+            const csf = cd.getSourceFile()
+            no += implementsIfaces(cd, rel(realFile(csf)), csf, [[d, false]], 'resolved', { via: ['structural'], at: `${r}:${lineOf(n, sf)}` }, () => false)
+          }
+        }
+      }
+      ts.forEachChild(n, walk)
+    }
+    walk(sf)
   }
   if (nh) stats.class_heritage_edges = nh
   if (no) stats.override_edges = no
@@ -1810,8 +1934,32 @@ function handleCall(node, cur, sf, r, encFn) {
   if (!t) return
   let kind = edgeKindFor(t.id, true)
   if (kind === 'REFERENCES_TYPE') return
-  addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined })
+  const recv = kind === 'CALLS' && ts.isPropertyAccessExpression(callee) ? receiverClasses(callee.expression, t.id) : null
+  addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined, recv: recv || undefined })
   callSites.push({ target: t.id, node, cur, r, line })
+}
+
+// `b.run()` landing on `Base.run` (B inherits it): the receiver's project classes (attrs.recv), so `impact B.run` can
+// keep only the calls whose receiver can be a B. Only for methods of classes / interfaces something extends or implements
+var baseTypeIds = null      // var: handleCall runs before this line is reached
+function receiverClasses(expr, targetId) {
+  if (!targetId.startsWith('method:')) return null
+  if (!baseTypeIds) baseTypeIds = new Set(edges.filter(e => e.kind === 'EXTENDS' || e.kind === 'IMPLEMENTS').map(e => e.dst))
+  const tn = nodeById.get(targetId)
+  if (!tn || !tn.parent || !baseTypeIds.has(tn.parent)) return null
+  let ty = null
+  try { ty = checker.getTypeAtLocation(expr) } catch { return null }
+  if (!ty) return null
+  const out = []
+  for (const m of ty.isUnion() ? ty.types : [ty]) {
+    const sym = m.getSymbol && m.getSymbol()
+    const ds = (sym && sym.declarations) || []      // a merged `interface X` + `class X`: the class
+    const d = ds.find(x => ts.isClassDeclaration(x) && declId.has(x)) || ds.find(x => ts.isInterfaceDeclaration(x) && declId.has(x))
+    if (!d) return null          // a receiver type outside the project classes: unknown
+    const id = declId.get(d)
+    if (!out.includes(id)) out.push(id)
+  }
+  return out.length && !(out.length === 1 && out[0] === tn.parent) ? out : null
 }
 
 function generatedClientCall(node, callee) {

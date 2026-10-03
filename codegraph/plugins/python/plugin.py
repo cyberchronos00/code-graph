@@ -58,6 +58,12 @@ STOP_METHODS = {"get", "set", "save", "delete", "update", "filter", "all", "item
 ASYNC_WRAPPERS = {"sync_to_async", "async_to_sync", "database_sync_to_async", "run_sync"}
 
 
+def _recv_attr(prog, call, tgt) -> dict:
+    """{"recv": [class ids]} for a call on a receiver whose class inherits the target method, else {}."""
+    r = prog.recv.get((id(call.func), id(tgt)))
+    return {"recv": list(r)} if r else {}
+
+
 @dataclass
 class FuncInfo:
     name: str
@@ -262,6 +268,10 @@ class PyProgram:
         self.method_index: dict[str, list[FuncInfo]] = {}
         self._elements_active: set = set()        # (id(expr), mode) being followed by elements(): cycle guard
         self._collection_steps: int | None = None  # steps left for the call site dispatch_targets is resolving
+        # (id(call.func), id(target method)) -> receiver class ids of a call landing on a method the receiver's class
+        # inherits (`b.run()` with b a B, run defined in Base): edge attrs.recv, so `impact B.run` keeps only calls on
+        # receivers that can be a B
+        self.recv: dict[tuple[int, int], list[str]] = {}
         self._returns: dict = {}                  # id(FuncInfo) -> [(return expr, ctx)]
         self.parse_errors: list[dict] = []
         self.attr_rules: list[Callable] = []      # (prog, base_type, attr, ctx) -> type | None
@@ -915,6 +925,9 @@ class PyProgram:
                     if vt and vt[0] == "type" and isinstance(fn.value, (ast.Name, ast.Attribute)):
                         conf = EXACT
                 out.append((t[1], conf, None))
+                if recv[0] in ("inst", "type") and isinstance(recv[1], ClassInfo) and t[1].cls is not None \
+                        and recv[1] is not t[1].cls:
+                    self.recv[(id(fn), id(t[1]))] = [recv[1].id]
                 # dispatch to overrides in subclasses (self.m() in a base class)
                 if recv[0] == "inst" and isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) and fn.value.id == "self":
                     for sub in self.subclasses(recv[1]):
@@ -959,7 +972,12 @@ class PyProgram:
             for e, ectx in self.drawn_from(fn.value, ctx):
                 t = self.infer(e, ectx)
                 if t and t[0] in ("inst", "type"):
-                    add(self.find_method(t[1], fn.attr))
+                    m = self.find_method(t[1], fn.attr)
+                    add(m)
+                    if m is not None and m.cls is not None and isinstance(t[1], ClassInfo):
+                        rs = self.recv.setdefault((id(fn), id(m)), [])
+                        if t[1].id not in rs:
+                            rs.append(t[1].id)
             return out
         from .refs import is_property
         for e, ectx in self.drawn_from(fn, ctx):
@@ -1348,7 +1366,8 @@ class PythonPlugin(LanguagePlugin):
                         if init:
                             b.add_edge(f.id, init.id, "CALLS", f.file, sub.lineno, conf, via="constructor")
                     else:
-                        b.add_edge(f.id, tgt.id, "CALLS", f.file, sub.lineno, conf, **({"via": via} if via else {}))
+                        b.add_edge(f.id, tgt.id, "CALLS", f.file, sub.lineno, conf, **({"via": via} if via else {}),
+                                   **_recv_attr(prog, sub, tgt))
                     conf_ct[conf] += 1
             n_env += self.env_reads(prog, b, f.id, f.node, ctx)
         for m in prog.modules.values():
@@ -1422,7 +1441,8 @@ class PythonPlugin(LanguagePlugin):
                         if init:
                             b.add_edge(src, init.id, "CALLS", file, sub.lineno, conf, via="constructor")
                     else:
-                        b.add_edge(src, tgt.id, "CALLS", file, sub.lineno, conf, **({"via": via} if via else {}))
+                        b.add_edge(src, tgt.id, "CALLS", file, sub.lineno, conf, **({"via": via} if via else {}),
+                                   **_recv_attr(prog, sub, tgt))
                     conf_ct[conf] += 1
 
     def references_and_entries(self, prog: PyProgram, b, conf_ct: dict, rp) -> dict:

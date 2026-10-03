@@ -507,6 +507,9 @@ def callers(symbol: str, min_confidence: str = "heuristic", limit: int = 60) -> 
         f"SELECT src, dst, kind, file, line, confidence FROM edges WHERE dst IN ({','.join('?' * len(ids[:5]))}) "
         f"AND kind IN ({','.join('?' * len(CALLER_KINDS))}) ORDER BY file, line", tuple(ids[:5]) + CALLER_KINDS)
             if rank.get(r["confidence"], 1) >= rank.get(min_confidence, 1)]
+    # a container binding next to the override / implementation edge of the same pair is one relation: show it once
+    disp = {(r["src"], r["dst"]) for r in rows if r["kind"] in Q.DISPATCH_KINDS}
+    rows = [r for r in rows if not (r["kind"] == "BOUND_TO" and (r["src"], r["dst"]) in disp)]
     head = f"targets: {', '.join(short(t) for t in ids[:5])}"
     _scope(ids[:5] + [r["src"] for r in rows])
     if not rows:
