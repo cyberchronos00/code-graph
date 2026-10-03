@@ -1,0 +1,3 @@
+// Release
+#include "Shared.xcconfig"
+SERVER_URL = https:/$()/shop.example.com

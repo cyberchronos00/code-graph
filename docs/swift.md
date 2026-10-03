@@ -13,7 +13,8 @@ With a Swift toolchain, calls come from the compiler's index store instead ([exa
 | Calls | `CALLS` resolved through the enclosing type, its extensions and supertypes, the receiver's parameter / property type (`api.book(id)` with `let api: BooksAPI`) and a project-wide unique name; initializer calls as `INSTANTIATES`; protocol / superclass members → conformances and overrides (`IMPLEMENTED_BY` / `OVERRIDDEN_BY`) |
 | Entry points | `@main` types and `App` conformances (`main`); `UIApplicationDelegate` / scene delegate / `UIViewController` / `AppIntent` / `Widget` lifecycle callbacks; `BGTaskScheduler.shared.register` handlers (`queue_job`); XCTest `test*` methods (`test`) |
 | SwiftUI / UIKit | views reached by `NavigationLink(destination:)`, `.navigationDestination { }`, `.sheet` / `.fullScreenCover` / `.popover { }`, `TabView` and the `WindowGroup` root become `page:swift:<View>` (ROUTES_TO its `body`) with `NAVIGATES_TO` edges; UIKit `pushViewController(V(), ...)` / `present(V(), ...)` likewise |
-| HTTP clients | URLSession (`data(from:)`, `data(for:)`, `dataTask`, `upload(for:)`) with the URL built in the same function (`URL(string: "...")`, `baseURL.appendingPathComponent("...")`, `"\(baseURL)/..."`) and `request.httpMethod = "POST"`; Alamofire `AF.request(url, method: .post)`. `\(base)` keeps `{base}` as the origin, so `cg link` still matches the path |
+| HTTP clients | URLSession (`data(from:)`, `data(for:)`, `dataTask`, `upload(for:)`) with the URL built in the same function (`URL(string: "...")`, `baseURL.appendingPathComponent("...")`, `"\(baseURL)/..."`) and `request.httpMethod = "POST"`; Alamofire `AF.request(url, method: .post)`. `\(base)` keeps `{base}` as the origin, so `cg link` still matches the path, unless the base is known (next row) |
+| Base URLs | `{baseURL}` is resolved from a constant with a base-like name (`static let apiBaseURL = URL(string: "https://api.example.com/v2")!`), or from an `Info.plist` key read in Swift (`Bundle.main.object(forInfoDictionaryKey: "SERVER_URL")`, `infoDictionary?["SERVER_URL"]`) whose `$(VAR)` comes from the `.xcconfig` files (`#include`s followed, `/$()/` read as `//`). One value: the endpoint gets that origin and path prefix (`origin_kind` api, `attrs.base` with value and source). One value per configuration (Debug / Release): `origin_kind` env with `attrs.base_candidates`, linked by path like an API call. An absolute URL on a configured base's origin also counts as an API call |
 | Moya | `enum API: TargetType` (or an `extension API: TargetType`): `baseURL` (`URL(string: "...")`, otherwise `{baseURL}`), `path` and `method` read per `case` from `switch self` (with or without `return`, `default:` included) or as a single value → one `http:<METHOD> <path>` node per case with `HTTP_CALLS` from the enum (`how: "moya target"`); `provider.request(.case)` / `requestPublisher` / `provider.rx.request` → `HTTP_CALLS` from the calling function, the target type taken from `MoyaProvider<API>` on the provider variable or a case name unique among targets. Edges carry `target: "API.case"`; a relative base links to the backend's routes |
 | Fluent | `Model` classes with `static let schema = "todos"` (or `static var schema: String { "todos" }`) → `table:todos` (`MAPS_TO_TABLE`); a migration's `database.schema("todos")...create()` / `.update()` / `.delete()` → `WRITES_TABLE` from `prepare` / `revert` (`via: "migration create"`); `Todo.query(on:)` and `Todo.find(...)` → `READS_TABLE` (`WRITES_TABLE` when the chain ends in `delete` / `update` / `set`); `todo.save(on:)` / `create` / `update` / `delete(on:)` with `todo` typed by a parameter, property or `let todo = Todo(...)` / `Todo.find(...)` in the function → `WRITES_TABLE` (`resolved`) |
 | Vapor | `app.get("orders", ":id") { }`, `routes.post("x", use: handler)`, `grouped("v1")` / `group("v1") { v1 in }` prefixes, middleware passed to `grouped(...)` (`User.authenticator()`, `User.guardMiddleware()`) as the route's guards, `RouteCollection.boot(routes:)` controllers → `route:GET /v1/orders/{id}`; closure handlers are nodes of their own |
@@ -45,6 +46,14 @@ What a Linux build covers: only the targets that compile there. SwiftUI / UIKit 
 targets that need Apple frameworks are not in a Linux store (use the store from an Xcode build for those). Code in an
 inactive `#if` branch is not compiled, so its heuristic edges are kept with `via: "not-compiled"`.
 
+Heuristic call resolution, as measured against the store (docs/validation.md): an initializer call on a type the
+project only extends (`String(decoding:as:)`, `Data(...)`, `URL(...)`, `JSONDecoder()`) is an edge only when one of
+the extension's initializers fits the argument labels (`calls_sdk_initializer` counts the others); initializer
+calls go to the overloads whose labels fit (defaults, closures and variadics may be left out, a trailing closure
+fills a closure parameter), the first of per-`#if` variants; and a call of a standard-library collection method
+(`first`, `filter`, `reduce`, `sorted`, ...) on a receiver of unknown type is not resolved to a same-named project
+method. In exact mode, initializers declared in an extension of an SDK type are `INSTANTIATES` / `CALLS` edges too.
+
 `index` stats: `index_files`, `index_defs_matched` / `index_defs_unmatched`, `index_references`, `index_refs_external`
 (SDK and dependency symbols), `heuristic_kept_not_compiled` and `exact_vs_heuristic` (precision and recall of the
 heuristic call edges against the store, for the covered files).
@@ -67,8 +76,8 @@ The path runs from the checkout sheet's `body` through the store to the URLSessi
 
 - Building Xcode projects (`.xcodeproj` / workspaces) or iOS-only targets on Linux: point
   `CODEGRAPH_SWIFT_INDEX_STORE` at an Xcode store instead.
-- `URLComponents` paths and query items, typed endpoint enums other than Moya, URLs built in helpers, base URLs from
-  `Info.plist` / `.xcconfig`.
+- `URLComponents` paths and query items, typed endpoint enums other than Moya, URLs built in helpers, per-scheme base
+  URLs set outside `.xcconfig` (build settings inside `.pbxproj`).
 - OS versions as filters (they are recorded, see above); App Intents and widgets as their own entry
   kinds; `navigationDestination(for:)` matched to `NavigationLink(value:)`; macro and package-plugin output as
   generated code.

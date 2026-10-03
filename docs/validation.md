@@ -366,14 +366,31 @@ found.
 | vapor/template (rendered with Fluent + SQLite, existing store) | 7 / 8 | 17 / 0 | 11 | 10 | 9 | 0.82 | 0.90 | ~2 min cold with dependencies |
 | **Total** | 155 | 1,309 / 32 | 912 | 1,188 | 710 | **0.78** | **0.60** | |
 
+After the heuristic precision fixes of [#58](https://github.com/cyberchronos00/code-graph/issues/58) (same stores,
+same sources; SDK initializers of extended types, initializer argument labels, standard-library collection methods,
+and the exact layer's initializers declared in extensions of SDK types):
+
+| Project | Heuristic edges | Exact edges | Agree | Precision | Recall |
+|---|---|---|---|---|---|
+| Alamofire/Alamofire | 655 → 585 | 833 → 848 | 544 → 552 | 0.83 → **0.94** | 0.65 → 0.65 |
+| pointfreeco/isowords (server product) | 246 → 174 | 345 → 374 | 157 → 163 | 0.64 → **0.94** | 0.46 → 0.44 |
+| vapor/template | 11 → 11 | 10 → 10 | 9 → 9 | 0.82 → 0.82 | 0.90 → 0.90 |
+| **Total** | 912 → 770 | 1,188 → 1,232 | 710 → 724 | 0.78 → **0.94** | 0.60 → 0.59 |
+
+The exact edges grew by the initializers projects declare in extensions of SDK types (`extension Data {
+init(hex:) }`), which the layer used to drop; recall moves by that denominator, not by lost heuristic edges. The whole
+graph also loses the SDK-initializer edges in files without a store (all edges: Alamofire 7,321 → 6,756, isowords
+4,973 → 4,295, mostly `Result`, `Data`, `URL`, `URLRequest` and `UUID` constructions in tests).
+
 What a Linux build covers: Alamofire's `Source/` (tests and example apps need Apple frameworks); isowords' server
 modules (the full `swift build` stops at SwiftUI; the server product needs `libsqlite3-dev`), the rest of its 384 files
 keep heuristic edges and `cg coverage` counts them; the Vapor app's `App` target (its test target was not built). Not
 run: Dimillian/IceCubesApp (iOS-only SwiftUI app, no Linux build; heuristic, with the reason in `cg coverage`).
 
-Where they disagree: the heuristic layer links initializers of SDK types the project extends (`URL(...)`,
-`Date(...)`, `UUID(...)` → the extension's class node, while the compiler resolves them to Foundation) and picks
-same-named methods (a Fluent migration's `.create()` matched `TodoController.create`); it misses initializer calls
+Where they disagreed before #58: the heuristic layer linked initializers of SDK types the project extends (`URL(...)`,
+`Date(...)`, `UUID(...)` → the extension's class node, while the compiler resolves them to Foundation) and picked
+same-named methods (`xs.first(where:)` → a project `first`; now fixed; a Fluent migration's `.create()` still matches
+`TodoController.create`); it misses initializer calls
 through `Self(...)` / `.init(...)` / nested types, calls to explicit `init` declarations (the index adds a `CALLS` to
 `T.init` next to `INSTANTIATES`), and members reached through inferred types (`.live`, closure parameters). In
 Alamofire, 247 heuristic edges sit in inactive `#if` branches (Apple-only code); they are kept with

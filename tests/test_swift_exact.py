@@ -157,3 +157,26 @@ def test_swift_build_failure_keeps_heuristic(tmp_path, no_toolchain, monkeypatch
     assert k["mode"] == "heuristic" and k["index"]["error"] == "exit 1"
     assert "swift build failed (exit 1: main.swift:1:8: error: no such module 'SwiftUI')" in _cov(st)["reason"]
     assert set(_edges(con).values()) == {"heuristic"}
+
+
+@needs_toolchain
+def test_exact_extension_initializer_of_sdk_type(tmp_path, clean_env):
+    """An initializer the project declares in an extension of an SDK type (`extension String { init(order:) }`):
+    the compiler's call is an INSTANTIATES / CALLS edge (its parent is the extension, mapped to the type's node), the
+    SDK's own initializers (`String(repeating:count:)`) are not, and the heuristic layer agrees on both."""
+    root = tmp_path / "proj"
+    shutil.copytree(FIX, root)
+    (root / "Sources" / "Demo" / "Ext.swift").write_text(
+        "extension String {\n    init(order: Int) {\n        self = \"o\\(order)\"\n    }\n}\n\n"
+        "func ext() -> String {\n    let a = String(order: 2)\n    let b = String(repeating: \"x\", count: 2)\n"
+        "    return a + b\n}\n")
+    clean_env.setenv("CODEGRAPH_SWIFT", SWIFT)
+    clean_env.setenv("CODEGRAPH_SWIFT_INDEX", "1")
+    st, con = _index(tmp_path, root)
+    assert st["plugins"]["swift"]["mode"] == "indexstore"
+    rows = {(s, d, k, ln, c) for s, d, k, ln, c in con.execute(
+        "select src, dst, kind, line, confidence from edges where file='Sources/Demo/Ext.swift' "
+        "and kind in ('CALLS', 'INSTANTIATES')")}
+    assert ("function:ext", "class:String", "INSTANTIATES", 8, "exact") in rows
+    assert ("function:ext", "method:String.init", "CALLS", 8, "exact") in rows
+    assert not any(r[3] == 9 for r in rows)

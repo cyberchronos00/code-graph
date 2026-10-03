@@ -55,6 +55,16 @@ LIFECYCLE = re.compile(r"^(application\w*|scene\w*|sceneDid\w*|sceneWill\w*|view
 LIFECYCLE_BASES = {"UIApplicationDelegate", "UIWindowSceneDelegate", "UISceneDelegate", "NSApplicationDelegate",
                    "UIViewController", "AppIntent", "Widget", "WKApplicationDelegate"}
 URLSESSION = re.compile(r"\b(data|dataTask|upload|uploadTask|download|downloadTask|bytes)\s*\(\s*(from|for|with)\s*:")
+# Sequence / Collection / Dictionary / Optional / String members: a call of one of these on a receiver of unknown type
+# is not resolved to a same-named project method by the unique-name fallback
+STDLIB_METHODS = {
+    "first", "last", "filter", "reduce", "sorted", "sort", "enumerated", "compactMap", "flatMap", "forEach",
+    "contains", "append", "insert", "remove", "removeAll", "removeFirst", "removeLast", "joined", "reversed",
+    "prefix", "suffix", "dropFirst", "dropLast", "min", "max", "split", "firstIndex", "lastIndex", "mapValues",
+    "compactMapValues", "merge", "merging", "updateValue", "index", "starts", "allSatisfy", "lowercased",
+    "uppercased", "replacingOccurrences", "trimmingCharacters", "components", "hasPrefix", "hasSuffix", "zip",
+    "shuffled", "partition", "subtracting", "union", "intersection", "formUnion", "isEmpty", "count", "makeIterator",
+    "withContiguousStorageIfAvailable", "encode", "decode", "description", "hash", "elementsEqual"}
 PRESENT = {"sheet", "fullScreenCover", "popover", "navigationDestination"}
 OS_PLATFORM = {"iOS": "ios", "iPadOS": "ios", "watchOS": "ios", "tvOS": "ios", "visionOS": "ios", "macOS": "macos",
                "OSX": "macos", "Linux": "linux", "Windows": "windows", "Android": "android", "WASI": "web"}
@@ -179,6 +189,7 @@ class SwiftPlugin(LanguagePlugin):
         self.types: dict[str, Decl] = {}
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.calls: list[tuple] = []
+        self.sigs: dict[str, list] = defaultdict(list)   # function / init node id -> [((label, optional), ...)]
         self.http: list[dict] = []
         self.navs: list[tuple] = []          # (owner, view type name, how, file, line)
         self.handler_refs: list[tuple] = []  # (route id, method name, type fqn, file, line)
@@ -217,6 +228,9 @@ class SwiftPlugin(LanguagePlugin):
         self._hierarchy()
         self._fluent_migrations(sfiles)
         self._moya_endpoints()
+        from .baseurl import collect
+        self.bases = collect(project.root, {sf.rel: sf.src.decode("utf-8", "replace") for sf in sfiles
+                                            if not sf.test and (b"http" in sf.src or b"InfoDictionary" in sf.src)})
         self._emit_http()
         self._link_navs()
         for rid, mname, tfq, file, line in self.handler_refs:
@@ -344,21 +358,30 @@ class SwiftPlugin(LanguagePlugin):
                 kind = "method" if cls else "function"
                 fq = f"{cls.fqn}.{nm}" if cls else nm
                 params = {}
-                for x in c.children:
+                sig = []
+                kids = list(c.children)
+                for i, x in enumerate(kids):
                     if x.type == "parameter":
                         names = [self.t(y) for y in x.children if y.type == "simple_identifier"]
                         tn = self._type_name(next((y for y in x.children if y.is_named and y.type not in
                                                    ("simple_identifier",)), None))
                         if names and tn:
                             params[names[-1]] = tn
+                        # optional at a call site: a default value, a closure (trailing-closure syntax), variadic
+                        opt = (i + 1 < len(kids) and kids[i + 1].type == "=") or any(
+                            y.type in ("function_type", "...") for y in x.children) or "->" in self.t(x)
+                        if names:
+                            sig.append((names[0], opt))
                 did = f"{kind}:{fq}"
                 if did in self.decls:
                     prev = self.decls[did]
                     if prev.file != sf.rel or not self._in_directive(sf, c):  # overloads share one node
                         prev.types.update(params)
+                        self.sigs[did].append(tuple(sig))
                         self._overloads[(sf.rel, c.start_point[0] + 1, nm)] = prev    # its body's calls are prev's
                         continue
                     did = f"{did}@{c.start_point[0] + 1}"                     # per-platform definition (#if os)
+                self.sigs[did].append(tuple(sig))
                 d = Decl(did, kind, nm, fq, sf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
                          cls.fqn if cls else None, [], attrs, mods, params, sf.test)
                 self._add(d, "protocol requirement" if ty == "protocol_function_declaration" else kind)
@@ -531,7 +554,7 @@ class SwiftPlugin(LanguagePlugin):
                         inner[pname] = (pfx, guards)
                     self._refs(lam, sf, owner, decl, {**ctx, "routers": inner})
                     return True
-        self.calls.append((owner, name, recv, line, sf, decl))
+        self.calls.append((owner, name, recv, line, sf, decl, tuple(lab or "_" for lab, _v in al), lam is not None))
         return False
 
     # ---- Vapor helpers
@@ -871,19 +894,60 @@ class SwiftPlugin(LanguagePlugin):
         return []
 
     def _resolve_calls(self):
-        for owner, name, recv, line, sf, decl in self.calls:
+        for owner, name, recv, line, sf, decl, labels, trailing in self.calls:
             targets = self._targets(name, recv, decl)
             if not targets:
                 self.st["calls_unresolved"] += 1
                 continue
+            done = False
             for t in targets[:3]:
                 if t.kind == "class":
+                    hit = self._first_variants([m for m in self.members.get(t.fqn, {}).get("init", [])
+                                                if self._fits(m.id, labels, trailing)])
+                    if "extension-only" in t.modifiers and not hit:
+                        # a type the project only extends (String, Data, URL, JSONDecoder, ...): the call uses one of
+                        # the SDK's initializers, not a project one
+                        self.st["calls_sdk_initializer"] += 1
+                        continue
                     self.b.add_edge(owner, t.id, "INSTANTIATES", sf.rel, line, HEURISTIC)
-                    for m in self.members.get(t.fqn, {}).get("init", []):
+                    for m in hit:
                         self.b.add_edge(owner, m.id, "CALLS", sf.rel, line, HEURISTIC)
                 else:
                     self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC)
-            self.st["calls_resolved"] += 1
+                done = True
+            self.st["calls_resolved" if done else "calls_unresolved"] += 1
+
+    @staticmethod
+    def _first_variants(ds: list) -> list:
+        """Of the per-`#if` definitions of one overload (`init`, `init@42`, `init@48` that fit the call), the first:
+        the platform pass links its sibling variants (attrs.platform_variant_of)."""
+        best: dict = {}
+        for d in ds:
+            k = d.id.split("@")[0]
+            if k not in best or d.line < best[k].line:
+                best[k] = d
+        return list(best.values())
+
+    def _fits(self, did: str, labels: tuple, trailing: bool) -> bool:
+        """Some signature of `did` accepts the call's argument labels (unknown signature: yes). Parameters with a
+        default value, closures and variadics may be left out; a trailing closure fills a closure parameter."""
+        sigs = self.sigs.get(did)
+        if not sigs:
+            return True
+        for sig in sigs:
+            i = 0
+            ok = True
+            for k, (lab, opt) in enumerate(sig):
+                if i < len(labels) and labels[i] == lab:
+                    i += 1
+                elif trailing and i == len(labels) and all(o for _l, o in sig[k + 1:]):
+                    trailing = False          # the trailing closure is this parameter (a closure typealias)
+                elif not opt:
+                    ok = False
+                    break
+            if ok and i == len(labels):
+                return True
+        return False
 
     def _encl_type(self, decl: Decl | None) -> Decl | None:
         if decl is None:
@@ -922,6 +986,8 @@ class SwiftPlugin(LanguagePlugin):
                 return [d for d in self._member(tc, name) if d.kind != "class"]
             return []
         cands = [d for d in self.by_name.get(name, []) if d.kind == "method"]
+        if name in STDLIB_METHODS:      # `xs.first(where:)` on an unknown receiver: the standard library's
+            return []
         return cands if len(cands) == 1 and len(name) > 3 else []
 
     def _hierarchy(self):
@@ -1144,13 +1210,30 @@ class SwiftPlugin(LanguagePlugin):
                     self.st["fluent_migrations"] += 1
 
     def _emit_http(self):
+        bases = getattr(self, "bases", {}) or {}
+        base_origins = {split_url(b["value"])[0] for bs in bases.values() for b in bs}
         for r in self.http:
             origin, path = split_url(r["url"])
             okind = "api" if origin is None else ("unknown" if origin.startswith("{") else "other")
-            key = f"{r['method']} {path}" if okind in ("api", "unknown") else f"{r['method']} {origin}{path}"
+            extra = {}
+            if okind == "unknown" and bases.get(origin[1:-1]):
+                bs = bases[origin[1:-1]]
+                if len(bs) == 1:            # one configured value: the backend's origin and path prefix
+                    bo, bp = split_url(bs[0]["value"])
+                    origin, path, okind = bo, (bp.rstrip("/") + path if bp not in ("", "/") else path), "api"
+                    extra = {"base": {"value": bs[0]["value"], "source": bs[0]["source"]}}
+                    self.st["http_base_resolved"] += 1
+                else:                       # one per configuration / environment
+                    okind = "env"
+                    extra = {"base_candidates": bs[:6]}
+                    self.st["http_base_per_environment"] += 1
+            elif okind == "other" and origin in base_origins:
+                okind = "api"               # an absolute URL on a configured base's origin
+                self.st["http_base_origin_matched"] += 1
+            key = f"{r['method']} {path}" if okind in ("api", "unknown", "env") else f"{r['method']} {origin}{path}"
             nid = self.b.add_node("http", key, key, fqn=key, lang="swift",
                                   attrs={"method": r["method"], "path": path, "client": r["client"], "origin": origin,
-                                         "origin_kind": okind})
+                                         "origin_kind": okind, **extra})
             self.b.add_edge(r["src"], nid, "HTTP_CALLS", r["file"], r["line"], HEURISTIC if okind != "api" else EXACT,
                             client=r["client"], url=r["url"], origin=origin,
                             **({"target": r["target"]} if "target" in r else {}),

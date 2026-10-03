@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Swift heuristic precision against the index store 0.78 -> 0.94 (Alamofire, isowords, vapor/template): SDK
+  initializers on types the project only extends are no longer `INSTANTIATES` edges, initializer calls go to the
+  overloads whose argument labels fit, and standard-library collection methods on unknown receivers are not matched to
+  same-named project methods; exact mode keeps initializers declared in extensions of SDK types. Base URLs: `{baseURL}`
+  resolves from base-like constants and from Info.plist keys with `.xcconfig` values (one value: api origin; one per
+  configuration: `env` with `base_candidates`) ([docs/swift.md](docs/swift.md),
+  [#58](https://github.com/cyberchronos00/code-graph/issues/58)).
+
 - SCIP index health: `cg coverage` warns (`warnings`) when an imported index has occurrences but no readable
   positions, no definitions, or (Kotlin / Rust / C exact layers) no definition matched a declaration, instead of
   adding nothing silently; `cg doctor --scip FILE` (CLI and MCP `doctor(scip=...)`) checks index files

@@ -244,7 +244,9 @@ class ExactLayer:
                 if o.kind not in ix.CALLABLE or o.name.startswith(("getter:", "setter:")):
                     continue
                 if o.kind == "constructor":
-                    tnode = usr_node.get(ctor_type.get(o.usr, ""))
+                    tt = ctor_type.get(o.usr, "")
+                    # an initializer declared in an extension: its parent is the extension, whose node is the type's
+                    tnode = usr_node.get(tt) or usr_node.get(ext_of.get(tt, ""))
                     if tnode is None:
                         ext += 1
                         continue

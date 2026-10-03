@@ -1,0 +1,2 @@
+AUTH_HOST = auth.example.com
+PRODUCT_BUNDLE_IDENTIFIER = com.example.more
