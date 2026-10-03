@@ -286,6 +286,12 @@ def _resolve_direct(st: GraphStore, spec: str) -> list[str]:
         out += [x["id"] for x in st.q("SELECT id FROM nodes WHERE kind='method' AND fqn LIKE ?", (r["fqn"] + "::%",))]
         # an event / job class also selects its dispatch node (event:X, job:X): `impact OrderShipped` follows dispatches
         out += [x["id"] for x in st.q("SELECT id FROM nodes WHERE id IN (?, ?)", ("event:" + r["fqn"], "job:" + r["fqn"]))]
+    if not out and re.fullmatch(r"[A-Za-z_][\w]*", spec):
+        # a bare free-function name in any language, as `search` finds it (Swift / Kotlin / PHP / Rust / C functions:
+        # `formatPrice`, Kotlin `pkg.formatPrice`, PHP `App\helpers\formatPrice`)
+        rows = st.q("""SELECT id FROM nodes WHERE kind='function' AND (name=? OR fqn=?) ORDER BY file, line""",
+                    (spec, spec))
+        out = [r["id"] for r in rows]
     return out
 
 
