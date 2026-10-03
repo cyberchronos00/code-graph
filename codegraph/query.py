@@ -592,6 +592,10 @@ def _hop_of(e) -> dict:
         hop["how"] = json.loads(e["attrs"]).get("how")
     elif e["kind"] == "CALLS" and e["attrs"] and '"collection"' in e["attrs"]:
         hop["via"] = json.loads(e["attrs"]).get("via")
+    if e["kind"] in ("CALLS", "TEST_CALLS") and e["attrs"] and '"candidate"' in e["attrs"]:
+        a = json.loads(e["attrs"])
+        if a.get("binding") == "candidate":      # one of several same-name methods, receiver type unknown (#83)
+            hop["candidate"] = a.get("candidates") or True
     if e["gate"]:
         hop["gated"] = e["gate"]
         hop["guard"] = json.loads(e["attrs"] or "{}").get("guard")
@@ -652,6 +656,12 @@ def classify(kinds: dict) -> str:
     if kinds:
         return "other_entry"
     return "no_entry"
+
+
+def path_candidate(path: list[dict] | None) -> bool:
+    """The path goes through a candidate call edge: a call whose receiver type is unknown, bound to each of the
+    project methods with that selector (Swift / Kotlin, #83), so it may reach a sibling instead of the target."""
+    return any(p.get("candidate") for p in path or ())
 
 
 def path_confidence(path: list[dict]) -> str:
@@ -925,6 +935,11 @@ def generated_label(n: dict) -> str:
     return f"  [generated: {g}" + (f", source {n['copy_of']}" if n.get("copy_of") else "") + "]"
 
 
+CANDIDATE_LABEL = "  (candidate)"
+CANDIDATE_NOTE = ("(candidate): through a call whose receiver type is unknown, bound to each project method with that "
+                  "selector; it may reach a same-name sibling instead")
+
+
 def caller_label(c: dict) -> str:
     """'' for a call; '  (ref: collection)' when the caller holds a reference to the function instead of calling it;
     plus the generated-file label of a caller in a generated file."""
@@ -934,6 +949,8 @@ def caller_label(c: dict) -> str:
         lab = "  (call through a collection)"
     else:
         lab = ""
+    if c.get("candidate"):
+        lab += CANDIDATE_LABEL
     if c.get("via_override"):
         v = c["via_override"]
         lab += f"  (via override {v[0]}" + (f" +{len(v) - 1}" if len(v) > 1 else "") + ")"
@@ -1075,7 +1092,8 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
         q = ",".join("?" * len(chunk))
         for r in st.q(f"SELECT id,kind,name,fqn,file,line,module,entry_kind,attrs FROM nodes WHERE id IN ({q})", chunk):
             rows[r["id"]] = with_generated(dict(r))
-    entries = [dict(rows[n], depth=d, path=paths[n], path_confidence=path_confidence(paths[n])) for n, d in depth.items()
+    entries = [dict(rows[n], depth=d, path=paths[n], path_confidence=path_confidence(paths[n]),
+                    **({"candidate": True} if path_candidate(paths[n]) else {})) for n, d in depth.items()
                if n in rows and rows[n]["entry_kind"]]
     callers = []
     for n, d in depth.items():
@@ -1083,6 +1101,8 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
             continue
         c = dict(rows[n], depth=d, **_first_hop(paths.get(n)))
         p = paths.get(n) or []
+        if path_candidate(p):
+            c["candidate"] = True
         if p and p[0]["to"] in bases:      # calls the base declaration; reaches the target through the override
             c["via_base"] = fq.get(p[0]["to"], p[0]["to"])
         if n in direct:    # calls an override (not the target itself): reaches the target's API through it
@@ -1726,6 +1746,8 @@ def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=3
             it.update(depth=trans[tid], path=tpaths.get(tid, []))
             key = "transitive"
         it["path_confidence"] = path_confidence(it["path"])
+        if path_candidate(it["path"]):
+            it["candidate"] = True
         if own is not None and tid not in own:    # reaches the target only through an override
             end = it["path"][-1]["to"] if it["path"] else None
             it["via_override"] = [bfq.get(end, end)] if end in bfq else sorted(set(bfq.values()))[:3]
@@ -1774,11 +1796,14 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
             vo = t.get("via_override")
             dn = (f' "{t["display_name"]}"' if t.get("display_name") else "") + (" (parameterized)" if t.get("parameterized") else "")
             L.append(f"  {t['name']}{dn}  [{t.get('framework') or 'test'}] {t['file']}:{t['line']}  depth={t['depth']} conf={t['path_confidence']}"
+                     + (CANDIDATE_LABEL if t.get("candidate") else "")
                      + (f"  (via override {vo[0]}" + (f" +{len(vo) - 1}" if len(vo) > 1 else "") + ")" if vo else ""))
             if show_paths and t["path"]:
                 L.append(f"      {_path_short(t['path'][:8])}{' ...' if len(t['path']) > 8 else ''}")
         if len(group) > limit:
             L.append(f"  ... {len(group) - limit} more")
+    if any(t.get("candidate") for k in ("direct", "transitive") for t in res[k]):
+        L += ["", CANDIDATE_NOTE]
     if not res["direct"] and not res["transitive"]:
         if st["tests_in_graph"]:
             why = (f" ({st['tests_in_graph']} test cases are indexed; none calls the target, directly or through"

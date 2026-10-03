@@ -908,6 +908,9 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
                 if dn is not None and dn.lang != "dart" and group_of.get(dn.file) == group_of[e.file]:
                     # a platform file naming its sibling explicitly (`export * from './X.ios'`): bundled as written
                     continue
+            if e.kind == "CALLS" and e.attrs.get("binding") in ("name", "candidate"):
+                # a call bound by its selector alone (receiver type unknown, Swift / Kotlin #83): too weak as well
+                continue
             if e.kind == "USES_VALUE" and (e.confidence == "heuristic" or e.dst.startswith("macro:")):
                 # a global matched by name only, or a macro tested by #ifdef: too weak to call a target broken
                 continue

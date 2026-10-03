@@ -10,7 +10,7 @@ With a Swift toolchain, calls come from the compiler's index store instead ([exa
 | Area | Facts |
 |---|---|
 | Declarations | classes, structs, enums, actors, protocols, functions, methods, initializers (`class:` / `function:` / `method:` ids by type-qualified name); extensions merge into the type they extend; a SwiftUI `body` property is a `method:<View>.body` node |
-| Calls | `CALLS` resolved through the enclosing type, its extensions and supertypes, the receiver's parameter / property type (`api.book(id)` with `let api: BooksAPI`) and a project-wide unique name; initializer calls as `INSTANTIATES`; protocol / superclass members → conformances and overrides (`IMPLEMENTED_BY` / `OVERRIDDEN_BY`) |
+| Calls | `CALLS` resolved through the enclosing type, its extensions and supertypes, the receiver's parameter / property type (`api.book(id)` with `let api: BooksAPI`) and finally the selector alone (a unique method, or `candidate` edges to up to five; see below); initializer calls as `INSTANTIATES`; protocol / superclass members → conformances and overrides (`IMPLEMENTED_BY` / `OVERRIDDEN_BY`) |
 | Entry points | `@main` types and `App` conformances (`main`); `UIApplicationDelegate` / scene delegate / `UIViewController` / `AppIntent` / `Widget` lifecycle callbacks; `BGTaskScheduler.shared.register` handlers (`queue_job`); tests (`test`): XCTest `test*` methods of `XCTestCase` subclasses (`xctest`) and Swift Testing `@Test` functions, parameterized ones included (`swift-testing`); `@Suite` types carry `attrs.suite` |
 | SwiftUI / UIKit | views reached by `NavigationLink(destination:)`, `.navigationDestination { }`, `.sheet` / `.fullScreenCover` / `.popover { }`, `TabView` and the `WindowGroup` root become `page:swift:<View>` (ROUTES_TO its `body`) with `NAVIGATES_TO` edges; UIKit `pushViewController(V(), ...)` / `present(V(), ...)` likewise |
 | HTTP clients | URLSession (`data(from:)`, `data(for:)`, `dataTask`, `upload(for:)`) with the URL built in the same function (`URL(string: "...")`, `baseURL.appendingPathComponent("...")`, `"\(baseURL)/..."`) and `request.httpMethod = "POST"`; Alamofire `AF.request(url, method: .post)`. `\(base)` keeps `{base}` as the origin, so `cg link` still matches the path, unless the base is known (next row) |
@@ -71,6 +71,33 @@ selector is a common SDK member (`contains(_:)`, `contains(where:)`, `.accessibi
 exactly one project instance method fits the selector, at heuristic confidence: `lookup["x"]!.contains(normalized:
 0.5, y: 0.5)` reaches `Region.contains(normalized:y:)` even though `contains` is a collection method name. An
 ambiguous selector stays unresolved (`calls_unresolved`).
+
+Since [#83](https://github.com/cyberchronos00/code-graph/issues/83):
+- A prefix operator is not part of the receiver. `#expect(!Preview.matches(a, b))` and `if !Chrome.shouldAutoPresent()`
+  reach the static methods.
+- `Module.function()` reaches a free function of that target folder (`Styleguide.registerFonts()` →
+  `Sources/Styleguide/`).
+- A property or local built with a generic initializer is typed by it (`@State var gate = SlotGate<Image>()`, so
+  `gate.cancel()` reaches `SlotGate.cancel`).
+- A local is typed by its nearest declaration above the call: `let x = T(...)` / `T<...>(...)`, `let x: T`, or a
+  literal (`var inside = false` is a `Bool`). A local declaration shadows a parameter or property of the same name.
+- A receiver whose SDK type is known does not reach a project extension of another concrete SDK type (`CGImage`,
+  `String`, `Data`, `Image`, ...). Extensions of protocols and open classes (`View`, `UIView`, a package's `Reducer`)
+  still apply. That covers a local (`var inside = false`, `let p = Path()`), an
+  SDK initializer call (`UIGraphicsPDFRenderer(bounds: r).pdfData { }`) and the closure parameter of `Path { p in }`,
+  `GeometryReader { proxy in }`, `ScrollViewReader` and `Canvas`. `inside.toggle()` no longer reaches
+  `HUDController.toggle()`, `p.close()` does not reach an app's `close()`, and `pdfData { }` does not reach
+  `extension CGImage`. A known receiver type binds exactly or not at all.
+- A call whose receiver type is unknown is bound by its selector alone. One fitting project method gives an edge with
+  `binding: "name"` (`calls_by_name_only`). Two to five fitting methods give a `candidate` edge to each, with
+  `binding: "candidate"` and `candidates: N` (`call_candidate_edges`); 0.8.0 dropped these calls. More than five
+  are dropped (`calls_too_ambiguous`). `cg tests`, `impact` and the MCP `callers` mark a test or caller reached
+  through a candidate edge `(candidate)`. Platform divergence leaves both kinds out of `missing_callee`.
+- A `func` and a `static func` of one name in one type are separate nodes. The one declared second has the id suffix
+  `~static` / `~instance`, so `Self.weight(from:to:)` reaches the static one and `weight(forExtraIndex:)` the instance
+  one. Overloads of one static-ness still share a node.
+- A call on a continuation line after a binary operator keeps its edge, on its own line. Lines starting with `<` / `>`
+  are a parse error in the grammar. `a + f(x)` parses as `(a + f)(x)`; that call used to be dropped.
 
 `index` stats: `index_files`, `index_defs_matched` / `index_defs_unmatched`, `index_references`, `index_refs_external`
 (SDK and dependency symbols), `heuristic_kept_not_compiled` and `exact_vs_heuristic` (precision and recall of the

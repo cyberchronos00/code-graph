@@ -368,7 +368,9 @@ class ExactLayer:
         st["exact_vs_heuristic"] = {
             "heuristic_edges": len(heur), "exact_edges": len(exact), "agree": agree,
             "precision": round(agree / len(heur), 3) if heur else None,
-            "recall": round(agree / len(exact), 3) if exact else None}
+            "recall": round(agree / len(exact), 3) if exact else None,
+            # candidate edges (receiver type unknown, one per same-name method, #83) are compared on their own
+            "candidate_edges": len(self.candidates), "candidate_agree": len(self.candidates & exact)}
         seen = set(getattr(self.p, "file_report", {}).get("seen") or covered)
         st["scip_files"] = len({f for f in covered & seen if f.endswith(".kt")})
         return True
@@ -404,8 +406,9 @@ class ExactLayer:
         return owners
 
     def _remove_heuristic(self, covered: set) -> set:
-        """Drop the heuristic call edges made in covered files; returns their (src, dst, kind) set."""
-        out = set()
+        """Drop the heuristic call edges made in covered files; returns their (src, dst, kind) set, without the
+        candidate edges (self.candidates)."""
+        out, cand = set(), set()
         for key, e in list(self.b.edges.items()):
             if e.confidence != HEURISTIC or e.file not in covered:
                 continue
@@ -413,8 +416,9 @@ class ExactLayer:
                 n = self.b.nodes.get(e.src)
                 if n is not None and n.lang == "kotlin":
                     if e.kind in CALL_KINDS:
-                        out.add((e.src, e.dst, e.kind))
+                        (cand if e.attrs.get("binding") == "candidate" else out).add((e.src, e.dst, e.kind))
                     del self.b.edges[key]
+        self.candidates = cand
         return out
 
     def _all_decls(self) -> list:

@@ -98,6 +98,8 @@ def test_exact_mode_with_scip_flag(tmp_path, no_toolchain):
     assert k["scip_defs_matched"] >= 18 and k["scip_defs_unmatched"] == 0 and k["scip_files"] == 3
     evh = k["exact_vs_heuristic"]
     assert evh["precision"] == 1.0 and evh["exact_edges"] > evh["heuristic_edges"] and evh["recall"] < 1.0
+    # candidate edges (an unknown receiver, a name on several classes, #83) are compared on their own
+    assert evh["candidate_edges"] > evh["candidate_agree"] >= 1, evh
     cov = _kotlin_cov(st)
     assert cov["status"] == "exact" and "scip-java index (--scip)" in cov["reason"]
     assert "kotlin: 5 files exact: scip-java index (--scip)" in coverage.render({"": st["coverage"]})

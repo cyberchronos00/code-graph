@@ -445,7 +445,7 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
             if n >= max_items:
                 break
             n += 1
-            out.append(f"  {_ename(e)}{Q.platform_label(e)}  {fmt_path(e['path'])}")
+            out.append(f"  {_ename(e)}{Q.CANDIDATE_LABEL if e.get('candidate') else ''}{Q.platform_label(e)}  {fmt_path(e['path'])}")
     mods = defaultdict(int)
     for c in r["callers"]:
         mods[c.get("module") or "?"] += 1
@@ -463,6 +463,10 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
         out.append(f"via override ({len(vo)}): " + ", ".join(f"{short(c['id'])} -> {', '.join(c['via_override'][:3])}"
                                                              + (f" +{len(c['via_override']) - 3}" if len(c['via_override']) > 3 else "")
                                                              for c in vo[:8]) + (f" …+{len(vo) - 8}" if len(vo) > 8 else ""))
+    cand = [c for c in r["callers"] if c.get("candidate")]
+    if cand or any(e.get("candidate") for e in r["entry_points"]):   # reached through a candidate call edge (#83)
+        out.append(f"candidate callers ({len(cand)}): " + ", ".join(short(c["id"]) for c in cand[:12])
+                   + (f" …+{len(cand) - 12}" if len(cand) > 12 else "") + "\n" + Q.CANDIDATE_NOTE)
     vb = [c for c in r["callers"] if c.get("via_base")]
     if vb:     # calls the base declaration; the target is reached through the override
         out.append(f"via base ({len(vb)}): " + ", ".join(f"{short(c['id'])} -> {c['via_base']}" for c in vb[:8])
@@ -504,7 +508,7 @@ def callers(symbol: str, min_confidence: str = "heuristic", limit: int = 60) -> 
     _scope(ids[:5])
     rank = {"exact": 3, "resolved": 2, "heuristic": 1}
     rows = [r for r in st.q(
-        f"SELECT src, dst, kind, file, line, confidence FROM edges WHERE dst IN ({','.join('?' * len(ids[:5]))}) "
+        f"SELECT src, dst, kind, file, line, confidence, attrs FROM edges WHERE dst IN ({','.join('?' * len(ids[:5]))}) "
         f"AND kind IN ({','.join('?' * len(CALLER_KINDS))}) ORDER BY file, line", tuple(ids[:5]) + CALLER_KINDS)
             if rank.get(r["confidence"], 1) >= rank.get(min_confidence, 1)]
     # a container binding next to the override / implementation edge of the same pair is one relation: show it once
@@ -519,7 +523,8 @@ def callers(symbol: str, min_confidence: str = "heuristic", limit: int = 60) -> 
     for r in rows[:limit]:
         c = "" if r["confidence"] == "exact" else f" ~{r['confidence'][0]}"
         k = "ref" if r["kind"] == "REFERENCES_FN" else r["kind"]
-        out.append(f"  {short(r['src'])}  {k}@{at((r['file'] or '?') + ':' + str(r['line']))}{c}")
+        cand = Q.CANDIDATE_LABEL if r["attrs"] and '"binding": "candidate"' in r["attrs"] else ""
+        out.append(f"  {short(r['src'])}  {k}@{at((r['file'] or '?') + ':' + str(r['line']))}{c}{cand}")
     if len(rows) > limit:
         out.append(f"  … +{len(rows) - limit} more (raise limit)")
     return "\n".join(out)
