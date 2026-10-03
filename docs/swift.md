@@ -76,6 +76,19 @@ exactly one project instance method fits the selector, at heuristic confidence: 
 0.5, y: 0.5)` reaches `Region.contains(normalized:y:)` even though `contains` is a collection method name. An
 ambiguous selector stays unresolved (`calls_unresolved`).
 
+Module visibility ([#90](https://github.com/cyberchronos00/code-graph/issues/90)): cg reads every local
+`Package.swift` (the root and up to three folders down): its targets, the folder each compiles (`path:`, else
+`Sources/<name>` / `Tests/<name>`) and their `dependencies:` (target names, `.target(name:)`, `.product(name:package:)`
+of local packages, transitively). Code in a package target binds only to declarations of its own module and the
+targets it depends on, never to an app, extension, preview or test target's: `store.solo` in a package does not
+reach a `static var solo` that only an app preview declares, and an `extension URL` in the app is not a member the
+package can call. A member of a test or app type that implements a protocol requirement (or overrides a member) of
+a type the package sees stays a candidate: dynamic dispatch reaches it. A qualified supertype is resolved as written
+(`final class Fake: StatusEditor.AutocompleteService.Client`), so a conformer of one of several nested `Client`
+protocols implements the right one. Code outside every package target (the Xcode
+app, its extensions and previews) sees every package. `candidates_outside_module` counts the declarations left out.
+Exact mode (index store) is not filtered.
+
 Since [#83](https://github.com/cyberchronos00/code-graph/issues/83):
 - A prefix operator is not part of the receiver. `#expect(!Preview.matches(a, b))` and `if !Chrome.shouldAutoPresent()`
   reach the static methods.

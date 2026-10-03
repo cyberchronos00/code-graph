@@ -416,7 +416,8 @@ class SwiftPlugin(LanguagePlugin):
         self._raw: dict[str, str] = {}
         self._attr_raw: dict[str, dict] = {}     # decl id -> {"Test" | "Suite": attribute source text}
         self._overloads: dict[tuple, Decl] = {}
-        self._vmember: dict[tuple, str] = {}    # (variant type id, member id without @line) -> its node id (#86)
+        self._vmember: dict[tuple, str] = {}
+        self._qsup: dict[str, list] = defaultdict(list)  # type fqn -> qualified supertype names written    # (variant type id, member id without @line) -> its node id (#86)
         self.by_name: dict[str, list[Decl]] = defaultdict(list)
         self.types: dict[str, Decl] = {}
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
@@ -437,6 +438,14 @@ class SwiftPlugin(LanguagePlugin):
             self.mac = apple_build(project.root)["mac"]
         except Exception:  # noqa: BLE001  (a build file cg cannot read never fails the index)
             self.mac = None
+        from .packages import SwiftPM
+        try:     # SwiftPM modules: what a package target may name (#90)
+            self.spm = SwiftPM(project.root, list(files))
+        except Exception:  # noqa: BLE001
+            self.spm = None
+        self._at = None
+        if self.spm:
+            self.st["swiftpm_targets"] = len(self.spm.targets)
         sfiles, failed = [], []
         errs: dict[str, list] = {}
         for rel in files:
@@ -479,6 +488,7 @@ class SwiftPlugin(LanguagePlugin):
             self._available(sf)
         self._resolve_calls()
         self._resolve_props()
+        self._at = None
         self._hierarchy()
         self._fluent_migrations(sfiles)
         self._moya_endpoints()
@@ -678,6 +688,11 @@ class SwiftPlugin(LanguagePlugin):
                 supers = [self._type_name(x) for x in c.children if x.type == "inheritance_specifier"]
                 supers = [s for s in supers if s]
                 fq = f"{cls.fqn}.{nm}" if cls and kw != "extension" else nm
+                for x in c.children:            # `: StatusEditor.AutocompleteService.Client`: the qualified name
+                    if x.type == "inheritance_specifier":
+                        q = re.match(r"\s*(?:some\s+|any\s+)?([A-Za-z_][\w.]*)", self.t(x))
+                        if q and "." in q.group(1) and q.group(1) not in self._qsup[fq]:
+                            self._qsup[fq].append(q.group(1))
                 body = next((x for x in c.children if x.type in ("class_body", "enum_class_body", "protocol_body")), None)
                 if kw == "extension":
                     base = self.types.get(nm)
@@ -1601,7 +1616,7 @@ class SwiftPlugin(LanguagePlugin):
         for owner, name, recv, line, sf, decl, labels, trailing in self.calls:
             self._how = None
             self._at = (sf, line)
-            targets = self._targets(name, recv, decl, labels, trailing)
+            targets = [t for t in self._targets(name, recv, decl, labels, trailing) if self._sees(t, True)]
             how = {"binding": self._how} if self._how else {}
             if self._how == "candidate":
                 how["candidates"] = len(targets)
@@ -1612,7 +1627,7 @@ class SwiftPlugin(LanguagePlugin):
             for t in targets[:MAX_CANDIDATES if self._how == "candidate" else 3]:
                 if t.kind == "class":
                     hit = self._first_variants([m for m in self.members.get(t.fqn, {}).get("init", [])
-                                                if self._fits(m.id, labels, trailing)])
+                                                if self._fits(m.id, labels, trailing) and self._sees(m)])
                     if "extension-only" in t.modifiers and not hit:
                         # a type the project only extends (String, Data, URL, JSONDecoder, ...): the call uses one of
                         # the SDK's initializers, not a project one
@@ -1684,7 +1699,7 @@ class SwiftPlugin(LanguagePlugin):
         return cands
 
     def _all_props(self, name: str) -> list[Decl]:
-        return [d for by in self.props.values() for d in by.get(name, ())]
+        return [d for by in self.props.values() for d in by.get(name, ()) if self._sees(d)]
 
     def _resolve_props(self):
         """CALLS edges for reads of computed / lazy properties and writes of computed / observed ones (`property`:
@@ -1692,7 +1707,7 @@ class SwiftPlugin(LanguagePlugin):
         for owner, name, recv, line, sf, decl, write in self.prop_refs:
             self._how = None
             self._at = (sf, line)
-            targets = self._prop_targets(name, recv, decl)
+            targets = [t for t in self._prop_targets(name, recv, decl) if self._sees(t, True)]
             how = {"binding": self._how} if self._how else {}
             if self._how == "candidate":
                 how["candidates"] = len(targets)
@@ -1902,7 +1917,64 @@ class SwiftPlugin(LanguagePlugin):
         return state
 
     def _fitting(self, ds: list, labels: tuple, trailing: bool) -> list:
-        return [d for d in ds if self._fits(d.id, labels, trailing)]
+        return [d for d in ds if self._fits(d.id, labels, trailing) and self._sees(d, True)]
+
+    def _dispatch_visible(self, d: Decl, caller: str, depth: int = 0) -> bool:
+        """A member of a type outside the caller's modules that overrides or implements a member of a supertype the
+        caller does see (an `EventMonitor` conformer in the tests): reached at run time through dynamic dispatch."""
+        t = self.types.get(d.cls) if d.cls else None
+        if t is None or depth > 4:
+            return False
+        for _s, st in self._supers(t):
+            if st is None or st is t or "extension-only" in st.modifiers:
+                continue
+            if self.spm.sees(caller, st.file) and (d.name in self.members.get(st.fqn, {})
+                                                   or d.name in self.props.get(st.fqn, {})
+                                                   or d.name in (self.b.nodes[st.id].attrs.get("property_requirements") or ())):
+                return True
+            if self._dispatch_visible(Decl(d.id, d.kind, d.name, d.fqn, d.file, d.line, d.end, st.fqn), caller, depth + 1):
+                return True
+        return False
+
+    def _super_type(self, name: str) -> Decl | None:
+        """The project type a supertype name means: the type of that (qualified, `Module.`-prefixed) name, else the
+        one nested type of that short name."""
+        q = name
+        while q:
+            if q in self.types:
+                return self.types[q]
+            q = q.split(".", 1)[1] if "." in q else None      # `Module.Type`: drop the module
+        if getattr(self, "_nested", None) is None:
+            self._nested = defaultdict(list)
+            for d in self.types.values():
+                if "." in d.fqn and "extension-only" not in d.modifiers:
+                    self._nested[d.fqn.rsplit(".", 1)[1]].append(d)
+        hit = self._nested.get(name.rsplit(".", 1)[-1]) or []
+        return hit[0] if len(hit) == 1 else None
+
+    def _supers(self, t: Decl) -> list[tuple[str, Decl | None]]:
+        """(name, project type or None) per supertype of `t`; a qualified name written in the inheritance clause
+        (`final class Spy: StatusEditor.AutocompleteService.Client, StatusEditor.PostingService.Client`) is resolved
+        as written (#90)."""
+        quals = self._qsup.get(t.fqn) or []
+        short = {q.rsplit(".", 1)[1] for q in quals}
+        names = list(quals) + [x for x in dict.fromkeys(t.supers) if x not in short]
+        return [(x, self._super_type(x)) for x in names]
+
+    def _sees(self, d: Decl, count: bool = False) -> bool:
+        """May the call / read being resolved name `d`? Code in a SwiftPM target sees its own module and the targets
+        it depends on, never an app, extension, preview or test target's declarations (#90). A type the project only
+        extends is the SDK's, visible everywhere (its members are not)."""
+        if not self.spm or self._at is None:
+            return True
+        if d.kind == "class" and "extension-only" in d.modifiers:
+            return True
+        caller = self._at[0].rel
+        if self.spm.sees(caller, d.file) or self._dispatch_visible(d, caller):
+            return True
+        if count:
+            self.st["candidates_outside_module"] += 1
+        return False
 
     def _targets(self, name: str, recv: str | None, decl: Decl | None, labels: tuple = (), trailing: bool = False) -> list[Decl]:
         """Project declarations a call reaches: the full selector (name, argument labels, arity) has to fit;
@@ -1983,12 +2055,12 @@ class SwiftPlugin(LanguagePlugin):
         for d in list(self.decls.values()):
             if d.kind != "class":
                 continue
-            ext = [s for s in d.supers if s not in self.types or "extension-only" in self.types[s].modifiers]
+            sups = self._supers(d)
+            ext = [s for s, sc in sups if sc is None or "extension-only" in sc.modifiers]
             if ext and self.b.nodes[d.id].attrs.get("swift_kind") == "class":
                 # an SDK superclass (`NSPopover`, `UIImageView`): members and initializers it gives are not in the graph
                 self.b.nodes[d.id].attrs["external_supers"] = ext[:4]
-            for s in d.supers:
-                sc = self.types.get(s)
+            for s, sc in sups:
                 if sc is None:
                     if s in LIFECYCLE_BASES or s == "App":
                         self._entry_class(d, "ui_page" if s == "UIViewController" else "main", f"{s} conformance")
