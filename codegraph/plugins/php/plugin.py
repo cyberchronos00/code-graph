@@ -498,9 +498,13 @@ class PhpProgram:
         recv = f.get("recv") or {}
         types = ctx.type_of(recv)
         out = []
+        self.last_recv = []
         for t in types:
-            if self.cls(t):
+            c = self.cls(t)
+            if c:
                 m = self.find_method(t, f.get("m"))
+                if m and c.methods.get((f.get("m") or "").lower()) is not m:
+                    self.last_recv.append(f"{c.kind}:{c.fqcn}")    # found on an ancestor: the receiver (attrs.recv, #62)
                 if m and all(m is not o for o, _ in out):
                     out.append((m, EXACT if recv.get("k") == "this" else RESOLVED))
         if out:
@@ -516,12 +520,14 @@ class PhpProgram:
     def _emit_call(self, fn: PhpFunc, f: dict, ctx: ResolveCtx):
         b, line, kind = self.b, f.get("line"), f["kind"]
         self.stats[f"calls_{kind}"] += 1
+        self.last_recv = []
         targets, status = self.call_targets(fn, f, ctx)
         for m, conf in targets:
             if conf == HEURISTIC:
                 b.add_edge(fn.id, m.id, "CALLS", fn.file, line, HEURISTIC, via="unique-method-name")
             else:
-                b.add_edge(fn.id, m.id, "CALLS", fn.file, line, conf)
+                b.add_edge(fn.id, m.id, "CALLS", fn.file, line, conf,
+                           **({"recv": sorted(set(self.last_recv))} if self.last_recv else {}))
         if status == "resolved":
             self.stats["calls_resolved"] += 1
         elif status == "heuristic":

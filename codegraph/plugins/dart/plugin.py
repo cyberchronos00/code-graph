@@ -372,7 +372,9 @@ class DartPlugin(LanguagePlugin):
                                 b.add_edge(src_id, tgt.methods[via].id, "CALLS", file, f.get("l"), conf)
                                 prog.callers.setdefault(tgt.methods[via].id, []).append((fn, f, ctx))
                         else:
-                            b.add_edge(src_id, tgt.id, "CALLS", file, f.get("l"), conf, **({"via": via} if via else {}))
+                            rc = getattr(prog, "last_recv", None)
+                            b.add_edge(src_id, tgt.id, "CALLS", file, f.get("l"), conf, **({"via": via} if via else {}),
+                                       **({"recv": [rc.id]} if rc is not None and rc.kind != "extension" else {}))
                             prog.callers.setdefault(tgt.id, []).append((fn, f, ctx))
                         conf_ct[conf] += 1
                     k = env_key(f)

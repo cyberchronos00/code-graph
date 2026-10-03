@@ -518,6 +518,19 @@ base `_getFeed`) up to `fetchNext`; on nestjs-boilerplate the repository impleme
 Nest's BOUND_TO edges and now also state `overrides: FileRepository.create`. Calls on a TypeScript **interface** type
 (`api.fetch()` with `api: FeedAPI`) still had no target node then; #55 below adds interface members.
 
+## Receiver types on inherited calls in Kotlin, Swift, Dart and PHP (#62)
+
+`cg index` before and after on the same commits: nodes and edges unchanged, calls into an inherited method now
+carry `attrs.recv` (the receiver's class), which `impact` / `reaches` / `tests` on `Sub.method` use to leave out
+calls on sibling subclasses.
+
+| Project | Commit | Nodes / edges | Calls with `recv` |
+|---|---|---|---|
+| android/nowinandroid (Kotlin) | a49ed25 | 1824 / 3414 unchanged | 0 → 2 |
+| Dimillian/IceCubesApp (Swift) | 9efcb16 | 4028 / 8945 unchanged | 0 → 65 |
+| koel/koel (PHP) | 295d8c1 | 15865 / 33158 unchanged | 0 → 708 |
+| dart-lang/dart_style (Dart) | 60f31a6 | 1610 / 6365 unchanged | 0 → 150 |
+
 ## Interface members, receiver-narrowed inherited specs, container bindings as dispatch (#55)
 
 `cg index <repo>` before and after, no flags; queries with the old and the new code on the old and the new graph.

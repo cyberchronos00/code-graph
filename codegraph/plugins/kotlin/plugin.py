@@ -917,12 +917,15 @@ class KotlinPlugin(LanguagePlugin):
     def _resolve_calls(self):
         for owner, name, recv, line, kf, decl in self.calls:
             self._data_access(owner, name, recv, line, kf, decl)
-            self._how = None
+            self._how = self._recv = None
             targets = self._targets(name, recv, kf, decl)
             if not targets:
                 self.st["calls_unresolved"] += 1
                 continue
             how = {"binding": self._how} if self._how else {}
+            # the receiver's class when the member was found on an ancestor: `impact Sub.m` narrows by it (#62)
+            if self._recv is not None and any(t.kind != "class" and t.cls and t.cls != self._recv.fqn for t in targets):
+                how["recv"] = [self._recv.id]
             if self._how == "candidate":
                 how["candidates"] = len(targets)
                 self.st["call_candidate_edges"] += len(targets)
@@ -943,6 +946,7 @@ class KotlinPlugin(LanguagePlugin):
             if cls is not None:
                 r = [d for d in self._member(cls, name) if d.kind != "class"]
                 if r:
+                    self._recv = cls
                     return self._same_set(r, kf)
             if decl is not None and decl.receiver:                         # extension function: members of its receiver
                 rc = self._class_of(decl.receiver.split(".")[-1], kf)
@@ -981,6 +985,7 @@ class KotlinPlugin(LanguagePlugin):
                     comp = self.classes.get(f"{tc.fqn}.Companion")
                     r = self._member(comp, name) if comp else []
                 if r:
+                    self._recv = tc
                     return self._same_set(r, kf)
                 return []
             short = re.sub(r"[<(].*", "", tyname, flags=re.S).rstrip("?! ").split(".")[-1]

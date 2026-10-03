@@ -784,7 +784,9 @@ class DartProgram:
 
     # ------------------------------------------------------------------ calls
     def resolve_call(self, r: dict, ctx: Ctx) -> list[tuple[Any, str, str | None]]:
-        """Targets of a call/new repr: [(DFunc | DClass, confidence, via)]."""
+        """Targets of a call/new repr: [(DFunc | DClass, confidence, via)]. `self.last_recv` is the receiver's class
+        when the method was found on one of its ancestors (edge attrs.recv, #62)."""
+        self.last_recv = None
         k = r.get("k")
         if k == "new":
             c = self.resolve_class(ctx.lib, r["type"])
@@ -809,6 +811,8 @@ class DartProgram:
             return []
         if t.get("k") == "this" and ctx.cls:
             m, inh = self.find_member(ctx.cls, n)
+            if inh and isinstance(m, DFunc):
+                self.last_recv = ctx.cls
             return [(m, EXACT if not inh else RESOLVED, None)] if isinstance(m, DFunc) else []
         if t.get("k") == "id" and t["v"] not in ctx.locals and t["v"] not in ctx.bindings and self.prefix_imports(ctx.lib, t["v"]):
             v = self.lookup_prefixed(ctx.lib, t["v"], n)
@@ -831,6 +835,8 @@ class DartProgram:
         if tt and tt[0] == "inst" and tt[1] is not None:
             m, inh = self.find_member(tt[1], n)
             if isinstance(m, DFunc):
+                if inh:
+                    self.last_recv = tt[1]
                 return [(m, RESOLVED, None)]
             if isinstance(m, DVar):
                 return []  # calling a function-typed field
@@ -874,6 +880,8 @@ class DartProgram:
         if ctx.cls:
             m, inh = self.find_member(ctx.cls, n)
             if isinstance(m, DFunc):
+                if inh:
+                    self.last_recv = ctx.cls
                 return [(m, EXACT if not inh else RESOLVED, None)]
             if isinstance(m, DVar):
                 return []

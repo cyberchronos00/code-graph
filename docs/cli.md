@@ -124,7 +124,8 @@ the filter and how many conditions could not be evaluated ([platforms.md](platfo
   ancestors (EXTENDS / IMPLEMENTS / trait use, nearest first) to the definition, and the answer says so
   (`B.run -> inherited from Base.run`, short names; `--json` has the fqns). The callers are those of the inherited
   definition, narrowed by receiver type: a call whose receiver is known (the TypeScript checker type, a Python
-  inferred instance, the elements of a collection it loops over; edge `attrs.recv`) to be a class that cannot be a
+  inferred instance, the elements of a collection it loops over, a Kotlin / Swift / Dart / PHP typed value or the
+  implicit `this` of a subclass; edge `attrs.recv`) to be a class that cannot be a
   `Sub` (a sibling, neither `Sub`, a subclass nor an ancestor) is left out, and the note counts them
   (`callers narrowed to B: 2 of 6 calls on other classes left out`). Calls with an unknown receiver, and receivers
   whose ancestry the graph does not know (a mixin `extends mix(Base)`), are kept. `reaches` and `tests` narrow the

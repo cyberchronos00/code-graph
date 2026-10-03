@@ -26,6 +26,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
   event name are listed by `cg bridges` as `unresolved` (`stats.bridges.dynamic`). `cg bridges --protocol` accepts
   every bridge protocol.
 
+- Dispatch (#62): Kotlin, Swift, Dart and PHP calls that land on an inherited method record the receiver's class
+  (`attrs.recv`), so `impact` / `reaches` / `tests` on `Sub.method` leave out calls on sibling subclasses as they
+  already did for TypeScript and Python. `overrides:` / `overridden by:` lines show the file when two declarations
+  share a name (two `FeedAPI` interfaces).
+
 ### Changed
 
 - CLI output (#75):

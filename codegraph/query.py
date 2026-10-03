@@ -1157,11 +1157,23 @@ def _type_level_callers(st: GraphStore, ids: list[str]) -> set[str]:
     return out
 
 
+def _file_of_id(nid: str) -> str:
+    """The file part of a node id (`method:src/a.ts#X.m` -> src/a.ts), else the id."""
+    body = nid.split(":", 1)[1] if ":" in nid else nid
+    return body.partition("#")[0] if "#" in body else nid
+
+
 def override_lines(res: dict, limit: int = 8) -> list[str]:
     """'overrides: Base.m' / 'overridden by: A.m, B.m' lines for an impact result (the relation, not callers)."""
     out = inherited_lines(res)
     for key, label in (("overrides", "overrides"), ("overridden_by", "overridden by")):
-        xs = list(dict.fromkeys(x["fqn"] for x in res.get(key) or []))
+        items = list({x["id"]: x for x in res.get(key) or []}.values())
+        ids_of = defaultdict(set)
+        for x in items:
+            ids_of[x["fqn"]].add(x["id"])
+        # two declarations with one name (two `FeedAPI` interfaces): each with its file (#62)
+        xs = list(dict.fromkeys(x["fqn"] if len(ids_of[x["fqn"]]) < 2 else f"{x['fqn']} ({_file_of_id(x['id'])})"
+                                for x in items))
         if xs:
             out.append(f"{label}: {', '.join(xs[:limit])}" + (f" …+{len(xs) - limit}" if len(xs) > limit else ""))
     return out

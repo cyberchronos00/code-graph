@@ -289,3 +289,145 @@ def test_nest_binding_is_a_dispatch_hop(tmp_path):
     assert sorted(o["fqn"] for o in base["overridden_by"]) == ["MemoryFileRepository.create", "RelationalFileRepository.create"]
     out = cli("impact", "MemoryFileRepository.create", "--db", str(db))
     assert "overrides: FileRepository.create" in out and "d=1 [src] FileRepository.create" not in out
+
+
+def test_override_lines_show_file_when_names_collide():
+    """#62 item 6: two interfaces named FeedAPI implemented by one class print as two entries with their files."""
+    from codegraph.query import override_lines
+    res = {"overrides": [
+        {"id": "method:src/lib/api/feed/types.ts#FeedAPI.peekLatest", "fqn": "FeedAPI.peekLatest", "of": "x", "edge": "IMPLEMENTED_BY"},
+        {"id": "method:src/state/feed/types.ts#FeedAPI.peekLatest", "fqn": "FeedAPI.peekLatest", "of": "x", "edge": "IMPLEMENTED_BY"},
+        {"id": "method:src/a.ts#Base.peekLatest", "fqn": "Base.peekLatest", "of": "x", "edge": "OVERRIDDEN_BY"},
+        {"id": "method:src/a.ts#Base.peekLatest", "fqn": "Base.peekLatest", "of": "y", "edge": "BOUND_TO"}]}
+    assert override_lines(res) == ["overrides: FeedAPI.peekLatest (src/lib/api/feed/types.ts), "
+                                   "FeedAPI.peekLatest (src/state/feed/types.ts), Base.peekLatest"]
+
+
+def test_kotlin_inherited_calls_carry_the_receiver(tmp_path):
+    """#62 item 1: a Kotlin call that resolves to an ancestor's member records the receiver class (attrs.recv), so
+    `impact A.shared` leaves out `b.shared()` on a sibling subclass."""
+    pytest.importorskip("tree_sitter_kotlin")
+    src = tmp_path / "proj" / "src" / "main" / "kotlin" / "p"
+    src.mkdir(parents=True)
+    (src / "M.kt").write_text(textwrap.dedent("""\
+        package p
+
+        open class Base {
+            open fun run() {}
+            fun shared() {}
+        }
+
+        class A : Base() {
+            override fun run() {}
+            fun own() { shared() }
+        }
+
+        class B : Base()
+
+        fun useA(a: A) { a.shared() }
+
+        fun useB(b: B) { b.shared() }
+        """))
+    db = tmp_path / "g.db"
+    index_project(tmp_path / "proj", db, "kt")
+    st = GraphStore(str(db))
+    res = Q.impact(st, "p.A.shared")
+    names = {c["fqn"] for c in res["callers"]}
+    assert "p.useA" in names and "p.A.own" in names and "p.useB" not in names
+    assert res["inherited"][0]["narrowed"]["dropped"] == 1
+
+
+def test_swift_inherited_calls_carry_the_receiver(tmp_path):
+    """#62 item 1: the same for Swift (`a.shared()` on an A, `b.shared()` on a B, both defined in Base)."""
+    pytest.importorskip("tree_sitter_swift")
+    src = tmp_path / "proj" / "Sources" / "P"
+    src.mkdir(parents=True)
+    (tmp_path / "proj" / "Package.swift").write_text(
+        '// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: "P", targets: [.target(name: "P")])\n')
+    (src / "M.swift").write_text(textwrap.dedent("""\
+        class Base {
+            func run() {}
+            func shared() {}
+        }
+
+        class A: Base {
+            override func run() {}
+        }
+
+        class B: Base {}
+
+        func useA(a: A) {
+            a.shared()
+        }
+
+        func useB(b: B) {
+            b.shared()
+        }
+        """))
+    db = tmp_path / "g.db"
+    index_project(tmp_path / "proj", db, "sw")
+    res = Q.impact(GraphStore(str(db)), "A.shared")
+    names = {c["fqn"] for c in res["callers"]}
+    assert "useA" in names and "useB" not in names
+
+
+def test_dart_inherited_calls_carry_the_receiver(tmp_path):
+    """#62 item 1: the same for Dart (typed parameter receivers and implicit `this` in a subclass)."""
+    from codegraph.plugins.dart.plugin import find_dart
+    if find_dart() is None:
+        pytest.skip("Dart SDK not found")
+    (tmp_path / "proj" / "lib").mkdir(parents=True)
+    (tmp_path / "proj" / "pubspec.yaml").write_text('name: dt\nenvironment:\n  sdk: ">=3.0.0 <4.0.0"\n')
+    (tmp_path / "proj" / "lib" / "m.dart").write_text(textwrap.dedent("""\
+        class Base {
+          void run() {}
+          void shared() {}
+        }
+
+        class A extends Base {
+          @override
+          void run() {}
+          void own() {
+            shared();
+          }
+        }
+
+        class B extends Base {}
+
+        void useA(A a) {
+          a.shared();
+        }
+
+        void useB(B b) {
+          b.shared();
+        }
+        """))
+    db = tmp_path / "g.db"
+    index_project(tmp_path / "proj", db, "dt")
+    res = Q.impact(GraphStore(str(db)), "A.shared")
+    names = {c["fqn"] for c in res["callers"]}
+    assert {"lib/m.dart#A.own", "lib/m.dart#useA"} <= names and "lib/m.dart#useB" not in names
+
+
+def test_php_inherited_calls_carry_the_receiver(tmp_path):
+    """#62 item 1: the same for PHP (typed parameters)."""
+    (tmp_path / "proj" / "app").mkdir(parents=True)
+    (tmp_path / "proj" / "composer.json").write_text('{"name": "x/p", "autoload": {"psr-4": {"App\\\\": "app/"}}}')
+    (tmp_path / "proj" / "app" / "M.php").write_text(textwrap.dedent("""\
+        <?php
+        namespace App;
+
+        class Base { public function run() {} public function shared() {} }
+        class A extends Base { public function run() {} }
+        class B extends Base {}
+
+        class Client {
+            public function useA(A $a) { $a->shared(); }
+            public function useB(B $b) { $b->shared(); }
+        }
+        """))
+    db = tmp_path / "g.db"
+    index_project(tmp_path / "proj", db, "php")
+    res = Q.impact(GraphStore(str(db)), "A::shared")
+    names = {c["fqn"] for c in res["callers"]}
+    assert "App\\Client::useA" in names and "App\\Client::useB" not in names

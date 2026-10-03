@@ -1774,10 +1774,13 @@ class SwiftPlugin(LanguagePlugin):
 
     def _resolve_calls(self):
         for owner, name, recv, line, sf, decl, labels, trailing in self.calls:
-            self._how = None
+            self._how = self._recv = None
             self._at = (sf, line)
             targets = [t for t in self._targets(name, recv, decl, labels, trailing) if self._sees(t, True)]
             how = {"binding": self._how} if self._how else {}
+            # the receiver's type when the member was found on an ancestor: `impact Sub.m` narrows by it (#62)
+            if self._recv is not None and any(t.kind != "class" and t.cls and t.cls != self._recv.fqn for t in targets):
+                how["recv"] = [self._recv.id]
             if self._how == "candidate":
                 how["candidates"] = len(targets)
             if not targets:
@@ -2144,6 +2147,7 @@ class SwiftPlugin(LanguagePlugin):
             if cls is not None:
                 own = [d for d in self._member(cls, name) if d.kind != "class"]
                 if own:
+                    self._recv = cls
                     fit = self._fitting(own, labels, trailing)
                     want = True if recv == "Self" else False if recv in ("self", "super") else \
                         bool(decl is not None and decl.kind != "class" and _static(decl))
@@ -2161,6 +2165,7 @@ class SwiftPlugin(LanguagePlugin):
         kind, tname = self._recv_type(recv, decl, cls)
         if kind in ("type", "meta"):
             tc = self._type(tname)
+            self._recv = tc
             ms = [d for d in self._member(tc, name) if d.kind != "class"] if tc is not None else []
             ms = [d for d in ms if _static(d) == (kind == "meta")] or \
                 ([] if kind == "type" else [d for d in ms if d.name == "init"])
