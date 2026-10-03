@@ -8,10 +8,13 @@ Prerequisites: Python 3.11+, PHP 8.2+ with Composer 2, Node.js 20+ (see the [REA
 
 ```bash
 git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph
-python3 -m venv .venv && .venv/bin/pip install "mcp>=2.2" pyyaml pytest protobuf
-(cd codegraph/plugins/php/extractor && composer install)
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"     # cg and cg-mcp from this checkout, plus pytest
+(cd codegraph/plugins/php/extractor && composer install)        # extractor deps in the checkout (the tests use them)
 (cd codegraph/plugins/ts/extractor && npm ci)
 ```
+
+An installed cg (not a checkout) puts the extractor dependencies in the user cache instead
+(`codegraph/core/extractors.py`, `cg setup`); `cg doctor` shows which directory is in use.
 
 Generated files (`out/`, `*.db`, plan baselines, `node_modules/`, `vendor/`) are gitignored.
 
@@ -71,9 +74,13 @@ Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, pl
 Versions follow [Semantic Versioning](https://semver.org/); the history is in [CHANGELOG.md](CHANGELOG.md).
 
 1. Every change adds its line under `## [Unreleased]` in the same commit.
-2. To release `X.Y.Z`: bump `__version__` in `codegraph/__init__.py`, rename `## [Unreleased]` to
+2. To release `X.Y.Z`: bump `__version__` in `codegraph/__init__.py` (the only place: `pyproject.toml` reads it, and
+   `cg doctor` / `cg --version` report it), rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD` (UTC date), add a fresh empty `## [Unreleased]` above it, and update the compare links at
    the bottom of the changelog.
 3. Commit, then create an annotated tag and push it: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin vX.Y.Z`.
 4. Create the GitHub release from the tag, titled `vX.Y.Z`, with that version's changelog section as the notes:
    `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section.md>`.
+5. Check the install path from the tag in a clean environment: `sh install.sh --version vX.Y.Z` (or
+   `uv tool install git+https://github.com/cyberchronos00/code-graph@vX.Y.Z`), then `cg doctor`. Users update with
+   `uv tool upgrade codegraph`, `pipx upgrade codegraph` or `install.sh --update`.

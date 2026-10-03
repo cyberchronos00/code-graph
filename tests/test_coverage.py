@@ -37,7 +37,7 @@ def test_missing_php_is_skipped_not_fatal(tmp_path):
     st = json.loads(r.stdout)
     assert st["plugins"]["php"]["status"] == "skipped" and "php not installed" in st["plugins"]["php"]["reason"]
     php = lang(st["coverage"], "php")
-    assert php["status"] == "skipped" and php["files"] == 22 and "composer install" in php["hint"]
+    assert php["status"] == "skipped" and php["files"] == 22 and "cg setup php" in php["hint"]
     assert "not fully covered: php 22 skipped" in r.stderr and "not proof of absence" in r.stderr
     out = cg("coverage", "--db", tmp_path / "api.db").stdout
     assert "php: 22 files (.php 22) skipped: php not installed" in out and "fix: install PHP 8.2+" in out
@@ -50,7 +50,7 @@ def test_missing_node_skips_typescript(tmp_path):
     r = cg("index", WEB, "--name", "bookstore-web", "--db", tmp_path / "web.db", path=str(empty))
     assert r.returncode == 0, r.stderr[-800:]
     ts = lang(json.loads(r.stdout)["coverage"], "typescript")
-    assert ts["status"] == "skipped" and "node not installed" in ts["reason"] and "npm ci" in ts["hint"]
+    assert ts["status"] == "skipped" and "node not installed" in ts["reason"] and "cg setup typescript" in ts["hint"]
 
 
 @needs_php

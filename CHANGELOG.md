@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Packaging: `pyproject.toml` with the `cg` and `cg-mcp` commands (version from `codegraph.__version__`), so
+  `uv tool install git+https://github.com/cyberchronos00/code-graph` / `pipx install git+...` install cg without a
+  checkout and `uv tool upgrade codegraph` / `pipx upgrade codegraph` update it. `install.sh` / `install.ps1`
+  (install, `--update`, `--version`, `--with rust,c,kotlin,swift`, `--uninstall`; no sudo). The TypeScript / PHP /
+  Dart extractor dependencies install into the user cache on first use or with `cg setup`. `cg doctor` (CLI and MCP):
+  tool versions, extractor dependencies, exact or heuristic mode per language with the reason and the install command.
+  `.cg.yaml` `rust.targets` controls the per-target rust-analyzer runs ([docs/install.md](docs/install.md),
+  [#64](https://github.com/cyberchronos00/code-graph/issues/64)).
 - Platform follow-ups: Rust exact mode runs rust-analyzer once more per target the `cfg` conditions name (up to 3,
   `CODEGRAPH_RUST_TARGETS`), so references under another target's `cfg` are exact edges (`attrs.exact_target`) instead
   of the name-based fallback. Swift `@available` / `#available` / `#unavailable` versions are recorded as minimum OS

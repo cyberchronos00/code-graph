@@ -15,6 +15,12 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   `attrs.generated` ([generated.md](generated.md)). An invalid `.cg.yaml` exits with status 2 and a message naming the key.
   When `.cg.yaml` lists monorepo `apps`, one run indexes each app and links each frontend / backend pair
   ([configuration.md](configuration.md#monorepo-apps)); `--no-apps` indexes ROOT as one project.
+- `doctor [ROOT] [--json]`: what this installation can index: cg, Python and tool versions, whether the TypeScript /
+  PHP / Dart extractor dependencies are installed (and where), and per language exact / heuristic / unavailable with
+  the reason and the command that installs what is missing; with ROOT only the project's languages and its own
+  conditions (`compile_commands.json`, `.cg.yaml` `rust.targets`). [install.md](install.md)
+- `setup [typescript] [php] [dart] [--quiet]`: install the extractor dependencies now (into the user cache for an
+  installed cg) instead of on the first index; default: every language whose toolchain is installed.
 - `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,
   `heuristic` when the exact-mode indexer is missing, `skipped` when the toolchain is missing, with the install hint),
   file completeness (discovered / indexed / parse failed / over size limit / unmapped / excluded, the first 5 paths

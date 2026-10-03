@@ -46,6 +46,19 @@ starts_with ends_with parse fmt write write_all read read_to_string flush lock s
 first last keys values entry or_insert or_default with_capacity capacity reserve truncate drain retain append
 is_some is_none is_ok is_err as_str as_bytes as_ptr to_vec cmp eq ne partial_cmp hash drop deref deref_mut index
 call build run close open start stop find position any all display debug copied cloned""".split())
+def rust_targets_setting(project=None) -> tuple[str, str]:
+    """(value, source) of the per-target rust-analyzer runs: CODEGRAPH_RUST_TARGETS, else `.cg.yaml` rust.targets,
+    else `auto`."""
+    env = os.environ.get("CODEGRAPH_RUST_TARGETS")
+    if env is not None:
+        return env.strip().lower() if env.strip().lower() in ("auto", "off", "none", "0", "") else env.strip(), "CODEGRAPH_RUST_TARGETS"
+    cfg = (getattr(project, "options", None) or {}).get("config") or {}
+    v = (cfg.get("rust") or {}).get("targets")
+    if v:
+        return v, f"{cfg.get('file', '.cg.yaml')} rust.targets"
+    return "auto", "default"
+
+
 # rust-analyzer `cargo.target` per platform (CODEGRAPH_RUST_TARGETS also takes triples)
 TRIPLES = {"windows": "x86_64-pc-windows-msvc", "macos": "aarch64-apple-darwin", "linux": "x86_64-unknown-linux-gnu",
            "ios": "aarch64-apple-ios", "android": "aarch64-linux-android", "web": "wasm32-unknown-unknown"}
@@ -80,6 +93,7 @@ class RustPlugin(LanguagePlugin):
         t0 = time.time()
         root = project.root
         self.root, self.b = root, builder
+        self.targets_setting = rust_targets_setting(project)
         self._tm = None
         self.rules = path_rules(project, "rust")
         stats: dict = defaultdict(int)
@@ -407,7 +421,7 @@ class RustPlugin(LanguagePlugin):
         code on a Linux host): the references under those conditions get exact edges instead of the syntactic
         fallback (`via: cfg-inactive`). CODEGRAPH_RUST_TARGETS=0 turns it off, `windows,macos` (or target triples)
         picks the targets; default `auto`: up to 3 targets named by the project's cfg conditions."""
-        want = os.environ.get("CODEGRAPH_RUST_TARGETS", "auto").strip()
+        want = getattr(self, "targets_setting", ("auto", "default"))[0]
         if want in ("0", "", "off", "none") or os.environ.get("CODEGRAPH_RUST_SCIP_FILE"):
             return {}
         from ...platforms import KNOWN, cfg_cond, norm

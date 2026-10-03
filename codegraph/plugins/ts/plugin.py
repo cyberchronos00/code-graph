@@ -37,7 +37,7 @@ from ... import presets
 from ...core.model import CONFIDENCE_RANK
 from ...core.paths import names_regex, rules as path_rules
 from ...coverage import SUPPORTED
-from ...core import fsutil
+from ...core import extractors, fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 
 EXTRACTOR_DIR = Path(__file__).parent / "extractor"
@@ -142,18 +142,18 @@ class TypeScriptPlugin(LanguagePlugin):
     def prerequisite_problem(self, project: Project) -> str | None:
         if not shutil.which("node"):
             return "node not installed (Node.js 20+ is needed for the TypeScript extractor)"
-        if not (EXTRACTOR_DIR / "node_modules" / "typescript").exists() and not shutil.which("npm"):
-            return "TypeScript extractor dependencies missing and npm not installed: run `(cd codegraph/plugins/ts/extractor && npm ci)`"
+        if not extractors.status("typescript")["installed"] and not shutil.which("npm"):
+            return "TypeScript extractor dependencies missing and npm not installed: install npm, then run `cg setup typescript`"
         return None
 
-    def ensure_extractor(self) -> None:
-        if not (EXTRACTOR_DIR / "node_modules" / "typescript").exists():
-            subprocess.run(["npm", "install", "--no-audit", "--no-fund"], cwd=EXTRACTOR_DIR, check=True)
+    def ensure_extractor(self) -> Path:
+        """Directory the extractor runs from, with its npm dependencies (codegraph/core/extractors.py)."""
+        return extractors.ensure("typescript")
 
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
         if not shutil.which("node"):
             return {"status": "skipped", "reason": "node not installed"}
-        self.ensure_extractor()
+        exdir = self.ensure_extractor()
         ctx = TsContext(project=project)
         # src/ and app/ (SPA / Next / Nuxt 4), and the Laravel + Vite asset dirs; the extractor falls back to the
         # tsconfig's own files when none of these hold any
@@ -203,7 +203,7 @@ class TypeScriptPlugin(LanguagePlugin):
                 out = Path(td) / "facts.json"
                 cfg = {**ctx.extractor_cfg, "out": str(out)}
                 cfgp.write_text(json.dumps(cfg))
-                proc = subprocess.run(["node", "--max-old-space-size=6144", str(EXTRACTOR), "--config", str(cfgp)],
+                proc = subprocess.run(["node", "--max-old-space-size=6144", str(exdir / EXTRACTOR.name), "--config", str(cfgp)],
                                       capture_output=True, text=True)
                 if proc.returncode != 0:
                     raise RuntimeError(f"ts extractor failed: {proc.stderr[-2000:]}")

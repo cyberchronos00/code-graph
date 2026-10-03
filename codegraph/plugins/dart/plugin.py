@@ -24,7 +24,7 @@ from pathlib import Path
 from ... import presets
 from ...core.model import EXACT, HEURISTIC, RESOLVED, CONFIDENCE_RANK
 from ...core.paths import rules as path_rules
-from ...core import fsutil
+from ...core import extractors, fsutil
 from ...core.plugin import FrameworkPlugin, GraphBuilder, LanguagePlugin, Project
 from .http import TOKEN, HttpExtractor, Tpl, UrlEval, bind_args, join, load_env_files, min_conf
 from .models import ModelIndex
@@ -65,19 +65,21 @@ def extractor_stamp() -> str:
     return h.hexdigest()
 
 
-def _stamp_path() -> Path:
-    return BIN.with_name(BIN.name + ".sha256")
+def _stamp_path(bin_: Path | None = None) -> Path:
+    b = bin_ or BIN
+    return b.with_name(b.name + ".sha256")
 
 
-def extractor_binary_current() -> bool:
+def extractor_binary_current(bin_: Path | None = None) -> bool:
+    b = bin_ or BIN
     try:
-        return BIN.exists() and _stamp_path().read_text().strip() == extractor_stamp()
+        return b.exists() and _stamp_path(b).read_text().strip() == extractor_stamp()
     except OSError:
         return False
 
 
-def write_extractor_stamp() -> None:
-    _stamp_path().write_text(extractor_stamp() + "\n")
+def write_extractor_stamp(bin_: Path | None = None) -> None:
+    _stamp_path(bin_).write_text(extractor_stamp() + "\n")
 
 
 def facts_fingerprint(root: Path, cfg: dict, rules=None) -> str:
@@ -141,16 +143,20 @@ class DartPlugin(LanguagePlugin):
         return False
 
     def ensure_extractor(self, dart: str) -> str:
-        if extractor_binary_current():
-            return str(BIN)
-        if not (EXTRACTOR_DIR / ".dart_tool" / "package_config.json").exists():
-            subprocess.run([dart, "pub", "get"], cwd=EXTRACTOR_DIR, check=True, capture_output=True)
-        BIN.parent.mkdir(exist_ok=True)
-        r = subprocess.run([dart, "compile", "exe", str(EXTRACTOR), "-o", str(BIN)], cwd=EXTRACTOR_DIR, capture_output=True, text=True)
+        """The compiled extractor: in the package's extractor directory when its dependencies are there (a checkout),
+        else in the per-user cache directory (codegraph/core/extractors.py)."""
+        work = extractors.workdir("dart")
+        bin_ = BIN if work == extractors.SPECS["dart"].pkg else work / ".bin" / "extract"
+        if extractor_binary_current(bin_):
+            return str(bin_)
+        work = extractors.ensure("dart", dart)
+        bin_.parent.mkdir(exist_ok=True)
+        r = subprocess.run([dart, "compile", "exe", str(work / "bin" / EXTRACTOR.name), "-o", str(bin_)], cwd=work,
+                           capture_output=True, text=True)
         if r.returncode != 0:
             raise RuntimeError("dart extractor compile failed: " + r.stderr[-500:])
-        write_extractor_stamp()
-        return str(BIN)
+        write_extractor_stamp(bin_)
+        return str(bin_)
 
     def run_extractor(self, project: Project, cfg: dict, rules=None) -> tuple[dict, str]:
         cache_file, status = None, "disabled"

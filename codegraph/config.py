@@ -49,6 +49,7 @@ SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None:
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
     "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
     "platforms": {"targets", "paths", "file_suffixes", "path_conventions"}, "include": None, "apps": None,
+    "rust": {"targets"},
 }
 APP_KEYS = ("name", "root", "role", "links")
 APP_ROLES = ("backend", "frontend")
@@ -257,6 +258,9 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
     pf = _section(data, "platforms", fname)
     if pf is not None:
         out["platforms"] = _platforms(pf, fname)
+    rs = _section(data, "rust", fname)
+    if rs is not None and rs.get("targets") is not None:
+        out["rust"] = {"targets": rust_targets(rs["targets"], f"{fname}: rust.targets")}
     fw = _section(data, "frameworks", fname)
     if fw is not None:
         out["frameworks"] = {}
@@ -338,6 +342,19 @@ def app_pairs(apps: list[dict]) -> list[tuple[dict, dict]]:
         if a["role"] == "frontend":
             out += [(a, by[n]) for n in a["links"]] if "links" in a else [(a, b) for b in backends]
     return out
+
+
+def rust_targets(v, where: str) -> str:
+    """`rust.targets`: extra rust-analyzer runs per target (#56). `auto` (default), `off` / false, or a list of
+    platforms / target triples; returned in the CODEGRAPH_RUST_TARGETS form."""
+    if v is False or (isinstance(v, str) and v.strip().lower() in ("off", "none", "0", "false")):
+        return "off"
+    if isinstance(v, str) and v.strip().lower() == "auto":
+        return "auto"
+    items = [v] if isinstance(v, str) else v
+    if not isinstance(items, list) or not items or not all(isinstance(x, str) and x.strip() for x in items):
+        raise ConfigError(f"{where}: expected auto, off or a list of platforms / target triples, got {v!r}")
+    return ",".join(x.strip() for x in items)
 
 
 def load(root: str | Path) -> dict:

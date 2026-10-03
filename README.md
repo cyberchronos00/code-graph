@@ -65,15 +65,19 @@ clone, from install to first query, the visual view and connecting an AI agent t
 **Prerequisites** for this quickstart: Python 3.11+, PHP 8.2+ with Composer 2, and Node.js 20+. Other stacks need
 other tools; see [Prerequisites per language](#prerequisites-per-language).
 
-**Install** (about 15 seconds; all dependencies go inside the checkout):
+**Install** `cg` (a user-level tool: no sudo, no checkout needed; [docs/install.md](docs/install.md) for Windows,
+options and updates):
 
 ```bash
-git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph
-python3 -m venv .venv && .venv/bin/pip install "mcp>=2.2" pyyaml pytest protobuf tree-sitter tree-sitter-rust tree-sitter-c tree-sitter-cpp tree-sitter-kotlin tree-sitter-swift
-(cd codegraph/plugins/php/extractor && composer install)
-(cd codegraph/plugins/ts/extractor && npm ci)
-cg() { .venv/bin/python -m codegraph.cli "$@"; }    # shorthand used below
+curl -fsSL https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.sh | sh
+#   or: uv tool install git+https://github.com/cyberchronos00/code-graph
+#   or: pipx install git+https://github.com/cyberchronos00/code-graph
+cg doctor                     # what indexes exact / heuristic on this machine, and what to install for the rest
+git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph    # the sample apps used below
 ```
+
+Update with `uv tool upgrade codegraph`, `pipx upgrade codegraph` or `install.sh --update`. Working on cg itself:
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Index both apps and link them into one graph** (a few seconds):
 
@@ -98,7 +102,6 @@ cg path page:/reports/:id table:orders --db out/graph.db                  # fron
 cg resolutions timezone --db out/graph.db                                 # where is "timezone" decided?
 cg routes --writes --db out/graph.db                                      # which routes write data, and with which guards?
 cg plan check preorders --plans-dir examples/plans --db out/graph.db      # what does this planned change miss?
-.venv/bin/python -m pytest -q tests/                                      # 299 tests; PHP / TS ones skip without their extractor deps
 ```
 
 **The same bookstore in other stacks.** Each sample indexes on its own; PHP is only needed for Laravel and Node only
@@ -373,15 +376,15 @@ Python 3.11+ (tested with 3.13) runs the indexer, CLI and MCP server for every s
 
 | language | you need | install |
 |---|---|---|
-| all | Python packages | `.venv/bin/pip install "mcp>=2.2" pyyaml pytest protobuf` |
-| PHP / Laravel | PHP 8.2+ (tested 8.4), Composer 2 | `(cd codegraph/plugins/php/extractor && composer install)` |
-| TypeScript / JavaScript (Nuxt, Vue, NestJS, Next.js, Express, Fastify, Koa, Hono) | Node.js 20+ (tested 20.19), npm | `(cd codegraph/plugins/ts/extractor && npm ci)` |
+| all | Python packages (tree-sitter grammars included) | installed with cg (`install.sh`, `uv tool install`, `pipx install`) |
+| PHP / Laravel | PHP 8.2+ (tested 8.4), Composer 2 | extractor packages install into the user cache on the first index, or `cg setup php` |
+| TypeScript / JavaScript (Nuxt, Vue, NestJS, Next.js, Express, Fastify, Koa, Hono) | Node.js 20+ (tested 20.19), npm | on the first index, or `cg setup typescript` |
 | Python / Django | nothing extra (stdlib `ast`) | — |
 | Dart / Flutter | Dart SDK 3.x (tested 3.13); the target project needs no `pub get` | `dart` on PATH or `$DART`; the extractor's packages are fetched on first use |
-| Rust | tree-sitter packages; rust-analyzer for exact mode (any 2024+ release) | `.venv/bin/pip install tree-sitter tree-sitter-rust`, `rustup component add rust-analyzer` |
-| C / C++ | tree-sitter packages; scip-clang 0.4+ and a `compile_commands.json` for exact mode | `.venv/bin/pip install tree-sitter tree-sitter-c tree-sitter-cpp`; scip-clang and compile database: [docs/native.md](docs/native.md#c-and-c) |
-| Kotlin | tree-sitter packages; a JDK and scip-java 0.12+ for exact mode (Kotlin ≤ 2.1 builds) | `.venv/bin/pip install tree-sitter tree-sitter-kotlin`; scip-java and opt-in: [docs/kotlin.md](docs/kotlin.md#exact-mode) |
-| Swift | tree-sitter packages; a Swift toolchain (5.9+, Linux or Xcode) for exact mode | `.venv/bin/pip install tree-sitter tree-sitter-swift`; toolchain and opt-in: [docs/swift.md](docs/swift.md#exact-mode) |
+| Rust | rust-analyzer for exact mode (any 2024+ release) | `rustup component add rust-analyzer` (`install.sh --with rust`) |
+| C / C++ | scip-clang 0.4+ and a `compile_commands.json` for exact mode | `install.sh --with c`; compile database: [docs/native.md](docs/native.md#c-and-c) |
+| Kotlin | a JDK and scip-java 0.12+ for exact mode (Kotlin ≤ 2.1 builds) | `install.sh --with kotlin`; opt-in: [docs/kotlin.md](docs/kotlin.md#exact-mode) |
+| Swift | a Swift toolchain (5.9+, Linux or Xcode) for exact mode | `install.sh --with swift`; opt-in: [docs/swift.md](docs/swift.md#exact-mode) |
 | Go, Java | an existing SCIP index | `cg index <root> --scip index.scip` |
 
 ## How it works
@@ -422,14 +425,14 @@ Details: [docs/architecture.md](docs/architecture.md) · schema: [docs/schema.md
 ## Using it with an AI agent
 
 Add the server to your MCP host. Most hosts, Cursor and Claude Desktop among them, accept an `mcpServers` entry.
-Replace `/path/to/code-graph` with your checkout:
+`cg-mcp` is installed next to `cg`; replace `/path/to/code-graph` with the directory holding the graph:
 
 ```json
 {
   "mcpServers": {
     "code-graph": {
-      "command": "/path/to/code-graph/.venv/bin/python",
-      "args": ["-m", "codegraph.mcp_server", "--db", "out/graph.db",
+      "command": "cg-mcp",
+      "args": ["--db", "out/graph.db",
                "--gates", "examples/bookstore.gates.json", "--plans", "examples/plans"],
       "cwd": "/path/to/code-graph"
     }
@@ -595,6 +598,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 
 | doc | contents |
 |---|---|
+| [docs/install.md](docs/install.md) | install, update and uninstall (`install.sh`, `install.ps1`, uv, pipx), extractor dependencies, `cg doctor` |
 | [docs/cli.md](docs/cli.md) | every command and option, query target syntax |
 | [docs/mcp.md](docs/mcp.md) | MCP tools, client config, agent instructions |
 | [docs/architecture.md](docs/architecture.md) | invariants, codemap, plugin interface, how queries, the TS/Nuxt plugin and `link` work |

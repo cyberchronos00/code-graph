@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from ...core import extractors
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.fsutil import keep_file
 from ...core.paths import rel_dir, rules as path_rules
@@ -513,8 +514,8 @@ class PhpPlugin(LanguagePlugin):
     def prerequisite_problem(self, project: Project) -> str | None:
         if not shutil.which("php"):
             return "php not installed (PHP 8.2+ is needed for the PHP extractor)"
-        if not (EXTRACTOR.parent / "vendor" / "autoload.php").exists():
-            return "PHP extractor dependencies missing: run `(cd codegraph/plugins/php/extractor && composer install)`"
+        if not extractors.status("php")["installed"] and not shutil.which("composer"):
+            return "PHP extractor dependencies missing and Composer not installed: install Composer, then run `cg setup php`"
         return None
 
     def list_files(self, project: Project) -> list[str]:
@@ -536,7 +537,8 @@ class PhpPlugin(LanguagePlugin):
         files = self.list_files(project)
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fl:
             fl.write("\n".join(files))
-        res = subprocess.run(["php", str(EXTRACTOR), str(project.root), fl.name], capture_output=True, text=True, check=True)
+        exdir = extractors.ensure("php")
+        res = subprocess.run(["php", str(exdir / EXTRACTOR.name), str(project.root), fl.name], capture_output=True, text=True, check=True)
         os.unlink(fl.name)
         return [json.loads(line) for line in res.stdout.splitlines() if line.strip()]
 

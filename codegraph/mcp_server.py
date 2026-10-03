@@ -723,6 +723,17 @@ def routes(writes: str | None = None, reaches: list[str] | None = None, missing:
 
 
 @tool
+def doctor(root: str | None = None, json_output: bool = False) -> str:
+    """What this cg installation can index: versions of cg and the tools it uses, whether the Node / PHP / Dart
+    extractor dependencies are installed, and per language whether indexing runs in exact or heuristic mode, why, and
+    the command that installs what is missing. `root`: a project directory; also checks project conditions (a
+    compile_commands.json, `.cg.yaml` rust.targets) and lists only its languages."""
+    from .doctor import render, report
+    r = report(root)
+    return json.dumps(r, indent=2) if json_output else render(r)
+
+
+@tool
 def coverage(path: str | None = None, all_files: bool = False, json_output: bool = False) -> str:
     """Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
     exact-mode indexer such as rust-analyzer or scip-clang is missing, skipped when the toolchain is missing, with the

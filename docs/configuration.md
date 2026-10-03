@@ -44,6 +44,8 @@ platforms:
   paths: {"src/win32/**": [windows]}   # files built only for some targets
   file_suffixes: true                  # React Native .ios.ts / .android.ts / .native.ts / .web.ts files
   path_conventions: true               # C / C++ win/ unix/ posix/ directories and *_win.c file names
+rust:
+  targets: off                         # extra rust-analyzer runs per target: auto (default), off, or [windows, macos]
 ```
 
 | key | meaning | flag |
@@ -65,6 +67,7 @@ platforms:
 | `viz.presets` | preset menu entries for `serve` (`{id, label, mode, specs[, sinks]}`) | `serve --presets FILE` |
 | `platforms.targets` | the targets `--platform` and `cg platforms divergence` work with (windows, linux, macos, ios, android, web); default: Flutter platform folders, Expo `app.json`, React Native, Electron / Tauri, else the desktop targets plus those the conditions name ([platforms.md](platforms.md#targets)) | |
 | `platforms.paths` | glob → targets: files built only for those targets (`unix` and `native` work too) | |
+| `rust.targets` | Rust exact mode: one more rust-analyzer run per other target the `cfg` conditions name. `auto` (default: up to 3), `off`, or a list of platforms / target triples. A cold index takes about twice as long with them ([native.md](native.md)); `cg doctor <root>` shows the setting in effect | `CODEGRAPH_RUST_TARGETS` (takes precedence) |
 | `platforms.file_suffixes` / `platforms.path_conventions` | React Native platform files and C / C++ platform directories / file names (default `true`) | |
 
 The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` and the MCP server read the plans

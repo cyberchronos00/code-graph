@@ -16,6 +16,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `node`: Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
 - `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
 - `routes`: Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
+- `doctor`: What this cg installation can index: versions of cg and the tools it uses, whether the Node / PHP / Dart
 - `coverage`: Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
 - `starters`: Starter queries derived from this graph, each with the tool call to run: the write route without an auth guard
 - `stats`: Index metadata and node/edge counts by kind.

@@ -33,7 +33,9 @@ from . import query as Q
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="codegraph")
+    from . import __version__
+    ap = argparse.ArgumentParser(prog="cg")
+    ap.add_argument("--version", action="version", version=f"cg {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("index"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
     p.add_argument("--python-root", action="append", metavar="DIR",
@@ -55,6 +57,15 @@ def main(argv=None):
     p.add_argument("--json", action="store_true", help="the effective configuration as JSON")
     p = sub.add_parser("starters", help="starter queries derived from the graph (unguarded write routes, most-reached tables, ...)")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p = sub.add_parser("doctor", help="what this installation can index: tool versions, extractor dependencies, exact or "
+                                      "heuristic mode per language and why, and what to install")
+    p.add_argument("root", nargs="?", help="project root: also check project conditions and list only its languages")
+    p.add_argument("--json", action="store_true")
+    p = sub.add_parser("setup", help="install the Node / PHP / Dart extractor dependencies (into the user cache; "
+                                     "otherwise done on the first index)")
+    p.add_argument("languages", nargs="*", metavar="LANG",
+                   help="typescript, php, dart (default: every one whose toolchain is installed)")
+    p.add_argument("--quiet", action="store_true")
     p = sub.add_parser("coverage", help="which source files / languages the index covers: exact, heuristic, skipped (indexer missing) or unsupported")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
     p.add_argument("--all-files", action="store_true", help="list every file per bucket (default: the first 5), excluded files too")
@@ -157,6 +168,18 @@ def main(argv=None):
         from .coverage import render
         print(render({"": st.get("coverage")}), file=sys.stderr)  # stdout stays pure JSON
         return
+    if a.cmd == "doctor":
+        from .doctor import render, report
+        r = report(a.root)
+        print(json.dumps(r, indent=2) if a.json else render(r))
+        return 0
+    if a.cmd == "setup":
+        from .doctor import setup
+        bad = [x for x in a.languages if x not in ("typescript", "php", "dart")]
+        if bad:
+            print(f"cg setup: unknown language {bad[0]!r} (typescript, php, dart)", file=sys.stderr)
+            return 2
+        return setup(a.languages or None, quiet=a.quiet)
     if a.cmd == "coverage":
         from .core.store import GraphStore as _GS
         from .coverage import for_graph, render

@@ -191,7 +191,8 @@ In exact mode, rust-analyzer resolves the host's `cfg`, and it runs once more fo
 conditions name (up to 3, e.g. Windows and macOS on a Linux host: `cargo.target` = `x86_64-pc-windows-msvc`,
 `aarch64-apple-darwin`): references under those conditions are exact edges with `attrs.exact_target`. What no run
 resolves is added from the syntax layer (`via: cfg-inactive`). Each run costs about as much as the host run on a
-cold cache (cached afterwards like the host index); `CODEGRAPH_RUST_TARGETS=0` turns it off. See
+cold cache (cached afterwards like the host index); `rust: {targets: off}` in `.cg.yaml` or
+`CODEGRAPH_RUST_TARGETS=0` turns it off (`cg doctor` shows the setting in effect). See
 [platforms.md](platforms.md).
 
 ## Environment variables
@@ -202,7 +203,7 @@ cold cache (cached afterwards like the host index); `CODEGRAPH_RUST_TARGETS=0` t
 | `CODEGRAPH_RUST_ANALYZER`, `CODEGRAPH_SCIP_CLANG` | indexer binary |
 | `CODEGRAPH_RUST_SCIP_FILE`, `CODEGRAPH_C_SCIP_FILE` | use an existing `index.scip` instead of running the indexer |
 | `CODEGRAPH_RUST_BUILD_SCRIPTS=1` | let rust-analyzer run build scripts and proc-macros |
-| `CODEGRAPH_RUST_TARGETS` | extra rust-analyzer runs per target: `auto` (default: up to 3 targets the `cfg` conditions name), `0` (off), or a list of platforms / triples (`windows,macos`, `aarch64-linux-android`) |
+| `CODEGRAPH_RUST_TARGETS` | extra rust-analyzer runs per target: `auto` (default: up to 3 targets the `cfg` conditions name), `0` (off), or a list of platforms / triples (`windows,macos`, `aarch64-linux-android`); overrides `.cg.yaml` `rust.targets` |
 | `CODEGRAPH_COMPDB` | path to `compile_commands.json` (or its directory) |
 | `CODEGRAPH_CFAMILY=0/1` | disable / force the C/C++ plugin |
 | `CODEGRAPH_JOBS` | scip-clang worker count |

@@ -1,0 +1,8 @@
+graft codegraph
+prune codegraph/plugins/ts/extractor/node_modules
+prune codegraph/plugins/php/extractor/vendor
+prune codegraph/plugins/dart/extractor/.bin
+prune codegraph/plugins/dart/extractor/.dart_tool
+prune codegraph/viz/tools/node_modules
+prune codegraph/viz/tools/screenshots
+global-exclude __pycache__ *.py[cod] *.db *.db-wal *.db-shm
