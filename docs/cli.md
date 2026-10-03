@@ -18,10 +18,14 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `doctor [ROOT] [--json]`: what this installation can index: cg, Python and tool versions, whether the TypeScript /
   PHP / Dart extractor dependencies are installed (and where), and per language exact / heuristic / unavailable with
   the reason and the command that installs what is missing; with ROOT only the project's languages and its own
-  conditions (`compile_commands.json`, `.cg.yaml` `rust.targets`). It imports every cg module and exits with status 1,
+  conditions (`compile_commands.json`, `.cg.yaml` `rust.targets`) and `project:` checks: the root `tsconfig.json` or
+  the per-package tsconfigs indexed as one program, the Gradle / Maven build file and Kotlin version (Android modules
+  named), and the root `Package.swift` or the Xcode projects that need `CODEGRAPH_SWIFT_INDEX_STORE`. It imports every cg module and exits with status 1,
   naming the module and the error, when one does not import on the running Python. [install.md](install.md)
 - `setup [typescript] [php] [dart] [--quiet]`: install the extractor dependencies now (into the user cache for an
   installed cg) instead of on the first index; default: every language whose toolchain is installed.
+  `setup --prune [--dry-run]` removes the extractor installs this cg does not use (left behind by an update that
+  changed a lock file) and prints them with their sizes; an install in progress (its lock held) is kept.
 - `clean [ROOT] [--all [--extractors]] [--stale] [--db DB] [--dry-run] [--json]`: remove cache entries: those of one
   project (and of every project indexed below ROOT), the stale ones, or all of them except the extractors; `--db`
   also deletes a graph DB with its `-wal` / `-shm` files. `doctor` shows the cache size per kind ([clean](#clean)).

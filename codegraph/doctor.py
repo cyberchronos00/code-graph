@@ -275,6 +275,53 @@ UPGRADE_HINT = ("upgrade cg (`uv tool upgrade codegraph` / `install.sh --update`
                 "`cg doctor` output, and meanwhile reinstall cg under a newer Python (`uv tool install --python 3.12 ...`)")
 
 
+def project_checks(root: Path, present: set) -> list[dict]:
+    """`cg doctor <root>`: what the project gives the exact layers and the TypeScript program (#65)."""
+    out = []
+
+    def add(lang, ok, what, fix=None):
+        out.append({"language": lang, "ok": ok, "what": what, **({"fix": fix} if fix else {})})
+    if "typescript" in present:
+        from .plugins.ts.plugin import sub_tsconfigs
+        cfgs = [c for c in ("tsconfig.json", "jsconfig.json") if (root / c).is_file()]
+        subs = sub_tsconfigs(root) if not cfgs else []
+        if cfgs:
+            add("typescript", True, f"{cfgs[0]} at the root: one program from it")
+        elif subs:
+            add("typescript", True, f"no root tsconfig; {len(subs)} package tsconfig(s) indexed as one program: "
+                + ", ".join(subs[:5]) + (" …" if len(subs) > 5 else ""))
+        else:
+            add("typescript", False, "no tsconfig.json / jsconfig.json: plain-JS defaults over src/ and app/",
+                "add a tsconfig.json (or a .cg.yaml `include:`) when the code lives elsewhere")
+    if "kotlin" in present:
+        from .plugins.kotlin.exact import BUILD_FILES, android_modules, kotlin_version
+        builds = [f for f in BUILD_FILES if (root / f).is_file()]
+        if not builds:
+            add("kotlin", False, "no Gradle / Maven build file at the root: scip-java cannot run (heuristic mode)",
+                "run cg on the directory holding settings.gradle(.kts) / build.gradle(.kts) / pom.xml")
+        else:
+            kv = kotlin_version(root)
+            andr = android_modules(root)
+            add("kotlin", True, f"{builds[0]} at the root" + (f"; Kotlin {'.'.join(map(str, kv))}" if kv else
+                "; Kotlin version not declared in the root build files")
+                + (f"; Android modules (no scip-java variant, heuristic there): {', '.join(andr[:4])}" if andr else ""))
+    if "swift" in present:
+        from .xcode import _manifests, _projects
+        pk, xp = _manifests(root), _projects(root)
+        if (root / "Package.swift").is_file():
+            add("swift", True, "Package.swift at the root: `swift build` can produce the index store (CODEGRAPH_SWIFT_INDEX=1)"
+                + (f"; also {len(xp)} Xcode project(s)" if xp else ""))
+        elif xp or pk:
+            where = ", ".join([p.parent.parent.relative_to(root).as_posix() or "." for p in xp][:3]
+                              + [p.parent.relative_to(root).as_posix() for p in pk][:3])
+            add("swift", False, f"no Package.swift at the root ({len(pk)} manifest(s), {len(xp)} Xcode project(s): {where}): "
+                "the exact layer builds a root package only and runs no Xcode build (heuristic mode)",
+                "point CODEGRAPH_SWIFT_INDEX_STORE at the index store of an Xcode build (DerivedData/<app>/Index.noindex/DataStore)")
+        else:
+            add("swift", False, "no Package.swift or .xcodeproj found (heuristic mode; platforms from file conditions only)")
+    return out
+
+
 def report(root: str | Path | None = None, scip: list | None = None) -> dict:
     rootp = Path(root).resolve() if root else None
     cfg, cfg_error, present = {}, None, None
@@ -302,6 +349,7 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         "cache_usage": cache.usage(),
         "tools": tools, "python_modules": {m: _module(m) for m in (*PIP_NAMES, "yaml", "mcp")},
         "modules": imports, "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
+        **({"project": project_checks(rootp, present)} if rootp is not None else {}),
         "update": "uv tool upgrade codegraph  |  pipx upgrade codegraph (releases)  |  install.sh --update",
         **({"scip": [scip_health(x) for x in scip]} if scip else {}),
     }
@@ -342,6 +390,12 @@ def render(r: dict) -> str:
         out.append(f"  {x['language']:<11} {x['mode']:<11} {x['why']}")
         if x.get("fix"):
             out.append(f"  {'':<11} {'':<11} fix: {x['fix']}")
+    if r.get("project"):
+        out.append("project:")
+        for x in r["project"]:
+            out.append(f"  {x['language']:<11} {'ok' if x['ok'] else 'check':<11} {x['what']}")
+            if x.get("fix"):
+                out.append(f"  {'':<11} {'':<11} fix: {x['fix']}")
     for x in r.get("scip") or ():
         if "documents" in x:
             out.append(f"scip {x['path']}: {x['tool']}, {x['documents']} documents, {x['occurrences']} occurrences "

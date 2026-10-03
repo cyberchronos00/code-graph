@@ -158,12 +158,15 @@ class DartPlugin(LanguagePlugin):
         if extractor_binary_current(bin_):
             return str(bin_)
         work = extractors.ensure("dart", dart)
-        bin_.parent.mkdir(exist_ok=True)
-        r = subprocess.run([dart, "compile", "exe", str(work / "bin" / EXTRACTOR.name), "-o", str(bin_)], cwd=work,
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            raise RuntimeError("dart extractor compile failed: " + r.stderr[-500:])
-        write_extractor_stamp(bin_)
+        with extractors.install_lock(work):          # two first-time compiles into one directory wait (#65)
+            if extractor_binary_current(bin_):
+                return str(bin_)
+            bin_.parent.mkdir(exist_ok=True)
+            r = subprocess.run([dart, "compile", "exe", str(work / "bin" / EXTRACTOR.name), "-o", str(bin_)], cwd=work,
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError("dart extractor compile failed: " + r.stderr[-500:])
+            write_extractor_stamp(bin_)
         return str(bin_)
 
     def run_extractor(self, project: Project, cfg: dict, rules=None) -> tuple[dict, str]:

@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Packaging follow-up (#65):
+  - `cg setup --prune [--dry-run]` removes extractor installs of an older lock file; installs into one directory take
+    `<dir>/.install.lock`, so concurrent first runs do not run npm / composer / dart pub there twice.
+  - `cg doctor <root>` prints `project:` checks: root or per-package tsconfigs, the Gradle / Maven build file and
+    Kotlin version (Android modules named), a root `Package.swift` or the Xcode projects needing an index store.
+
 - Tests that run the project's programs in a subprocess (#60):
   - Rust `CARGO_BIN_EXE_x` / `cargo_bin("x")`, Node `child_process` / `execa`, PHP `Process` / `exec` running
     `php artisan x`, and Dart `Process.run` / `TestProcess.start` link to the entry point (`codegraph/process_runs.py`).

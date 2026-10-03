@@ -13,8 +13,10 @@ else $XDG_CACHE_HOME/codegraph or ~/.cache/codegraph; the extractors live in <ro
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -22,6 +24,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import cache
+
+try:
+    import fcntl
+except ImportError:          # Windows: msvcrt byte-range locks instead
+    fcntl = None
 
 PLUGINS = Path(__file__).resolve().parent.parent / "plugins"
 
@@ -105,17 +112,70 @@ def install_command(lang: str, dart: str | None = None) -> list[str]:
     return [dart or shutil.which("dart") or "dart", "pub", "get"]
 
 
+@contextlib.contextmanager
+def install_lock(d: Path):
+    """Hold `<d>/.install.lock` while installing into d: two first-time installs into the same directory at once
+    (two `cg index` runs, or `cg setup` next to one) wait for each other instead of running npm / composer / dart pub
+    in one directory twice (#65)."""
+    d.mkdir(parents=True, exist_ok=True)
+    fd = os.open(d / ".install.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            try:
+                import msvcrt
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            except (ImportError, OSError):
+                pass
+        yield
+    finally:
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def ensure(lang: str, dart: str | None = None) -> Path:
     """Install the extractor's dependencies if missing; returns the directory to run it from."""
     spec = SPECS[lang]
     d = workdir(lang)
     if lang == "dart":
-        if not (d / ".dart_tool" / "package_config.json").exists():
-            _run(install_command(lang, dart), d, spec)
+        done = lambda: (d / ".dart_tool" / "package_config.json").exists()
+    else:
+        done = lambda: _installed(d, spec)
+    if done():
         return d
-    if not _installed(d, spec):
-        _run(install_command(lang, dart), d, spec)
+    with install_lock(d):
+        if not done():                 # another process may have finished the install while this one waited
+            _run(install_command(lang, dart), d, spec)
     return d
+
+
+CACHE_DIR_RE = re.compile(r"^(?P<lang>[a-z]+)-[0-9a-f]{12}$")
+
+
+def prune(dry_run: bool = False) -> list[tuple[Path, int]]:
+    """`cg setup --prune`: remove extractor installs (`<language>-<lock hash>` directories) this version of cg does
+    not use: left behind by updates that changed a lock file. Another installed cg version that still uses one
+    reinstalls it on its next index. A directory whose install lock is held is kept."""
+    root = cache_root()
+    keep = {cache_dir(lang).name for lang in SPECS}
+    out = []
+    if not root.is_dir():
+        return out
+    for p in sorted(root.iterdir()):
+        m = CACHE_DIR_RE.match(p.name)
+        if not p.is_dir() or p.is_symlink() or not m or m.group("lang") not in SPECS or p.name in keep:
+            continue
+        if cache._held(p / ".install.lock"):
+            continue
+        size = cache._size(p)
+        if not dry_run:
+            shutil.rmtree(p, ignore_errors=True)
+        out.append((p, size))
+    return out
 
 
 def _run(cmd: list[str], d: Path, spec: Spec) -> None:

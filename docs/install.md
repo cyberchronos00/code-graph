@@ -15,7 +15,9 @@ user-level tool in its own environment; no checkout and no sudo are needed.
 
 Then run `cg doctor`: it lists the tools found, whether the extractor dependencies are installed, and per language
 whether `cg index` runs in exact or heuristic mode, why, and the command that installs what is missing.
-`cg doctor <project>` checks one project (only its languages, its `compile_commands.json`, its `.cg.yaml`). The MCP
+`cg doctor <project>` checks one project (only its languages, its `compile_commands.json`, its `.cg.yaml`, and
+`project:` lines for the inputs of the TypeScript program and the Kotlin / Swift exact layers: root or per-package
+tsconfigs, the Gradle / Maven build file and Kotlin version, a root `Package.swift` or the Xcode projects). The MCP
 server has the same report as the `doctor` tool. Doctor also imports every module of cg (`cg modules:`): `cg index`
 loads every language plugin, so a module that does not import on the running Python makes indexing fail for every
 language; doctor then names the module and the error (`file:line`), marks the languages `broken` and exits with
@@ -76,7 +78,9 @@ The TypeScript, PHP and Dart extractors ship as sources inside the package; thei
 They install on the first index that needs them, or ahead of time with `cg setup [typescript php dart]`, into
 `<cache root>/extractors/<language>-<lock hash>` (the root is `$CODEGRAPH_CACHE`, default `$XDG_CACHE_HOME/codegraph`
 or `~/.cache/codegraph`, `%LOCALAPPDATA%\codegraph` on Windows; [cli.md](cli.md#clean)). The directory is keyed by the lock file: an update that changes only the extractor code reuses the
-installed dependencies, one that changes the lock file installs fresh ones. A development checkout whose extractor
+installed dependencies, one that changes the lock file installs fresh ones; `cg setup --prune` (`--dry-run` to list
+only) removes the old ones. Two installs into one directory at once (two first `cg index` runs, or `cg setup` next to
+one) wait for each other on `<dir>/.install.lock` and the second one reuses the first one's install. A development checkout whose extractor
 directory already has its dependencies (`npm ci` run there) keeps using it.
 
 ## Exact-mode indexers

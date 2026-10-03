@@ -84,6 +84,10 @@ def main(argv=None):
     p.add_argument("languages", nargs="*", metavar="LANG",
                    help="typescript, php, dart (default: every one whose toolchain is installed)")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--prune", action="store_true",
+                   help="remove extractor installs this version does not use (left by updates that changed a lock "
+                        "file) instead of installing")
+    p.add_argument("--dry-run", action="store_true", help="with --prune: list what would be removed")
     p = sub.add_parser("coverage", help="which source files / languages the index covers: exact, heuristic, skipped (indexer missing) or unsupported")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
     p.add_argument("--details", action="store_true", help="the full report: file lists (the first 5 per bucket), fix hints, "
@@ -274,6 +278,15 @@ def main(argv=None):
             print(f"cg clean: {verb} {n} entr{'y' if n == 1 else 'ies'}, {C.human(pl.bytes)} (cache root {pl.root})"
                   + (f"; projects: {', '.join(pl.projects)}" if pl.projects else ""))
         return 1 if errors else 0
+    if a.cmd == "setup" and a.prune:
+        from .core import cache as _cache, extractors as _ex
+        gone = _ex.prune(dry_run=a.dry_run)
+        verb = "would remove" if a.dry_run else "removed"
+        for pth, size in gone:
+            print(f"{verb} {pth} ({_cache.human(size)})")
+        print(f"cg setup --prune: {verb} {len(gone)} unused extractor install(s), "
+              f"{_cache.human(sum(sz for _, sz in gone))}; kept {', '.join(_ex.cache_dir(x).name for x in _ex.SPECS)}")
+        return 0
     if a.cmd == "setup":
         from .doctor import setup
         bad = [x for x in a.languages if x not in ("typescript", "php", "dart")]
