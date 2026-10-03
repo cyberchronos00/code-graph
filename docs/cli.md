@@ -18,7 +18,8 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `doctor [ROOT] [--json]`: what this installation can index: cg, Python and tool versions, whether the TypeScript /
   PHP / Dart extractor dependencies are installed (and where), and per language exact / heuristic / unavailable with
   the reason and the command that installs what is missing; with ROOT only the project's languages and its own
-  conditions (`compile_commands.json`, `.cg.yaml` `rust.targets`). [install.md](install.md)
+  conditions (`compile_commands.json`, `.cg.yaml` `rust.targets`). It imports every cg module and exits with status 1,
+  naming the module and the error, when one does not import on the running Python. [install.md](install.md)
 - `setup [typescript] [php] [dart] [--quiet]`: install the extractor dependencies now (into the user cache for an
   installed cg) instead of on the first index; default: every language whose toolchain is installed.
 - `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,

@@ -71,6 +71,8 @@ SET_PLATFORM = {"android": "android", "ios": "ios", "iosArm64": "ios", "iosX64":
                 "wasmJs": "web", "wasm": "web", "linux": "linux", "linuxX64": "linux", "mingw": "windows",
                 "mingwX64": "windows"}
 TEMPLATE = re.compile(r"\$\{([^{}]*)\}|\$([A-Za-z_]\w*)")
+# Ktor path parameters `{id}` / `{id:regex}` normalized to `{id}` for route keys
+_KTOR_PARAM_RE = re.compile(r"\{(\w+)(?::[^{}]*)?\}")
 
 
 def parser():
@@ -698,7 +700,8 @@ class KotlinPlugin(LanguagePlugin):
                               end_line=c.end_point[0] + 1, module=kf.package or None, lang="kotlin",
                               attrs={"lambda": True, "kotlin_kind": "route handler", **({"test": True} if kf.test else {})})
         self._route(method, uri, hid, kf.rel, line, "ktor", ctx["guards"], EXACT)
-        self.b.add_edge(owner, f"route:{method} {re.sub(r'{(\w+)(?::[^{}]*)?}', r'{\1}', uri)}", "REFERENCES_FN", kf.rel,
+        norm_uri = _KTOR_PARAM_RE.sub(r"{\1}", uri)
+        self.b.add_edge(owner, f"route:{method} {norm_uri}", "REFERENCES_FN", kf.rel,
                         line, EXACT, how="router registration")
         return hid
 

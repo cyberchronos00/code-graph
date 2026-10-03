@@ -8,6 +8,25 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-03
+
+### Fixed
+
+- Python 3.11: `cg index` failed for every language with a `SyntaxError` on Python 3.11 (the supported minimum),
+  because one line of the Kotlin plugin used an f-string form that needs Python 3.12 and the indexer loads every
+  language plugin. The line is rewritten; the whole package was byte-compiled and the test suite run under Python 3.11,
+  and no other 3.12+ syntax or API was found. `tests/test_python_compat.py` compiles every module for Python 3.11
+  on any interpreter (`ast` feature version, a tokenizer check for the PEP 701 f-string forms) and with a Python 3.11
+  when one is installed.
+- `cg doctor` imports every cg module: one that does not import on the running Python is listed under `cg modules:`
+  with the error and `file:line`, the languages whose plugins it breaks (all of them when the indexer cannot load) are
+  marked `broken`, and doctor exits with status 1 (it reported a healthy installation before). `cg index` names the
+  module and points to `cg doctor` instead of printing a traceback.
+- `cg doctor` reports Rust as heuristic, with `rustup component add rust-analyzer` as the fix, when `rust-analyzer`
+  on PATH does not run (an empty rustup proxy) instead of exact; tools that do not run are marked `[does not run]`.
+- `cg --help` describes every command (index, detect, path, reaches, siblings, writers, impact, stats, node,
+  downstream and api-calls had none).
+
 ### Added
 
 - Protocol links: one endpoint model for every sender / receiver pair (`endpoint:<protocol>:<name>`, SENDS_TO /
@@ -413,7 +432,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/cyberchronos00/code-graph/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/cyberchronos00/code-graph/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cyberchronos00/code-graph/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cyberchronos00/code-graph/compare/v0.4.0...v0.5.0

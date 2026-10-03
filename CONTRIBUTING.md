@@ -29,6 +29,15 @@ network and no database, and runs in about 10 seconds. It must leave `git status
 temp dirs or `out/`. The one tracked generated file, `docs/mcp/sample_outputs.md`, is deterministic and only rewritten
 when its content changes. If your change alters MCP output, commit the regenerated file.
 
+cg supports Python 3.11+ (`requires-python`), so syntax and standard-library APIs newer than 3.11 (for example a
+backslash or a same-quote string inside an f-string expression, `type X = ...`, `itertools.batched`) break it.
+`tests/test_python_compat.py` checks the syntax on any interpreter and byte-compiles the package with a Python 3.11
+when one is installed; before a release, also run the suite under 3.11:
+
+```bash
+uv run --isolated --python 3.11 --extra dev python -m pytest -q tests/     # a temporary 3.11 env
+```
+
 `scripts/reproduce.sh` runs the full end-to-end pass (index, link, queries, plan check, HTML views, tests).
 
 ## Adding a language or framework plugin

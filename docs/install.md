@@ -16,7 +16,10 @@ user-level tool in its own environment; no checkout and no sudo are needed.
 Then run `cg doctor`: it lists the tools found, whether the extractor dependencies are installed, and per language
 whether `cg index` runs in exact or heuristic mode, why, and the command that installs what is missing.
 `cg doctor <project>` checks one project (only its languages, its `compile_commands.json`, its `.cg.yaml`). The MCP
-server has the same report as the `doctor` tool.
+server has the same report as the `doctor` tool. Doctor also imports every module of cg (`cg modules:`): `cg index`
+loads every language plugin, so a module that does not import on the running Python makes indexing fail for every
+language; doctor then names the module and the error (`file:line`), marks the languages `broken` and exits with
+status 1.
 
 `cg doctor --scip index.scip` (repeatable) checks SCIP index files: documents, occurrences with a position cg can
 read, definitions, and a warning (exit status 1) when the index is not usable: occurrences without a readable position

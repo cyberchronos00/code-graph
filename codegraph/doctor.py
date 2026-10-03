@@ -2,7 +2,9 @@
 
 Versions of cg and the tools it uses, whether the Node / PHP / Dart extractor dependencies are installed (and where:
 codegraph/core/extractors.py), and per language whether `cg index` runs in exact or heuristic mode, why, and the
-command that installs what is missing. With a project root it also checks project-level conditions (a
+command that installs what is missing. Every module of the package is imported as well: `cg index` loads every
+language plugin, so a module that does not import on this Python (syntax or an API newer than the running
+interpreter) breaks indexing for every language; doctor names it and exits non-zero. With a project root it also checks project-level conditions (a
 compile_commands.json for C / C++, a Gradle / Maven build for Kotlin, `.cg.yaml` rust.targets) and lists only the
 languages the project has."""
 from __future__ import annotations
@@ -25,15 +27,74 @@ PIP_NAMES = {"tree_sitter": "tree-sitter", "tree_sitter_rust": "tree-sitter-rust
              "tree_sitter_cpp": "tree-sitter-cpp", "tree_sitter_kotlin": "tree-sitter-kotlin", "tree_sitter_swift": "tree-sitter-swift"}
 
 
-def _version(tool: str | None, args=("--version",)) -> str | None:
+# language -> the plugin packages its `cg index` run loads (besides the indexer, which loads all of them)
+PLUGIN_PACKAGES = {"python": ("python", "pyweb", "django"), "typescript": ("ts", "tsweb", "nuxt", "nest", "nextjs", "express"),
+                   "php": ("php", "laravel"), "dart": ("dart", "flutter"), "rust": ("rust", "native", "scip"),
+                   "c_cpp": ("cfamily", "native", "scip"), "kotlin": ("kotlin", "scip"), "swift": ("swift",)}
+
+
+def _run(tool: str | None, args=("--version",)) -> tuple[str | None, bool]:
+    """First output line of `tool args` and whether it exited 0 (a rustup proxy without its component prints an
+    error and exits non-zero)."""
     if not tool:
-        return None
+        return None, False
     try:
         r = subprocess.run([tool, *args], capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None, False
     out = (r.stdout or r.stderr).strip().splitlines()
-    return out[0].strip()[:120] if out else "?"
+    return (out[0].strip()[:120] if out else "?"), r.returncode == 0
+
+
+def _version(tool: str | None, args=("--version",)) -> str | None:
+    return _run(tool, args)[0]
+
+
+def _describe(e: BaseException) -> str:
+    """`SyntaxError: <msg> (codegraph/plugins/x/plugin.py:12)`: the error and where in the package it is."""
+    pkg = Path(__file__).resolve().parent
+    where = None
+    if isinstance(e, SyntaxError) and e.filename:
+        where = (e.filename, e.lineno)
+    else:
+        tb = e.__traceback__
+        while tb is not None:
+            if str(Path(tb.tb_frame.f_code.co_filename).resolve()).startswith(str(pkg)):
+                where = (tb.tb_frame.f_code.co_filename, tb.tb_lineno)
+            tb = tb.tb_next
+    msg = e.msg if isinstance(e, SyntaxError) else str(e)
+    if where:
+        try:
+            rel = Path(where[0]).resolve().relative_to(pkg.parent).as_posix()
+        except ValueError:
+            rel = where[0]
+        return f"{type(e).__name__}: {msg} ({rel}:{where[1]})"
+    return f"{type(e).__name__}: {msg}"
+
+
+def module_imports() -> dict:
+    """Import every module of the package. `cg index` imports every language plugin, so one module that fails to
+    import on this interpreter makes indexing fail for every language. Returns the module count and the failures
+    (module -> error)."""
+    import importlib
+    import pkgutil
+
+    import codegraph
+    failed: dict[str, str] = {}
+
+    def onerror(name):
+        e = sys.exc_info()[1]
+        if e is not None and name not in failed:
+            failed[name] = _describe(e)
+
+    n = 0
+    for m in pkgutil.walk_packages(codegraph.__path__, "codegraph.", onerror=onerror):
+        n += 1
+        try:
+            importlib.import_module(m.name)
+        except Exception as e:  # noqa: BLE001  (SyntaxError included: a module this Python cannot compile)
+            failed.setdefault(m.name, _describe(e))
+    return {"modules": n, "failed": failed}
 
 
 def _tools() -> dict:
@@ -54,7 +115,11 @@ def _tools() -> dict:
         "java": find_java(), "swift": find_swift(), "git": shutil.which("git"),
     }
     vargs = {"java": ("-version",), "dart": ("--version",)}
-    return {k: {"path": v, "version": _version(v, vargs.get(k, ("--version",)))} for k, v in found.items()}
+    out = {}
+    for k, v in found.items():
+        ver, ok = _run(v, vargs.get(k, ("--version",)))
+        out[k] = {"path": v, "version": ver, **({"runs": False} if v and not ok else {})}
+    return out
 
 
 def _module(name: str) -> bool:
@@ -108,6 +173,10 @@ def _languages(tools: dict, root: Path | None, cfg: dict) -> list[dict]:
         miss = " and ".join(t for t in ("rust-analyzer", "cargo") if not has(t))
         add("rust", "heuristic", f"{miss} not found: tree-sitter layer with name-based resolution",
             "rustup component add rust-analyzer  (or install.sh --with rust)")
+    elif tools["rust-analyzer"].get("runs") is False:
+        add("rust", "heuristic", f"rust-analyzer at {tools['rust-analyzer']['path']} does not run "
+            f"({tools['rust-analyzer']['version'] or 'no output'}): tree-sitter layer with name-based resolution",
+            "rustup component add rust-analyzer  (an empty rustup proxy is on PATH)")
     else:
         from .plugins.rust.plugin import rust_targets_setting
         class _P:      # rust_targets_setting reads project.options["config"]
@@ -185,6 +254,27 @@ def scip_health(path: str | Path) -> dict:
     return out
 
 
+def _mark_broken(langs: list[dict], imports: dict) -> None:
+    """A language whose plugin (or the indexer itself) does not import cannot be indexed, whatever its tools."""
+    failed = imports["failed"]
+    if not failed:
+        return
+    index_err = failed.get("codegraph.indexer")
+    for x in langs:
+        own = [m for m in failed for p in PLUGIN_PACKAGES.get(x["language"], ())
+               if m == f"codegraph.plugins.{p}" or m.startswith(f"codegraph.plugins.{p}.")]
+        if not own and not index_err:
+            continue
+        x["mode"] = "broken"
+        x["why"] = (f"{own[0]} does not import: {failed[own[0]]}" if own else
+                    f"cg index cannot load (codegraph.indexer: {index_err})")
+        x["fix"] = "see `cg modules` above"
+
+
+UPGRADE_HINT = ("upgrade cg (`uv tool upgrade codegraph` / `install.sh --update`); if it persists, report it with the "
+                "`cg doctor` output, and meanwhile reinstall cg under a newer Python (`uv tool install --python 3.12 ...`)")
+
+
 def report(root: str | Path | None = None, scip: list | None = None) -> dict:
     rootp = Path(root).resolve() if root else None
     cfg, cfg_error, present = {}, None, None
@@ -199,6 +289,8 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         present = {lang for lang, exts in SUPPORTED.items() if any(counts.get(e) for e in exts)}
     tools = _tools()
     langs = _languages(tools, rootp, cfg)
+    imports = module_imports()
+    _mark_broken(langs, imports)
     if present is not None:
         langs = [x for x in langs if x["language"] in present]
     pkg = Path(__file__).resolve().parent
@@ -208,7 +300,7 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         "os": f"{platform.system()} {platform.machine()}",
         "extractors": {k: extractors.status(k) for k in extractors.SPECS}, "cache": str(extractors.cache_root()),
         "tools": tools, "python_modules": {m: _module(m) for m in (*PIP_NAMES, "yaml", "mcp")},
-        "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
+        "modules": imports, "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
         "update": "uv tool upgrade codegraph  |  pipx upgrade codegraph (releases)  |  install.sh --update",
         **({"scip": [scip_health(x) for x in scip]} if scip else {}),
     }
@@ -218,13 +310,23 @@ def render(r: dict) -> str:
     out = [f"cg {r['cg']}  (Python {r['python']}, {r['os']}; {r['package']}{', checkout' if r['checkout'] else ''})"]
     out.append("tools:")
     for k, v in r["tools"].items():
-        out.append(f"  {k:<14} {v['version'] or 'not found'}" + (f"  ({v['path']})" if v["path"] else ""))
+        out.append(f"  {k:<14} {v['version'] or 'not found'}" + (f"  ({v['path']})" if v["path"] else "")
+                   + ("  [does not run]" if v.get("runs") is False else ""))
     out.append(f"extractor dependencies (cache {r['cache']}):")
     for k, v in r["extractors"].items():
         out.append(f"  {k:<14} {'installed' if v['installed'] else 'not installed'}  ({v['where']}: {v['dir']})")
     mods = r["python_modules"]
     missing = sorted(m for m, ok in mods.items() if not ok)
     out.append("python modules: " + ("all present" if not missing else "missing " + ", ".join(missing)))
+    imp = r.get("modules") or {"modules": 0, "failed": {}}
+    if not imp["failed"]:
+        out.append(f"cg modules: all {imp['modules']} import on Python {r['python']}")
+    else:
+        out.append(f"cg modules: {len(imp['failed'])} of {imp['modules']} do not import on Python {r['python']}; "
+                   "`cg index` fails for every language that loads them:")
+        for m, err in sorted(imp["failed"].items()):
+            out.append(f"  {m}: {err}")
+        out.append(f"  fix: {UPGRADE_HINT}")
     if r.get("config_error"):
         out.append(f"config: {r['config_error']}")
     out.append("languages" + (f" in {r['root']}:" if r["root"] else ":"))

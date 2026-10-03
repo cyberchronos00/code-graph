@@ -373,7 +373,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 
 ## Prerequisites per language
 
-Python 3.11+ (tested with 3.13) runs the indexer, CLI and MCP server for every stack. Each language adds:
+Python 3.11+ (tested with 3.11 and 3.13) runs the indexer, CLI and MCP server for every stack. Each language adds:
 
 | language | you need | install |
 |---|---|---|

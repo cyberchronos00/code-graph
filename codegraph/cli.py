@@ -38,14 +38,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="cg")
     ap.add_argument("--version", action="version", version=f"cg {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("index"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
+    p = sub.add_parser("index", help="detect languages / frameworks under ROOT and build the graph DB (stats JSON on stdout, coverage on stderr)"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
     p.add_argument("--python-root", action="append", metavar="DIR",
                    help="Python source root, relative to ROOT (repeatable); replaces detection and python.source_roots in .cg.yaml")
     p.add_argument("--no-apps", action="store_true",
                    help="index ROOT as one project although its .cg.yaml lists monorepo apps")
     p.add_argument("--include-generated", action="store_true",
                    help="also index generated, copied and vendored files (labelled attrs.generated); default: excluded and listed by `cg coverage`")
-    p = sub.add_parser("detect"); p.add_argument("root")
+    p = sub.add_parser("detect", help="the languages and frameworks detected under ROOT, without indexing"); p.add_argument("root")
     p = sub.add_parser("config", help="project config: `show` the effective configuration and where each value comes from, "
                                       "`validate` a .cg.yaml")
     p.add_argument("action", choices=["show", "validate"]); p.add_argument("root", nargs="?", default=".", help="indexed root (or, for validate, a config file)")
@@ -76,7 +76,7 @@ def main(argv=None):
     p.add_argument("--backend", required=True); p.add_argument("--frontend", required=True); p.add_argument("--db", required=True)
     p.add_argument("--backend-name", default="backend"); p.add_argument("--frontend-name", default="frontend")
     p.add_argument("--report", help="write <prefix>.json/.md match report")
-    p = sub.add_parser("path"); p.add_argument("src"); p.add_argument("dst"); p.add_argument("--db", required=True)
+    p = sub.add_parser("path", help="one shortest evidence chain from SRC to DST (exit status 1 when there is none)"); p.add_argument("src"); p.add_argument("dst"); p.add_argument("--db", required=True)
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
     p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
     p = sub.add_parser("platforms", help="platform-specific code: targets, tagged symbols per target, and divergence "
@@ -138,8 +138,16 @@ def main(argv=None):
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
+    helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
+             "siblings": "code related to a symbol: class hierarchy, the same method in sibling classes, shared resources, co-callers",
+             "writers": "code that writes a table (or column)",
+             "impact": "callers of a method up to their entry points (reverse walk), overrides listed apart",
+             "stats": "node / edge counts of a graph DB",
+             "node": "one node's details and its incoming / outgoing edges",
+             "downstream": "forward dependencies of a symbol or page (calls, HTTP, routes, services, tables)",
+             "api-calls": "client HTTP calls with call sites, request keys and the matched route"}
     for name in ("reaches", "siblings", "writers", "impact", "stats", "node", "downstream", "api-calls"):
-        p = sub.add_parser(name)
+        p = sub.add_parser(name, help=helps[name])
         if name == "reaches":
             p.add_argument("specs", nargs="+")
         elif name == "api-calls":
@@ -159,7 +167,13 @@ def main(argv=None):
     a = ap.parse_args(argv)
 
     if a.cmd == "index":
-        from .indexer import index_project
+        try:
+            from .indexer import index_project
+        except (SyntaxError, ImportError) as ex:   # a plugin this interpreter cannot load: name it, point to doctor
+            from .doctor import _describe
+            print(f"cg index: cannot load the indexer on Python {sys.version.split()[0]}: {_describe(ex)}\n"
+                  "run `cg doctor` for details; upgrading cg (`uv tool upgrade codegraph`) usually fixes it", file=sys.stderr)
+            return 2
         from .config import ConfigError, load as load_config
         try:
             cfg = load_config(a.root) if not a.no_apps else {}
@@ -183,7 +197,8 @@ def main(argv=None):
         from .doctor import render, report
         r = report(a.root, scip=a.scip)
         print(json.dumps(r, indent=2) if a.json else render(r))
-        return 1 if any(x.get("warning") for x in r.get("scip") or ()) else 0
+        broken = bool((r.get("modules") or {}).get("failed"))
+        return 1 if broken or any(x.get("warning") for x in r.get("scip") or ()) else 0
     if a.cmd == "setup":
         from .doctor import setup
         bad = [x for x in a.languages if x not in ("typescript", "php", "dart")]
