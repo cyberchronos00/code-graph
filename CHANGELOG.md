@@ -30,6 +30,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Kotlin (#81): a suspend lambda used as an expression (`val b = suspend { 1 }`, `X to suspend { ... }`) no longer
+  breaks the parse and drops the enclosing class's functions; ktor-samples: 34 more `@Test` functions (162 → 196),
+  files with syntax errors 6 → 3. No change on nowinandroid, KaMPKit, spring-petclinic-kotlin.
 - Protocol links (#69): Socket.IO matching follows the direction (a client `emit` reaches server handlers, a server
   `emit` client handlers), so a client handler no longer counts as the receiver of a client emit; the index and
   `cg link` per-protocol stats apply `.cg.yaml` `protocols.external` (new `external` count) as `cg protocols` does.

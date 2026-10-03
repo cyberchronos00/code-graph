@@ -179,3 +179,25 @@ def test_ktor_type_safe_resources():
     for r in ("GET /articles", "GET /articles/{id}", "POST /articles/new"):
         a = _attrs(f"route:{r}")
         assert a["framework"] == "ktor"
+
+
+def test_suspend_lambda_expression_parses(tmp_path):
+    """#81: `val b = suspend { 1 }` / `X to suspend { ... }` no longer swallows the enclosing class."""
+    from codegraph.plugins.kotlin.plugin import _suspend_lambdas
+    d = tmp_path / "src" / "test" / "kotlin"
+    d.mkdir(parents=True)
+    src = ("package demo\n\nimport kotlin.test.Test\n\nclass SuspendTest {\n    @Test\n    fun usesSuspendLambda() {\n"
+           "        val block = suspend { 1 }\n        val pairs = listOf(1 to suspend { 2 }, 3 to suspend { 4 })\n    }\n\n"
+           "    suspend fun keep() {}\n\n    @Test\n    fun plain() {}\n}\n")
+    (d / "SuspendTest.kt").write_text(src)
+    out, n = _suspend_lambdas(src.encode())
+    assert n == 3 and len(out) == len(src.encode()) and b"suspend fun keep" in out
+    dbp = tmp_path / "g.db"
+    stats = index_project(tmp_path, dbp, "susp")
+    c = sqlite3.connect(dbp)
+    rows = {r[0]: (r[1], r[2]) for r in c.execute("SELECT id, line, entry_kind FROM nodes WHERE kind IN ('class', 'method')")}
+    assert "class:demo.SuspendTest" in rows
+    assert rows["method:demo.SuspendTest.usesSuspendLambda"] == (6, "test")
+    assert rows["method:demo.SuspendTest.plain"] == (14, "test")
+    assert "method:demo.SuspendTest.keep" in rows
+    assert stats["plugins"]["kotlin"]["suspend_lambdas_rewritten"] == 3

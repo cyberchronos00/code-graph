@@ -173,6 +173,20 @@ def _module_root(rel: str) -> str:
     return "" if rel.startswith("src/") or i < 0 else rel[:i]
 
 
+
+# tree-sitter-kotlin 1.1.0 cannot parse a suspend lambda used as an expression (`val b = suspend { 1 }`,
+# `X to suspend { ... }`): the error swallows the declarations around it (#81). `suspend` becomes seven spaces in
+# front of the `{`, the same length, so byte offsets and the names read from the original source stay as written.
+_SUSPEND_LAMBDA = re.compile(rb"(=|\(|,|\[|\bto|\breturn|->|&&|\|\||\?:)(\s*)suspend(\s*\{)")
+
+
+def _suspend_lambdas(src: bytes) -> tuple[bytes, int]:
+    if b"suspend" not in src:
+        return src, 0
+    out, n = _SUSPEND_LAMBDA.subn(lambda m: m.group(1) + m.group(2) + b" " * 7 + m.group(3), src)
+    return out, n
+
+
 class KFile:
     def __init__(self, rel: str, src: bytes, tree):
         self.rel, self.src, self.tree = rel, src, tree
@@ -228,8 +242,12 @@ class KotlinPlugin(LanguagePlugin):
             except OSError:
                 failed.append(rel)
                 continue
-            tree = p.parse(src)
-            kf = KFile(rel, src, tree)
+            psrc, n_susp = _suspend_lambdas(src)
+            if n_susp:
+                self.st["suspend_lambdas_rewritten"] += n_susp
+                self.st["files_with_suspend_lambdas"] += 1
+            tree = p.parse(psrc)
+            kf = KFile(rel, src, tree)            # names and text from the original bytes; offsets are unchanged
             if tree.root_node.has_error:
                 self.st["files_with_syntax_errors"] += 1
                 errs[rel] = tree_spans(tree.root_node)

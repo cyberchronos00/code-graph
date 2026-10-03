@@ -5,6 +5,12 @@ or Gradle build is needed, so any checkout indexes as-is. `cg coverage` then rep
 are resolved by name, as for Rust and C / C++ without their compiler indexers. With a scip-java index of the build the
 call edges are compiler-resolved and coverage reports **exact** ([Exact mode](#exact-mode)).
 
+tree-sitter-kotlin 1.1.0 cannot parse a suspend lambda used as an expression (`val b = suspend { 1 }`,
+`HttpMethod.Post to suspend { ... }`); the error used to swallow the enclosing class. Before parsing, `suspend` in
+front of such a `{` (after `=`, `(`, `,`, `[`, `to`, `return`, `->`, `&&`, `||`, `?:`) is replaced by spaces of the
+same length, so lines, byte offsets and names stay as written; the index stats count `suspend_lambdas_rewritten`.
+Other parse errors are listed by `cg coverage --details` with the declarations they cost.
+
 ## What is in the graph
 
 | Area | Facts |
