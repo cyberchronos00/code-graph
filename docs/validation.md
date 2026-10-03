@@ -745,3 +745,24 @@ memoised, so a partial answer is not reused elsewhere. The plugin stats report t
   full-stack-fastapi-template. The work budget was not reached on any of them.
 - `tests/test_python_infer_cycles.py` has the langgraph shape in a dozen lines: it indexed for more than 60 s before
   (stopped by the test's alarm) and takes 0.2 s now.
+
+## Laravel graphs independent of the hash seed (#79)
+
+A property read on a receiver that can be several Eloquent models, in a `??` fallback chain, took the table of the
+first model a set iteration produced, so two indexes of one commit could differ (in the issue's repro, seed 3 picked
+`incomes` where seeds 1, 2, 4, 5, 6 picked `expenses`). Each such step now has one FALLS_BACK_TO edge per candidate
+model's column, all with the step's `order`, `ambiguous: true` and `candidates`; the candidates are those whose
+migrations declare the column, else those whose table the migrations create. A single-model read is unchanged.
+
+Every graph below indexed under `PYTHONHASHSEED` 1 and 2 is identical (nodes, edges, attributes), and against the
+previous version only the multi-model steps changed:
+
+| Project | Edges before (seed 1) → after | What changed |
+|---|---|---|
+| koel, solidtime, firefly-iii, pixelfed, vito, panel, UNIT3D, akaunting, librenms, laravel.io | unchanged | no multi-model fallback step |
+| monica | 34,205 → 34,211 | 3 resolutions (`UpdateVCard`, `UpdateVCalendar`, `GetEtag`): `distant_etag` on `vcard_resources` and `vcalendar_resources`, before `vcard_resources` only |
+| coolify | 83,087 → 83,088 | `Show::copyValue`: `value` on `environment_variables` and `shared_environment_variables`, before the latter only |
+| invoiceninja | 172,259 → 172,269 | `line_items` and `design_id` on credits, invoices, purchase_orders, quotes and recurring_invoices (before purchase_orders only); `$entity->client` on clients and vendors (no migration declares either column; before vendors only) |
+
+`tests/test_laravel_determinism.py` indexes the issue's fixture under two seeds that differed before and compares the
+whole graph.

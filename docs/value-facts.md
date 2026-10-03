@@ -9,7 +9,7 @@ and the TS extractor:
 | | VALIDATES (`rule`) | FormRequest `rules()` keys (inline `$request->validate([...])` rules are not emitted as VALIDATES; their keys are read through `$validated['k']`) |
 | `method:…::rules` | VALIDATED_BY | an action whose parameter is typed with that FormRequest |
 | `setting:<key>` | READS_SETTING / WRITES_SETTING (`owner`, `default`) | `getSetting('key', default)` / `setSetting` on classes declaring them (e.g. `Store`) |
-| `resolution:<fn>#<target>@<line>` | HAS_RESOLUTION (fn → resolution); FALLS_BACK_TO (resolution → each source, `order`, `default`) | a value picked through a fallback chain (see below) |
+| `resolution:<fn>#<target>@<line>` | HAS_RESOLUTION (fn → resolution); FALLS_BACK_TO (resolution → each source, `order`, `default`; `ambiguous`, `candidates` for a multi-model column) | a value picked through a fallback chain (see below) |
 
 - **Request-array flow** (through more than one helper level): a fixpoint over call arguments. Sources are request
   accessors (`validated()`, `all()`, `input()`, `only()`, … on a receiver typed Request/FormRequest), `request()`, arrays
@@ -21,6 +21,10 @@ and the TS extractor:
   expanded too), or a function with ≥ 2 ordered early returns (a `resolveX()` helper). Each operand is expanded into
   atoms: request key, setting (+ its literal default), model attribute → column (the Store attribute
   `default_timezone` → `stores.default_timezone`), a builder `value('col')` call, config/env, literal.
+  A receiver that can be several models (`Income|Expense $doc`, a variable assigned from either) reads one column per
+  model as one step: the signature names them all (`column:expenses.paid_at|incomes.paid_at`) and each FALLS_BACK_TO
+  edge of the step has the same `order`, `ambiguous: true` and `candidates`. Candidates narrow to the tables whose
+  migrations declare the column, else to the tables the migrations create.
   Transparent wrappers (`strtoupper`, `trim`, casts) are recorded as `norm`. Locals are inlined from their assignment;
   parameters are expanded through their call sites (depth ≤ 4). A site is kept when its chain has a source and ≥ 2
   entries; the flattened `signature` is stored on the node.

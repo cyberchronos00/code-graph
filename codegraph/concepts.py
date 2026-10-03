@@ -83,6 +83,8 @@ def atom_text(a) -> str:
         own = f" ({'/'.join(a['owner'])}::getSetting)" if a.get("owner") else ""
         return f"setting '{a['key']}'{own} default {a.get('default')!r}{norm}"
     if k == "column":
+        if a.get("candidates"):
+            return f"column {' | '.join(a['candidates'])} ({a.get('how')}, one per model){norm}"
         return f"column {a['column']} ({a.get('how')}){norm}"
     if k in ("config", "env"):
         return f"{k} '{a['key']}' default {a.get('default')!r}"
