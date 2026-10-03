@@ -596,6 +596,8 @@ def _hop_of(e) -> dict:
         a = json.loads(e["attrs"])
         if a.get("binding") == "candidate":      # one of several same-name methods, receiver type unknown (#83)
             hop["candidate"] = a.get("candidates") or True
+    if e["kind"] in ("CALLS", "TEST_CALLS") and e["attrs"] and '"accessor"' in e["attrs"]:
+        hop["accessor"] = json.loads(e["attrs"]).get("accessor")   # inside `didSet { }` / `get { }` (Swift, #72)
     if e["gate"]:
         hop["gated"] = e["gate"]
         hop["guard"] = json.loads(e["attrs"] or "{}").get("guard")
@@ -899,7 +901,8 @@ def _first_hop(path: list[dict] | None) -> dict:
     if not path:
         return {}
     h = path[0]
-    return {"edge": h["kind"], **({"how": h["how"]} if h.get("how") else {}), **({"via": h["via"]} if h.get("via") else {})}
+    return {"edge": h["kind"], **({"how": h["how"]} if h.get("how") else {}), **({"via": h["via"]} if h.get("via") else {}),
+            **({"accessor": h["accessor"]} if h.get("accessor") else {})}
 
 
 def with_generated(row: dict) -> dict:
@@ -942,13 +945,17 @@ CANDIDATE_NOTE = ("(candidate): through a call whose receiver type is unknown, b
 
 def caller_label(c: dict) -> str:
     """'' for a call; '  (ref: collection)' when the caller holds a reference to the function instead of calling it;
-    plus the generated-file label of a caller in a generated file."""
+    '  (didSet)' when the call sits in that accessor of a property; plus the generated-file label of a caller in a generated file."""
     if c.get("edge") == "REFERENCES_FN":
         lab = f"  (ref: {c['how']})" if c.get("how") else "  (ref)"
     elif c.get("via") == "collection":
         lab = "  (call through a collection)"
     else:
         lab = ""
+    if c.get("accessor"):                        # the call sits in that accessor of a property node (Swift, #72)
+        lab += f"  ({c['accessor']})"
+    if c.get("in_property"):                     # a type node: the call is in a property of that type (#72)
+        lab += "  (in a property)"
     if c.get("candidate"):
         lab += CANDIDATE_LABEL
     if c.get("via_override"):
@@ -1096,10 +1103,14 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
                     **({"candidate": True} if path_candidate(paths[n]) else {})) for n, d in depth.items()
                if n in rows and rows[n]["entry_kind"]]
     callers = []
+    typed = _type_level_callers(st, [n for n, d in depth.items() if d and n in rows and rows[n]["kind"] == "class"
+                                     and (paths.get(n) or [{}])[0].get("kind") == "CALLS"])
     for n, d in depth.items():
-        if n not in rows or rows[n]["kind"] not in CODE_KINDS + ("http",) or d == 0:
+        if n not in rows or (rows[n]["kind"] not in CODE_KINDS + ("http",) and n not in typed) or d == 0:
             continue
         c = dict(rows[n], depth=d, **_first_hop(paths.get(n)))
+        if n in typed:                     # a call in a property initializer / Kotlin accessor of that type (#72)
+            c["in_property"] = True
         p = paths.get(n) or []
         if path_candidate(p):
             c["candidate"] = True
@@ -1114,6 +1125,22 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
         from .platforms import filter_info
         out["platform"] = filter_info(st, platform)
         out["platform"]["targets_not_built"] = _not_built(st, targets, platform)
+    return out
+
+
+TYPE_LEVEL_LANGS = ("swift", "kotlin")
+
+
+def _type_level_callers(st: GraphStore, ids: list[str]) -> set[str]:
+    """Swift / Kotlin type nodes that call the target themselves: the call sits in a stored property's initializer
+    or (Kotlin) a custom getter / setter, which have no node of their own. They count as callers, labelled
+    `(in a property)` (#72), rather than leaving "no callers"."""
+    out = set()
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        out |= {r["id"] for r in st.q(f"SELECT id FROM nodes WHERE id IN ({','.join('?' * len(chunk))}) "
+                                      f"AND lang IN ({','.join('?' * len(TYPE_LEVEL_LANGS))})",
+                                      (*chunk, *TYPE_LEVEL_LANGS))}
     return out
 
 

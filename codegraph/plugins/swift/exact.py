@@ -31,6 +31,11 @@ from ...core import cache, fsutil
 from ..native import runner
 from . import indexstore as ix
 
+# index-store names of accessor definitions (`getter:label`, `didSet:items`): owned by their property
+ACCESSORS = ("getter:", "setter:", "_modify:", "modify:", "read:", "_read:", "willSet:", "didSet:")
+ACCESSOR_ATTR = {"getter": "get", "setter": "set", "willSet": "willSet", "didSet": "didSet", "modify": "modify",
+                 "_modify": "modify"}
+
 CALL_KINDS = ("CALLS", "INSTANTIATES")
 
 
@@ -162,7 +167,9 @@ class ExactLayer:
         ctor_type: dict[str, str] = {}
         matched = unmatched = 0
         accessor_of: dict[str, str] = {}
+        accessor_kind: dict[str, str] = {}   # accessor usr -> "getter" | "setter" | "didSet" | ...
         prop_def: dict[str, str] = {}
+        prop_how: dict[str, str] = {}        # property usr -> "computed" | "observed" | "lazy" (property nodes)
         parent_of: dict[str, str] = {}       # definition usr -> enclosing type / extension usr (childOf)
         ext_of: dict[str, str] = {}          # extension usr -> extended type usr
         for rel, occs in rels.items():
@@ -181,14 +188,20 @@ class ExactLayer:
                     if rr & ix.REL_CHILDOF:
                         parent_of.setdefault(o.usr, ru)
                 if o.kind in ("instancemethod", "function", "staticmethod", "classmethod") and \
-                        o.name.startswith(("getter:", "setter:", "_modify:", "modify:", "read:")):
+                        o.name.startswith(ACCESSORS):
                     for rr, ru, _rn, _rk in o.rels:
                         if rr & ix.REL_ACCESSOROF:
                             accessor_of[o.usr] = ru
+                            accessor_kind[o.usr] = o.name.split(":", 1)[0]
                     continue
                 if o.kind in ("instanceproperty", "staticproperty", "classproperty", "variable"):
                     if o.name == "body":
                         prop_def[o.usr] = self._decl(rel, o.line, "body", ("method",), by_line) or ""
+                    else:
+                        d = self._prop_decl(rel, o.line, o.name, by_line)
+                        if d is not None:             # a computed / observed / lazy property node (#72)
+                            prop_def[o.usr] = d.id
+                            prop_how[o.usr] = next(m for m in ("computed", "observed", "lazy") if m in d.modifiers)
                     continue
                 if o.kind not in ix.CALLABLE and o.kind not in ix.TYPES:
                     continue
@@ -243,9 +256,16 @@ class ExactLayer:
             for o in occs:
                 if o.roles & ix.DEFINITION or not (o.roles & ix.CALL or o.kind == "constructor"):
                     continue
-                if o.kind not in ix.CALLABLE or o.name.startswith(("getter:", "setter:")):
+                if o.kind not in ix.CALLABLE:
                     continue
-                if o.kind == "constructor":
+                prop = accessor_of.get(o.usr) if o.name.startswith(ACCESSORS) else None
+                if o.name.startswith(ACCESSORS) and not (prop in prop_how and self._runs(accessor_kind.get(o.usr, ""),
+                                                                                         prop_how[prop])):
+                    continue
+                if prop is not None:
+                    # a read (getter) or write (setter / modify) of a property node: a call of it (#72)
+                    targets = [(prop_def[prop], "CALLS")]
+                elif o.kind == "constructor":
                     tt = ctor_type.get(o.usr, "")
                     # an initializer declared in an extension: its parent is the extension, whose node is the type's
                     tnode = usr_node.get(tt) or usr_node.get(ext_of.get(tt, ""))
@@ -262,13 +282,20 @@ class ExactLayer:
                         continue
                     targets = [(t, "CALLS")]
                 src = None
+                acc = {}
                 for rr, ru, _rn, _rk in o.rels:
                     if rr & (ix.REL_CALLEDBY | ix.REL_CONTAINEDBY):
                         src = owner(ru)
                         if src is not None:
+                            acc = self._accessor_attr(src, accessor_kind.get(ru))
                             break
                 if src is None:
                     src = self._owner_type(rel, o.line) or fid
+                if src.startswith("class:"):
+                    # the initializer of a `lazy var` belongs to the type in the store; here to the property node
+                    pd = next((d for d in self.p.props_in.get(rel, ()) if d.line <= o.line <= d.end
+                               and f"class:{d.cls}" == src), None)
+                    src = pd.id if pd is not None else src
                 lam = min((x for x in lambdas.get(rel, ()) if x[0] <= o.line <= x[1]),
                           key=lambda x: x[1] - x[0], default=None)
                 if lam is not None:
@@ -276,8 +303,10 @@ class ExactLayer:
                 for dst, kind in targets:
                     if (src == dst and kind == "CALLS") or src not in self.b.nodes or dst not in self.b.nodes:
                         continue
+                    if prop is not None:
+                        acc = {**acc, "property": "read" if accessor_kind.get(o.usr) == "getter" else "write"}
                     self.b.add_edge(src, dst, kind, rel, o.line, EXACT, source="indexstore",
-                                    **({"dynamic": True} if o.roles & ix.DYNAMIC else {}))
+                                    **({"dynamic": True} if o.roles & ix.DYNAMIC else {}), **acc)
                     exact.add((src, dst, kind))
                     refs += 1
         st["index_references"] = refs
@@ -311,6 +340,33 @@ class ExactLayer:
                 out[rel] = occs
         return out
 
+    @staticmethod
+    def _runs(accessor: str, how: str) -> bool:
+        """Does a use of this accessor run code of a property node? A read of a computed or lazy property, a write of
+        a computed or observed one (the getter of a stored property with observers is the plain storage)."""
+        if accessor in ("getter", "read", "_read"):
+            return how in ("computed", "lazy")
+        if accessor in ("setter", "modify", "_modify"):
+            return how in ("computed", "observed")
+        return False
+
+    def _accessor_attr(self, src: str, accessor: str | None) -> dict:
+        """{"accessor": "didSet"} for a call inside an explicit accessor of a property node (as the heuristic pass)."""
+        name = ACCESSOR_ATTR.get(accessor or "")
+        n = self.b.nodes.get(src)
+        return {"accessor": name} if name and n is not None and name in (n.attrs.get("accessors") or ()) else {}
+
+    def _prop_decl(self, rel, line, name, by_line):
+        """The property node of a property definition: by its line, else (attributes on the lines above the name)
+        the one of that name whose range holds the line."""
+        for d in by_line.get((rel, line), ()):
+            if d.name == name and "property" in d.modifiers:
+                return d
+        for d in self.p.props_in.get(rel, ()):
+            if d.name == name and d.line <= line <= d.end:
+                return d
+        return None
+
     def _decl(self, rel, line, name, kinds, by_line):
         for d in by_line.get((rel, line), ()):
             if d.name == name and d.kind in kinds:
@@ -321,7 +377,7 @@ class ExactLayer:
         """An overload (one node per name) or a declaration whose name line differs from the node's line."""
         parent = next((rn for rr, _ru, rn, _rk in o.rels if rr & ix.REL_CHILDOF), None)
         for d in self._all_decls():
-            if d.file == rel and d.name == name and d.kind in kinds and \
+            if d.file == rel and d.name == name and d.kind in kinds and "property" not in d.modifiers and \
                     (parent is None or (d.cls or "").split(".")[-1] == parent or d.kind == "class"):
                 if d.line <= o.line <= d.end or d.kind != "class":
                     return d.id

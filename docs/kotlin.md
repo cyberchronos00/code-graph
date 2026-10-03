@@ -95,7 +95,7 @@ Android Gradle plugin (`android_modules` in the stats) and names them in the rea
 rest of the build was indexed. Builds whose settings use `repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)`
 (the Android template default) reject the repository scip-java's Gradle plugin adds; the reason says so. Java fields and Java-only builds are not covered by this
 layer (index a Java-only build with scip-java and `--scip`). Property accessors are not call edges (a property read
-reports the synthetic getter, which may share its symbol with a declared `fun getX()`).
+reports the synthetic getter, which may share its symbol with a declared `fun getX()`). Custom getters / setters (`val label get() = ...`) have no node of their own: their calls come from the class, and `impact` lists such a class as a caller, labelled `(in a property)`.
 
 ## Roadmap
 

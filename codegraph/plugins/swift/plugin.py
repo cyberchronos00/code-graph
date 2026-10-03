@@ -111,6 +111,23 @@ APPLE_ONLY = {"Darwin", "Security", "Network", "SystemConfiguration", "UniformTy
               "CoreServices", "CoreLocation", "CoreData", "CoreGraphics", "CoreFoundation", "ObjectiveC", "os",
               "StoreKit", "AVFoundation", "Metal", "CryptoKit", "UserNotifications", "WidgetKit"}
 TYPE_DECLS = ("class_declaration", "protocol_declaration")
+# a read of one of these on a receiver of unknown type is not bound to a project computed property by name (#72):
+# far more often a stored or SDK property of the same name
+COMMON_PROPS = {
+    "id", "name", "title", "value", "count", "first", "last", "isEmpty", "description", "debugDescription", "text",
+    "url", "type", "kind", "data", "date", "key", "label", "image", "color", "font", "state", "status", "items",
+    "content", "message", "error", "result", "index", "size", "width", "height", "frame", "bounds", "view",
+    "isEnabled", "isHidden", "isSelected", "isLoading", "rawValue", "hashValue", "body", "path", "host", "string",
+    "startIndex", "endIndex", "indices", "keys", "values", "lowercased", "uppercased", "shared", "default"}
+ACCESSOR_CLAUSES = {"computed_getter": "get", "computed_setter": "set", "computed_modify": "modify",
+                    "willset_clause": "willSet", "didset_clause": "didSet"}
+# a bare identifier under one of these parents is not a property read (declaration names, labels, members, types)
+NOT_A_READ = {"navigation_suffix", "pattern", "lambda_parameter", "parameter", "value_argument_label",
+              "function_declaration", "class_declaration", "protocol_declaration", "enum_entry", "import_declaration",
+              "user_type", "type_identifier", "tuple_type_item", "capture_list_item", "value_binding_pattern", "switch_pattern",
+              "key_path_expression", "attribute", "protocol_function_declaration", "typealias_declaration",
+              "init_declaration", "property_declaration", "protocol_property_declaration", "inheritance_specifier",
+              "macro_invocation", "external_macro_definition", "macro_declaration", "precedence_group_declaration"}
 # an unknown receiver whose selector fits more project methods than this gets no candidate edges (#83 item 6)
 MAX_CANDIDATES = 5
 STATIC_MODS = {"static", "class"}
@@ -221,6 +238,7 @@ class Decl:
     modifiers: set = field(default_factory=set)
     types: dict = field(default_factory=dict)
     test: bool = False
+    ranges: list = field(default_factory=list)      # property node: [(first line, last line, "get" | "didSet" ...)]
 
 
 RAW_IDENT_DECL = re.compile(rb"\b(?:func|struct|class|enum|actor|extension|protocol|case|let|var)\s+`[^`\"\n\\]*[^\w`\"\n\\]")
@@ -277,6 +295,12 @@ class SwiftPlugin(LanguagePlugin):
         self.types: dict[str, Decl] = {}
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.calls: list[tuple] = []
+        self.props: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))   # type fqn -> name
+        self.prop_names: set[str] = set()
+        self.props_in: dict[str, list[Decl]] = defaultdict(list)   # file -> property nodes
+        self.stored_names: set[str] = set()      # names of plain stored properties anywhere in the project
+        self.stored_in: dict[str, set[str]] = defaultdict(set)    # type fqn -> its stored property names
+        self.prop_refs: list[tuple] = []         # (owner, name, receiver | None, line, sf, decl, write)
         self.sigs: dict[str, list] = defaultdict(list)   # function / init node id -> [((label, optional), ...)]
         self.http: list[dict] = []
         self.navs: list[tuple] = []          # (owner, view type name, how, file, line)
@@ -319,6 +343,7 @@ class SwiftPlugin(LanguagePlugin):
             self._directives(sf)
             self._available(sf)
         self._resolve_calls()
+        self._resolve_props()
         self._hierarchy()
         self._fluent_migrations(sfiles)
         self._moya_endpoints()
@@ -474,6 +499,8 @@ class SwiftPlugin(LanguagePlugin):
                         if names:
                             sig.append((names[0], opt))
                 did = f"{kind}:{fq}"
+                if did in self.decls and "property" in self.decls[did].modifiers:
+                    did = f"{did}~func"          # `var label { }` declared first, then `func label(for:)`
                 if did in self.decls and _static(self.decls[did]) != bool(STATIC_MODS & mods):
                     # `func weight(forExtraIndex:)` and `static func weight(from:to:)`: two nodes; the one declared
                     # second carries `~static` / `~instance` (like `~2` for a second TypeScript declaration);
@@ -497,6 +524,8 @@ class SwiftPlugin(LanguagePlugin):
                     d = Decl(f"method:{cls.fqn}.body", "method", "body", f"{cls.fqn}.body", sf.rel,
                              c.start_point[0] + 1, c.end_point[0] + 1, cls.fqn, [], [], set(), test=sf.test)
                     self._add(d, "view body")
+                elif nm:
+                    self._prop_decl(c, nm, sf, cls)
             elif ty not in ("lambda_literal", "statements", "function_body"):
                 self._decls(c, sf, cls)
 
@@ -513,7 +542,49 @@ class SwiftPlugin(LanguagePlugin):
             if nm and tn:
                 d.types[nm] = tn
 
-    def _add(self, d: Decl, display_kind: str):
+    def _prop_decl(self, c, nm: str, sf: SFile, cls: Decl):
+        """A computed property, a stored property with `willSet` / `didSet`, or a `lazy var` with an initializer
+        becomes a node (`method:<Type>.<name>`, attrs.property, #72): the calls in its body come from it, and reads
+        (writes, for observers) of it are CALLS edges to it. A plain stored property stays out of the graph."""
+        comp = next((x for x in c.children if x.type == "computed_property"), None)
+        obs = next((x for x in c.children if x.type == "willset_didset_block"), None)
+        attrs, mods = self._mods(c)
+        lazy = "lazy" in mods and any(x.type == "=" for x in c.children)
+        if not (comp or obs or lazy):
+            self.stored_names.add(nm)
+            self.stored_in[cls.fqn].add(nm)     # hides a protocol extension's default of that name
+            return
+        fq = f"{cls.fqn}.{nm}"
+        did = f"method:{fq}"
+        line = c.start_point[0] + 1
+        if did in self.decls:
+            prev = self.decls[did]
+            if "property" not in prev.modifiers:
+                did = f"{did}~property"            # a `func label(for:)` declared first
+            elif prev.file == sf.rel and self._in_directive(sf, c):
+                did = f"{did}@{line}"              # one definition per `#if` branch
+            else:
+                return
+        ranges = []
+        for blk in (comp, obs):
+            for x in (blk.children if blk is not None else ()):
+                if x.type in ACCESSOR_CLAUSES:
+                    ranges.append((x.start_point[0] + 1, x.end_point[0] + 1, ACCESSOR_CLAUSES[x.type]))
+        how = "computed" if comp is not None else "observed" if obs is not None else "lazy"
+        mods = set(mods) | {"property", how}
+        d = Decl(did, "method", nm, fq, sf.rel, line, c.end_point[0] + 1, cls.fqn, [], attrs, mods, {}, sf.test, ranges)
+        self._add(d, {"computed": "computed property", "observed": "property observers", "lazy": "lazy property"}[how],
+                  index=False)
+        n = self.b.nodes[d.id]
+        n.attrs["property"] = how
+        if ranges:
+            n.attrs["accessors"] = [r[2] for r in ranges]
+        self.props[cls.fqn][nm].append(d)
+        self.props_in[sf.rel].append(d)
+        self.prop_names.add(nm)
+        self.st[f"properties_{how}"] += 1
+
+    def _add(self, d: Decl, display_kind: str, index: bool = True):
         attrs = {"swift_kind": display_kind}
         if d.test:
             attrs["test"] = True
@@ -536,11 +607,13 @@ class SwiftPlugin(LanguagePlugin):
         elif d.test and d.kind == "class" and "Suite" in d.attributes:
             self._swift_testing(n, d, "Suite")
         self.decls[d.id] = d
-        self.by_name[d.name].append(d)
+        if index:            # a property node is not a call target (`_prop_targets` resolves reads of it)
+            self.by_name[d.name].append(d)
         if d.kind == "class":
             self.types.setdefault(d.fqn, d)
         if d.cls:
-            self.members[d.cls][d.name].append(d)
+            if index:
+                self.members[d.cls][d.name].append(d)
             self.b.add_edge(f"class:{d.cls}", d.id, "CONTAINS", d.file, d.line, EXACT)
 
     def _swift_testing(self, n, d: Decl, attr: str):
@@ -630,17 +703,93 @@ class SwiftPlugin(LanguagePlugin):
                 d = inner or d
                 self._refs(c, sf, d.id if d else owner, d or decl, ctx)
                 continue
-            elif ty == "property_declaration" and decl is not None and decl.kind == "class" and self._name(c) == "body":
-                b = self.decls.get(f"method:{decl.fqn}.body")
-                if b is not None:
-                    self._refs(c, sf, b.id, b, ctx)
+            elif ty == "property_declaration" and decl is not None and decl.kind == "class" and self._name(c) == "body" \
+                    and f"method:{decl.fqn}.body" in self.decls:
+                b = self.decls[f"method:{decl.fqn}.body"]
+                self._refs(c, sf, b.id, b, ctx)
+                continue
+            elif ty == "property_declaration" and decl is not None and decl.kind == "class" and self.prop_names:
+                pd = self._decl_at(sf, c, ("method",))
+                if pd is not None and "property" in pd.modifiers:
+                    self._refs(c, sf, pd.id, pd, ctx)
                     continue
+            elif ty == "navigation_expression" and self.prop_names:
+                self._prop_nav(c, sf, owner, decl)
+            elif ty == "simple_identifier" and self.prop_names:
+                self._prop_bare(c, sf, owner, decl)
             elif ty == "call_expression":
                 if self._call(c, sf, owner, decl, ctx):
                     continue
             elif ty == "property_declaration" and decl is not None:
                 self._router_binding(c, ctx)
             self._refs(c, sf, owner, decl, ctx)
+
+    @staticmethod
+    def _is_callee(n) -> bool:
+        p = n.parent
+        return p is not None and p.type == "call_expression" and p.children and p.children[0] == n
+
+    @staticmethod
+    def _is_write(n) -> bool:
+        p = n.parent
+        return p is not None and p.type == "directly_assignable_expression"
+
+    def _prop_nav(self, c, sf: SFile, owner: str, decl: Decl | None):
+        """`cart.label`, `self.summary`, `Cart.shared`: a read (or write) of a property node, resolved later."""
+        sfx = c.child_by_field_name("suffix")
+        nmn = sfx.child_by_field_name("suffix") if sfx is not None else None
+        nm = self.t(nmn) if nmn is not None else None
+        if not nm or nm not in self.prop_names or self._is_callee(c):
+            return
+        target = c.child_by_field_name("target")
+        if target is None or target.type == "key_path_expression":
+            return
+        recv = re.sub(r"^\s*[!\-~&]+", "", self.t(target))
+        self.prop_refs.append((owner, nm, recv, c.start_point[0] + 1, sf, decl, self._is_write(c)))
+
+    def _prop_bare(self, c, sf: SFile, owner: str, decl: Decl | None):
+        """`summary` inside a member of the type that declares it (an implicit `self.summary`)."""
+        nm = self.t(c)
+        p = c.parent
+        if nm not in self.prop_names or p is None or p.type in NOT_A_READ or self._is_callee(c):
+            return
+        if p.type == "value_argument" and p.child_by_field_name("value") != c:
+            return
+        if p.type == "prefix_expression" and self.t(p).lstrip().startswith("."):
+            return
+        if p.type == "navigation_expression" and p.child_by_field_name("target") != c:
+            return
+        if c.prev_sibling is not None and c.prev_sibling.type == ".":
+            return                                  # `guard case .success = self`: an implicit member
+        line = c.start_point[0] + 1
+        if decl is None or decl.kind == "class" or self._bound(c, nm) or self._shadowed(decl, nm, sf, line):
+            return
+        self.prop_refs.append((owner, nm, None, line, sf, decl, self._is_write(c)))
+
+    def _bound(self, c, nm: str) -> bool:
+        """A parameter of an enclosing function, initializer, subscript or closure is named `nm`."""
+        a = c.parent
+        while a is not None and a.type not in TYPE_DECLS:
+            if a.type in ("function_declaration", "init_declaration", "subscript_declaration", "lambda_literal"):
+                for x in a.children:
+                    if x.type == "parameter" or x.type == "lambda_function_type":
+                        for y in ([x] if x.type == "parameter" else
+                                  [z for q in x.children if q.type == "lambda_function_type_parameters"
+                                   for z in q.children if z.type == "lambda_parameter"]):
+                            n = y.child_by_field_name("name")
+                            if n is not None and self.t(n) == nm:
+                                return True
+            a = a.parent
+        return False
+
+    def _shadowed(self, decl: Decl, nm: str, sf: SFile, line: int) -> bool:
+        """A local, closure parameter, `case let` binding or loop variable of that name in the member above `line`."""
+        if nm in decl.types:
+            return True
+        txt = "\n".join(sf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:line])
+        n = re.escape(nm)
+        return bool(re.search(rf"\b(?:let|var)\s+[^=\n{{}}]*?\b{n}\b|\b{n}\s*(?:,\s*\w+\s*)*\)?\s+in\b|"
+                              rf"\bfor\s+(?:case\s+)?(?:let\s+)?\(?[\w\s,]*\b{n}\b", txt))
 
     def _callee(self, c):
         """(receiver text, name, value_arguments node, trailing lambda, line) of a call_expression. The line is the
@@ -1129,11 +1278,96 @@ class SwiftPlugin(LanguagePlugin):
                     for m in hit:
                         self.b.add_edge(owner, m.id, "CALLS", sf.rel, line, HEURISTIC)
                 else:
-                    self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, **how)
+                    self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, **how, **self._accessor_attr(decl, line))
                     if how:
                         self.st["calls_by_name_only" if self._how == "name" else "call_candidate_edges"] += 1
                 done = True
             self.st["calls_resolved" if done else "calls_unresolved"] += 1
+
+    def _prop_member(self, cls: Decl | None, name: str, depth: int = 0) -> list[Decl]:
+        """Property nodes named `name` of a type, its extensions and its supertypes (protocol extensions too)."""
+        if cls is None or name in self.stored_in.get(cls.fqn, ()):
+            return []
+        hit = self.props.get(cls.fqn, {}).get(name)
+        if hit:
+            return hit
+        if depth > 6:
+            return []
+        for e in self._qualified_ext().get(cls.fqn, []) if "extension-only" not in cls.modifiers else ():
+            if name in self.stored_in.get(e.fqn, ()):
+                return []
+            hit = self.props.get(e.fqn, {}).get(name)
+            if hit:
+                return hit
+        for s in cls.supers:
+            sc = self.types.get(s)
+            if sc is not None and sc is not cls:
+                r = self._prop_member(sc, name, depth + 1)
+                if r:
+                    return r
+        return []
+
+    def _prop_targets(self, name: str, recv: str | None, decl: Decl | None) -> list[Decl]:
+        """Property nodes a read reaches, with the receiver rules of method calls (#70, #83): a known receiver type
+        binds exactly or not at all; an unknown one only by a name that no stored / SDK property shares."""
+        cls = self._encl_type(decl)
+        if recv is None or recv in ("self", "Self", "super"):
+            own = self._prop_member(cls, name)
+            want = True if recv == "Self" else False if recv in ("self", "super") else \
+                bool(decl is not None and decl.kind != "class" and _static(decl))
+            return [d for d in own if _static(d) == want] or (own if recv is None else [])
+        kind, tname = self._recv_type(recv, decl, cls)
+        if kind in ("type", "meta"):
+            return [d for d in self._prop_member(self._type(tname), name) if _static(d) == (kind == "meta")]
+        if kind == "sdk":
+            tc = self.types.get(tname) if tname else None
+            if tc is not None and "extension-only" in tc.modifiers:
+                own = self._prop_member(tc, name)
+                if own:
+                    return own
+            if tname is None and (name in self.stored_names or name in COMMON_PROPS):
+                return []                    # `conn.data.database`: some SDK value's own (stored) property
+            cands = [d for d in self._all_props(name) if d.cls in self.types
+                     and "extension-only" in self.types[d.cls].modifiers and not _static(d)
+                     and (not self._certain or d.cls not in CONCRETE_SDK or d.cls == tname)]
+            return cands if len(cands) == 1 else []
+        if name in self.stored_names or name in COMMON_PROPS:
+            return []
+        cands = self._first_variants([d for d in self._all_props(name) if not _static(d)])
+        if not cands or len(cands) > MAX_CANDIDATES:
+            return []
+        self._how = "name" if len(cands) == 1 else "candidate"
+        return cands
+
+    def _all_props(self, name: str) -> list[Decl]:
+        return [d for by in self.props.values() for d in by.get(name, ())]
+
+    def _resolve_props(self):
+        """CALLS edges for reads of computed / lazy properties and writes of computed / observed ones (`property`:
+        `read` | `write`); a read of a stored property with observers runs no code of it."""
+        for owner, name, recv, line, sf, decl, write in self.prop_refs:
+            self._how = None
+            self._at = (sf, line)
+            targets = self._prop_targets(name, recv, decl)
+            how = {"binding": self._how} if self._how else {}
+            if self._how == "candidate":
+                how["candidates"] = len(targets)
+            done = False
+            for t in targets[:MAX_CANDIDATES]:
+                if t.id == owner or ("observed" in t.modifiers and not write) or ("lazy" in t.modifiers and write):
+                    continue
+                self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, property="write" if write else "read",
+                                **how, **self._accessor_attr(decl, line))
+                done = True
+            self.st["property_refs_resolved" if done else "property_refs_unresolved"] += 1
+
+    @staticmethod
+    def _accessor_attr(decl: Decl | None, line: int) -> dict:
+        """{"accessor": "didSet"} for a reference inside an explicit accessor of a property node."""
+        for a, b, name in (decl.ranges if decl is not None else ()):
+            if a <= line <= b:
+                return {"accessor": name}
+        return {}
 
     @staticmethod
     def _first_variants(ds: list) -> list:

@@ -8,6 +8,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Swift computed properties, stored properties with `willSet` / `didSet` and `lazy var`s with an initializer are
+  `method:<Type>.<name>` nodes: the calls inside them come from the property (with `accessor: get | set | willSet |
+  didSet`, shown by impact as `(didSet)`) instead of the type, and reads (writes, for observers and setters) of them are
+  `CALLS` edges with `property: read | write`, in the heuristic and the exact (index store) layer. `impact` and
+  `cg tests` now reach code and tests that go through a computed property. A Swift / Kotlin type node that calls the
+  target itself (a stored property's initializer, a Kotlin custom getter) is listed by `impact` as a caller, labelled
+  `(in a property)` (#72).
+
 ### Changed
 
 - The visual view (`serve`, `viz-export`) opens on a landing page with graph stats, a fuzzy search and the starter
