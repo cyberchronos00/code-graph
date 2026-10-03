@@ -54,6 +54,24 @@ fills a closure parameter), the first of per-`#if` variants; and a call of a sta
 (`first`, `filter`, `reduce`, `sorted`, ...) on a receiver of unknown type is not resolved to a same-named project
 method. In exact mode, initializers declared in an extension of an SDK type are `INSTANTIATES` / `CALLS` edges too.
 
+Member calls ([#70](https://github.com/cyberchronos00/code-graph/issues/70)) bind only when the full selector fits:
+the argument labels and arity of the call have to match one of the declaration's signatures (the same rule as for
+initializers), so overloads that differ by labels are told apart and `format(currency:)` does not reach
+`format(amount:)`. `value.m()` does not reach a `static func m` and `Type.m()` reaches only static members. The
+receiver is typed from the enclosing function's parameters and locals, the type's properties and chains of them
+(`other.region!`, `self.service`, `Client.shared`); `a?.b` and `a!.b` read as `a.b`, and nested types are found by
+their simple name and through module-qualified extensions (`extension Models.Notification.NotificationType`).
+A receiver whose value is an SDK type reaches only members the project declares in an extension of an SDK type:
+SwiftUI modifier chains (`Text("x").font(...).cardStyle()` → `extension View`), `Font.body`, `Font.system(...)`,
+`NotificationCenter.default`, `UIApplication.shared`, closure parameters typed with SDK types; short unlabelled
+selectors (`.run()`) on such values stay unbound. On a receiver cg cannot type, the selector decides: a call whose
+selector is a common SDK member (`contains(_:)`, `contains(where:)`, `.accessibilityIdentifier(_:)`,
+`.accessibilityLabel(_:)`, Font `.weight(_:)`, `resume(returning:)`, `post(name:object:)`, `open(_:)`,
+`draw(_:at:)`, `read(_:maxLength:)`, ... ; `calls_sdk_selector` counts them) is not bound; otherwise it binds when
+exactly one project instance method fits the selector, at heuristic confidence: `lookup["x"]!.contains(normalized:
+0.5, y: 0.5)` reaches `Region.contains(normalized:y:)` even though `contains` is a collection method name. An
+ambiguous selector stays unresolved (`calls_unresolved`).
+
 `index` stats: `index_files`, `index_defs_matched` / `index_defs_unmatched`, `index_references`, `index_refs_external`
 (SDK and dependency symbols), `heuristic_kept_not_compiled` and `exact_vs_heuristic` (precision and recall of the
 heuristic call edges against the store, for the covered files).
@@ -81,5 +99,8 @@ The path runs from the checkout sheet's `body` through the store to the URLSessi
 - OS versions as filters (they are recorded, see above); App Intents and widgets as their own entry
   kinds; `navigationDestination(for:)` matched to `NavigationLink(value:)`; macro and package-plugin output as
   generated code.
+- Heuristic receiver types: method return types (`a.load().run()`), dictionary / array element types
+  (`lookup["x"]`), generic constraints and protocol conformances of SDK types (a project `extension View` is matched
+  for any SDK value), the SDK's own members with the same selector as a project extension.
 - Moya: `MultiTarget`, paths built in helpers; Fluent: relations (`$todo.$tags`), raw SQL, query chains split across
   variables.

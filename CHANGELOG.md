@@ -23,6 +23,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   URLs, `.env.example` values, docker-compose services and DSNs (CONNECTS_TO, CONFIGURED_BY, CREDENTIAL_FROM with
   the location of the secret, never its value; TLS); one node per system across linked repos; `cg external` / MCP
   `external_systems` ([docs/external.md](docs/external.md), [#40](https://github.com/cyberchronos00/code-graph/issues/40)).
+- Swift heuristic member calls match the full selector (argument labels, arity) and static vs instance; SDK
+  values (SwiftUI modifier chains, `Font`, `NotificationCenter.default`, `UIApplication.shared`) reach only project
+  extensions and SDK selectors on untyped receivers (`contains(_:)`, `resume(returning:)`, `.accessibilityIdentifier(_:)`)
+  stay unbound, so they no longer make false hubs; a labelled selector one project method declares is kept through
+  optional / force-unwrapped / untyped receivers again (`region!.contains(normalized:y:)`, dropped in 0.7.1)
+  ([docs/swift.md](docs/swift.md), [#70](https://github.com/cyberchronos00/code-graph/issues/70)).
 
 ## [0.7.1] - 2026-10-03
 

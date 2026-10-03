@@ -65,6 +65,35 @@ STDLIB_METHODS = {
     "uppercased", "replacingOccurrences", "trimmingCharacters", "components", "hasPrefix", "hasSuffix", "zip",
     "shuffled", "partition", "subtracting", "union", "intersection", "formUnion", "isEmpty", "count", "makeIterator",
     "withContiguousStorageIfAvailable", "encode", "decode", "description", "hash", "elementsEqual"}
+# selectors (name + argument labels) of SDK members commonly called on receivers cg cannot type: a call with one of
+# these selectors on an unknown receiver is not bound to a same-selector project method (#70)
+SDK_SELECTORS = {
+    "contains(_:)", "contains(where:)", "first(where:)", "firstIndex(of:)", "firstIndex(where:)", "remove(at:)",
+    "append(_:)", "append(contentsOf:)", "insert(_:at:)", "insert(_:)", "remove(_:)", "index(of:)", "index(_:offsetBy:)",
+    "filter(_:)", "map(_:)", "compactMap(_:)", "sorted(by:)", "joined(separator:)", "split(separator:)",
+    "accessibilityIdentifier(_:)", "accessibilityLabel(_:)", "accessibilityHint(_:)", "accessibilityValue(_:)",
+    "accessibilityAddTraits(_:)", "accessibilityHidden(_:)", "font(_:)", "weight(_:)", "bold()", "bold(_:)",
+    "italic()", "foregroundColor(_:)", "foregroundStyle(_:)", "background(_:)", "overlay(_:)", "padding(_:)",
+    "padding()", "padding(_:_:)", "opacity(_:)", "tint(_:)", "tag(_:)", "id(_:)", "frame(width:height:)",
+    "disabled(_:)", "hidden()", "navigationTitle(_:)", "offset(x:y:)", "scaleEffect(_:)", "rotationEffect(_:)",
+    "clipShape(_:)", "cornerRadius(_:)", "shadow(radius:)", "animation(_:value:)", "transition(_:)", "zIndex(_:)",
+    "onAppear(perform:)", "onDisappear(perform:)", "onTapGesture(perform:)", "task(_:)", "task(id:_:)",
+    "resume()", "resume(returning:)", "resume(throwing:)", "resume(with:)", "yield(_:)", "finish()",
+    "post(name:object:)", "post(name:object:userInfo:)", "post(_:)", "addObserver(_:selector:name:object:)",
+    "removeObserver(_:)", "open(_:)", "open(_:options:completionHandler:)", "canOpenURL(_:)",
+    "draw(_:at:)", "draw(_:in:)", "draw(_:at:anchor:)", "fill(_:with:)", "stroke(_:with:lineWidth:)",
+    "read(_:maxLength:)", "write(_:maxLength:)", "cancel()", "send(_:)", "sink(receiveValue:)",
+    "set(_:forKey:)", "value(forKey:)", "object(forKey:)", "removeObject(forKey:)", "string(forKey:)",
+    "async(execute:)", "asyncAfter(deadline:execute:)", "sync(execute:)", "sleep(nanoseconds:)", "sleep(for:)",
+    "dataTask(with:)", "data(from:)", "data(for:)", "encode(_:)", "decode(_:from:)", "start()", "stop()",
+    "reloadData()", "dismiss(animated:completion:)", "present(_:animated:completion:)", "layoutIfNeeded()",
+    "setNeedsLayout()", "addSubview(_:)", "removeFromSuperview()", "becomeFirstResponder()", "resignFirstResponder()",
+}
+# argument labels of standard-library collection members (`xs.first(where:)`, `s.split(separator:)`): a call of a
+# STDLIB_METHODS name with only these labels stays unbound on an unknown receiver; other labels name a project method
+STDLIB_LABELS = {"_", "where", "at", "by", "of", "into", "separator", "with", "contentsOf", "keepingCapacity",
+                 "maxSplits", "omittingEmptySubsequences", "offsetBy", "limitedBy", "from", "to", "through",
+                 "uniquingKeysWith", "isIncluded", "options", "range", "locale", "in", "forKey"}
 PRESENT = {"sheet", "fullScreenCover", "popover", "navigationDestination"}
 OS_PLATFORM = {"iOS": "ios", "iPadOS": "ios", "watchOS": "ios", "tvOS": "ios", "visionOS": "ios", "macOS": "macos",
                "OSX": "macos", "Linux": "linux", "Windows": "windows", "Android": "android", "WASI": "web"}
@@ -885,6 +914,12 @@ class SwiftPlugin(LanguagePlugin):
             return hit
         if depth > 6:
             return []
+        if "extension-only" not in cls.modifiers:
+            # `extension Models.Notification.NotificationType { ... }` (module-qualified) extends the nested type
+            for e in self._qualified_ext().get(cls.fqn, []):
+                hit = self.members.get(e.fqn, {}).get(name)
+                if hit:
+                    return hit
         for s in cls.supers:
             sc = self.types.get(s)
             if sc is not None and sc is not cls:
@@ -893,9 +928,22 @@ class SwiftPlugin(LanguagePlugin):
                     return r
         return []
 
+    def _qualified_ext(self) -> dict:
+        """Extensions written with a qualified name (`extension Models.Notification.NotificationType`) by the fqn of
+        the project type they extend (`Notification.NotificationType`)."""
+        if getattr(self, "_qext", None) is None:
+            self._qext = defaultdict(list)
+            real = [d for d in self.types.values() if "extension-only" not in d.modifiers]
+            for e in self.types.values():
+                if "extension-only" in e.modifiers and "." in e.fqn:
+                    for t in real:
+                        if e.fqn.endswith("." + t.fqn):
+                            self._qext[t.fqn].append(e)
+        return self._qext
+
     def _resolve_calls(self):
         for owner, name, recv, line, sf, decl, labels, trailing in self.calls:
-            targets = self._targets(name, recv, decl)
+            targets = self._targets(name, recv, decl, labels, trailing)
             if not targets:
                 self.st["calls_unresolved"] += 1
                 continue
@@ -956,39 +1004,173 @@ class SwiftPlugin(LanguagePlugin):
             return decl
         return self.types.get(decl.cls) if decl.cls else None
 
-    def _targets(self, name: str, recv: str | None, decl: Decl | None) -> list[Decl]:
+    @staticmethod
+    def _selector(name: str, labels: tuple, trailing: bool) -> str:
+        return f"{name}({''.join(l + ':' for l in labels)}{'_:' if trailing and labels else ''})" if labels or not trailing \
+            else f"{name}(_:)"
+
+    @staticmethod
+    def _segments(recv: str) -> list[str]:
+        """`a.b(x).c[0]!` -> ['a', 'b(x)', 'c[0]!'] (top-level dots; of a binary expression only the right operand)."""
+        depth, quote, cut, parts = 0, False, 0, []
+        txt = recv.strip()
+        for i, ch in enumerate(txt):
+            if ch == '"':
+                quote = not quote
+            if quote:
+                continue
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            elif depth == 0:
+                if ch == "." and not (i > 0 and txt[i - 1].isdigit()):
+                    parts.append(txt[cut:i])
+                    cut = i + 1
+                elif ch in "+-*/%<>=&|?" and i > 0 and txt[i - 1] in " \t\n" and re.match(r"[+\-*/%<>=&|?]+\s", txt[i:]):
+                    parts, cut = [], i + len(re.match(r"[+\-*/%<>=&|?]+\s*", txt[i:]).group(0))
+        parts.append(txt[cut:])
+        return [p.strip() for p in parts if p.strip()]
+
+    def _type(self, name: str | None) -> Decl | None:
+        """A project type by fqn or, for nested types (`StatusEditor.TextEditingService` recorded as
+        `TextEditingService`), by its unique simple name."""
+        if not name:
+            return None
+        t = self.types.get(name)
+        if t is not None:
+            return t
+        cs = {d.fqn: d for d in self.by_name.get(name.split(".")[-1], []) if d.kind == "class"}
+        return next(iter(cs.values())) if len(cs) == 1 else None
+
+    def _sdk_or_unknown(self, tn: str) -> tuple[str, str | None]:
+        """A type name cg could not resolve to one project type: an SDK type unless the project declares a type of
+        that simple name (several nested ones, `Configuration`): then unknown."""
+        if any(d.kind == "class" and "extension-only" not in d.modifiers for d in self.by_name.get(tn.split(".")[-1], [])):
+            return "unknown", None
+        return "sdk", tn
+
+    def _recv_type(self, recv: str, decl: Decl | None, cls: Decl | None) -> tuple[str, str | None]:
+        """What a receiver expression is: ("type", T) a value of project type T, ("meta", T) the project type T itself
+        (static members), ("sdk", T | None) a value of an SDK type (T when known; modifier chains on SDK views,
+        `Font.body`, `UIApplication.shared`), ("unknown", None). `a?.b` / `a!.b` read as `a.b`."""
+        segs = self._segments(recv)
+        if not segs:
+            return "unknown", None
+        state: tuple[str, str | None] = ("unknown", None)
+        for i, seg in enumerate(segs):
+            seg = seg.rstrip("!?")
+            m = re.match(r"^([A-Za-z_]\w*)\s*(.*)$", seg, re.S)
+            if not m:
+                return "unknown", None
+            ident, rest = m.group(1), m.group(2).strip()
+            called = rest.startswith(("(", "{"))
+            sub = rest.startswith("[")
+            if i == 0:
+                if ident in ("self", "Self", "super") and not rest:
+                    if cls is None:
+                        return "unknown", None
+                    state = ("type", cls.fqn) if "extension-only" not in cls.modifiers else ("sdk", cls.fqn)
+                    continue
+                if ident[:1].isupper():
+                    t = self._type(ident)
+                    if t is not None and "extension-only" not in t.modifiers:
+                        state = ("type", t.fqn) if called else ("meta", t.fqn)
+                    else:                            # an SDK type, its initializer or a value built from it
+                        state = ("sdk", ident) if t is not None else self._sdk_or_unknown(ident)
+                    if sub:
+                        state = ("unknown", None)
+                    continue
+                if called:                            # a free function's result
+                    return "unknown", None
+                tn = (decl.types.get(ident) if decl is not None else None) or (cls.types.get(ident) if cls is not None else None)
+                if tn is None or sub:
+                    return "unknown", None
+                t = self._type(tn)
+                state = ("type", t.fqn) if t is not None and "extension-only" not in t.modifiers else \
+                    ("sdk", tn) if t is not None else self._sdk_or_unknown(tn)
+                continue
+            kind, tname = state
+            if kind == "sdk":
+                if sub:
+                    return "unknown", None
+                # `Font.body`, `UIApplication.shared`: a static property of an SDK type is a value of that type;
+                # anything further down a chain (`Text("x").font(...)`) is some SDK value
+                state = ("sdk", tname if not called and i == 1 and segs[0][:1].isupper() else None)
+                continue
+            if kind in ("type", "meta") and not called and not sub:
+                tc = self.types.get(tname)
+                tn = tc.types.get(ident) if tc is not None else None
+                t = self._type(tn)
+                if t is not None and "extension-only" not in t.modifiers:
+                    state = ("type", t.fqn)
+                    continue
+                if tn:
+                    state = ("sdk", tn) if t is not None else self._sdk_or_unknown(tn)
+                    if state[0] == "unknown":
+                        return state
+                    continue
+            return "unknown", None
+        return state
+
+    def _fitting(self, ds: list, labels: tuple, trailing: bool) -> list:
+        return [d for d in ds if self._fits(d.id, labels, trailing)]
+
+    def _targets(self, name: str, recv: str | None, decl: Decl | None, labels: tuple = (), trailing: bool = False) -> list[Decl]:
+        """Project declarations a call reaches: the full selector (name, argument labels, arity) has to fit;
+        static members only through the type, instance members only through a value (#70)."""
         cls = self._encl_type(decl)
         if recv is None or recv in ("self", "Self", "super"):
             if cls is not None:
-                r = [d for d in self._member(cls, name) if d.kind != "class"]
-                if r:
-                    return r
+                own = [d for d in self._member(cls, name) if d.kind != "class"]
+                if own:
+                    return self._fitting(own, labels, trailing)
             if name[:1].isupper():
                 t = self.types.get(name)
                 return [t] if t is not None else []
-            cands = [d for d in self.by_name.get(name, []) if d.kind == "function"]
+            cands = self._fitting([d for d in self.by_name.get(name, []) if d.kind == "function"], labels, trailing)
             if len(cands) > 1 and len({d.id.split("@")[0] for d in cands}) == 1:
                 # one function defined per `#if os(...)` branch: the call reaches the base definition, and the
                 # platform pass links its sibling variants (attrs.platform_variant_of)
                 return [min(cands, key=lambda d: ("@" in d.id, d.line))]
             return cands if len(cands) == 1 else []
-        rname = re.sub(r"[?!]|\(.*\)$", "", recv).split(".")[-1].strip()
-        tyname = None
-        if decl is not None:
-            tyname = decl.types.get(rname)
-        if tyname is None and cls is not None:
-            tyname = cls.types.get(rname)
-        if tyname is None and rname[:1].isupper():
-            tyname = rname
-        if tyname:
-            tc = self.types.get(tyname)
-            if tc is not None:
-                return [d for d in self._member(tc, name) if d.kind != "class"]
+        kind, tname = self._recv_type(recv, decl, cls)
+        if kind in ("type", "meta"):
+            tc = self._type(tname)
+            ms = [d for d in self._member(tc, name) if d.kind != "class"] if tc is not None else []
+            ms = [d for d in ms if ("static" in d.modifiers or "class" in d.modifiers) == (kind == "meta")] or \
+                ([] if kind == "type" else [d for d in ms if d.name == "init"])
+            return self._fitting(ms, labels, trailing)
+        sel = self._selector(name, labels, trailing)
+        sdk_sel = sel in SDK_SELECTORS or (name in STDLIB_METHODS and all(lab in STDLIB_LABELS for lab in labels))
+        if kind == "sdk":
+            # an SDK value: only members the project declares in an extension of an SDK type (of that type when
+            # known, else of any: `Group { ... }.withEnvironments()` reaches `extension View`); never a selector
+            # the SDK itself has (`.sorted(by:)`, `.accessibilityIdentifier(_:)`)
+            if sdk_sel:
+                self.st["calls_sdk_selector"] += 1
+                return []
+            tc = self.types.get(tname) if tname else None
+            if tc is not None and "extension-only" in tc.modifiers:
+                own = self._fitting([d for d in self._member(tc, name) if d.kind != "class"], labels, trailing)
+                if own:
+                    return own
+            cands = [d for d in self.by_name.get(name, []) if d.kind == "method" and d.cls in self.types
+                     and "extension-only" in self.types[d.cls].modifiers and "static" not in d.modifiers]
+            cands = self._fitting(cands, labels, trailing)
+            # short unlabelled selectors (`.run()`, `.get(_:)`) are too often the SDK type's own member
+            return cands if len(cands) == 1 and (any(lab != "_" for lab in labels) or len(name) > 3) else []
+        # unknown receiver: the selector decides
+        if sdk_sel:                    # `xs.first(where:)`, `continuation.resume(returning:)`: the SDK's
+            self.st["calls_sdk_selector"] += 1
             return []
-        cands = [d for d in self.by_name.get(name, []) if d.kind == "method"]
-        if name in STDLIB_METHODS:      # `xs.first(where:)` on an unknown receiver: the standard library's
+        labelled = any(lab != "_" for lab in labels)
+        cands = [d for d in self.by_name.get(name, []) if d.kind == "method" and "static" not in d.modifiers
+                 and "class" not in d.modifiers]
+        cands = self._fitting(cands, labels, trailing)
+        if len(cands) != 1:
             return []
-        return cands if len(cands) == 1 and len(name) > 3 else []
+        return cands if labelled or len(name) > 3 else []
 
     def _hierarchy(self):
         for d in list(self.decls.values()):

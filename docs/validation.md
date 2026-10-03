@@ -660,3 +660,36 @@ appear nowhere in the database files.
 
 Seen on the way: column nodes from Laravel migrations differ between two runs of the same commit (a few columns
 attributed to another table), with or without this change.
+
+## Swift: selectors, static vs instance, SDK receivers (#70)
+
+Same stores and sources as for #58 (heuristic edges in the files the store covers, against the compiler's):
+
+| Project | Heuristic edges | Agree | Precision | Recall |
+|---|---|---|---|---|
+| Alamofire/Alamofire | 585 → 602 | 552 → 580 | 0.94 → **0.96** | 0.65 → **0.68** |
+| pointfreeco/isowords (server product) | 174 → 180 | 163 → 167 | 0.94 → 0.93 | 0.44 → **0.45** |
+| vapor/template | 11 → 9 | 9 → 9 | 0.82 → **1.00** | 0.90 → 0.90 |
+| **Total** | 770 → 791 | 724 → 756 | 0.94 → **0.96** | 0.59 → **0.61** |
+
+Recall goes up because labelled selectors on receivers cg cannot type (`client.put(endpoint:)`, `toastCenter.update(id:toast:)`)
+are bound again when exactly one project method fits, also for short names. Precision on isowords moves by two edges:
+calls of `Dictionary.transformKeys`, which isowords declares twice (in two modules); cg merges both into one node and
+the compiler's target is the copy without a node, so these real calls count as disagreements. The Alamofire false
+positives left (about 50 in the heuristic-only graph, 55 before) are mostly owner differences (`HTTPHeaders.init`
+calling `HTTPHeader.init`) and Apple-only branches.
+
+Dimillian/IceCubesApp (`9efcb16`, heuristic only, no Linux build), before → after:
+
+- `MediaUIAttachmentVideoViewModel.resume`: 20 callers → 1 (`viewModel.resume()`); `continuation.resume(returning:)`
+  inside `withCheckedContinuation` is no longer bound.
+- `MastodonClient.post`: the 10 `NotificationCenter.default.post(name:object:)` calls are gone (64 → 54 edges, all
+  `client.post(endpoint:)`).
+- `InAppSafariManager.open`: 9 → 1 (`safariManager.open(url)`); `cg platforms divergence` missing-callee findings
+  12 → 4 (the 8 `UIApplication.shared.open` findings are gone, the 4 left are the project's own `close` defined per
+  `#if`).
+- Removed 46 call edges, all false (also `data.write(to:)` → `DeepLUserAPIHandler.write`,
+  `UserDefaults.standard.register(defaults:)` → `SoundEffectManager.register`); added 122 (labelled selectors on
+  untyped receivers, `MediaContainer.pending(...)` static factories, `extension View` modifiers on SDK view chains,
+  members of nested types). `calls_sdk_selector`: 2,132 calls left unbound by the SDK-selector rule.
+- `cg starters` still suggests `MastodonClient.get` / `.post`, now with real callers only (76 / 42 direct callers).
