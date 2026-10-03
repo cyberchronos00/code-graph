@@ -168,6 +168,10 @@ def main(argv=None):
     p.add_argument("spec", help="Class.method or Class::method (either separator, any language), Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-paths", action="store_true")
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
+    p.add_argument("--max-depth", type=int, default=3, help="transitive tests at most N hops from the target (0: any depth)")
+    p.add_argument("--unit-only", action="store_true", help="leave out UI / snapshot / screenshot tests")
+    p.add_argument("--exclude-root", action="append", default=[], help="a symbol transitive paths must not run through (repeatable)")
+    p.add_argument("--through-roots", action="store_true", help="keep paths through app entry points (@main, App.body, MainActivity)")
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
@@ -380,7 +384,8 @@ def main(argv=None):
         print(json.dumps(res, indent=1, default=str) if a.json else render_protocols(res, max_items=a.max_items))
         return
     if a.cmd == "tests":
-        res = Q.tests_covering(st, a.spec, min_conf=a.min_confidence)
+        res = Q.tests_covering(st, a.spec, min_conf=a.min_confidence, near_depth=a.max_depth or None,
+                               unit_only=a.unit_only, exclude_roots=a.exclude_root, through_roots=a.through_roots)
         res["completeness"] = _completeness(st, res.get("targets"))
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_tests_covering(res, show_paths=not a.no_paths))
         _note(res["completeness"], a.json)

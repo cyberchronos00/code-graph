@@ -1749,12 +1749,97 @@ def route_targets(st: GraphStore, spec: str) -> list[str]:
     return out
 
 
-def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30) -> dict:
+UI_TEST_PATH = re.compile(r"(^|/)(\w*UITests?|androidTest|\w*[Ss]napshot\w*|\w*[Ss]creenshot\w*|uiTest|"
+                          r"integration_test|cypress|playwright)(/|$)", re.I)
+UI_TEST_FRAMEWORKS = {"playwright", "cypress", "xcuitest", "espresso", "compose-ui", "snapshot"}
+
+
+def test_class(t: dict) -> str:
+    """"ui" for UI, snapshot and screenshot tests (XCUITest, Compose UI / Espresso, Playwright / Cypress, snapshot
+    libraries; a test target or folder named *UITests, androidTest, e2e, *Snapshot*, *Screenshot*), else "unit"."""
+    if (t.get("framework") or "") in UI_TEST_FRAMEWORKS or UI_TEST_PATH.search(t.get("file") or ""):
+        return "ui"
+    if re.search(r"(snapshot|screenshot)", f"{t.get('name') or ''} {(t.get('file') or '').rsplit('/', 1)[-1]}", re.I):
+        return "ui"
+    return "unit"
+
+
+def app_roots(st: GraphStore, extra: list[str] | None = None, defaults: bool = True) -> set[str]:
+    """App entry points a transitive test path should not run through: `@main` types (Swift), `*Activity` classes
+    (Android) and their members (`App.body`) unless `defaults` is off, plus the `--exclude-root` symbols."""
+    ids: set[str] = set()
+    if defaults:
+        ids |= {r["id"] for r in st.q("SELECT id FROM nodes WHERE entry_kind='main' AND kind IN ('class','struct')")}
+        ids |= {r["id"] for r in st.q("SELECT id FROM nodes WHERE kind='class' AND lang='kotlin' AND name LIKE "
+                                      "'%Activity' AND json_extract(attrs, '$.test') IS NULL")}
+    for x in extra or ():
+        ids |= set(resolve_targets(st, x))
+    fqns = [r["fqn"] for r in st.q(f"SELECT fqn FROM nodes WHERE id IN ({','.join('?' * len(ids))})", list(ids))
+            if r["fqn"]] if ids else []
+    for fq in fqns:
+        ids |= {r["id"] for r in st.q("SELECT id FROM nodes WHERE fqn LIKE ? ESCAPE '\\' AND kind IN ('method','function')",
+                                      (fq.replace("_", "\\_").replace("%", "\\%") + ".%",))}
+    return ids
+
+
+def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, near_depth: int | None = 3,
+                   unit_only=False, exclude_roots: list[str] | None = None, through_roots=False) -> dict:
     """Tests that exercise a symbol / route / table...: direct (the test code itself calls / requests it) and
     transitive (through application code: test -> route -> controller -> service -> target). An inherited
-    `Sub.method` spec leaves out the calls whose receiver cannot be a Sub (narrow_inherited)."""
+    `Sub.method` spec leaves out the calls whose receiver cannot be a Sub (narrow_inherited).
+    Transitive results are kept near the target (#87): at most `near_depth` hops (None: any), not through an app
+    root (`@main`, `App.body`, `MainActivity`, `exclude_roots`; `through_roots` keeps those), and UI / snapshot tests
+    in their own `ui` list (`unit_only` drops it). What is left out is counted in `omitted`."""
     with narrowed(st, inherited_targets(st, spec)):
-        return _tests_covering(st, spec, min_conf, max_depth)
+        res = _tests_covering(st, spec, min_conf, max_depth)
+    return _split_tests(st, res, near_depth, unit_only, exclude_roots, through_roots)
+
+
+# hops that are wiring, not application code between the test and the target: the test's own calls and requests,
+# route -> handler, cross-repo http -> route, command -> handle, middleware
+WIRING_EDGES = {"ROUTES_TO", "MATCHES_ROUTE", "MATCHES_ENDPOINT", "MATCHES_CHANNEL", "HANDLED_BY", "USES_MIDDLEWARE"}
+
+
+def app_depth(path: list[dict]) -> int:
+    """Hops through application code on a test's path (#87): test edges (TEST_CALLS, TEST_HTTP...) and wiring
+    (route -> controller) do not count, so `test -> route -> controller -> service` is 1."""
+    return sum(1 for p in path or () if not p["kind"].startswith("TEST_") and p["kind"] not in WIRING_EDGES)
+
+
+def _split_tests(st, res, near_depth, unit_only, exclude_roots, through_roots) -> dict:
+    roots = app_roots(st, exclude_roots, defaults=not through_roots)
+    targets = set(res.get("targets") or ())
+    omitted = {"deeper": 0, "through_roots": 0, "ui": 0}
+    out_direct, near, ui = [], [], []
+    for t in res["direct"]:
+        t["class"] = test_class(t)
+        out_direct.append(t)
+    for t in res["transitive"]:
+        t["class"] = test_class(t)
+        hops = {p["to"] for p in t.get("path") or ()} | {p["from"] for p in t.get("path") or ()}
+        root = next((h for h in hops if h in roots and h not in targets and h != t["test"]), None)
+        if root is not None:
+            omitted["through_roots"] += 1
+            continue
+        t["app_depth"] = app_depth(t.get("path"))
+        if near_depth is not None and t["app_depth"] > near_depth:
+            omitted["deeper"] += 1
+            continue
+        if t["class"] == "ui":
+            if unit_only:
+                omitted["ui"] += 1
+            else:
+                ui.append(t)
+            continue
+        near.append(t)
+    if unit_only:
+        omitted["ui"] += sum(1 for t in out_direct if t["class"] == "ui")
+        out_direct = [t for t in out_direct if t["class"] != "ui"]
+    res.update(direct=out_direct, transitive=near, ui=ui, omitted=omitted,
+               limits={"near_depth": near_depth, "unit_only": unit_only, "through_roots": through_roots,
+                       "exclude_roots": exclude_roots or []})
+    res["stats"].update(direct=len(out_direct), transitive=len(near), ui=len(ui), omitted=sum(omitted.values()))
+    return res
 
 
 def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30) -> dict:
@@ -1842,9 +1927,17 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
     fws = st.get("tests_by_framework") or {}
     per = (": " + ", ".join(f"{k} {v}" for k, v in fws.items())) if fws else ""
     L += inherited_lines(res)
-    L.append(f"tests: {st['direct']} direct, {st['transitive']} transitive (of {st['tests_in_graph']} test cases in the graph{per})")
+    om = res.get("omitted") or {}
+    lim = res.get("limits") or {}
+    more = ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in om.items() if v)
+    nd = lim.get("near_depth")
+    L.append(f"tests: {st['direct']} direct, {st['transitive']} nearby transitive"
+             + (f" (app depth <= {nd})" if nd else "") + (f", {st['ui']} UI / snapshot" if st.get("ui") else "")
+             + (f"; {sum(om.values())} more not listed ({more})" if more else "")
+             + f" (of {st['tests_in_graph']} test cases in the graph{per})")
     for label, key in (("DIRECT (the test code itself calls / requests the target)", "direct"),
-                       ("TRANSITIVE (through application code)", "transitive")):
+                       ("TRANSITIVE (through application code)", "transitive"),
+                       ("UI / SNAPSHOT (through application code)", "ui")):
         group = res[key]
         if not group:
             continue
@@ -1854,14 +1947,17 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
             dn = (f' "{t["display_name"]}"' if t.get("display_name") else "") + (" (parameterized)" if t.get("parameterized") else "")
             L.append(f"  {t['name']}{dn}  [{t.get('framework') or 'test'}] {t['file']}:{t['line']}  depth={t['depth']} conf={t['path_confidence']}"
                      + (CANDIDATE_LABEL if t.get("candidate") else "")
-                     + (f"  (via override {vo[0]}" + (f" +{len(vo) - 1}" if len(vo) > 1 else "") + ")" if vo else ""))
+                     + (f"  (via override {vo[0]}" + (f" +{len(vo) - 1}" if len(vo) > 1 else "") + ")" if vo else "")
+                     + (f"  app_depth={t['app_depth']}" if t.get("app_depth", t["depth"]) != t["depth"] else ""))
             if show_paths and t["path"]:
                 L.append(f"      {_path_short(t['path'][:8])}{' ...' if len(t['path']) > 8 else ''}")
         if len(group) > limit:
             L.append(f"  ... {len(group) - limit} more")
     if any(t.get("candidate") for k in ("direct", "transitive") for t in res[k]):
         L += ["", CANDIDATE_NOTE]
-    if not res["direct"] and not res["transitive"]:
+    if more:
+        L += ["", "not listed: " + more + " (widen with --max-depth N or 0 for any depth, --through-roots, no --unit-only)"]
+    if not res["direct"] and not res["transitive"] and not res.get("ui"):
         if st["tests_in_graph"]:
             why = (f" ({st['tests_in_graph']} test cases are indexed; none calls the target, directly or through"
                    " application code)")

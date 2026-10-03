@@ -258,7 +258,7 @@ LISTENED TO BY (1)
 
 $ cg tests 'PATCH /api/tasks/{task}/move' --no-paths --db out/graph.db
 targets: 1 node(s): route:PATCH /tasks/{task}/move
-tests: 2 direct, 0 transitive (of 10 test cases in the graph: phpunit 4, pest 3, playwright 2, vitest 1)
+tests: 2 direct, 0 nearby transitive (app depth <= 3) (of 10 test cases in the graph: phpunit 4, pest 3, playwright 2, vitest 1)
 
 == DIRECT (the test code itself calls / requests the target): 2
   TaskMoveTest::test_moving_a_task_updates_its_state  [phpunit] backend/tests/Feature/TaskMoveTest.php:17  depth=2 conf=exact

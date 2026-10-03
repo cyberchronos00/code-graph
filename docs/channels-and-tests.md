@@ -162,15 +162,15 @@ HTTP endpoints that only tests call are tagged `test_only` and kept out of the f
 ```text
 $ cg tests 'App\Support\BoardAccess::visibleBoardIds' --db out/graph.db
 targets: 1 node(s): Support\BoardAccess::visibleBoardIds
-tests: 2 direct, 1 transitive (of 10 test cases in the graph: phpunit 4, pest 3, playwright 2, vitest 1)
+tests: 2 direct, 0 nearby transitive (app depth <= 3), 1 UI / snapshot (of 10 test cases in the graph: phpunit 4, pest 3, playwright 2, vitest 1)
 
 == DIRECT (the test code itself calls / requests the target): 2
   board access > it lists the boards of the user teams  [pest] backend/tests/Unit/BoardAccessTest.php:11  depth=1 conf=exact
       test:… -TEST_CALLS-> Support\BoardAccess::visibleBoardIds
   board access > admins see every board  [pest] backend/tests/Unit/BoardAccessTest.php:15  depth=1 conf=exact
 
-== TRANSITIVE (through application code): 1
-  board page > shows the tasks of a board  [playwright] frontend/e2e/board.spec.ts:4  depth=6 conf=exact
+== UI / SNAPSHOT (through application code): 1
+  board page > shows the tasks of a board  [playwright] frontend/e2e/board.spec.ts:4  depth=6 conf=exact  app_depth=3
       test:e2e/board.spec.ts#… -TEST_VISITS-> page:app/pages/boards/[id].vue -USES_COMPOSABLE-> useBoardRealtime (useBoardRealtime.ts) -SUBSCRIBES_CHANNEL-> channel_sub:board.{boardId} -MATCHES_CHANNEL-> channel:board.{board} -HANDLED_BY-> Broadcasting\BoardChannel::join -CALLS-> Support\BoardAccess::visibleBoardIds
 ```
 
@@ -179,10 +179,10 @@ A Python example, from the bundled Django sample (`examples/bookstore-django`):
 ```text
 $ cg tests catalog.api.get_book --db out/bookstore-django.db
 targets: 1 node(s): catalog.api.get_book
-tests: 0 direct, 1 transitive (of 10 test cases in the graph: pytest 5, unittest 5)
+tests: 0 direct, 1 nearby transitive (app depth <= 3) (of 10 test cases in the graph: pytest 5, unittest 5)
 
 == TRANSITIVE (through application code): 1
-  test_book_endpoints  [pytest] catalog/tests/test_api.py:13  depth=3 conf=exact
+  test_book_endpoints  [pytest] catalog/tests/test_api.py:13  depth=3 conf=exact  app_depth=0
       test:catalog.tests.test_api.test_book_endpoints -TEST_CALLS-> catalog.tests.test_api.test_book_endpoints -TEST_HTTP-> route:GET /api/books/{book_id}/ -ROUTES_TO-> catalog.api.get_book
 ```
 
@@ -213,7 +213,7 @@ Swift and Kotlin test cases are the test functions themselves (`entry_kind` `tes
 ```text
 $ cg tests Pricing.total --db out/lib.db
 targets: 1 node(s): Pricing.total
-tests: 3 direct, 0 transitive (of 3 test cases in the graph: swift-testing 3)
+tests: 3 direct, 0 nearby transitive (app depth <= 3) (of 3 test cases in the graph: swift-testing 3)
 
 == DIRECT (the test code itself calls / requests the target): 3
   totalOfEmptyIsZero  [swift-testing] Tests/LibTests/PricingTests.swift:5  depth=1 conf=heuristic
@@ -233,7 +233,34 @@ On a base or interface method the tests of its overrides count too, as in `impac
 value calls the overrides): those tests are marked `(via override A.m)` (`via_override` in `--json` and MCP), and
 `Sub.method` for an inherited method resolves to the definition it inherits.
 
-MCP: `tests_covering(target, min_confidence?, paths?)`.
+### Scope: nearby tests, UI tests, app roots
+
+A widely used helper is reached by almost every test of an app through the app's entry point, screens and view
+models. Listing all of them hides the few tests that check the helper itself, so `cg tests` scopes the transitive
+list ([#87](https://github.com/cyberchronos00/code-graph/issues/87)):
+
+- **App depth.** A transitive test is listed when at most `--max-depth` hops (default 3) of its path run through
+  application code. The test's own edges (`TEST_CALLS`, `TEST_HTTP`, `TEST_VISITS`, ...) and wiring (route →
+  handler, `MATCHES_ROUTE` / `MATCHES_ENDPOINT` / `MATCHES_CHANNEL`, `HANDLED_BY`, middleware) do not count, so
+  `test → route → controller → service → target` has app depth 2. A test line shows `app_depth=N` when it differs
+  from `depth`. `--max-depth 0` lists every depth.
+- **UI and snapshot tests** get their own section, `UI / SNAPSHOT (through application code)`: Playwright and
+  Cypress tests, tests in a `*UITests` / `androidTest` / `uiTest` / `integration_test` / `cypress` /
+  `playwright` folder or a snapshot / screenshot folder, and tests whose name or file name says snapshot or
+  screenshot. `--unit-only` leaves them out,
+  direct UI tests included.
+- **App roots.** A transitive test whose path passes through an app root is left out: an `@main` type and its
+  methods (Swift `App` / `UIApplicationDelegate`), a Kotlin `*Activity` class and its methods, and every node given
+  with `--exclude-root SPEC` (repeatable; any target spec, members of a type included). A test that starts the whole app
+  covers everything; it says little about one helper. `--through-roots` keeps these tests (an explicit
+  `--exclude-root` still applies). A root that is itself the target is not excluded.
+
+The header and a `not listed:` line count what was left out (`1 more not listed (1 deeper, 1 through roots, 1 ui)`),
+with the options that bring it back. `--json` and MCP carry the same in `ui`, `omitted` (`deeper`,
+`through_roots`, `ui`) and `limits`.
+
+MCP: `tests_covering(target, min_confidence?, paths?, max_depth? = 3, unit_only?, exclude_roots?, through_roots?)`;
+`max_depth` 0 means any depth.
 
 ## Limits
 

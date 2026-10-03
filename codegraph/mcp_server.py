@@ -683,15 +683,21 @@ def llm_tools(pattern: str | None = None, framework: str | None = None, unmatche
 
 
 @tool
-def tests_covering(target: str, min_confidence: str = "heuristic", paths: bool = True) -> str:
+def tests_covering(target: str, min_confidence: str = "heuristic", paths: bool = True, max_depth: int = 3,
+                   unit_only: bool = False, exclude_roots: list[str] | None = None, through_roots: bool = False) -> str:
     """Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
     HTTP request to the route ($this->getJson('/x'), Playwright request.get). TRANSITIVE: through application code
     (test -> route -> controller -> service -> target). target: Class::method | Class | route:VERB /uri | `VERB /path`
     or /path (matched against route URIs) | table.column | any node id. Tests are PHPUnit / Pest (tests/), Vitest / Jest
     / Playwright / Cypress spec files; they never count as callers in the other queries. A base / interface method
     also lists the tests of its overrides, marked `via override X`; `Sub.method` for an inherited method resolves to
-    the definition it inherits (noted)."""
-    res = Q.tests_covering(_st(), target, min_conf=min_confidence)
+    the definition it inherits (noted). Transitive tests are kept near the target: at most max_depth hops (0: any
+    depth), not through an app entry point (`@main` types and their members such as `App.body`, Android `*Activity`
+    classes, exclude_roots symbols; through_roots=true keeps them). UI / snapshot / screenshot tests (XCUITest,
+    Compose UI / Espresso, Playwright / Cypress, *UITests / androidTest folders) are listed apart, or left out
+    with unit_only=true. The summary line counts what was left out and why."""
+    res = Q.tests_covering(_st(), target, min_conf=min_confidence, near_depth=max_depth or None, unit_only=unit_only,
+                           exclude_roots=exclude_roots, through_roots=through_roots)
     _scope(res.get("targets") or [])
     return Q.render_tests_covering(res, show_paths=paths)
 

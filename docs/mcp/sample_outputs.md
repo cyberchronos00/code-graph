@@ -222,11 +222,11 @@ direct callers: 2 (2 sites)
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
 
-## `tests_covering {'target': 'StockService::reserve'}`  (358 chars)
+## `tests_covering {'target': 'StockService::reserve'}`  (382 chars)
 
 ```
 targets: 1 node(s): Services\StockService::reserve
-tests: 0 direct, 0 transitive (of 0 test cases in the graph)
+tests: 0 direct, 0 nearby transitive (app depth <= 3) (of 0 test cases in the graph)
 no indexed test reaches the target (the graph has no test code: no test files or test cases were indexed)
 coverage: every source file cg found is indexed (php, typescript); code outside these languages or generated at runtime is not in the graph.
 ```

@@ -150,7 +150,7 @@ def test_tests_follow_overrides(tmp_path):
     own = Q.tests_covering(st, "pkg.core.A.run")["transitive"]
     assert [t["name"] for t in own] == ["test_main"] and "via_override" not in own[0]
     out = cli("tests", "pkg.core.Base.run", "--db", str(db), "--no-paths")
-    assert "test_main  [pytest] tests/test_main.py:4  depth=3 conf=resolved  (via override pkg.core.A.run)" in out
+    assert "test_main  [pytest] tests/test_main.py:4  depth=3 conf=resolved  (via override pkg.core.A.run)  app_depth=1" in out
     js = json.loads(cli("tests", "pkg.core.Base.run", "--db", str(db), "--json"))
     assert {t["name"]: t.get("via_override") for t in js["transitive"]}["test_main"] == ["pkg.core.A.run"]
 

@@ -224,7 +224,8 @@ def test_channels_and_tests_on_combined_graph():
     assert {t["framework"] for t in cov["direct"]} == {"phpunit", "playwright"}
     cov = Q.tests_covering(st, "taskLabel")
     assert [t["framework"] for t in cov["direct"]] == ["vitest"]
-    assert [t["framework"] for t in cov["transitive"]] == ["playwright"]     # page.goto -> page -> taskLabel
+    assert cov["transitive"] == []                     # an end-to-end test is listed apart (#87)
+    assert [t["framework"] for t in cov["ui"]] == ["playwright"]     # page.goto -> page -> taskLabel
 
 
 @needs_ts
