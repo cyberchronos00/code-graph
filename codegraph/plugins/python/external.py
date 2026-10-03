@@ -3,8 +3,10 @@
 Module-level settings dicts (Django `DATABASES` / `CACHES`, NetBox-style `DATABASE` / `REDIS`, and nested aliases
 `{"default": {...}}`) with a HOST / LOCATION, and URL settings (`DATABASE_URL`, `CELERY_BROKER_URL`, `BROKER_URL`,
 `REDIS_URL`, `CACHE_URL`, `EMAIL_HOST`): literal values, `os.environ.get("K", default)` / `os.getenv` / `env("K")`
-reads and names of other module dicts. Only facts are recorded (builder.external_facts); passwords are kept as the
-env key or the location of a literal, never the value."""
+reads and names of other module dicts. Client constructors with an address in their arguments (#77):
+`psycopg.connect(host=...)`, `redis.Redis(host=)` / `redis.from_url(url)`, `smtplib.SMTP(host, port)`,
+`pymongo.MongoClient(url)`, `ldap3.Server(host)`, `boto3.client("s3", endpoint_url=)` ... Only facts are recorded
+(builder.external_facts); passwords are kept as the env key or the location of a literal, never the value."""
 from __future__ import annotations
 
 import ast
@@ -58,7 +60,7 @@ def _proto(engine: str | None, default):
     return default, False
 
 
-def index(prog, b) -> int:
+def index(prog, b, walk_body=None) -> int:
     facts = []
     for m in prog.modules.values():
         if not any(s in m.name.rsplit(".", 1)[-1].lower() for s in ("settings", "config", "configuration")):
@@ -109,6 +111,135 @@ def index(prog, b) -> int:
                     f["password"] = ("env", pv[1]) if pv and pv[0] == "env" else ("literal", f"{em.file}:{pw.lineno}") \
                         if pv and pv[0] == "lit" and pv[1] else None
                 facts.append(f)
+    if walk_body is not None:
+        facts += client_facts(prog, b, walk_body)
     if facts:
         b.external_facts = getattr(b, "external_facts", []) + facts
     return len(facts)
+
+
+# top-level package -> (protocol, constructor / function names, default port override)
+CLIENTS = {
+    "psycopg": ("postgres", {"connect", "Connection", "AsyncConnection", "ConnectionPool", "AsyncConnectionPool"}),
+    "psycopg2": ("postgres", {"connect", "SimpleConnectionPool", "ThreadedConnectionPool"}),
+    "psycopg_pool": ("postgres", {"ConnectionPool", "AsyncConnectionPool"}),
+    "asyncpg": ("postgres", {"connect", "create_pool"}),
+    "pg8000": ("postgres", {"connect", "Connection"}),
+    "pymysql": ("mysql", {"connect", "Connection"}),
+    "MySQLdb": ("mysql", {"connect", "Connection"}),
+    "mysql": ("mysql", {"connect", "MySQLConnection"}),
+    "aiomysql": ("mysql", {"connect", "create_pool"}),
+    "redis": ("redis", {"Redis", "StrictRedis", "from_url", "ConnectionPool"}),
+    "aioredis": ("redis", {"Redis", "from_url", "create_redis_pool"}),
+    "pymongo": ("mongodb", {"MongoClient"}),
+    "motor": ("mongodb", {"AsyncIOMotorClient", "MotorClient"}),
+    "smtplib": ("smtp", {"SMTP", "SMTP_SSL"}),
+    "aiosmtplib": ("smtp", {"SMTP", "send"}),
+    "ftplib": ("ftp", {"FTP", "FTP_TLS"}),
+    "ldap3": ("ldap", {"Server"}),
+    "ldap": ("ldap", {"initialize"}),
+    "pika": ("amqp", {"URLParameters", "ConnectionParameters"}),
+    "aio_pika": ("amqp", {"connect", "connect_robust"}),
+    "kombu": ("amqp", {"Connection"}),
+    "elasticsearch": ("elasticsearch", {"Elasticsearch", "AsyncElasticsearch"}),
+    "pymemcache": ("memcached", {"Client", "PooledClient"}),
+    "boto3": ("s3", {"client", "resource"}),
+}
+TLS_CTORS = {"SMTP_SSL": "465", "FTP_TLS": None}
+URL_KW = ("dsn", "url", "conninfo", "host_url", "endpoint_url", "hosts")
+HOST_KW = ("host", "hostname", "server")
+
+
+def _dotted(m, e):
+    """`redis.asyncio.Redis` / `Redis` (from redis import Redis) -> 'redis.asyncio.Redis', through the imports."""
+    parts = []
+    while isinstance(e, ast.Attribute):
+        parts.append(e.attr)
+        e = e.value
+    if not isinstance(e, ast.Name):
+        return None
+    imp = m.imports.get(e.id)
+    if not isinstance(imp, tuple) or len(imp) < 2 or not isinstance(imp[1], str):
+        return None
+    base = imp[1] + (f".{imp[2]}" if len(imp) > 2 and imp[0] == "sym" and isinstance(imp[2], str) else "")
+    return ".".join([base, *reversed(parts)])
+
+
+def _kwarg(call, names):
+    for k in call.keywords:
+        if k.arg in names:
+            return k.value
+    return None
+
+
+def client_facts(prog, b, walk_body) -> list:
+    tops = set(CLIENTS)
+    facts = []
+    for m in prog.modules.values():
+        if not any(isinstance(v, tuple) and len(v) > 1 and isinstance(v[1], str) and v[1].split(".")[0] in tops
+                   for v in m.imports.values()):
+            continue
+        scopes = [(f.id, walk_body(f.node)) for f in m.funcs.values()]
+        scopes += [(f.id, walk_body(f.node)) for c in m.classes.values() for f in c.methods.values()]
+        scopes.append((f"module:{m.name}", (n for st in m.tree.body if not isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                                            for n in ast.walk(st))))
+        for src, nodes in scopes:
+            if src not in b.nodes:
+                continue
+            for c in nodes:
+                if not isinstance(c, ast.Call):
+                    continue
+                dn = _dotted(m, c.func)
+                if not dn:
+                    continue
+                top, last = dn.split(".")[0], dn.rsplit(".", 1)[-1]
+                if top not in CLIENTS or last not in CLIENTS[top][1]:
+                    continue
+                proto = CLIENTS[top][0]
+                if top == "boto3":
+                    if not (c.args and isinstance(c.args[0], ast.Constant) and c.args[0].value == "s3"):
+                        continue
+                    if _kwarg(c, ("endpoint_url",)) is None:
+                        continue
+                url = _kwarg(c, URL_KW)
+                host = _kwarg(c, HOST_KW)
+                pos = c.args[0] if c.args and top != "boto3" else None
+                if url is None and host is None and pos is not None:
+                    pv = _value(prog, m, pos)
+                    if pv and pv[0] == "lit" and "://" in pv[1] or last in ("from_url", "URLParameters") or top in ("pymongo", "motor", "asyncpg", "aio_pika") and pv and pv[0] == "env":
+                        url = pos
+                    elif proto in ("smtp", "ftp", "ldap", "elasticsearch", "memcached", "amqp") or (top == "redis" and last != "from_url"):
+                        host = pos
+                port = _kwarg(c, ("port",)) or (c.args[1] if len(c.args) > 1 and proto in ("smtp", "ftp", "redis") else None)
+                f = {"var": f"{dn}()", "module": m.name, "protocol": proto, "src": src, "file": m.file, "line": c.lineno,
+                     "client": top, "resource": None}
+                if url is not None:
+                    u = _value(prog, m, url)
+                    if not u or u[0] not in ("lit", "env") or (u[0] == "lit" and "://" not in u[1] and proto != "ldap"):
+                        continue
+                    if u[0] == "lit" and "://" not in u[1]:            # ldap3.Server("ldap.example.org")
+                        f["host"], f["port"] = u, None
+                    else:
+                        f["url"] = u
+                elif host is not None:
+                    h = _value(prog, m, host)
+                    if not h or h[0] not in ("lit", "env"):
+                        continue
+                    if h[0] == "lit" and "://" in h[1]:
+                        f["url"] = h
+                    else:
+                        f["host"] = h
+                        pv = _value(prog, m, port) if port is not None else None
+                        f["port"] = pv if pv and pv[0] in ("lit", "env") else (("lit", TLS_CTORS[last]) if TLS_CTORS.get(last) else None)
+                else:
+                    continue
+                db = _kwarg(c, ("dbname", "database", "db"))
+                dv = _value(prog, m, db) if db is not None else None
+                f["resource"] = dv[1] if dv and dv[0] == "lit" else None
+                pw = _kwarg(c, ("password", "passwd"))
+                if pw is not None:
+                    pv = _value(prog, m, pw)
+                    f["password"] = ("env", pv[1]) if pv and pv[0] == "env" else ("literal", f"{m.file}:{pw.lineno}") \
+                        if pv and pv[0] == "lit" and pv[1] else None
+                facts.append(f)
+    return facts

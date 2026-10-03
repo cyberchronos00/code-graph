@@ -68,6 +68,8 @@ IMAGES = [("postgis", "postgres"), ("postgres", "postgres"), ("pgvector", "postg
           ("memcached", "memcached"), ("minio", "s3"), ("localstack", "s3"), ("mailhog", "smtp"), ("mailpit", "smtp"),
           ("maildev", "smtp"), ("openldap", "ldap"), ("nats", "nats"), ("kafka", "kafka"), ("mosquitto", "mqtt"),
           ("clickhouse", "clickhouse"), ("cassandra", "cassandra")]
+LLM_KEYS = {"openai": ("OPENAI_API_KEY",), "azure-openai": ("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_KEY"),
+            "anthropic": ("ANTHROPIC_API_KEY",), "ollama": (), "openai-agents": ("OPENAI_API_KEY",)}
 LOOPBACK = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal", ""}
 ENV_FILES = (".env.example", ".env.sample", ".env.dist", ".env.template", ".env.defaults", "example.env", "env.example")
 
@@ -221,7 +223,9 @@ def attach(builder, root: Path) -> dict:
     envs = {n.id[len("env:"):]: n for n in builder.nodes.values() if n.kind == "env"}
     conns = [n for n in builder.nodes.values() if n.kind == "connection"]
     facts = getattr(builder, "external_facts", None) or []
-    if not envs and not conns and not facts:
+    # model calls made from test code are fixtures, not systems the application talks to (as for third-party HTTP)
+    llm = [n for n in builder.nodes.values() if (n.attrs or {}).get("llm_calls") and not n.attrs.get("test")]
+    if not envs and not conns and not facts and not llm:
         return {}
     ex = read_env_example(root)
     compose = read_compose(root)
@@ -378,9 +382,13 @@ def attach(builder, root: Path) -> dict:
         if u is not None:
             if u[0] == "lit":
                 d = parse_dsn(u[1])
+                if d and f.get("client") and (d["host"] or "").lower() in LOOPBACK:
+                    continue                                   # redis.from_url("redis://localhost"): no system
                 if d:
+                    # an HTTP endpoint of a client that speaks another protocol over it (boto3 S3 endpoint_url)
+                    pr = f["protocol"] if f.get("client") and d["protocol"] in ("http", "https") and f["protocol"] else d["protocol"]
                     r = (target_of(d["host"], d["port"]), {"address_source": "literal", "address_at": f"{f['file']}:{f['line']}",
-                         **{k: d[k] for k in ("scheme", "resource", "user", "tls") if d.get(k) is not None}}, "exact", d["protocol"])
+                         **{k: d[k] for k in ("scheme", "resource", "user", "tls") if d.get(k) is not None}}, "exact", pr)
                     if d["has_password"]:
                         r[1].update(credential_source="literal", credential_at=f"{f['file']}:{f['line']}")
                 elif f.get("host_only") and f["protocol"]:
@@ -396,6 +404,8 @@ def attach(builder, root: Path) -> dict:
             proto = f["protocol"] or (dep_sql_protocol(root, compose) if f["var"].startswith("DATABASE") else None) or "sql"
             if h[0] == "lit":
                 r = resolve(proto, host_val=h[1], port_val=pv, src_hint=("literal", f"{f['file']}:{f['line']}"))
+                if f.get("client") and (r is None or r[0].startswith("env:")):
+                    continue                                   # a client pointed at the local machine: no system
                 if r is None or r[0].startswith("env:"):
                     r = (f"config:{f['module']}.{f['var']}", {"address_source": "config", "address_at": f"{f['file']}:{f['line']}",
                                                 "address_default": target_of(h[1] or "localhost", pv or PORTS.get(proto))}, "heuristic", proto)
@@ -407,8 +417,12 @@ def attach(builder, root: Path) -> dict:
         target, attrs, conf, proto = r
         if attrs.get("address_source") == "env-example" and attrs.get("address_at") in defaults_at:
             attrs = {**attrs, "address_source": "code-default"}
-        nid = node(proto, target, {**attrs, "setting": f["var"], "resource": f.get("resource")}, conf)
-        builder.add_edge(f["src"], nid, "CONNECTS_TO", f["file"], f["line"], conf, op="configure", via=f"setting {f['var']}")
+        if f.get("client"):        # a client constructor in code (#77)
+            nid = node(proto, target, {**attrs, "client": f["var"], "library": f["client"], "resource": f.get("resource")}, conf)
+            builder.add_edge(f["src"], nid, "CONNECTS_TO", f["file"], f["line"], conf, op="connect", via=f"client {f['var']}")
+        else:
+            nid = node(proto, target, {**attrs, "setting": f["var"], "resource": f.get("resource")}, conf)
+            builder.add_edge(f["src"], nid, "CONNECTS_TO", f["file"], f["line"], conf, op="configure", via=f"setting {f['var']}")
         st["connects"] += 1
         for kk in ([u[1]] if u is not None and u[0] == "env" else []) + ([f["host"][1]] if f.get("host") and f["host"][0] == "env" else []):
             if f"env:{kk}" in builder.nodes:
@@ -422,6 +436,28 @@ def attach(builder, root: Path) -> dict:
             used_keys.add(pw[1])
         elif pw:
             builder.nodes[nid].attrs.update(credential_source="literal", credential_at=pw[1])
+
+    # ---- model calls (#66 attrs.llm_calls) -> external:llm:<provider>, the API-key env var as the credential (#77)
+    for n in llm:
+        for c in n.attrs["llm_calls"]:
+            prov = c.get("provider")
+            if not prov:
+                continue
+            base = parse_dsn(c["base_url"]) if c.get("base_url") else None
+            host = base["host"] if base else None
+            if host and host.lower() not in LOOPBACK:
+                target, a = target_of(host.lower(), base["port"]), {"address_source": "literal", "tls": base.get("tls")}
+            else:
+                target, a = prov, {"address_source": "provider", **({"address_default": target_of(host, base["port"])} if host else {})}
+            nid = node("llm", target, {**a, "provider": prov, "address_at": f"{n.file}:{c.get('line')}"}, "exact" if host else "resolved")
+            models = builder.nodes[nid].attrs.setdefault("models", [])
+            if c.get("model") and c["model"] not in models:
+                models.append(c["model"])
+            builder.add_edge(n.id, nid, "CONNECTS_TO", n.file, c.get("line"), "resolved", op=c.get("op") or "model call",
+                             via=f"model {c['model']}" if c.get("model") else f"{prov} client")
+            st["connects"] += 1
+            cred(nid, [k for k in LLM_KEYS.get(prov, ()) if k in envs])
+            used_keys.update(k for k in LLM_KEYS.get(prov, ()) if k in envs)
 
     # ---- env keys read by code, grouped by prefix
     groups: dict = {}

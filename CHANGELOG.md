@@ -22,6 +22,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   inside `async def serve()`. python-sdk: MCP endpoints 584 → 955, handled tools 124 → 162, unmatched client calls
   (`no_receiver`) 30 → 10; modelcontextprotocol/servers (Python): 0 → 12 git tools.
 
+- External systems (#77): Python client constructors with an address in their arguments (`psycopg2.connect(host=)`,
+  `redis.Redis(host=)` / `from_url`, `smtplib.SMTP_SSL`, `pymongo.MongoClient`, `ldap3.Server`, `boto3` S3
+  `endpoint_url` ...) are CONNECTS_TO from the calling function; model calls become `external:llm:<provider>` nodes
+  with their models and API-key env var; `impact external:...` / `impact table:...` list the code using the system
+  instead of "no recorded callers".
+
 ### Fixed
 
 - Protocol links (#69): Socket.IO matching follows the direction (a client `emit` reaches server handlers, a server

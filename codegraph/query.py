@@ -1082,15 +1082,22 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
     return out
 
 
+# impact on a data node (#77): its users are the code that connects to / uses / reads / writes it; these edges only
+# point at data nodes, so following them never widens the walk above the first code hop
+DATA_USE = ["CONNECTS_TO", "USES_CONNECTION", "READS_TABLE", "WRITES_TABLE", "MAPS_TO_TABLE"]
+DATA_TARGET = ("external:", "connection:", "table:")
+
+
 def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> dict:
     targets = resolve_targets(st, spec)
+    kinds = CALL_LIKE + DATA_USE if any(t.startswith(DATA_TARGET) for t in targets) else CALL_LIKE
     si = _has_class_target(targets)
     rel = override_relations(st, targets, min_conf)
     below = override_seeds(st, spec, targets, min_conf)
     seeds = targets + below
-    depth = reverse_closure(st, seeds, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
-    own = reverse_closure(st, targets, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform) if below else depth
-    paths = shortest_paths(st, depth, kinds=CALL_LIKE, min_conf=min_conf, seed_inst=si, platform=platform)
+    depth = reverse_closure(st, seeds, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform)
+    own = reverse_closure(st, targets, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform) if below else depth
+    paths = shortest_paths(st, depth, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform)
     bases = _dispatch_only(st, depth, paths, min_conf, platform)
     for b in list(depth):
         if b in bases or b in below:

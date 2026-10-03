@@ -26,6 +26,8 @@ service), `config:<module>.<setting>` for a settings dict that points at the loc
 | Python settings | module-level dicts in `*settings*` / `*config*` modules: Django `DATABASES` / `CACHES` (`ENGINE` / `BACKEND` gives the protocol; sqlite, local-memory and file caches are no network system), NetBox-style `DATABASE` / `REDIS` with aliases, values from literals, `os.environ.get("K", default)`, `os.getenv`, `os.environ["K"]`, django-environ `env("K")` and other module dicts; URL settings `DATABASE_URL`, `CELERY_BROKER_URL`, `BROKER_URL`, `REDIS_URL`, `CACHE_URL`, `EMAIL_HOST` | exact / resolved / heuristic |
 | `.env.example`, `.env.sample`, `.env.dist`, `.env.template`, `example.env` | values of non-secret keys; secret keys keep only their location; a DSN password becomes `***` before anything else sees it | |
 | `docker-compose*.yml`, `compose*.yaml` | services with a known image (postgres, mysql / mariadb, redis / valkey, mongo, rabbitmq, elasticsearch / opensearch, memcached, minio, mailpit / mailhog, openldap, nats, kafka, mosquitto, clickhouse, cassandra): a host equal to the service name resolves to `service:port` with `deployment_name` and `image` | resolved |
+| Python client constructors | `psycopg` / `psycopg2` / `asyncpg` / `pg8000` `connect(host=, port=, dbname=)` or a DSN, `pymysql` / `MySQLdb` / `mysql.connector`, `redis.Redis(host=)` / `redis.from_url(url)`, `pymongo.MongoClient(url)`, `smtplib.SMTP(host, port)` / `SMTP_SSL` (TLS, 465), `ftplib.FTP` / `FTP_TLS`, `ldap3.Server(host)`, `pika` / `aio_pika` / `kombu`, `elasticsearch`, `pymemcache`, `boto3.client("s3", endpoint_url=)`: literal or env-read arguments; CONNECTS_TO from the calling function (op connect, `client` attr); a client left at its localhost default is no system | exact for a literal, otherwise as above |
+| Model calls (`attrs.llm_calls` from [AI tools](ai-tools.md)) | `external:llm:<provider>` (openai, anthropic, azure-openai, ollama ...) with the `models` called, or `external:llm:<host>:<port>` for a non-local `base_url`; CONNECTS_TO from the calling function, CREDENTIAL_FROM the provider's API-key env var when code reads it; calls from test code are left out | resolved / exact |
 | Third-party HTTP (`http` nodes with origin_kind other) | shown by `cg external` as `external:https:<host>:<port>` through an adapter, without extra nodes; origins only called from tests are left out | exact |
 
 DSNs: postgres(ql) / pgsql, mysql / mariadb, mssql / sqlserver, oracle, mongodb(+srv), redis / rediss / valkey, amqp(s),
@@ -59,16 +61,17 @@ cg external 'external:postgres:*' --db graph.db --json
 
 Per system: the code and connections using it (with file:line and how: connection, env key, setting), the entry
 kinds reaching those users, CONFIGURED_BY / CREDENTIAL_FROM keys, TLS. MCP: `external_systems(pattern?, protocol?,
-source?, tls_off?)`. `reaches external:...` lists the entry points that reach a system.
+source?, tls_off?)`. `reaches external:...` lists the entry points that reach a system, and `impact external:...` /
+`impact table:...` lists the code using it (CONNECTS_TO / USES_CONNECTION / READS_TABLE / WRITES_TABLE /
+MAPS_TO_TABLE as the first hop, then callers) with the entry points above it.
 
 ## Not covered yet
 
-- Client constructors with literal arguments (`psycopg.connect(host=...)`, `redis.Redis(...)`, `smtplib.SMTP(...)`,
-  `paramiko`, `ldap3`, `boto3`, Node `new Pool({...})`, `new Redis(...)`, `nodemailer.createTransport`) are not read:
-  the address must come from configuration.
+- Client constructors in Node (`new Pool({...})`, `new Redis(...)`, `nodemailer.createTransport`, `mongoose.connect`)
+  and PHP (`new PDO($dsn)`), and `paramiko.SSHClient().connect()` (a method on an instance): the address must come
+  from configuration.
 - Config schemas that read the environment indirectly (zod / class-validator env DTOs, `environment.X` wrappers)
   give no env nodes, so their keys are not grouped; env writes (`process.env.X = ...`) count as reads.
 - Spring `application.yml`, Rails `database.yml`, Kubernetes / Helm / Terraform values, settings built with
   f-strings (NetBox's `CACHES` from `REDIS`), docker-compose files outside the indexed root.
-- Third-party HTTP hosts are an adapter in `cg external`, not graph nodes; `impact` does not walk external nodes
-  (use `reaches`).
+- Third-party HTTP hosts are an adapter in `cg external`, not graph nodes.

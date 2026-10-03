@@ -140,6 +140,20 @@ def test_link_one_node_per_system_and_reach(dbs):
     assert r.returncode == 0 and "OrderController" in r.stdout and "/sync" in r.stdout, r.stdout + r.stderr
 
 
+def test_impact_on_external_and_table(dbs):
+    """#77: impact walks CONNECTS_TO / USES_CONNECTION / table edges into the code that uses the system."""
+    from codegraph.query import impact
+    st = GraphStore(dbs["link"])
+    res = impact(st, "external:postgres:db:5432")
+    callers = {c["name"]: c["depth"] for c in res["callers"]}
+    assert callers.get("pool") == 1 and "App\\Http\\Controllers\\OrderController::index" in {c["fqn"] for c in res["callers"]}
+    assert {e["name"] for e in res["entry_points"]} >= {"GET /orders", "POST /sync"}
+    t = impact(st, "table:orders")
+    assert [c["fqn"] for c in t["callers"]] == ["App\\Http\\Controllers\\OrderController::index"]
+    r = cli("impact", "external:postgres:db:5432", "--db", str(dbs["link"]))
+    assert r.returncode == 0 and "no recorded callers" not in r.stdout and "POST /sync" in r.stdout
+
+
 def test_no_secret_bytes(dbs):
     for k in ("shop-api", "shop-worker", "shop-py", "link"):
         raw = Path(dbs[k]).read_bytes()
@@ -167,3 +181,108 @@ def test_plain_project_has_no_externals(tmp_path):
     db = tmp_path / "p.db"
     stats = index_project(tmp_path, db, "plain")
     assert not ext(GraphStore(db)) and not stats.get("external")
+
+
+CLIENTS_PY = """import os
+import smtplib
+import psycopg2
+import redis
+from redis import Redis
+from pymongo import MongoClient
+import ldap3
+import boto3
+
+
+def reports():
+    return psycopg2.connect(host="reports.internal.example", port=5433, dbname="reports", password=os.environ["REPORTS_PW"])
+
+
+def cache():
+    return Redis(host=os.getenv("CACHE_HOST", "localhost"), port=6380)
+
+
+def queue_cache():
+    return redis.from_url("rediss://queue-cache.internal.example:6390/0")
+
+
+def local():
+    return redis.Redis()             # localhost default: nothing
+
+
+def loop():
+    return redis.Redis(host="127.0.0.1")
+
+
+def loop_url():
+    return psycopg2.connect("postgresql://app@localhost:54320/app")
+
+
+def mail(msg):
+    with smtplib.SMTP_SSL("smtp.mail.example.com") as s:
+        s.send_message(msg)
+
+
+def events():
+    return MongoClient("mongodb://events.internal.example:27018/events")
+
+
+def directory():
+    return ldap3.Server("ldap.corp.example", port=636)
+
+
+def bucket():
+    return boto3.client("s3", endpoint_url="https://minio.internal.example:9000")
+
+
+def plain_s3():
+    return boto3.client("s3")
+"""
+
+
+def test_python_client_constructors(tmp_path):
+    """#77: client constructors with an address in their arguments are CONNECTS_TO from the calling function."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "clients.py").write_text(CLIENTS_PY)
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "clients")
+    st = GraphStore(db)
+    e = ext(st)
+    pg = e["external:postgres:reports.internal.example:5433"]
+    assert pg["confidence"] == "exact" and pg["resource"] == "reports" and pg["credential_at"] == "env:REPORTS_PW"
+    assert e["external:redis:queue-cache.internal.example:6390"]["tls"] is True
+    assert e["external:smtp:smtp.mail.example.com:465"]["tls"] is True
+    assert "external:mongodb:events.internal.example:27018" in e and "external:ldap:ldap.corp.example:636" in e
+    assert "external:s3:minio.internal.example:9000" in e
+    assert e["external:redis:env:CACHE_HOST"]["address_source"] == "env"
+    assert not any("127.0.0.1" in k or "localhost" in k for k in e)              # local defaults: no system
+    ct = edges(st, "CONNECTS_TO")
+    assert ("function:app.clients.reports", "external:postgres:reports.internal.example:5433") in ct
+    assert ("function:app.clients.mail", "external:smtp:smtp.mail.example.com:465") in ct
+    assert not any(s in ("function:app.clients.local", "function:app.clients.loop", "function:app.clients.plain_s3") for s, _ in ct)
+    assert not any(s == "function:app.clients.loop_url" for s, _ in ct)
+    assert ("external:postgres:reports.internal.example:5433", "env:REPORTS_PW") in edges(st, "CREDENTIAL_FROM")
+
+
+def test_llm_providers_as_externals(tmp_path):
+    """#77: model calls (#66 attrs.llm_calls) are CONNECTS_TO external:llm:<provider>; a base_url names the host."""
+    (tmp_path / "bot.py").write_text(
+        "import os\nfrom openai import OpenAI\nfrom anthropic import Anthropic\n\n"
+        "KEY = os.environ['OPENAI_API_KEY']\n\n\n"
+        "def ask(q):\n    c = OpenAI()\n    return c.chat.completions.create(model='gpt-4.1', messages=[q])\n\n\n"
+        "def ask_claude(q):\n    return Anthropic().messages.create(model='claude-x', max_tokens=10, messages=[q])\n\n\n"
+        "def ask_gateway(q):\n    return OpenAI(base_url='https://llm-gateway.internal.example/v1', model='m')\n")
+    (tmp_path / "test_bot.py").write_text(
+        "from openai import OpenAI\n\n\ndef test_fake():\n    OpenAI(base_url='https://fake.example.test/v1', model='t')\n")
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "bot")
+    st = GraphStore(db)
+    e = ext(st)
+    oa = e["external:llm:openai"]
+    assert oa["provider"] == "openai" and oa["models"] == ["gpt-4.1"] and oa["credential_at"] == "env:OPENAI_API_KEY"
+    assert "claude-x" in e["external:llm:anthropic"]["models"]
+    assert e["external:llm:llm-gateway.internal.example:443"]["address_source"] == "literal"
+    ct = edges(st, "CONNECTS_TO")
+    assert ("function:bot.ask", "external:llm:openai") in ct and ("function:bot.ask_claude", "external:llm:anthropic") in ct
+    assert ("function:bot.ask_gateway", "external:llm:llm-gateway.internal.example:443") in ct
+    assert not any("fake.example.test" in k for k in e)                              # model calls from tests: none

@@ -1439,7 +1439,7 @@ class PythonPlugin(LanguagePlugin):
             refs["socketio"] = sio_st
         # settings dicts / URLs -> external-system facts (codegraph/external.py, #40)
         from .external import index as ext_index
-        if (n_ext := ext_index(prog, b)):
+        if (n_ext := ext_index(prog, b, walk_body)):
             refs["external_settings"] = n_ext
         # LLM tools, MCP servers / clients, agents -> endpoint:llm_tool / mcp_* (protocol model, #66)
         from .aitools import index as ai_index
