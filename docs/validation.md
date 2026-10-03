@@ -726,3 +726,22 @@ named):
   test case: benchmarks in `src/main` (nowinandroid, not test code by path), `@Test` inside lint-test source strings,
   and on ktor-samples 30 expression-bodied tests (`fun anything() = testApplication { ... }`) in three httpbin files
   where the Kotlin grammar drops the class body's functions.
+
+## Python inference on self-referencing attributes (#78)
+
+langchain-ai/langgraph (`7dc9195`, 461 `.py` files) did not finish indexing in 400 s. `PregelLoop` re-assigns
+`self.checkpoint_pending_writes` from list comprehensions over itself, several per method with one shared loop name
+`w`; inferring the attribute re-entered it once per binding of `w` at every level, with a fresh per-function guard
+each time, until the depth limit of 40, so the work grew exponentially. Attribute types (`self.x` assignments and
+class attributes) are now memoised per class and attribute, an attribute already being inferred further up the stack
+is unknown, and one top-level inference stops after 5,000 steps. A result computed while a cycle was cut is not
+memoised, so a partial answer is not reused elsewhere. The plugin stats report the cuts as
+`inference_limits` (`attr_cycles`, `budget_exhausted`).
+
+- langgraph: indexes in 14 s, 9,774 nodes / 38,141 edges, 34 cycle cuts, budget never reached.
+- The same graphs before and after (every node and every edge with kind and confidence identical), and times within
+  noise or faster, on django (259 cuts), flask, saleor, netbox (186; 39 → 29 s), pytest (372), sphinx (20), ansible (9;
+  21 → 16 s), beets, flake8, httpie, microblog, mkdocs, pylint (17), opentelemetry-python (1,075) and
+  full-stack-fastapi-template. The work budget was not reached on any of them.
+- `tests/test_python_infer_cycles.py` has the langgraph shape in a dozen lines: it indexed for more than 60 s before
+  (stopped by the test's alarm) and takes 0.2 s now.

@@ -64,6 +64,10 @@ def _recv_attr(prog, call, tgt) -> dict:
     return {"recv": list(r)} if r else {}
 
 
+# #78: steps one top-level type inference may take (nested infer calls); beyond it the type is unknown
+INFER_BUDGET = 5000
+
+
 @dataclass
 class FuncInfo:
     name: str
@@ -278,6 +282,14 @@ class PyProgram:
         self.call_rules: list[Callable] = []      # (prog, call, func_type, ctx) -> type | None
         self._var_cache: dict[int, dict] = {}
         self._infer_depth = 0
+        # #78: attribute types are memoised per (class, attr); an attribute whose type is being inferred further up
+        # the stack is unknown (a cycle: `self.a = self.b.x` / `self.b = self.a.y`), and one top-level inference gets
+        # a work budget, so chains of fluent / self-referencing attributes cannot explore exponentially
+        self._attr_memo: dict[tuple, object] = {}
+        self._attr_busy: set[tuple] = set()
+        self._cuts = 0
+        self._work = 0
+        self.infer_stats = {"attr_cycles": 0, "budget_exhausted": 0}
 
     # ---- loading
     def source_roots(self) -> list[Path]:
@@ -567,7 +579,35 @@ class PyProgram:
                     return sa
         return None
 
+    def clear_memo(self) -> None:
+        """Forget memoised attribute types (framework hooks registered after load() can change them)."""
+        self._attr_memo.clear()
+
+    def _memo_attr(self, kind: str, fn, c: ClassInfo, attr: str, depth: int):
+        key = (kind, id(c), attr)
+        if key in self._attr_memo:
+            return self._attr_memo[key]
+        if key in self._attr_busy:
+            self._cuts += 1
+            self.infer_stats["attr_cycles"] += 1
+            return None
+        self._attr_busy.add(key)
+        cuts = self._cuts
+        try:
+            r = fn(c, attr, depth)
+        finally:
+            self._attr_busy.discard(key)
+        if self._cuts == cuts and self._work <= INFER_BUDGET:   # complete answer: no cycle cut, no budget stop
+            self._attr_memo[key] = r
+        return r
+
     def class_attr(self, c: ClassInfo, attr: str, depth=0):
+        return self._memo_attr("c", self._class_attr, c, attr, depth)
+
+    def self_attr_type(self, c: ClassInfo, attr: str, depth=0):
+        return self._memo_attr("s", self._self_attr_type, c, attr, depth)
+
+    def _class_attr(self, c: ClassInfo, attr: str, depth=0):
         if depth > 10:
             return None
         if attr in c.attrs:
@@ -588,7 +628,7 @@ class PyProgram:
                     return r
         return None
 
-    def self_attr_type(self, c: ClassInfo, attr: str, depth=0):
+    def _self_attr_type(self, c: ClassInfo, attr: str, depth=0):
         if depth > 10:
             return None
         for val, ann, f in c.self_attrs.get(attr, []):
@@ -781,6 +821,13 @@ class PyProgram:
 
     def infer(self, e, ctx: "Ctx"):
         if e is None or self._infer_depth > 40:
+            return None
+        if self._infer_depth == 0:
+            self._work = 0
+        self._work += 1
+        if self._work > INFER_BUDGET:
+            if self._work == INFER_BUDGET + 1:
+                self.infer_stats["budget_exhausted"] += 1
             return None
         self._infer_depth += 1
         try:
@@ -1299,6 +1346,7 @@ class PythonPlugin(LanguagePlugin):
         n_alias = self.tests.rootdir_aliases()
         for fw in frameworks:
             fw.register_hooks(prog)
+        prog.clear_memo()
         b = builder
         for m in prog.modules.values():
             b.add_node("module", m.name, name=m.name, fqn=m.name, file=m.file, line=1, module=module_of(m.file), lang="python")
@@ -1410,6 +1458,8 @@ class PythonPlugin(LanguagePlugin):
                                                   "path_named": prog.root_plan.n_requalified,
                                                   "samples": prog.root_plan.collisions[:5]}}
                       if prog.root_plan.n_collisions else {}),
+                   # #78: inference cut short (attribute type cycles, per-expression work budget) -> those types unknown
+                   **({"inference_limits": dict(prog.infer_stats)} if any(prog.infer_stats.values()) else {}),
                    "seconds": round(time.time() - t0, 2)})
         return st
 
