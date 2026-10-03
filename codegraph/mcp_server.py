@@ -723,13 +723,14 @@ def routes(writes: str | None = None, reaches: list[str] | None = None, missing:
 
 
 @tool
-def doctor(root: str | None = None, json_output: bool = False) -> str:
+def doctor(root: str | None = None, scip: list[str] | None = None, json_output: bool = False) -> str:
     """What this cg installation can index: versions of cg and the tools it uses, whether the Node / PHP / Dart
     extractor dependencies are installed, and per language whether indexing runs in exact or heuristic mode, why, and
     the command that installs what is missing. `root`: a project directory; also checks project conditions (a
-    compile_commands.json, `.cg.yaml` rust.targets) and lists only its languages."""
+    compile_commands.json, `.cg.yaml` rust.targets) and lists only its languages. `scip`: SCIP index files to check
+    (documents, occurrences with a usable position, definitions; a warning when cg could not use them)."""
     from .doctor import render, report
-    r = report(root)
+    r = report(root, scip=scip)
     return json.dumps(r, indent=2) if json_output else render(r)
 
 

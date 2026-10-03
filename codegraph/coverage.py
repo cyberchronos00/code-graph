@@ -241,7 +241,7 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
 
 
 def compute(root: str | Path, plugins: dict, scip_imported: bool = False, reports: dict | None = None,
-            scanned: Scan | None = None, blind_spots: list | None = None) -> dict:
+            scanned: Scan | None = None, blind_spots: list | None = None, warnings: list | None = None) -> dict:
     """Coverage entry list from the file scan, the per-plugin index stats and per-file reports, plus the blind spots
     found at index time (codegraph/blindspots.py)."""
     sc = scanned or scan_tree(root)
@@ -316,6 +316,8 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
     out = {"languages": langs, "gaps": sum(1 for e in langs if _is_gap(e))}
     if blind_spots:
         out["blind_spots"] = blind_spots
+    if warnings:
+        out["warnings"] = list(warnings)
     return out
 
 
@@ -542,6 +544,8 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
                     out.append(f"  {e['language']}: {e['excluded']} excluded")
                     out += _paths_lines(e, True)
         out += platform_lines((cov or {}).get("platforms"))
+        for w in (cov or {}).get("warnings") or ():
+            out.append(f"  warning: {w}")
         bs = blind_spots(cov)
         if bs:
             any_bs = True

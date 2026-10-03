@@ -105,6 +105,20 @@ def setup(project: Project) -> dict:
             "frameworks": names, "removed": sorted(remove & set(found)), "presets": applied}
 
 
+def scip_warnings(plugins: dict) -> list[str]:
+    """Unusable SCIP indexes (no readable positions, no definitions, none matched): the generic importer's
+    (`scip:<path>`) and the exact layers' (`<lang>.scip.warning`)."""
+    out = []
+    for k, v in plugins.items():
+        if not isinstance(v, dict):
+            continue
+        w = v.get("warning") if k.startswith("scip:") else (v.get("scip") or {}).get("warning") \
+            if isinstance(v.get("scip"), dict) else None
+        if w:
+            out.append(w if k.startswith("scip:") else f"{k}: {w}")
+    return out
+
+
 def index_project(root: str | Path, db_path: str | Path, name: str | None = None, scip: list[str] | None = None,
                   gates: str | None = None, python_roots: list[str] | None = None, include_generated: bool = False) -> dict:
     """Index `root` into a new graph DB. The project config file (.cg.yaml at the root) is read automatically;
@@ -252,7 +266,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
         store.db.executemany("INSERT OR REPLACE INTO gate_predicates VALUES (?,?,?,?)", getattr(lp, "gate_predicates", []) or [])
     store.db.commit()
     stats["coverage"] = compute(project.root, {k: v for k, v in stats["plugins"].items() if "/" not in k and not k.startswith("scip:")},
-                                scip_imported=bool(scip), reports=file_reports, scanned=scanned, blind_spots=bspots)
+                                scip_imported=bool(scip), reports=file_reports, scanned=scanned, blind_spots=bspots,
+                                warnings=scip_warnings(stats["plugins"]))
     gsum = clf.summary()
     if gsum["files"] or gsum.get("build_dirs"):
         stats["coverage"]["generated"] = gsum

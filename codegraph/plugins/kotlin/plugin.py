@@ -258,6 +258,8 @@ class KotlinPlugin(LanguagePlugin):
                       "scip_references", "scip_refs_external", "java"):
                 if k in sst:
                     self.st[k] = sst[k]
+            if sst.get("scip_warning"):
+                info["warning"] = sst["scip_warning"]
         info["seconds"] = round(time.time() - t1, 2)
         self.st["scip"] = info
         return mode

@@ -165,7 +165,27 @@ def _languages(tools: dict, root: Path | None, cfg: dict) -> list[dict]:
     return out
 
 
-def report(root: str | Path | None = None) -> dict:
+def scip_health(path: str | Path) -> dict:
+    """What cg can read from a SCIP index: documents, occurrences with a usable position, definitions, and the
+    warning `cg coverage` would show."""
+    from .plugins.native import scipread
+    p = Path(path)
+    out = {"path": str(p)}
+    try:
+        idx = scipread.load(p)
+    except Exception as e:  # noqa: BLE001
+        out["warning"] = f"SCIP index {p.name}: cannot be read ({type(e).__name__}: {str(e)[:200]})"
+        return out
+    ndefs = sum(len(v) for v in idx.defs.values())
+    out.update(tool=f"{idx.tool} {idx.version}".strip(), documents=len(idx.docs), occurrences=idx.occurrences,
+               positioned=idx.positioned, definitions=ndefs)
+    w = scipread.health_warning(p.name, idx.occurrences, idx.positioned, ndefs)
+    if w:
+        out["warning"] = w
+    return out
+
+
+def report(root: str | Path | None = None, scip: list | None = None) -> dict:
     rootp = Path(root).resolve() if root else None
     cfg, cfg_error, present = {}, None, None
     if rootp is not None:
@@ -190,6 +210,7 @@ def report(root: str | Path | None = None) -> dict:
         "tools": tools, "python_modules": {m: _module(m) for m in (*PIP_NAMES, "yaml", "mcp")},
         "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
         "update": "uv tool upgrade codegraph  |  pipx upgrade codegraph (releases)  |  install.sh --update",
+        **({"scip": [scip_health(x) for x in scip]} if scip else {}),
     }
 
 
@@ -213,6 +234,12 @@ def render(r: dict) -> str:
         out.append(f"  {x['language']:<11} {x['mode']:<11} {x['why']}")
         if x.get("fix"):
             out.append(f"  {'':<11} {'':<11} fix: {x['fix']}")
+    for x in r.get("scip") or ():
+        if "documents" in x:
+            out.append(f"scip {x['path']}: {x['tool']}, {x['documents']} documents, {x['occurrences']} occurrences "
+                       f"({x['positioned']} with a usable position), {x['definitions']} definitions")
+        if x.get("warning"):
+            out.append(f"  warning: {x['warning']}")
     out.append(f"update: {r['update']}  ({INSTALL_DOC})")
     return "\n".join(out)
 

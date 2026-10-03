@@ -60,6 +60,8 @@ def main(argv=None):
     p = sub.add_parser("doctor", help="what this installation can index: tool versions, extractor dependencies, exact or "
                                       "heuristic mode per language and why, and what to install")
     p.add_argument("root", nargs="?", help="project root: also check project conditions and list only its languages")
+    p.add_argument("--scip", action="append", metavar="FILE",
+                   help="check a SCIP index: documents, occurrences with a usable position, definitions (repeatable)")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("setup", help="install the Node / PHP / Dart extractor dependencies (into the user cache; "
                                      "otherwise done on the first index)")
@@ -170,9 +172,9 @@ def main(argv=None):
         return
     if a.cmd == "doctor":
         from .doctor import render, report
-        r = report(a.root)
+        r = report(a.root, scip=a.scip)
         print(json.dumps(r, indent=2) if a.json else render(r))
-        return 0
+        return 1 if any(x.get("warning") for x in r.get("scip") or ()) else 0
     if a.cmd == "setup":
         from .doctor import setup
         bad = [x for x in a.languages if x not in ("typescript", "php", "dart")]

@@ -21,7 +21,7 @@ import scip_pb2  # noqa: E402  (generated from scip.proto with grpc_tools.protoc
 
 from ...core.model import HEURISTIC, RESOLVED  # noqa: E402
 from ...core.plugin import GraphBuilder  # noqa: E402
-from ..native.scipread import occ_enclosing, occ_range  # noqa: E402
+from ..native.scipread import has_position, health_warning, occ_enclosing, occ_range  # noqa: E402
 
 NS_SEP = {"php": "\\", "go": "/", "rust": "::", "c_cpp": "::", "typescript": "/", "python": ".", "java": "."}
 
@@ -86,6 +86,9 @@ def import_scip(path: str | Path, builder: GraphBuilder, lang: str = "php", skip
         stats["docs"] += 1
         defs = []  # (start_line, end_line or None, node_id)
         for o in doc.occurrences:
+            if o.symbol and not o.symbol.startswith("local "):
+                stats["occurrences"] += 1
+                stats["positioned"] += has_position(o)
             if o.symbol_roles & scip_pb2.SymbolRole.Definition:
                 n = to_node(o.symbol, lang)
                 if not n:
@@ -118,4 +121,9 @@ def import_scip(path: str | Path, builder: GraphBuilder, lang: str = "php", skip
             dst = f"{kind}:{key}"
             builder.add_edge(src, dst, "CALLS" if kind == "method" else "REFERENCES", rel, line + 1, conf, source="scip")
             stats["references"] += 1
-    return dict(stats)
+    out = dict(stats)
+    w = health_warning(Path(path).name, out.get("occurrences", 0), out.get("positioned", 0),
+                       out.get("definitions", 0))
+    if w:
+        out["warning"] = w
+    return out

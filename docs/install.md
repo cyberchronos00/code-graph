@@ -18,6 +18,13 @@ whether `cg index` runs in exact or heuristic mode, why, and the command that in
 `cg doctor <project>` checks one project (only its languages, its `compile_commands.json`, its `.cg.yaml`). The MCP
 server has the same report as the `doctor` tool.
 
+`cg doctor --scip index.scip` (repeatable) checks SCIP index files: documents, occurrences with a position cg can
+read, definitions, and a warning (exit status 1) when the index is not usable: occurrences without a readable position
+(an indexer writing a range form cg does not know), no definitions, or an unreadable file. The same checks run when
+an index is imported (`cg index --scip`, and the Kotlin / Rust / C exact layers, which also warn when none of the
+index's definitions matched a declaration): `cg coverage` prints them as `warning:` lines (`warnings` in the JSON)
+instead of an exact layer that silently adds nothing.
+
 ## Update and uninstall
 
 | | update | uninstall |

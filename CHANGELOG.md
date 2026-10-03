@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- SCIP index health: `cg coverage` warns (`warnings`) when an imported index has occurrences but no readable
+  positions, no definitions, or (Kotlin / Rust / C exact layers) no definition matched a declaration, instead of
+  adding nothing silently; `cg doctor --scip FILE` (CLI and MCP `doctor(scip=...)`) checks index files
+  ([docs/install.md](docs/install.md)).
+
 - Kotlin exact mode on Kotlin 2.2 and mixed Kotlin / Java builds: the Java documents of the scip-java index the Kotlin
   plugin consumes become `java` nodes with exact Kotlin -> Java, Java -> Kotlin (file facades `AppKt.f()` included)
   and Java -> Java call / constructor edges, and `cg coverage` reports Java as `scip`. cg reads the build's Kotlin

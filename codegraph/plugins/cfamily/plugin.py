@@ -185,6 +185,8 @@ class CFamilyPlugin(LanguagePlugin):
                 if scip_path:
                     self._import_scip(scip_path, stats)
                     mode = "scip"
+                    if self._scip_warning:
+                        scip_info["warning"] = self._scip_warning
             else:
                 scip_info = {"status": "no compile_commands.json found; heuristic mode. Generate one with "
                                        "`cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON` or `bear -- make` (docs/native.md)"}
@@ -474,6 +476,7 @@ class CFamilyPlugin(LanguagePlugin):
                         stats["fqn_from_scip"] += 1
                 if (rel, nid) not in sym_nodes[sym]:
                     sym_nodes[sym].append((rel, nid))
+        self._scip_warning = scipread.native_warning(path, idx, stats)
         # pure-virtual / declaration-only methods: the symbol is only ever declared
         for rel, doc in idx.docs.items():
             f = self.files.get(rel)

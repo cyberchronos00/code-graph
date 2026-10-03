@@ -310,6 +310,10 @@ class ExactLayer:
                 matched += 1
         st["scip_defs_matched"] = matched
         st["scip_defs_unmatched"] = unmatched
+        w = scipread.health_warning(Path(path).name, idx.occurrences, idx.positioned, None if not matched + unmatched
+                                    else matched + unmatched, matched, "the Kotlin declarations")
+        if w:
+            st["scip_warning"] = w
         jdocs = {p: d for p, d in idx.docs.items() if p.endswith(".java")}
         jowners = self._java_nodes(jdocs, sym, st) if jdocs else {}
         covered = set(kdocs)

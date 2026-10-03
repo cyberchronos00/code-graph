@@ -44,6 +44,29 @@ class Index:
     docs: dict[str, Doc]
     # symbol -> list of (path, Occ) definitions (scip-clang: also forward definitions/declarations)
     defs: dict[str, list] = field(default_factory=dict)
+    occurrences: int = 0     # non-local occurrences read
+    positioned: int = 0      # ... of which carried a range cg can read
+
+
+def has_position(o) -> bool:
+    """The occurrence carries a range in a form cg reads (packed `range` of 3 / 4 ints, or a typed range)."""
+    return len(o.range) in (3, 4) or o.HasField("single_line_range") or o.HasField("multi_line_range")
+
+
+def health_warning(name: str, occurrences: int, positioned: int, definitions: int | None = None,
+                   matched: int | None = None, what: str = "the syntax layer's declarations") -> str | None:
+    """A warning for an index cg could not use although it is not empty, else None. Reported in `cg coverage`
+    (`warnings`) and by `cg doctor --scip`, instead of an exact layer that silently adds nothing."""
+    if occurrences and not positioned:
+        return (f"SCIP index {name}: {occurrences} occurrences but none with a usable position (range missing or in a "
+                "form cg does not read): no edges could be placed; regenerate it, or report the indexer version")
+    if occurrences and definitions == 0:
+        return (f"SCIP index {name}: {occurrences} occurrences but 0 definitions (symbols cg maps to nodes): nothing "
+                "imported; check the indexer and that the index belongs to this project")
+    if definitions and matched == 0:
+        return (f"SCIP index {name}: 0 of {definitions} definitions matched {what}: the exact layer added no edges; "
+                "check that the index was built from these sources (same paths, same revision)")
+    return None
 
 
 def _rng(r) -> tuple[int, int, int, int]:
@@ -83,6 +106,7 @@ def load(path: str | Path) -> Index:
     idx.ParseFromString(Path(path).read_bytes())
     docs: dict[str, Doc] = {}
     seen: dict[str, set] = {}
+    out_occ = [0, 0]
     for d in idx.documents:
         doc = docs.get(d.relative_path)
         if doc is None:
@@ -92,6 +116,9 @@ def load(path: str | Path) -> Index:
         for o in d.occurrences:
             if o.symbol.startswith("local ") or not o.symbol:
                 continue
+            out_occ[0] += 1
+            if has_position(o):
+                out_occ[1] += 1
             sl, sc, el, ec = occ_range(o)
             key = (sl, sc, ec, o.symbol, o.symbol_roles)
             if key in s:
@@ -105,7 +132,8 @@ def load(path: str | Path) -> Index:
         for si in d.symbols:
             if not si.symbol.startswith("local "):
                 doc.symbols.setdefault(si.symbol, si)
-    out = Index(idx.metadata.tool_info.name, idx.metadata.tool_info.version, docs)
+    out = Index(idx.metadata.tool_info.name, idx.metadata.tool_info.version, docs, occurrences=out_occ[0],
+                positioned=out_occ[1])
     for doc in docs.values():
         doc.occs.sort(key=lambda o: (o.line, o.col))
         for o in doc.occs:
@@ -156,3 +184,11 @@ def descriptors(symbol: str) -> tuple[str, list[tuple[str, str]]] | None:
 
 def is_project_symbol(idx: Index, symbol: str) -> bool:
     return symbol in idx.defs
+
+
+def native_warning(path, idx: Index, stats: dict) -> str | None:
+    """health_warning for a native plugin's import (rust-analyzer, scip-clang): matched = definitions placed on a
+    syntax-layer item, the rest became synthetic nodes."""
+    m = stats.get("scip_defs_matched", 0)
+    return health_warning(Path(path).name, idx.occurrences, idx.positioned,
+                          (m + stats.get("scip_defs_synthetic", 0)) or None, m, "the syntax layer's items")

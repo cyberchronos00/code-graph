@@ -129,6 +129,8 @@ class RustPlugin(LanguagePlugin):
             if scip_path:
                 self._import_scip(scip_path, stats)
                 mode = "scip"
+                if self._scip_warning:
+                    scip_info["warning"] = self._scip_warning
                 tinfo = self._target_scips(stats)
                 if tinfo:
                     scip_info["targets"] = tinfo
@@ -505,6 +507,8 @@ class RustPlugin(LanguagePlugin):
                     nid = self.nid(it)
                     stats["scip_defs_matched" if target is None else "target_scip_defs_matched"] += 1
                 sym_nodes[sym].append((rel, nid))
+        if target is None:
+            self._scip_warning = scipread.native_warning(path, idx, stats)
         attrs = {"exact_target": target} if target else {}
         for rel, doc in idx.docs.items():
             rf = self.files.get(rel)
