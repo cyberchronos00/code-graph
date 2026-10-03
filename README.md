@@ -282,6 +282,9 @@ $ cg platforms divergence --db out/app.db      # abridged
 
 Details: [docs/platforms.md](docs/platforms.md).
 
+Port gaps between two platform apps (an iOS app and its Android port): `cg parity --db ios.db --against android.db`
+lists the types, functions, enum cases and constants with no counterpart ([docs/parity.md](docs/parity.md)).
+
 Full reference: [docs/cli.md](docs/cli.md) · value facts: [docs/value-facts.md](docs/value-facts.md)
 
 ### 2. An MCP server for AI agents

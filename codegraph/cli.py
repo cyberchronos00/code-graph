@@ -172,6 +172,14 @@ def main(argv=None):
     p.add_argument("--unit-only", action="store_true", help="leave out UI / snapshot / screenshot tests")
     p.add_argument("--exclude-root", action="append", default=[], help="a symbol transitive paths must not run through (repeatable)")
     p.add_argument("--through-roots", action="store_true", help="keep paths through app entry points (@main, App.body, MainActivity)")
+    p = sub.add_parser("parity", help="port gap report: types, functions, enum cases and constants of --db with no "
+                                       "counterpart in --against (e.g. an iOS app and its Android port)")
+    p.add_argument("--db", required=True, help="source graph"); p.add_argument("--against", required=True, help="target graph")
+    p.add_argument("--map", help="JSON file {\"source name\": \"target name\"} for renames")
+    p.add_argument("--no-fuzzy", action="store_true", help="no fuzzy (shortened / plural word) name matches")
+    p.add_argument("--strip-prefix", action="append", default=[], help="a name prefix one side adds (`Vault` in "
+                   "VaultAddEditState for AddEditState), ignored when matching (repeatable)")
+    p.add_argument("--json", action="store_true"); p.add_argument("--max-items", type=int, default=200)
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
@@ -314,6 +322,12 @@ def main(argv=None):
     if a.cmd == "viz-plan":
         from .viz.server import export_plan_html
         print(export_plan_html(a.db, a.out, a.name, plans_root=a.plans_dir))
+        return
+    if a.cmd == "parity":
+        from . import parity as PA
+        mapping = json.loads(open(a.map, encoding="utf-8").read()) if a.map else None
+        res = PA.parity(a.db, a.against, mapping=mapping, fuzzy=not a.no_fuzzy, strip_prefixes=a.strip_prefix)
+        print(json.dumps(res, indent=1, default=str) if a.json else PA.render(res, max_items=a.max_items))
         return
     if a.cmd == "serve":
         from .viz.server import serve

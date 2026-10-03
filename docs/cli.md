@@ -92,6 +92,9 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `external [PATTERN] [--protocol P] [--source S] [--tls-off]`: external systems (databases, caches, brokers, mail
   relays, directories, file-transfer hosts, object stores, third-party HTTP hosts) with the code and connections
   using them, address source, credential source (location only) and TLS. See [external.md](external.md).
+- `parity --db SRC --against TGT [--map FILE] [--strip-prefix WORD]... [--no-fuzzy]`: port gap report, the types,
+  functions, enum cases and constants of SRC with no counterpart in TGT (an iOS app and its Android port), grouped by
+  folder, with the match confidence. See [parity.md](parity.md).
 - `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
   [channels-and-tests.md](channels-and-tests.md#tests).
 - `platforms [summary|divergence] [--target T] [--kind K]`: platform-specific code: the project's targets and where
@@ -686,8 +689,10 @@ options:
 
 ```
 usage: python -m codegraph.cli tests [-h] --db DB [--json] [--no-paths]
-                       [--min-confidence {heuristic,resolved,exact}]
-                       spec
+                [--min-confidence {heuristic,resolved,exact}]
+                [--max-depth MAX_DEPTH] [--unit-only]
+                [--exclude-root EXCLUDE_ROOT] [--through-roots]
+                spec
 
 positional arguments:
   spec                  Class.method or Class::method (either separator, any
@@ -700,6 +705,36 @@ options:
   --json
   --no-paths
   --min-confidence {heuristic,resolved,exact}
+  --max-depth MAX_DEPTH
+                        transitive tests at most N hops from the target (0:
+                        any depth)
+  --unit-only           leave out UI / snapshot / screenshot tests
+  --exclude-root EXCLUDE_ROOT
+                        a symbol transitive paths must not run through
+                        (repeatable)
+  --through-roots       keep paths through app entry points (@main, App.body,
+                        MainActivity)
+```
+
+### `parity`
+
+```
+usage: python -m codegraph.cli parity [-h] --db DB --against AGAINST [--map MAP] [--no-fuzzy]
+                 [--strip-prefix STRIP_PREFIX] [--json]
+                 [--max-items MAX_ITEMS]
+
+options:
+  -h, --help            show this help message and exit
+  --db DB               source graph
+  --against AGAINST     target graph
+  --map MAP             JSON file {"source name": "target name"} for renames
+  --no-fuzzy            no fuzzy (shortened / plural word) name matches
+  --strip-prefix STRIP_PREFIX
+                        a name prefix one side adds (`Vault` in
+                        VaultAddEditState for AddEditState), ignored when
+                        matching (repeatable)
+  --json
+  --max-items MAX_ITEMS
 ```
 
 ### `platforms`
