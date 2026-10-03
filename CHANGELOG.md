@@ -8,6 +8,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-03
+
+Swift properties as graph nodes (#72), Swift sources that did not parse (#73) with a per-file syntax error listing in
+`cg coverage` for every language, and the first round of the web view polish (#82 P0).
+
 ### Added
 
 - Swift computed properties, stored properties with `willSet` / `didSet` and `lazy var`s with an initializer are
@@ -22,6 +27,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `syntax_errors`, `syntax_error_files`, `parsed_with_errors`, `decls_lost`). An answer that involves such a file is
   marked partial and names it (#73).
 
+### Changed
+
+- The visual view (`serve`, `viz-export`) opens on a landing page with graph stats, a fuzzy search and the starter
+  queries as cards (the presets menu is gone), draws impact, downstream and path left to right in layers with large
+  caller layers folded into counted clusters that expand in place, keeps labels at 11 px or more, fits its toolbar
+  from 1024 px and loads without console errors or warnings; `shoot.mjs` checks this at 1280 and 1920 (#82).
+
 ### Fixed
 
 - Swift: tests whose suite has a `sourceLocation: SourceLocation = #_sourceLocation` default, tests between
@@ -30,13 +42,6 @@ commands, output and the graph schema; such changes are listed under **Changed**
   and continuation lines that start with a binary operator no longer break the parse, and members after a macro the
   grammar does not know are recovered into their type. On IceCubesApp the `EditorStore` class is whole again (31
   free functions are 50 methods). Files with syntax errors: IceCubesApp 7 → 3, isowords 18 → 5, Alamofire 8 → 1 (#73).
-
-### Changed
-
-- The visual view (`serve`, `viz-export`) opens on a landing page with graph stats, a fuzzy search and the starter
-  queries as cards (the presets menu is gone), draws impact, downstream and path left to right in layers with large
-  caller layers folded into counted clusters that expand in place, keeps labels at 11 px or more, fits its toolbar
-  from 1024 px and loads without console errors or warnings; `shoot.mjs` checks this at 1280 and 1920 (#82).
 
 ## [0.8.1] - 2026-10-03
 
@@ -549,7 +554,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/cyberchronos00/code-graph/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/cyberchronos00/code-graph/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/cyberchronos00/code-graph/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/cyberchronos00/code-graph/compare/v0.7.0...v0.7.1
