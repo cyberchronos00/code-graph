@@ -257,8 +257,13 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             e["reason"] = reason
         if status in ("skipped", "heuristic", "not_indexed"):
             e["hint"] = HINTS.get(lang)
-        if status == "not_indexed" and lang == "typescript" and "php" in plugins:
-            e["hint"] = "no tsconfig.json / package.json with typescript at the indexed root: index the frontend directory separately"
+        if status == "not_indexed" and lang == "typescript":
+            # the plugin did not run (nothing to install) or ran without source files: say which
+            if st is None:
+                e["reason"], e["hint"] = _ts_not_run(root, "php" in plugins)
+            else:
+                e["hint"] = ("check the tsconfig's `include` / `files` (they match no file under the indexed root), or "
+                             "list the source directories in .cg.yaml `include`")
         rep = reports.get(lang)
         if rep is not None and status not in ("skipped", "not_indexed"):
             fc = file_completeness(sc.files(exts), rep)
@@ -305,6 +310,37 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
     if blind_spots:
         out["blind_spots"] = blind_spots
     return out
+
+
+TS_CONFIGS = ("tsconfig.json", "jsconfig.json")
+
+
+def _ts_not_run(root, with_php: bool) -> tuple[str, str]:
+    """Why the TypeScript plugin did not run on a root that holds .ts / .js files, and what to index instead: the
+    directories (up to 3 levels down) that hold a tsconfig.json / jsconfig.json."""
+    root = Path(root)
+    has_pkg = (root / "package.json").is_file()
+    reason = ("the TypeScript plugin did not run: no tsconfig.json / jsconfig.json at the indexed root"
+              + (", and its package.json declares no typescript dependency, no package tsconfigs and no server framework"
+                 if has_pkg else " and no package.json"))
+    found = []
+    base = len(root.parts)
+    for dp, dns, fns in os.walk(root):
+        depth = len(Path(dp).parts) - base
+        dns[:] = sorted(d for d in dns if not d.startswith(".") and d not in SKIP_DIRS and d != "node_modules") \
+            if depth < 3 else []
+        if depth and any(f in fns for f in TS_CONFIGS):
+            found.append(os.path.relpath(dp, root).replace(os.sep, "/"))
+            if len(found) >= 6:
+                break
+    if found:
+        hint = (f"index a directory that holds a tsconfig.json ({', '.join(found[:5])}"
+                + (" ..." if len(found) > 5 else "") + ") separately, or add a root tsconfig.json")
+    elif with_php:
+        hint = "no tsconfig.json / package.json with typescript at the indexed root: index the frontend directory separately"
+    else:
+        hint = "add a tsconfig.json (or jsconfig.json) at the root naming the source files, or index the directory that holds one"
+    return reason, hint
 
 
 def _python_unmapped_hint(st: dict) -> str:

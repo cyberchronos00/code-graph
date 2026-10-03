@@ -88,6 +88,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   guard clauses (`if (Platform.OS !== 'ios') return`) and JS without semicolons
   ([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
 
+### Fixed
+
+- `cg coverage` no longer tells you to install Node.js when the TypeScript plugin did not run because the indexed
+  root is not a TypeScript project (no tsconfig.json / jsconfig.json, nothing in package.json): it names that reason
+  and the directories holding a tsconfig.json to index instead; a run that found no source files points at the
+  tsconfig `include` / `files`. The install hint stays for a skipped plugin (Node.js or the extractor missing).
+
 ## [0.6.0] - 2026-10-03
 
 ### Added
