@@ -69,7 +69,7 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     # native code (Rust, C, C++)
     "USES_TYPE": (True, "code/type refers to a type (struct, enum, union, trait, class, typedef)"),
     "ACCESSES_FIELD": (True, "code reads/writes a struct/class field or enum variant"),
-    "USES_VALUE": (True, "code refers to a constant, static/global variable or object-like macro"),
+    "USES_VALUE": (True, "code refers to an enum case, a constant, a static/global variable or an object-like macro"),
     "REFERENCES_FN": (True, "code/data takes a function as a value (callback, dispatch table, handler registration)"),
     "USES_UNSAFE": (True, "code contains an unsafe block or is an unsafe fn (sink node unsafe:<crate>)"),
     "GATED_BY": (True, "code compiled only under a condition: Cargo feature, cfg predicate or preprocessor macro"),

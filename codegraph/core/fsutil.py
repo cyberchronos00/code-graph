@@ -38,7 +38,7 @@ def keep_file(path: str | os.PathLike) -> bool:
 # Bumped whenever the cache key scheme changes: every extractor / SCIP cache key includes it, so entries written by
 # an older cg are never reused (TS and Dart drop them on the next write, the SCIP cache prunes them).
 # 2: keys hash file content (was size + mtime, which returned stale facts after a same-size edit with a restored mtime).
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 
 
 def content_key(path: str | os.PathLike) -> str:

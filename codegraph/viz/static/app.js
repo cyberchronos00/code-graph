@@ -617,7 +617,7 @@
     const conf = (st && st.confidence) || {}; const tot = (conf.exact || 0) + (conf.resolved || 0) + (conf.heuristic || 0) || 1
     const pc = (k) => Math.round(100 * (conf[k] || 0) / tot) + '%'
     const kinds = Object.keys((st && st.node_kinds) || {})
-    const chipKinds = ['method', 'function', 'class', 'page', 'route', 'component', 'table', 'column', 'config', 'env'].filter((k) => kinds.includes(k))
+    const chipKinds = ['method', 'function', 'class', 'page', 'route', 'component', 'table', 'column', 'config', 'env', 'enum_case', 'constant'].filter((k) => kinds.includes(k))
     box.innerHTML = `<h1>${esc((meta && meta.project) || 'code-graph')}</h1><div class="sub">indexed ${esc((meta && meta.indexed_at) || '?')}` +
       `${meta && meta.db ? ' · ' + esc(String(meta.db).replace(/^.*\//, '')) : ''}</div>` +
       (st ? `<div class="stats"><div class="stat"><div class="n">${fmt(st.nodes)}</div><div class="l">nodes</div><div class="kinds">${top(st.node_kinds, 6)}</div></div>` +

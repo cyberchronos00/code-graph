@@ -540,6 +540,39 @@ def setup_line(setup: dict) -> str:
             f" | config: {setup.get('config') or 'no .cg.yaml'}")
 
 
+# the node kinds of one concept per language (docs/schema.md "Enum cases and constants"): Rust and C / C++ keep theirs
+VALUE_KINDS = {"enum_case": "enum_case", "variant": "enum_case", "enumerator": "enum_case",
+               "constant": "constant", "const": "constant", "static": "constant", "global": "constant"}
+
+
+def value_counts(builder) -> dict:
+    """Per language: enum cases, constants (each language's kinds folded into the two concepts) and the USES_VALUE
+    references that point at them."""
+    out: dict = {}
+    for n in builder.nodes.values():
+        c = VALUE_KINDS.get(n.kind)
+        if c and n.lang:
+            e = out.setdefault(n.lang, {"enum_cases": 0, "constants": 0, "references": 0, "kinds": []})
+            e["enum_cases" if c == "enum_case" else "constants"] += 1
+            if n.kind not in e["kinds"]:
+                e["kinds"].append(n.kind)
+    for e in builder.edges.values():
+        if e.kind == "USES_VALUE":
+            n = builder.nodes.get(e.dst)
+            if n is not None and n.lang in out and n.kind in VALUE_KINDS:
+                out[n.lang]["references"] += 1
+    for e in out.values():
+        e["kinds"].sort()
+    return dict(sorted(out.items()))
+
+
+def value_lines(vc: dict | None) -> list[str]:
+    if not vc:
+        return []
+    return ["  values: " + "; ".join(f"{lang} {v['enum_cases']} enum cases, {v['constants']} constants, "
+                                     f"{v['references']} references ({', '.join(v['kinds'])})" for lang, v in vc.items())]
+
+
 def platform_lines(pc: dict | None) -> list[str]:
     """Per-target coverage of platform-specific code (codegraph/platforms.py): files and symbols each target builds."""
     if not pc or not pc.get("targets"):
@@ -646,6 +679,7 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
                     out.append(f"  {e['language']}: {e['excluded']} excluded")
                     out += _paths_lines(e, True)
         out += platform_lines((cov or {}).get("platforms"))
+        out += value_lines((cov or {}).get("values"))
         for w in (cov or {}).get("warnings") or ():
             out.append(f"  warning: {w}")
         bs = blind_spots(cov)

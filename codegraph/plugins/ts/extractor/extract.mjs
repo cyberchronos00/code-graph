@@ -514,6 +514,29 @@ function wrappedFn(init, depth = 0) {
 const isModuleExports = e => { e = unwrap(e); return !!e && ts.isPropertyAccessExpression(e) && e.getText() === 'module.exports' }
 const nodes = []                  // {id, kind, name, file, line, end_line, doc, parent, attrs}
 const declId = new Map()          // ts.Node (declaration) -> node id
+const valueIds = new Map()        // enum member / constant declaration -> enum_case / constant node id (#84)
+const valueNames = new Set()
+// a constant's initializer: a literal, a literal array / object / template, `-1`, `as const`; not a call or `new`
+function constInit(e) {
+  e = unwrap(e)
+  if (!e) return false
+  if (ts.isStringLiteralLike(e) || ts.isNumericLiteral(e) || ts.isBigIntLiteral?.(e) || ts.isRegularExpressionLiteral(e)
+      || e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword || e.kind === ts.SyntaxKind.NullKeyword) return true
+  if (ts.isPrefixUnaryExpression(e)) return constInit(e.operand)
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return constInit(e.left) && constInit(e.right)   // 1000 * 60
+  if (ts.isTemplateExpression(e)) return true
+  if (ts.isArrayLiteralExpression(e)) return true
+  if (ts.isObjectLiteralExpression(e)) return !e.properties.some(p => ts.isMethodDeclaration(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p) || (ts.isPropertyAssignment(p) && isFn(unwrap(p.initializer))))
+  return false
+}
+function addValue(kind, key, name, d, sf, r, parentId) {
+  const id = `${kind}:${key}`
+  if (usedIds.has(id)) return
+  usedIds.add(id)
+  nodes.push({ id, kind, name, file: r, line: lineOf(d, sf), end_line: sf.getLineAndCharacterOfPosition(d.end).line + 1, doc: null, parent: parentId, attrs: {} })
+  valueIds.set(d, id)
+  valueNames.add(d.name.text)
+}
 const fileNode = new Map()        // abs real path -> node id
 const modNode = new Map()   // module node id -> node object (re-export attrs)
 const usedIds = new Set()
@@ -614,6 +637,10 @@ for (const sf of sourceFiles) {
   if (real.endsWith('.vue')) continue // SFC: references are attributed to the component node
   const visit = (node, qual, parentId, inObj) => {
     let name = null, kind = null, body = null, wrapped = null
+    if (!qual && !inObj && ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
+        && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)
+        && ts.isVariableStatement(node.parent.parent) && node.parent.parent.parent === sf && constInit(node.initializer))
+      addValue('constant', `${r}#${node.name.text}`, node.name.text, node, sf, r, fid)     // `export const MAX = 3` (#84)
     if (ts.isFunctionDeclaration(node) && node.name) { name = node.name.text; kind = 'function'; body = node }
     else if (ts.isFunctionDeclaration(node) && !node.name && !qual && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default)) { name = 'default'; kind = 'function'; body = node }
     else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
@@ -736,6 +763,14 @@ for (const sf of sourceFiles) {
       declId.set(node, id)
       if (body && body !== node) declId.set(body, id)
       if (kind === 'type' && (ts.isInterfaceDeclaration(node) || (ts.isTypeAliasDeclaration(node) && ts.isTypeLiteralNode(node.type)))) ifaceMembers(node, q, id, r, sf)
+      if (ts.isEnumDeclaration(node)) for (const m of node.members) {
+        if (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name)) addValue('enum_case', `${r}#${q}.${m.name.text}`, `${q}.${m.name.text}`, m, sf, r, id)
+      }
+      if (ts.isClassDeclaration(node)) for (const m of node.members) {    // `static readonly MAX = 3`
+        const fl = ts.getCombinedModifierFlags(m)
+        if (ts.isPropertyDeclaration(m) && ts.isIdentifier(m.name) && (fl & ts.ModifierFlags.Static) && (fl & ts.ModifierFlags.Readonly) && constInit(m.initializer))
+          addValue('constant', `${r}#${q}.${m.name.text}`, `${q}.${m.name.text}`, m, sf, r, id)
+      }
       if (kind === 'type') return
       ts.forEachChild(node, c => visit(c, q, id))
       return
@@ -1849,6 +1884,19 @@ for (const sf of sourceFiles) {
           }
         }
       }
+    }
+    // enum members and constants (#84): `Color.Red`, `MAX`, an imported `MAX`, `ns.MAX`; resolved by the checker
+    if (ts.isImportSpecifier(node) && node.propertyName && valueNames.has(node.propertyName.text)) valueNames.add(node.name.text)
+    if (ts.isIdentifier(node) && valueNames.has(node.text) && !(node.parent && node.parent.name === node
+        && (ts.isVariableDeclaration(node.parent) || ts.isEnumMember(node.parent) || ts.isPropertyDeclaration(node.parent)))
+        && !ts.isImportSpecifier(node.parent) && !ts.isImportClause(node.parent) && !ts.isExportSpecifier(node.parent)
+        && !ts.isQualifiedName(node.parent)) {
+      let s = null
+      try { s = checker.getSymbolAtLocation(node) } catch { }
+      if (s && (s.flags & ts.SymbolFlags.Alias)) { try { s = checker.getAliasedSymbol(s) } catch { s = null } }
+      const vd = s && (s.valueDeclaration || (s.declarations || [])[0])
+      const vid = vd && valueIds.get(vd)
+      if (vid && vid !== cur) addEdge(cur, vid, 'USES_VALUE', r, lineOf(node, sf), 'exact', { how: 'checker' })
     }
     if (ts.isTypeReferenceNode(node)) {
       const sym = checker.getSymbolAtLocation(ts.isQualifiedName(node.typeName) ? node.typeName.right : node.typeName)

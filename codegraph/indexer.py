@@ -318,6 +318,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if pl:       # per-target coverage: what each declared target builds, conditions left unevaluated
         stats["coverage"]["platforms"] = {k: pl[k] for k in ("targets", "per_target", "unevaluated_conditions",
                                                              "unevaluated_samples", "conditions") if k in pl}
+    from .coverage import value_counts
+    vc = value_counts(builder)
+    if vc:       # enum cases / constants per language and the references resolved to them (#84)
+        stats["coverage"]["values"] = vc
     stats["completeness_seconds"] = round(t_tag - t_cov, 2)
     stats["scan_seconds"] = scan_seconds
     stats["nodes"] = len(builder.nodes)

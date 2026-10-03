@@ -846,7 +846,7 @@ def _vkey(nid: str, n, nvals: dict | None = None) -> str:
 
 
 ALT_KINDS = ("function", "method", "struct", "enum", "type_alias", "typedef", "class", "union", "macro", "const",
-             "static", "global")
+             "static", "global", "enum_case", "constant")
 
 
 def _swift_inherited(builder, nvals: dict, alts: dict, vkey_of: dict):

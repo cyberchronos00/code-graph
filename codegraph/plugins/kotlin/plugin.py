@@ -167,6 +167,12 @@ class Decl:
     name_line: int | None = None                        # line of the name identifier (SCIP definitions sit there)
 
 
+def _module_root(rel: str) -> str:
+    """The Gradle module directory of a source file: the path before its `src/` directory."""
+    i = rel.find("/src/")
+    return "" if rel.startswith("src/") or i < 0 else rel[:i]
+
+
 class KFile:
     def __init__(self, rel: str, src: bytes, tree):
         self.rel, self.src, self.tree = rel, src, tree
@@ -211,6 +217,8 @@ class KotlinPlugin(LanguagePlugin):
         self.api_base: dict[str, set] = defaultdict(set)    # Retrofit interface short name -> base URLs it is built with
         self.build_config = self._build_config(project.root, files)
         self.st = defaultdict(int)
+        self.values: dict[str, dict[str, str]] = defaultdict(dict)   # owner fqn / pkg:<package> -> name -> id
+        self.value_fq: dict[str, str] = {}                           # fqn -> id (imports name them)
         kfiles, failed = [], []
         errs: dict[str, list] = {}
         for rel in files:
@@ -413,10 +421,54 @@ class KotlinPlugin(LanguagePlugin):
                           c.end_point[0] + 1, cls.fqn if cls else None, [], anns, mods, recv,
                           self._params(params) if params is not None else {}, kf.test, self._name_line(c))
                 self._add_decl(dc, kind)
+            elif ty == "enum_entry" and cls is not None:
+                nm = self._name(c)
+                if nm:
+                    self._value(cls, "enum_case", nm, kf, c)
+                body = next((d for d in c.children if d.type == "class_body"), None)
+                if body is not None:                 # `GREEN { override fun label() = "g" }`: the enum's members
+                    self._decls(body, kf, cls, fn)
+            elif ty == "property_declaration" and fn is None and self._is_constant(c, cls):
+                nm = self._name(next((d for d in c.children if d.type == "variable_declaration"), c))
+                if nm:
+                    self._value(cls, "constant", nm, kf, c)
             elif ty in ("property_declaration",) and cls is None:
                 pass
             else:
                 self._decls(c, kf, cls, fn)
+
+    def _is_constant(self, c, cls: Decl | None) -> bool:
+        """`const val` anywhere; a `val` / `var` of an `object` or `companion object`; a file-level `val` (#84). No
+        custom getter (that is computed each read)."""
+        if any(x.type == "getter" for x in c.children) or re.search(r"\bget\s*\(", self.t(c).split("=", 1)[0]):
+            return False
+        _anns, mods = self._annotations(c)
+        if "const" in mods:
+            return True
+        if cls is None:
+            vb = next((x for x in c.children if x.type in ("val", "var") or self.t(x) in ("val", "var")), None)
+            return vb is not None and self.t(vb) == "val" and any(x.type == "=" for x in c.children)
+        return self.b.nodes.get(cls.id) is not None and \
+            self.b.nodes[cls.id].attrs.get("kotlin_kind") == "object"
+
+    def _value(self, cls: Decl | None, kind: str, nm: str, kf: KFile, n):
+        """An enum entry (`enum_case:<Enum>.<NAME>`) or a constant (`constant:<Type>.<NAME>`; a companion object's
+        is its class's, as code names it: `K.A`; `constant:<package>.<NAME>` at file level): the node USES_VALUE
+        edges point at (#84). Not a call target."""
+        owner = cls
+        if cls is not None and cls.name == "Companion" and cls.cls:
+            owner = self.classes.get(cls.cls) or cls
+        ofq = owner.fqn if owner is not None else (kf.package or "")
+        fq = f"{ofq}.{nm}" if ofq else nm
+        key = f"{fq}@{cls.id.split('@', 1)[1]}" if cls is not None and "@" in cls.id else fq
+        line = n.start_point[0] + 1
+        nid = self.b.add_node(kind, key, name=nm, fqn=fq, file=kf.rel, line=line, end_line=n.end_point[0] + 1,
+                              module=(fq.rsplit(".", 1)[0] if "." in fq else None), lang="kotlin",
+                              attrs={"test": True} if kf.test else {})
+        if cls is not None:
+            self.b.add_edge(cls.id, nid, "CONTAINS", kf.rel, line, EXACT)
+        self.values[owner.fqn if owner is not None else f"pkg:{kf.package}"].setdefault(nm, nid)
+        self.value_fq.setdefault(fq, nid)
 
     def _variant(self, kf: KFile, mods: set) -> str:
         return f"@{kf.source_set}" if "actual" in mods and kf.source_set else ""
@@ -520,6 +572,8 @@ class KotlinPlugin(LanguagePlugin):
     def _refs(self, n, kf: KFile, owner: str, decl: Decl | None, ctx: dict):
         for c in n.children:
             ty = c.type
+            if self.values and ty in ("navigation_expression", "identifier"):
+                self._value_ref(c, kf, owner, decl)
             if ty == "function_declaration":
                 d = self._decl_at(kf, c, ("function", "method"))
                 if d is not None:
@@ -761,6 +815,82 @@ class KotlinPlugin(LanguagePlugin):
         self.st["platform_source_set_files"] += 1
 
     # ------------------------------------------------------------------ resolution
+    def _value_ref(self, c, kf: KFile, owner: str, decl: Decl | None):
+        """USES_VALUE to an enum entry or constant named for certain (#84): `Color.RED`, `K.A` (a companion's),
+        `a.b.MAX`, or a bare `RED` / `MAX` that is imported, of the enclosing class or of the file's package, and not
+        a local or parameter of that name."""
+        line = c.start_point[0] + 1
+        if c.type == "navigation_expression":
+            kids = [x for x in c.children if x.type != "."]
+            if len(kids) != 2 or kids[1].type != "identifier":
+                return
+            tgt, nm = self.t(kids[0]), self.t(kids[1])
+            vid = None
+            if re.fullmatch(r"[A-Za-z_][\w.]*", tgt):
+                t = self.classes.get(tgt) or (self._class_of(tgt, kf) if "." not in tgt and tgt[:1].isupper() else None)
+                if t is not None:
+                    if t.name == "Companion" and t.cls:
+                        t = self.classes.get(t.cls) or t
+                    vid = self.values.get(t.fqn, {}).get(nm)
+                elif "." in tgt:
+                    vid = self.value_fq.get(f"{tgt}.{nm}")
+            if vid is not None and vid != owner:
+                self.b.add_edge(owner, vid, "USES_VALUE", kf.rel, line, EXACT, how="member")
+                self.st["value_refs"] += 1
+            return
+        p = c.parent
+        if p is None or p.type in ("variable_declaration", "parameter", "class_parameter", "function_value_parameter",
+                                   "import", "qualified_identifier", "package_header", "user_type", "type_identifier",
+                                   "enum_entry", "function_declaration", "class_declaration", "object_declaration",
+                                   "lambda_parameters", "annotation", "constructor_invocation", "label"):
+            return
+        if p.type == "navigation_expression" and p.children and p.children[0] != c:
+            return
+        if p.type == "call_expression" and p.children and p.children[0] == c:
+            return
+        if p.type == "value_argument" and c.next_sibling is not None and c.next_sibling.type == "=":
+            return
+        nm = self.t(c)
+        cls = self.classes.get(decl.cls) if decl is not None and decl.kind != "class" and decl.cls else \
+            (decl if decl is not None and decl.kind == "class" else None)
+        if cls is not None and cls.name == "Companion" and cls.cls:
+            cls = self.classes.get(cls.cls) or cls
+        vid = self.values.get(cls.fqn, {}).get(nm) if cls is not None else None
+        how = "own type"
+        if vid is None:
+            fq = kf.imports.get(nm)
+            vid, how = (self.value_fq.get(fq), "import") if fq else (None, how)
+        if vid is None and not kf.imports.get(nm):
+            vid, how = self.values.get(f"pkg:{kf.package}", {}).get(nm), "package"
+            vn = self.b.nodes.get(vid) if vid else None
+            if vn is not None and _module_root(vn.file) != _module_root(kf.rel):
+                vid = None                   # the same package in another Gradle module is not visible
+        if vid is None or vid == owner or self._shadowed(decl, nm, kf, line):
+            return
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", nm) and self._in_lambda(c):
+            return                           # `testApplication { client }`: a receiver's member may be meant
+        self.b.add_edge(owner, vid, "USES_VALUE", kf.rel, line, EXACT, how=how)
+        self.st["value_refs"] += 1
+
+    @staticmethod
+    def _in_lambda(c) -> bool:
+        a = c.parent
+        while a is not None and a.type not in ("function_declaration", "class_body", "source_file"):
+            if a.type in ("lambda_literal", "annotated_lambda"):
+                return True
+            a = a.parent
+        return False
+
+    def _shadowed(self, decl: Decl | None, nm: str, kf: KFile, line: int) -> bool:
+        """A parameter, local `val` / `var`, lambda parameter or destructured name `nm` in the function around `line`."""
+        if decl is None or decl.kind == "class":
+            return False
+        if nm in decl.types:
+            return True
+        lines = kf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:decl.end]
+        return bool(re.search(rf"(?:\b(?:val|var)\s+(?:\([^)]*)?|[(,]\s*|\{{\s*(?:[\w\s,]*,\s*)?){re.escape(nm)}\b\s*(?:[:=),]|->|in\b)",
+                              "\n".join(lines)))
+
     def _class_of(self, short: str, kf: KFile) -> Decl | None:
         fq = kf.imports.get(short)
         if fq and fq in self.classes:

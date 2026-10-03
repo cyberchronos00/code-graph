@@ -96,6 +96,7 @@ class PhpClass:
     props: dict
     consts: list
     methods: dict  # lower name -> PhpFunc
+    cases: list = field(default_factory=list)    # PHP 8.1 enum cases (#84)
 
 
 class ResolveCtx:
@@ -153,7 +154,8 @@ class PhpProgram:
             for c in rec.get("classes", []):
                 pc = PhpClass(fqcn=c["fqcn"], kind=c["kind"], file=f, line=c["line"], end_line=c["end_line"], doc=c.get("doc"),
                               extends=c["extends"], implements=c["implements"], traits=c["traits"], abstract=c.get("abstract", False),
-                              props={p["name"]: p for p in c["props"]}, consts=c["consts"], methods={})
+                              props={p["name"]: p for p in c["props"]}, consts=c["consts"], methods={},
+                              cases=c.get("cases") or [])
                 for m in c["methods"]:
                     fn = PhpFunc(id=f"method:{pc.fqcn}::{m['name']}", name=m["name"], cls=pc.fqcn, file=f, line=m["line"],
                                  end_line=m["end_line"], doc=m.get("doc"), params=m["params"], returns=m["returns"], facts=m["facts"],
@@ -396,6 +398,11 @@ class PhpProgram:
                                  file=c.file, line=p.get("line"), module=module_of(c.file), doc=p.get("doc"), lang="php",
                                  attrs={**({"types": p.get("types"), "default": p.get("default")} if (p.get("types") or p.get("default") is not None) else {}), **ta})
                 b.add_edge(cid, pid, "CONTAINS", c.file, p.get("line"), EXACT)
+            for kind, vals in (("enum_case", c.cases), ("constant", c.consts)):     # #84
+                for v in vals:
+                    vid = b.add_node(kind, f"{c.fqcn}::{v['name']}", name=v["name"], fqn=f"{c.fqcn}::{v['name']}",
+                                     file=c.file, line=v.get("line"), module=module_of(c.file), lang="php", attrs={**ta})
+                    b.add_edge(cid, vid, "CONTAINS", c.file, v.get("line"), EXACT)
             for m in c.methods.values():
                 b.add_node("method", f"{c.fqcn}::{m.name}", name=m.name, fqn=f"{c.fqcn}::{m.name}", file=c.file, line=m.line,
                            end_line=m.end_line, module=module_of(c.file), doc=m.doc, lang="php",
@@ -422,6 +429,21 @@ class PhpProgram:
         for s in self.scripts.values():
             b.add_node("script", s.file, name=s.file, file=s.file, line=1, module=module_of(s.file), lang="php",
                        attrs={"test": True} if is_test_path(s.file) else {})
+
+    def value_of(self, fqcn: str, name: str | None) -> str | None:
+        """The enum case or class constant `Class::NAME` names: the class's own, else an ancestor's or an
+        implemented interface's (constants are inherited; enum cases are not)."""
+        if not name or name == "class":
+            return None
+        for i, a in enumerate([fqcn] + [x for x in self.ancestors(fqcn, include_self=False) if x != fqcn]):
+            ac = self.cls(a)
+            if ac is None:
+                continue
+            if i == 0 and any(v["name"] == name for v in ac.cases):
+                return f"enum_case:{ac.fqcn}::{name}"
+            if any(v["name"] == name for v in ac.consts):
+                return f"constant:{ac.fqcn}::{name}"
+        return None
 
     def fn_node_exists(self, fn: PhpFunc) -> bool:
         return self.b.has(fn.id)
@@ -453,6 +475,9 @@ class PhpProgram:
                     c = self.cls(f["class"])
                     if c:
                         b.add_edge(fn.id, f"{c.kind}:{c.fqcn}", "REFERENCES", fn.file, line, EXACT)
+                        vid = self.value_of(c.fqcn, f.get("const"))
+                        if vid:
+                            b.add_edge(fn.id, vid, "USES_VALUE", fn.file, line, EXACT)
                 for h in handlers:
                     h(self, fn, f, ctx)
             b.current_gate = None

@@ -493,13 +493,13 @@ ENTRY CHAINS (entry point -> modified code)
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
 
-## `index (gating fixture, temp db)`  (503 chars)
+## `index (gating fixture, temp db)`  (529 chars)
 
 ```
-indexed tests/gating_fixture -> fixture.db: 24 nodes, 53 edges in <s>s; gated edges {'new_inventory': 10}
+indexed tests/gating_fixture -> fixture.db: 25 nodes, 55 edges in <s>s; gated edges {'new_inventory': 10}
 project=gating_fixture root=tests/gating_fixture indexed_at=<indexed_at> index_seconds=<s>
-nodes: method×16, class×5, property×3
-edges: CALLS×30(gated 10), CONTAINS×19, INJECTS×3, REFERENCES×1
+nodes: method×16, class×5, property×3, constant×1
+edges: CALLS×30(gated 10), CONTAINS×20, INJECTS×3, USES_VALUE×1, REFERENCES×1
 gate predicates: [new_inventory] Support\FeatureGate::oldMode=false; [new_inventory] Support\FeatureGate::usesNewInventory=true; [new_inventory] Support\Flags::on=true
 coverage gating_fixture: php 1 exact
 ```

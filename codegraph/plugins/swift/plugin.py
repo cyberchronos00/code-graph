@@ -52,6 +52,9 @@ from ...core.paths import rules as path_rules
 from ...core.plugin import GraphBuilder, LanguagePlugin, Project
 from ..native.ts import TreeSitterMissing
 
+VALUE_SITES = frozenset({"navigation_expression", "call_expression", "simple_identifier", "switch_statement",
+                         "equality_expression", "property_declaration", "parameter"})
+
 EXTS = (".swift",)
 VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
 TEST_IMPORTS = {"XCTest", "Testing"}
@@ -427,6 +430,8 @@ class SwiftPlugin(LanguagePlugin):
         self.props_in: dict[str, list[Decl]] = defaultdict(list)   # file -> property nodes
         self.stored_names: set[str] = set()      # names of plain stored properties anywhere in the project
         self.stored_in: dict[str, set[str]] = defaultdict(set)    # type fqn -> its stored property names
+        self.values: dict[str, dict[str, str]] = defaultdict(dict)  # type fqn ("" file level) -> case/constant -> id
+        self.globals_: dict[str, list] = {}      # file-level constant name -> [(id, file, test, private)]
         self.prop_refs: list[tuple] = []         # (owner, name, receiver | None, line, sf, decl, write)
         self.sigs: dict[str, list] = defaultdict(list)   # function / init node id -> [((label, optional), ...)]
         self.http: list[dict] = []
@@ -782,6 +787,15 @@ class SwiftPlugin(LanguagePlugin):
                     self._add(d, "view body")
                 elif nm:
                     self._prop_decl(c, nm, sf, cls)
+            elif ty == "enum_entry" and cls is not None:
+                for x in c.children:
+                    if x.type == "simple_identifier":
+                        self._value(cls, "enum_case", self.t(x), sf, x)
+            elif ty == "property_declaration" and cls is None and self._top_let(c) and \
+                    not re.match(r"Package(@swift-[\d.]+)?\.swift$", os.path.basename(sf.rel)):
+                nm = self._name(c)
+                if nm:
+                    self._value(None, "constant", nm, sf, c)
             elif ty == "protocol_property_declaration" and cls is not None:
                 nm = (self._name(c) or "").split()[-1:]     # `var isShown: Bool { get }`: a conformer has it (#86)
                 nm = nm[0] if nm else None
@@ -790,6 +804,41 @@ class SwiftPlugin(LanguagePlugin):
                     req.append(nm)
             elif ty not in ("lambda_literal", "statements", "function_body"):
                 self._decls(c, sf, cls)
+
+    @staticmethod
+    def _top_let(c) -> bool:
+        """A file-level `let` (not `var`) binding a single name: a constant."""
+        vb = next((x for x in c.children if x.type == "value_binding_pattern"), None)
+        return vb is not None and vb.text.strip() == b"let" and sum(x.type == "pattern" for x in c.children) == 1
+
+    def _value(self, cls: Decl | None, kind: str, nm: str, sf: SFile, n):
+        """An enum case (`enum_case:<Type>.<case>`) or a constant (`constant:<Type>.<name>`, `constant:<name>`
+        for a file-level `let`): a node under its type that USES_VALUE edges point at (#84). Not a call target,
+        so no CALLS edge changes."""
+        fq = f"{cls.fqn}.{nm}" if cls else nm
+        line = n.start_point[0] + 1
+        key = fq
+        _attrs, mods = self._mods(n)
+        private = cls is None and bool(mods & {"private", "fileprivate"})
+        if private:
+            key = f"{fq}#{sf.rel}"        # a file's own `private let ray`
+        prev = self.b.nodes.get(f"{kind}:{key}")
+        if prev is not None and (prev.file, prev.line) != (sf.rel, line):
+            if cls is None and prev.file != sf.rel:
+                key = f"{fq}#{sf.rel}"    # another file's (another module's) `let jsonDecoder`: a symbol of its own
+                if f"{kind}:{key}" in self.b.nodes:
+                    key = f"{key}@{line}"
+            else:
+                key = f"{fq}@{line}"      # another `#if` branch's definition: the platform pass links the two
+        nid = self.b.add_node(kind, key, name=nm, fqn=fq, file=sf.rel, line=line, end_line=n.end_point[0] + 1,
+                              module=cls.fqn if cls else None, lang="swift",
+                              attrs={"test": True} if sf.test else {})
+        if cls is not None:
+            self.b.add_edge(cls.id, nid, "CONTAINS", sf.rel, line, EXACT)
+            self.values[cls.fqn].setdefault(nm, nid)
+        else:
+            self.globals_.setdefault(nm, []).append((nid, sf.rel, sf.test, private))
+            self.values[""].setdefault(nm, nid)
 
     def _props(self, body, d: Decl, sf: SFile):
         for x in body.children:
@@ -813,6 +862,8 @@ class SwiftPlugin(LanguagePlugin):
         attrs, mods = self._mods(c)
         lazy = "lazy" in mods and any(x.type == "=" for x in c.children)
         if not (comp or obs or lazy):
+            if mods & {"static", "class"}:
+                self._value(cls, "constant", nm, sf, c)    # `static let shared = …` (#84)
             self.stored_names.add(nm)
             self.stored_in[cls.fqn].add(nm)     # hides a protocol extension's default of that name
             return
@@ -960,6 +1011,8 @@ class SwiftPlugin(LanguagePlugin):
                     self._refs(SimpleNamespace(children=[c]), sf, d.id, d, ctx)
                     continue
             ty = c.type
+            if self.values and ty in VALUE_SITES:
+                self._value_refs(c, sf, owner, decl)
             if ty in ("function_declaration", "init_declaration"):
                 d = self._decl_at(sf, c, ("function", "method"), "init" if ty == "init_declaration" else None)
                 if d is not None:
@@ -994,6 +1047,113 @@ class SwiftPlugin(LanguagePlugin):
             elif ty == "property_declaration" and decl is not None:
                 self._router_binding(c, ctx)
             self._refs(c, sf, owner, decl, ctx)
+
+    def _value_refs(self, c, sf: SFile, owner: str, decl: Decl | None):
+        """USES_VALUE edges to enum cases and constants where the type is certain (#84): `Type.case`,
+        `Type.constant`, a file-level constant by name, and `.case` where the contextual type is known: the
+        subject of a `switch`, the other side of `==` / `!=`, a `let x: T = .case`, a parameter default."""
+        ty = c.type
+        line = c.start_point[0] + 1
+        cls = self._encl_type(decl)
+        self._at = (sf, line)
+        if ty == "call_expression":
+            f = c.children[0] if c.children else None
+            if f is not None and f.type == "navigation_expression":
+                self._value_refs(f, sf, owner, decl)      # `E.c(1)`: the callee is not visited again
+            return
+        if ty == "navigation_expression":
+            target = c.child_by_field_name("target")
+            sfx = c.child_by_field_name("suffix")
+            nmn = sfx.child_by_field_name("suffix") if sfx is not None else None
+            if target is None or nmn is None or target.type not in ("simple_identifier", "navigation_expression"):
+                return
+            kind, tn = self._recv_type(self.t(target), decl, cls)
+            if kind == "meta":
+                self._value_edge(owner, tn, self.t(nmn), sf, line, "member")
+            return
+        if ty == "simple_identifier":
+            nm = self.t(c)
+            p = c.parent
+            if nm in self.values.get("", {}) and p is not None and p.type not in NOT_A_READ \
+                    and p.type not in ("navigation_suffix", "pattern", "value_argument_label") \
+                    and not (p.type == "navigation_expression" and p.child_by_field_name("target") != c) \
+                    and not (decl is not None and (self._bound(c, nm) or self._shadowed(decl, nm, sf, line))) \
+                    and (decl is None or self._local(decl, nm) is None) and not self._is_callee(c) \
+                    and not (cls is not None and nm in self.stored_in.get(cls.fqn, ())):
+                self._global_edge(owner, nm, sf, line)
+            return
+        if ty == "switch_statement":
+            subj = next((x for x in c.children if x.is_named and x.type not in ("switch_entry", "comment")), None)
+            tn = self._ctx_type(subj, decl, cls)
+            if tn is None:
+                return
+            for e in c.children:
+                if e.type != "switch_entry":
+                    continue
+                for sp in e.children:
+                    if sp.type == "switch_pattern":
+                        self._implicit(sp, tn, owner, sf)
+            return
+        if ty == "equality_expression":
+            kids = [x for x in c.children if x.is_named]
+            if len(kids) == 2:
+                for a, b in ((kids[0], kids[1]), (kids[1], kids[0])):
+                    if b.type in ("prefix_expression", "call_expression") and self.t(b).lstrip().startswith("."):
+                        tn = self._ctx_type(a, decl, cls)
+                        if tn is not None:
+                            self._implicit(b, tn, owner, sf)
+            return
+        if ty == "property_declaration":
+            ta = next((x for x in c.children if x.type == "type_annotation"), None)
+            val = next((x for x in c.children if x.type == "prefix_expression"), None)
+            if ta is not None and val is not None:
+                tn = self._type_name(ta.child_by_field_name("name"))
+                t = self._type(tn)
+                if t is not None:
+                    self._implicit(val, t.fqn, owner, sf)
+            return
+        if ty == "parameter":
+            nx = c.next_sibling
+            if nx is not None and nx.type == "=" and nx.next_sibling is not None \
+                    and nx.next_sibling.type == "prefix_expression":
+                tn = self._type_name(next((y for y in c.children if y.is_named and y.type != "simple_identifier"),
+                                          None))
+                t = self._type(tn)
+                if t is not None:
+                    self._implicit(nx.next_sibling, t.fqn, owner, sf)
+
+    def _ctx_type(self, n, decl: Decl | None, cls: Decl | None) -> str | None:
+        """The project type of an expression used as a contextual type for `.case`: `self` inside the type, a
+        parameter, a local or a property of known type."""
+        if n is None or n.type not in ("simple_identifier", "navigation_expression", "self_expression"):
+            return None
+        kind, tn = self._recv_type(self.t(n), decl, cls)
+        return tn if kind == "type" and tn in self.values else None
+
+    def _implicit(self, n, tn: str, owner: str, sf: SFile):
+        """`.case` / `.case(let x)` / `.case?` written in `n` (a prefix expression or a switch pattern)."""
+        txt = self.t(n).lstrip()
+        m = re.match(r"^(?:case\s+)?\.\s*([A-Za-z_]\w*)", txt)
+        if m:
+            self._value_edge(owner, tn, m.group(1), sf, n.start_point[0] + 1, "contextual type")
+
+    def _global_edge(self, owner: str, nm: str, sf: SFile, line: int):
+        """A file-level constant read by name: the one the reading file can see (its own `private let`, else a
+        single visible one: same module or a dependency, a test file's only from tests); none when ambiguous."""
+        cs = self.globals_.get(nm, ())
+        own = [c for c in cs if c[1] == sf.rel]
+        if not own:
+            own = [c for c in cs if not c[3] and (sf.test or not c[2])
+                   and (not self.spm or self.spm.sees(sf.rel, c[1]))]
+        if len(own) == 1 and own[0][0] != owner:
+            self.b.add_edge(owner, own[0][0], "USES_VALUE", sf.rel, line, EXACT, how="file constant")
+            self.st["value_refs"] += 1
+
+    def _value_edge(self, owner: str, tn: str, nm: str, sf: SFile, line: int, how: str):
+        vid = self.values.get(tn, {}).get(nm)
+        if vid is not None and vid != owner:
+            self.b.add_edge(owner, vid, "USES_VALUE", sf.rel, line, EXACT, how=how)
+            self.st["value_refs"] += 1
 
     @staticmethod
     def _is_callee(n) -> bool:

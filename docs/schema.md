@@ -63,6 +63,25 @@ config, env, table, column. Route attrs: `uri`, `method`, `framework`, `middlewa
 `handler_unresolved`. Route paths use `{param}`, `{param?}`, `{rest*}` (one or more segments) and `{rest*?}` (zero or more).
 **module** is derived from the path or namespace (e.g. `Http/Controllers/Admin`, `Services`, `Console/Commands`, `Domain/X`). **doc** holds the PHPDoc text.
 
+**Enum cases and constants.** Every language indexes them, under the kind names below, as children (CONTAINS) of their
+type or module. A reference to one is an edge to it, added only where the binding is certain. These nodes are never
+call targets: no CALLS edge points at them.
+To query across languages, match both concepts' kinds, e.g. `kind IN ('enum_case', 'variant', 'enumerator')`.
+
+| Language | Enum case | Constant | Reference edge | Id |
+|---|---|---|---|---|
+| Swift | `enum_case` (each `case`) | `constant`: stored `static let/var`, file-level `let` | USES_VALUE: `Type.case`, `Type.constant`, `.case` with a known contextual type (`switch` subject, `==`, a typed `let`, a parameter default), a file-level constant by name | `enum_case:<Type>.<case>`, `constant:<Type>.<name>`, `constant:<name>` (a `private` one or a second file's: `<name>#<file>`) |
+| Kotlin | `enum_case` (each entry) | `constant`: `const val`, a `val` / `var` of an `object` or `companion object` (named by its class), file-level `val`; no custom getter | USES_VALUE: `Type.NAME`, `pkg.NAME`, a bare name that is imported, of the enclosing class or of the package in the same Gradle module | `enum_case:<pkg>.<Enum>.<NAME>`, `constant:<pkg>.<Type>.<NAME>`, `constant:<pkg>.<NAME>` |
+| TypeScript / JavaScript | `enum_case` (each `enum` member) | `constant`: module-level `const` with a literal, array, object (no functions) or template initializer; `static readonly` class fields | USES_VALUE, resolved by the type checker (imports, aliases, `ns.NAME`) | `enum_case:<file>#<Enum>.<Member>`, `constant:<file>#<NAME>`, `constant:<file>#<Class>.<NAME>` |
+| Python | `enum_case`: members of an `enum.Enum` / `IntEnum` / `StrEnum` / `Flag` subclass | `constant`: module-level UPPER_CASE or `Final` names (not `TypeVar` / `NewType` / `NamedTuple`) | USES_VALUE: `Color.RED`, `mod.NAME`, an imported name, a bare module name with no local binding in the function | `enum_case:<module>.<Enum>.<NAME>`, `constant:<module>.<NAME>` |
+| PHP | `enum_case` (PHP 8.1 `case`) | `constant`: class / interface / enum `const` | USES_VALUE: `Class::NAME`, `self::` / `static::`, inherited from a parent class or an interface (enum cases are not inherited) | `enum_case:<Class>::<Case>`, `constant:<Class>::<NAME>` |
+| Rust | `variant` | `const`, `static` | ACCESSES_FIELD (a variant), USES_VALUE (a const or static) | see [native.md](native.md) |
+| C / C++ | `enumerator` | `global` (and object-like `macro`) | USES_VALUE | see [native.md](native.md) |
+
+Java and C# have no language plugin yet, so they are not covered. Dart enums stay class nodes.
+`cg coverage --details` adds a `values:` line, and `--json` adds `values` (per language: `enum_cases`, `constants`,
+`references`, `kinds`). The default summary does not show them.
+
 **Edge kinds** (✓ = propagates in `reaches`/`impact`):
 CALLS✓, IMPLEMENTED_BY✓ (interface method → impl), OVERRIDDEN_BY✓ (parent → override), BOUND_TO✓ (container binding),
 ROUTES_TO✓, USES_MIDDLEWARE✓, HANDLED_BY✓ (command → handle), SCHEDULES✓, DISPATCHES✓, LISTENED_BY✓,
@@ -73,7 +92,8 @@ TS: EXTENDS / IMPLEMENTS (class → project class or interface), OVERRIDDEN_BY /
 `via: structural` for a class used as an interface without `implements`), CALLS `attrs.recv` (the receiver's project
 classes when the call lands on an inherited method; Python too), IMPORTS, RENDERS✓ (template component usage), USES_COMPOSABLE✓, USES_STORE✓, HTTP_CALLS✓ (→ http endpoint), MATCHES_ROUTE✓
 (http endpoint → backend route, combined DB only), USES_LAYOUT, USES_I18N, REFERENCES_TYPE.
-Native: USES_TYPE✓, ACCESSES_FIELD✓ (field or enum variant), USES_VALUE✓ (const/static/global/object macro),
+Native: USES_TYPE✓, ACCESSES_FIELD✓ (field or enum variant), USES_VALUE✓ (const/static/global/object macro; in the
+other languages an `enum_case` or `constant`, see above),
 REFERENCES_FN✓ (function taken as a value: callbacks, dispatch tables, serde/clap attributes), USES_UNSAFE✓,
 GATED_BY✓ (→ feature/cfg/define), INCLUDES✓ (file → header); IMPLEMENTED_BY / OVERRIDDEN_BY also carry trait and
 virtual dispatch (`attrs.dispatch`), and IMPLEMENTS links a Rust type to its trait.

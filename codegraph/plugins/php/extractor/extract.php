@@ -323,7 +323,7 @@ function classLike(Stmt\ClassLike $cl, Ctx $c, \PhpParser\NameContext $nc, strin
     if ($cl instanceof Stmt\Interface_) $extends = array_map(fn($n) => ltrim($n->toString(), '\\'), $cl->extends);
     $c->parent = $extends[0] ?? null;
     $impl = ($cl instanceof Stmt\Class_ || $cl instanceof Stmt\Enum_) ? array_map(fn($n) => ltrim($n->toString(), '\\'), $cl->implements) : [];
-    $traits = []; $props = []; $methods = []; $consts = [];
+    $traits = []; $props = []; $methods = []; $consts = []; $cases = [];
     $cdoc = docText($cl);
     $docProps = [];
     if ($cdoc && preg_match_all('/@property(?:-read|-write)?\s+(\S+)\s+\$(\w+)/', $cdoc, $mm, PREG_SET_ORDER)) {
@@ -340,6 +340,8 @@ function classLike(Stmt\ClassLike $cl, Ctx $c, \PhpParser\NameContext $nc, strin
                 $props[] = ['name' => $p->name->toString(), 'types' => $ts, 'static' => $s->isStatic(), 'default' => $p->default ? literal($p->default) : null,
                     'line' => $s->getStartLine(), 'doc' => $pd];
             }
+        } elseif ($s instanceof Stmt\EnumCase) {
+            $cases[] = ['name' => $s->name->toString(), 'line' => $s->getStartLine()];
         } elseif ($s instanceof Stmt\ClassConst) {
             foreach ($s->consts as $k) $consts[] = ['name' => $k->name->toString(), 'value' => literal($k->value), 'line' => $s->getStartLine()];
         } elseif ($s instanceof Stmt\ClassMethod) {
@@ -359,7 +361,7 @@ function classLike(Stmt\ClassLike $cl, Ctx $c, \PhpParser\NameContext $nc, strin
     foreach ($docProps as $dp) $props[] = $dp + ['static' => false, 'default' => null, 'line' => $cl->getStartLine(), 'doc' => null];
     $abstract = $cl instanceof Stmt\Class_ ? $cl->isAbstract() : false;
     return ['kind' => $kind, 'fqcn' => $fq, 'extends' => $extends, 'implements' => $impl, 'traits' => $traits, 'abstract' => $abstract,
-        'line' => $cl->getStartLine(), 'end_line' => $cl->getEndLine(), 'doc' => $cdoc, 'props' => $props, 'consts' => $consts, 'methods' => $methods];
+        'line' => $cl->getStartLine(), 'end_line' => $cl->getEndLine(), 'doc' => $cdoc, 'props' => $props, 'consts' => $consts, 'cases' => $cases, 'methods' => $methods];
 }
 
 /** Collect class-likes anywhere in the tree (incl. anonymous classes in `return new class ...`). */

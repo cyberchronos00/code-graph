@@ -1424,6 +1424,8 @@ class PythonPlugin(LanguagePlugin):
         for m in prog.modules.values():
             n_env += self.env_reads(prog, b, m.id, m.tree, Ctx(m, None, None), top_only=True)
         refs = self.references_and_entries(prog, b, conf_ct, rp)
+        from .values import Values
+        val_st = Values(prog, b).run()
         # programs started in a subprocess (`python -m pkg.cli`, console scripts) -> their entry points (subproc.py)
         from .subproc import Subprocesses
         sub_st = Subprocesses(prog, b, Ctx, FuncInfo, ClassInfo, dotted, walk_body, rp).link()
@@ -1450,7 +1452,7 @@ class PythonPlugin(LanguagePlugin):
             tests_st["rootdir_import_names"] = n_alias
         st.update({"classes": len(prog.classes), "functions": sum(1 for f in prog.funcs.values() if f.kind == "function"),
                    "methods": sum(1 for f in prog.funcs.values() if f.kind == "method"), "imports": n_imp,
-                   "extends": n_ext, "calls": conf_ct, "env_reads": n_env, **refs,
+                   "extends": n_ext, "calls": conf_ct, "env_reads": n_env, **refs, "values": val_st,
                    **({"tests": tests_st} if tests_st else {}),
                    "parse_error_files": [e["file"] for e in prog.parse_errors[:20]],
                    "roots_mode": prog.root_plan.mode, "source_roots": prog.roots_report,
