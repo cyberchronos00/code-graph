@@ -487,8 +487,8 @@ code-graph indexes a project with zero configuration. The optional inputs are:
                   "true_settings": ["features.new_inventory.enabled"], "false_settings": []}]}
   ```
 
-- **Viz presets** (`serve --presets FILE`): a JSON list of canned queries for the preset menu,
-  `{id, label, mode, specs[, sinks]}`. Without one, the menu offers starter queries derived from your graph (a
+- **Viz presets** (`serve --presets FILE`): a JSON list of canned queries for the landing page's starter cards,
+  `{id, label, mode, specs[, sinks]}`. Without one, the landing page offers starter queries derived from your graph (a
   write route without an auth guard, the busiest tables, connections and env keys, the most-called functions;
   `cg starters`).
 - **Plans directory** (`--plans-dir DIR`; MCP server: `--plans DIR`). The default is `plans/`.

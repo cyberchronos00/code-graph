@@ -8,6 +8,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Changed
+
+- The visual view (`serve`, `viz-export`) opens on a landing page with graph stats, a fuzzy search and the starter
+  queries as cards (the presets menu is gone), draws impact, downstream and path left to right in layers with large
+  caller layers folded into counted clusters that expand in place, keeps labels at 11 px or more, fits its toolbar
+  from 1024 px and loads without console errors or warnings; `shoot.mjs` checks this at 1280 and 1920 (#82).
+
 ### Fixed
 
 - A bare free-function name (`cg tests formatPrice`, `cg impact initConnection`) resolves in every language, as

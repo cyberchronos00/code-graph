@@ -34,7 +34,7 @@ plans:
   dir: docs/plans                      # plans directory (--plans-dir)
   text_mention_dirs: [src, templates]  # where plan checks look for text mentions of a planned name
 viz:
-  presets:                             # canned queries for the visual view's preset menu
+  presets:                             # canned queries for the visual view's starter cards
     - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
 apps:                                  # monorepo: one `cg index <root>` indexes each app and links each pair
   - {name: api, root: apps/api, role: backend}
@@ -67,7 +67,7 @@ protocols:
 | `gates` | gate scenarios file, relative to the indexed root | `cg index --gates FILE` |
 | `plans.dir` | plans directory used by `plan`, `viz-plan`, `serve`, `impact` and the MCP server | `--plans-dir DIR` / `--plans DIR` |
 | `plans.text_mention_dirs` | directories scanned for text mentions of planned names | |
-| `viz.presets` | preset menu entries for `serve` (`{id, label, mode, specs[, sinks]}`) | `serve --presets FILE` |
+| `viz.presets` | starter cards for `serve` (`{id, label, mode, specs[, sinks]}`) | `serve --presets FILE` |
 | `platforms.targets` | the targets `--platform` and `cg platforms divergence` work with (windows, linux, macos, ios, android, web); default: Flutter platform folders, Expo `app.json`, React Native, Electron / Tauri, else the desktop targets plus those the conditions name ([platforms.md](platforms.md#targets)) | |
 | `platforms.paths` | glob → targets: files built only for those targets (`unix` and `native` work too) | |
 | `rust.targets` | Rust exact mode: one more rust-analyzer run per other target the `cfg` conditions name. `auto` (default: up to 3), `off`, or a list of platforms / target triples. A cold index takes about twice as long with them ([native.md](native.md)); `cg doctor <root>` shows the setting in effect | `CODEGRAPH_RUST_TARGETS` (takes precedence) |
@@ -223,7 +223,7 @@ doesn't mention stay unknown, and unknown code is treated as live. Example: `exa
 
 ## Viz presets and starter queries
 
-The preset menu in the visual view is built from, in order:
+The starter cards on the visual view's landing page are built from, in order:
 
 1. `serve --presets FILE` (a JSON list), or `viz.presets` in `.cg.yaml`;
 2. the sample presets for the bundled example apps, when their targets exist in the graph;
@@ -251,8 +251,13 @@ A presets file:
 ## Screenshots (`codegraph/viz/tools/shoot.mjs`)
 
 `node shoot.mjs <base-url> <out-dir>` against a running `serve`. Environment: `CHROME` (browser binary, default
-`/usr/bin/google-chrome`), `SHOTS` (JSON list of `{file, hash}`, where `hash` is the view's URL hash), `ONLY`
-(substring filter on file names). Install with `PUPPETEER_SKIP_DOWNLOAD=1 npm ci` in `codegraph/viz/tools`.
+`/usr/bin/google-chrome`), `SHOTS` (JSON list of `{file, hash | url, maxTop?, actions?}`, where `hash` is the view's
+URL hash, `''` the landing page, and `url` an absolute URL such as a `viz-export` file), `PRESETS=1` (also every
+query from `/api/presets`), `WIDTHS` (default `1280,1920`), `DPR` (default 2), `ONLY` (substring filter on file
+names), `NO_ASSERT=1` (report only). Each shot is saved per width as `<file>_<width>.png`, the measurements go to
+`<out-dir>/metrics.json`, and the script exits 1 when a shot has a console error or warning, a toolbar that overflows
+or wraps, a label under 11 px, more than 5% overlapping labels, a one-node module box or more than `maxTop` top-level
+items. Install with `PUPPETEER_SKIP_DOWNLOAD=1 npm ci` in `codegraph/viz/tools`.
 
 ## Plans directory
 

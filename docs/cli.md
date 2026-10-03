@@ -38,7 +38,7 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   [configuration.md](configuration.md#checking-a-config-file).
 - `starters --db DB [--json]`: starter queries derived from the graph, each with the matching command and MCP call
   (a write route without an auth guard, the most-written and most-read tables, the busiest connection and env key, the
-  page with the largest backend reach, the most-called functions). The visual view's preset menu offers them too.
+  page with the largest backend reach, the most-called functions). The visual view's landing page offers them too.
 - `link --backend DB --frontend DB --db OUT`: merge a backend and a frontend graph and match client HTTP calls to routes.
 - `reaches SPEC... [--gate auto/none/NAME]`: everything that depends on the targets, grouped by entry classification.
   On a base or interface method it also follows the overrides (listed as `overrides followed`), and the dependents
@@ -801,7 +801,7 @@ options:
   --port PORT
   --host HOST
   --plans-dir PLANS_DIR
-  --presets PRESETS     JSON list of canned queries for the preset menu
+  --presets PRESETS     JSON list of canned queries for the starter cards
                         (default: viz.presets in .cg.yaml, then the sample
                         presets that resolve, then the starter queries)
 ```

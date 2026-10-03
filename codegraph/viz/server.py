@@ -1,7 +1,8 @@
 """Local web UI over a code-graph DB: `python -m codegraph.cli serve --db out/combined.db [--port 8177]`.
 
 Stdlib HTTP server, read-only. Static page + vendored Cytoscape.js/fcose (no CDN). JSON API:
-  /api/search?q=&kind=            node lookup
+  /api/search?q=&kind=&fuzzy=1    node lookup (fuzzy: the query's characters in order)
+  /api/stats                      node / edge counts by kind, entry points by kind, edges by confidence (landing page)
   /api/graph?mode=&spec=&spec=&min_conf=&sinks=   subgraph = union of the query's evidence paths
   /api/node?id=                   docblock, file:line, source snippet, in/out edges with evidence
   /api/presets                    canned queries: --presets FILE or .cg.yaml viz.presets, the sample-app presets that
@@ -58,7 +59,9 @@ class App:
     def api(self, path: str, qs: dict) -> object:
         one = lambda k, d=None: (qs.get(k) or [d])[0]  # noqa: E731
         if path == "/api/search":
-            return G.search(self.st(), one("q", ""), one("kind") or None, int(one("limit", 30)))
+            return G.search(self.st(), one("q", ""), one("kind") or None, int(one("limit", 30)), fuzzy=one("fuzzy") == "1")
+        if path == "/api/stats":
+            return G.stats(self.st())
         if path == "/api/graph" and one("mode") == "plan":
             return G.build_plan(self.st(), (qs.get("spec") or [""])[0], self.plans, verify=one("verify") == "1")
         if path == "/api/plans":
@@ -179,6 +182,8 @@ def _write_html(st: GraphStore, g: dict, out: str, title: str) -> str:
     for name in ("cytoscape.min.js", "layout-base.js", "cose-base.js", "cytoscape-fcose.js"):
         js = (STATIC / "vendor" / name).read_text().replace("</script", "<\\/script")
         html = html.replace(f'<script src="vendor/{name}"></script>', f"<script>{js}</script>")
+    js = (STATIC / "layered.js").read_text().replace("</script", "<\\/script")
+    html = html.replace('<script src="layered.js"></script>', f"<script>{js}</script>")
     css = (STATIC / "app.css").read_text()
     html = html.replace('<link rel="stylesheet" href="app.css">', f"<style>{css}</style>")
     data = json.dumps({"graph": g, "details": details, "title": title}, default=str)

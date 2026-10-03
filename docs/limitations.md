@@ -97,7 +97,8 @@ Issues and pull requests that extend it are welcome.
     innermost method/function span;
   - text mentions only scan `app/` and `resources/views/` PHP/Blade and use exact names (identity columns, relation names).
 - Visual view: a few hundred nodes per view is comfortable; above 1,500 nodes the closest ones are kept (`truncated`);
-  layouts are force-directed (fcose) or layered (breadthfirst; does not handle module boxes well); serving is local
+  layouts are layered left to right (impact, downstream, path; depth or longest-path layers with barycenter ordering,
+  not a full Sugiyama crossing minimisation) or force-directed (fcose: reaches, plan); serving is local
   (127.0.0.1) and has no auth, so expose it only through an SSH tunnel or use `viz-export`.
 - Python / Django:
   - source roots are detected from the layout and packaging config, or set in `.cg.yaml`

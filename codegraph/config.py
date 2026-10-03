@@ -31,7 +31,7 @@ Records project-specific knowledge once, for the CLI, the MCP server and the vis
       dir: docs/plans                        # plans directory (--plans-dir)
       text_mention_dirs: [src, templates]    # where plan completeness scans for text mentions
     viz:
-      presets:                               # canned queries in the visual view's preset menu
+      presets:                               # canned queries in the visual view's starter cards
         - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
     apps:                                    # monorepo: `cg index <root>` indexes each app and links each pair
       - {name: api, root: apps/api, role: backend}

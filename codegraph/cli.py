@@ -103,7 +103,7 @@ def main(argv=None):
     p.add_argument("--no-client", action="store_true"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("serve", help="local web UI over a graph DB")
     p.add_argument("--db", required=True); p.add_argument("--port", type=int, default=8177); p.add_argument("--host", default="127.0.0.1"); p.add_argument("--plans-dir")
-    p.add_argument("--presets", help="JSON list of canned queries for the preset menu (default: viz.presets in .cg.yaml, then the sample presets that resolve, then the starter queries)")
+    p.add_argument("--presets", help="JSON list of canned queries for the starter cards (default: viz.presets in .cg.yaml, then the sample presets that resolve, then the starter queries)")
     p = sub.add_parser("viz-export", help="self-contained HTML view of one query (opens from disk, no server)")
     p.add_argument("mode", choices=["reaches", "impact", "downstream", "path"]); p.add_argument("specs", nargs="+")
     p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True)

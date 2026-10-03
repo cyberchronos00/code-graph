@@ -75,7 +75,7 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 - `starters()`: starter queries derived from the graph, each with the tool call to run: the write route without an
   auth guard that writes the most tables, the most-written and most-read tables, the busiest DB connection and env
   key, the page with the largest backend reach and the most-called functions. Every starter resolves to existing
-  nodes, so it is a good first call on an unfamiliar repository; the visual view's preset menu offers the same list.
+  nodes, so it is a good first call on an unfamiliar repository; the visual view's landing page offers the same list.
 
 Rust, C and C++ graphs use the same tools. Specs take native forms (`kv_core::store::Store::get`, `ns::Class::method`,
 `mod:crate::module`, a file path, `feature:`/`cfg:`/`define:`/`unsafe:`/`env:` nodes; see [native.md](native.md#query-specs)).

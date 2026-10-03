@@ -72,7 +72,7 @@ codegraph/
   plugins/stubs/     SCIP-indexer recipes for Go and Java (untested stubs)
   indexer.py         detect -> language plugins (+framework hooks) -> framework contribute -> completeness -> store -> entry tagging
   config.py          project config file (.cg.yaml at the indexed root): loading, validation, `cg config show`
-  starters.py        starter queries derived from the graph (CLI, MCP, the visual view's preset menu)
+  starters.py        starter queries derived from the graph (CLI, MCP, the visual view's landing page)
   coverage.py        per-language parser mode + file completeness, unsupported source types, scoped completeness of answers
   blindspots.py      index-time detectors for route / handler registrations no plugin models (file:line samples)
   link.py            cross-repo link: backend DB + frontend DB -> combined DB with MATCHES_ROUTE edges

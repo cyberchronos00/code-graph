@@ -4,49 +4,61 @@
 <meta charset="utf-8">
 <title>code-graph view</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8L12 3.5M4 8L12 12.5' stroke='%231d2330' stroke-width='1.4'/%3E%3Ccircle cx='4' cy='8' r='2.8' fill='%230072B2'/%3E%3Ccircle cx='12' cy='3.5' r='2.4' fill='%23009E73'/%3E%3Ccircle cx='12' cy='12.5' r='2.4' fill='%23D55E00'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header>
-  <div class="brand">code-graph</div>
-  <select id="preset" title="canned queries"><option value="">presets…</option></select>
-  <select id="mode" title="query">
-    <option value="reaches">reaches (what depends on it)</option>
-    <option value="impact">impact (callers → entry points)</option>
-    <option value="downstream">downstream (what it depends on)</option>
-    <option value="path">path (source → target)</option>
-    <option value="plan">plan overlay (plans/&lt;name&gt;.yaml)</option>
-  </select>
-  <div class="specbox"><input id="spec" list="sugg" placeholder="spec(s), comma separated (path: source, [via…,] target): Class::method, table.column, page:/route, connection:x, request_key:timezone …" autocomplete="off"><datalist id="sugg"></datalist></div>
-  <select id="sinks" title="downstream sinks">
-    <option value="table,column">sinks: tables (via columns)</option>
-    <option value="table">sinks: tables (direct only)</option>
-    <option value="table,column,route">sinks: tables + routes</option>
-    <option value="route,http">sinks: routes + http</option>
-    <option value="">sinks: all</option>
-  </select>
-  <select id="minconf" title="minimum edge confidence">
-    <option value="heuristic">≥ heuristic</option><option value="resolved">≥ resolved</option><option value="exact">exact only</option>
-  </select>
-  <button id="go">Show</button>
-  <span class="sep"></span>
-  <select id="layout" title="layout"><option value="fcose">layout: clustered</option><option value="breadthfirst">layout: layered</option></select>
-  <button id="collapse" title="collapse every module">collapse all</button>
-  <button id="expand" title="expand every module">expand all</button>
-  <button id="fit">fit</button>
+  <a class="brand" id="home" href="#" title="start page: overview, search and starter queries">code-graph</a>
+  <div class="grp query">
+    <select id="mode" title="query">
+      <option value="impact" title="callers of the spec, up to entry points">impact</option>
+      <option value="reaches" title="what depends on the spec (tables, connections, keys), with entry kinds and gates">reaches</option>
+      <option value="downstream" title="what the spec depends on, down to sinks">downstream</option>
+      <option value="path" title="one evidence path: source, [via…,] target">path</option>
+      <option value="plan" title="planned-change overlay (plans/&lt;name&gt;.yaml)">plan</option>
+    </select>
+    <div class="specbox"><input id="spec" list="sugg" placeholder="Search a symbol, table, route…" title="spec(s), comma separated: Class::method, table.column, page:/route, connection:x, request_key:timezone; path: source, [via…,] target" autocomplete="off"><datalist id="sugg"></datalist></div>
+    <button id="go">Show</button>
+  </div>
+  <div class="grp filters">
+    <select id="minconf" title="minimum edge confidence">
+      <option value="heuristic">≥ heuristic</option><option value="resolved">≥ resolved</option><option value="exact">exact only</option>
+    </select>
+    <select id="sinks" title="downstream sinks">
+      <option value="table,column">sinks: tables (via columns)</option>
+      <option value="table">sinks: tables (direct only)</option>
+      <option value="table,column,route">sinks: tables + routes</option>
+      <option value="route,http">sinks: routes + http</option>
+      <option value="">sinks: all</option>
+    </select>
+  </div>
+  <button id="more" class="more" title="view options" aria-haspopup="true" aria-expanded="false" aria-controls="viewgrp">⋯</button>
+  <div class="grp view" id="viewgrp">
+    <select id="layout" title="layout">
+      <option value="auto">layout: auto</option><option value="layered">layout: layered</option><option value="fcose">layout: clustered</option>
+    </select>
+    <button id="collapse" title="fold every module / caller cluster">collapse all</button>
+    <button id="expand" title="open every module / caller cluster">expand all</button>
+    <button id="fit" title="fit the whole view">fit</button>
+  </div>
 </header>
 <main>
+  <div id="status" aria-live="polite"></div>
   <div id="cy"></div>
-  <aside id="panel"><div class="hint">Search a node and pick a query, or choose a preset.<br><br>
-    Modules are boxes; click a <b>collapsed module</b> to open it, double-click an open module to fold it.
+  <div id="landing" hidden></div>
+  <button id="fitall" hidden></button>
+  <details id="legendbox"><summary>legend</summary><div id="legend"></div></details>
+  <div id="tip" hidden></div>
+  <aside id="panel"><div class="hint">Search a node and pick a query, or start from a starter query.<br><br>
+    Caller clusters and modules fold their members: click a cluster to open it, click again for the next 20, Esc folds.
     Click a node for its docblock, file:line evidence and source.</div></aside>
-  <div id="status"></div>
-  <div id="legend"></div>
 </main>
 <script src="vendor/cytoscape.min.js"></script>
 <script src="vendor/layout-base.js"></script>
 <script src="vendor/cose-base.js"></script>
 <script src="vendor/cytoscape-fcose.js"></script>
+<script src="layered.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

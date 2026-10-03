@@ -219,13 +219,37 @@ def node_detail(st: GraphStore, src: Sources, nid: str, limit=25) -> dict | None
             "out_count": n_out, "in_count": n_in}
 
 
-def search(st: GraphStore, q: str, kind: str | None = None, limit=30) -> list[dict]:
+def search(st: GraphStore, q: str, kind: str | None = None, limit=30, fuzzy: bool = False) -> list[dict]:
+    """Substring match on id / name / fqn; `fuzzy` adds names holding the query's characters in order (`mcget` ->
+    MastodonClient.get), ranked after the substring hits."""
     like = f"%{q}%"
-    sql = ("SELECT id,kind,name,fqn,file,line,module,entry_kind FROM nodes WHERE (id LIKE ? OR name LIKE ? OR fqn LIKE ?)"
+    cols = "id,kind,name,fqn,file,line,module,entry_kind"
+    sql = (f"SELECT {cols} FROM nodes WHERE (id LIKE ? OR name LIKE ? OR fqn LIKE ?)"
            + (" AND kind=?" if kind else "") +
            " ORDER BY (name = ?) DESC, (kind IN ('page','route','method','table','column','connection')) DESC, length(id) LIMIT ?")
     args = [like, like, like] + ([kind] if kind else []) + [q, limit]
-    return [dict(r) for r in st.q(sql, args)]
+    out = [dict(r) for r in st.q(sql, args)]
+    chars = [c for c in q if not c.isspace()]
+    if fuzzy and len(out) < limit and len(chars) >= 3:
+        pat = "%" + "%".join(c.replace("%", "").replace("_", "") for c in chars) + "%"
+        have = {r["id"] for r in out}
+        rows = st.q(f"SELECT {cols} FROM nodes WHERE (name LIKE ? OR fqn LIKE ?)" + (" AND kind=?" if kind else "") +
+                    " ORDER BY length(coalesce(fqn, name)), id LIMIT ?", [pat, pat] + ([kind] if kind else []) + [limit * 3])
+        out += [dict(r) for r in rows if r["id"] not in have][:limit - len(out)]
+    return out
+
+
+def stats(st: GraphStore) -> dict:
+    """Landing-page overview: node / edge counts by kind, entry points by kind, edges by confidence."""
+    m = st.meta()
+    nk = {r["kind"]: r["c"] for r in st.q("SELECT kind, COUNT(*) c FROM nodes GROUP BY kind ORDER BY c DESC, kind")}
+    ek = {r["kind"]: r["c"] for r in st.q("SELECT kind, COUNT(*) c FROM edges GROUP BY kind ORDER BY c DESC, kind")}
+    ent = {r["entry_kind"]: r["c"] for r in st.q(
+        "SELECT entry_kind, COUNT(*) c FROM nodes WHERE entry_kind IS NOT NULL AND entry_kind != '' GROUP BY entry_kind ORDER BY c DESC, entry_kind")}
+    conf = {r["confidence"]: r["c"] for r in st.q("SELECT confidence, COUNT(*) c FROM edges GROUP BY confidence")}
+    return {"project": m.get("project"), "indexed_at": m.get("indexed_at"), "nodes": sum(nk.values()), "edges": sum(ek.values()),
+            "node_kinds": nk, "edge_kinds": ek, "entry_points": sum(ent.values()), "entry_kinds": ent,
+            "confidence": {k: conf.get(k, 0) for k in ("exact", "resolved", "heuristic")}}
 
 
 PSEUDO = {"client": ("ext:clients", "external clients (snapshot)"), "issue": ("ext:issues", "filed issues (snapshot)"),
