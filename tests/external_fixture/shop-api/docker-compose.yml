@@ -1,0 +1,10 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: s3cr3t-fixture-pw
+  redis:
+    image: redis:7-alpine
+  app:
+    build: .
+    depends_on: [db, redis]

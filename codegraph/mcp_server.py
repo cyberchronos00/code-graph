@@ -3,7 +3,7 @@
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
 Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, starters, index, downstream, path,
-api_calls, resolutions, channels, bridges, protocol_links, llm_tools, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+api_calls, resolutions, channels, bridges, protocol_links, llm_tools, external_systems, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -649,6 +649,19 @@ def protocol_links(pattern: str | None = None, protocol: str | None = None, side
     packages). impact / reaches / path / downstream follow SENDS_TO / RECEIVED_BY / MATCHES_ENDPOINT as usual."""
     from .protocols.view import protocols as _pr, render_protocols
     return render_protocols(_pr(_st(), pattern, protocol=protocol, side=side, unmatched=unmatched))
+
+
+@tool
+def external_systems(pattern: str | None = None, protocol: str | None = None, source: str | None = None,
+                     tls_off: bool = False) -> str:
+    """External systems the code connects to (#40): databases, caches, brokers, mail relays, directories, file-transfer
+    hosts, object stores (external:<protocol>:<target>, target host:port when known from a DSN, .env.example or a
+    docker-compose service, else env:<KEY>) and third-party HTTP hosts; per system the code and logical connections
+    using it (CONNECTS_TO), the entry points reaching them, the address source and the credential source (location
+    only, never the value), TLS when known. protocol: postgres | mysql | redis | smtp | amqp | mongodb | ldap | ssh |
+    ftp | s3 | https ...; source: literal | env | env-example | compose | config; tls_off: only plaintext systems."""
+    from .external import external, render_external
+    return render_external(external(_st(), pattern, protocol=protocol, source=source, tls_off=tls_off))
 
 
 @tool

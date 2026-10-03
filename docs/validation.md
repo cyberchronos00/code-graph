@@ -638,3 +638,25 @@ What the findings are, from spot checks:
   calls in the SDK itself as dynamic dispatch; only runtime tool names (`name`, `tool_call.function.name`, ...) count now.
 - **langchain-ai/langgraph** (7dc9195) did not finish indexing within 400 s, before and after this change (deep type
   inference in the Python plugin); not measured.
+
+## External systems (#40)
+
+`cg index` with no flags, then `cg external` ([external.md](external.md)). The only graph change is additive:
+`external` nodes and their CONNECTS_TO / CONFIGURED_BY / CREDENTIAL_FROM edges; projects without env reads,
+connections or settings dicts are unchanged.
+
+| Project | Commit | Systems | New nodes / edges | What was found |
+|---|---|---|---|---|
+| netbox-community/netbox | 251458b | 3 postgres, 5 redis | +8 / +12 (38,028 / 140,181 before) | `DATABASES[default]` and `REDIS[tasks]` / `REDIS[caching]` in `configuration_example.py` and `configuration_testing.py` (loopback hosts: `config:<module>.<setting>` targets with `address_default`, literal test password as location only); `scripts/smoketest_configuration.py` reads `POSTGRES_HOST` / `REDIS_HOST` with their password keys. Postgres comes from the dependencies (`DATABASE` has no `ENGINE`) |
+| immich-app/immich `server/` | c5e06dc | 1 postgres | +1 / +2 (8,038 / 36,450 before) | `DB_URL` (protocol from the `pg` / `postgres` dependencies); the env schema is a zod DTO, so the main reader is not seen and the one user is `src/bin/sync-open-api.ts`, which assigns the variable; the compose files are under `../docker` |
+| outline/outline | 478e812 | 1 postgres, 1 https | +1 / +4 (13,358 / 52,050 before) | `DATABASE_URL` read by `server/config/database.js`, resolved through `.env.sample` to the compose service `postgres:5432` (resource outline, credential in the URL); `updates.getoutline.com`; Redis / S3 / SMTP keys go through an `environment.X` wrapper and are missed; three example.com origins called only from tests are left out |
+| bookstore-django (examples) | – | 1 redis | +1 / +2 (207 / 341 before) | `CELERY_BROKER_URL` from the environment with a loopback default |
+| a private Laravel API + Vue client pair | – | 1 postgres, 1 redis, 1 memcached (API) | +3 / +12 (API); client graph identical | a custom connection with its host and password keys, the Redis keys read by `config/database.php` / `config/reverb.php`, the memcached store of `config/cache.php`; the default connection is sqlite (no network system). Link results identical |
+
+Fixture (`tests/external_fixture`): a Laravel API, an Express worker and a Django project sharing `db` / `redis`
+services: after `cg link` the API's `connection:pgsql` and the worker's `pool()` use the same
+`external:postgres:db:5432`, and `reaches` lists `OrderController::index` and `POST /sync`. The fixture secrets
+appear nowhere in the database files.
+
+Seen on the way: column nodes from Laravel migrations differ between two runs of the same commit (a few columns
+attributed to another table), with or without this change.

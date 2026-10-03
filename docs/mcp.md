@@ -42,6 +42,9 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 - `llm_tools(pattern?, framework?, unmatched?, agent?)`: LLM tools and MCP tools / resources / prompts with their
   handler, the tables it reaches, the agents offering them and the code calling them; agents, dynamic dispatch and
   model calls (see [ai-tools.md](ai-tools.md));
+- `external_systems(pattern?, protocol?, source?, tls_off?)`: databases, caches, brokers, mail relays, directories,
+  file-transfer hosts, object stores and third-party HTTP hosts the code connects to, with the code and connections
+  using each, address and credential source (never the value) and TLS (see [external.md](external.md));
 - `tests_covering(target, min_confidence?, paths?)`: the tests that exercise a symbol, route or table, direct and
   transitive, closest first, with the test cases in the graph per framework (PHPUnit, Pest, Vitest, Jest,
   Playwright, Cypress, pytest, unittest; see [channels-and-tests.md](channels-and-tests.md#tests));

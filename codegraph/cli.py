@@ -16,6 +16,7 @@
   python -m codegraph.cli channels [PATTERN] --db ...   (who can join, which events publish, which client code listens)
   python -m codegraph.cli tests <spec> --db ...          (tests covering a symbol / route / table: direct + transitive)
   python -m codegraph.cli bridges [PATTERN] --db ... [--protocol capacitor] [--unmatched]   (web / native bridge calls)
+  python -m codegraph.cli external [PATTERN] --db ... [--protocol P] [--source S] [--tls-off]   (databases, caches, brokers, mail ... and who reaches them)
   python -m codegraph.cli tools [PATTERN] --db ... [--framework F] [--agent A] [--unmatched]   (LLM / MCP tools: handler, tables, agents, checks)
   python -m codegraph.cli protocols [PATTERN] --db ... [--protocol P] [--side send|receive] [--unmatched]   (every protocol endpoint: senders, receivers, checks)
   python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
@@ -133,6 +134,14 @@ def main(argv=None):
     p.add_argument("--side", choices=["send", "receive"]); p.add_argument("--max-items", type=int, default=60)
     p.add_argument("--unmatched", action="store_true", help="only endpoints with a check (no_receiver, no_sender, ambiguous, "
                                                             "schema_mismatch, unguarded) or an external peer")
+    p = sub.add_parser("external", help="external systems (databases, caches, brokers, mail, directories, file transfer, object "
+                                         "stores, third-party HTTP hosts): users, entry points, address and credential sources")
+    p.add_argument("pattern", nargs="?", help="external id, substring or glob (`external:postgres:*`, `redis`)")
+    p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("--protocol", help="postgres, mysql, redis, smtp, amqp, mongodb, ldap, ssh, ftp, s3, https, ...")
+    p.add_argument("--source", help="address or credential source: literal, env, env-example, compose, config")
+    p.add_argument("--tls-off", action="store_true", help="only systems known to be reached without TLS")
+    p.add_argument("--max-items", type=int, default=60)
     p = sub.add_parser("tools", help="LLM tools and MCP tools / resources / prompts: handler, tables it reaches, agents "
                                       "offering it, callers, checks; agents, dynamic dispatch, model calls")
     p.add_argument("pattern", nargs="?", help="tool name, substring or glob")
@@ -305,6 +314,12 @@ def main(argv=None):
         from .bridges import bridges, render_bridges
         res = bridges(st, a.pattern, protocol=a.protocol, unmatched=a.unmatched)
         print(json.dumps(res, indent=1, default=str) if a.json else render_bridges(res))
+        return
+    if a.cmd == "external":
+        from .external import external, render_external
+        res = external(st, a.pattern, protocol=a.protocol, source=a.source, tls_off=a.tls_off,
+                       max_items=max(a.max_items, 200) if a.json else a.max_items)
+        print(json.dumps(res, indent=1, default=str) if a.json else render_external(res, max_items=a.max_items))
         return
     if a.cmd == "tools":
         from .aitools import render_tools, tools

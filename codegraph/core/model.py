@@ -34,7 +34,7 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     "WRITES_CONFIG": (True, "code sets config key at runtime"),
     "READS_ENV": (True, "code/config reads env key"),
     "REFERS_TO": (True, "config value names a connection/other entity"),
-    "CONFIGURED_BY": (True, "connection defined by config key"),
+    "CONFIGURED_BY": (True, "connection or external system defined by a config / env key"),
     "CONFIG_CONTAINS": (True, "config parent key contains child key"),
     "MAPS_TO_TABLE": (False, "model class -> table"),
     "HAS_RELATION": (False, "model -> related model (hasMany, belongsTo, ...)"),
@@ -95,6 +95,10 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
                           "@ReactMethod / channel handler); attrs.platform"),
     "MATCHES_ENDPOINT": (True, "send-side endpoint -> receive-side endpoint of the same protocol whose name matches by the "
                                "protocol's rules (wildcards, {param} templates); attrs.pattern, segments"),
+    # external systems (#40, codegraph/external.py): external:<protocol>:<target>
+    "CONNECTS_TO": (True, "code or a logical connection -> external system it connects to (database, cache, broker, mail relay, "
+                          "directory, file-transfer host, object store); attrs.op, via"),
+    "CREDENTIAL_FROM": (False, "external system -> env / config node holding its password / token (never the value); attrs.kind"),
     # AI harnesses (#66): agents and the tools they expose (tools themselves are endpoint:llm_tool / mcp_tool nodes)
     "OFFERS_TOOL": (True, "agent -> a tool endpoint it gives the model (Agents SDK Agent(tools=), create_react_agent)"),
     "HANDS_OFF_TO": (True, "agent -> agent it can hand the conversation to (Agents SDK handoffs=[...])"),

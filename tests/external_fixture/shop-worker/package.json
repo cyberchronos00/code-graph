@@ -1,0 +1,1 @@
+{ "name": "shop-worker", "private": true, "dependencies": { "express": "^4.19.0", "pg": "^8.11.0", "ioredis": "^5.4.0" } }

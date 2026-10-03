@@ -44,6 +44,10 @@ AI harnesses ([ai-tools.md](ai-tools.md), no lang): endpoint `endpoint:llm_tool:
 `endpoint:mcp_resource:<server>/<uri template>`, `endpoint:mcp_prompt:<server>/<name>` (attrs `framework`, `description`,
 `params`, `schema_source`, `toolset`, `server`; a received one is an `llm_tool` entry); agent (`agent:<name>`, attrs
 `framework`, `model`, `tools`). Functions may carry `attrs.llm_dynamic_dispatch` and `attrs.llm_calls`.
+External systems ([external.md](external.md), no lang): external (`external:<protocol>:<target>`, target `host:port`,
+`config:<module>.<setting>` or `env:<KEY>`; attrs `protocol`, `host`, `port`, `confidence`, `address_source`,
+`address_at`, `address_default`, `deployment_name`, `image`, `resource`, `user`, `tls`, `credential_source`,
+`credential_at`, `setting`, `connection`; never a secret value).
 Web / native bridges ([bridges.md](bridges.md), no lang): endpoint (`endpoint:<protocol>:<module>#<method>`, protocol
 capacitor, react-native, flutter; `endpoint:flutter-event:<channel>`; desktop processes: `endpoint:electron-ipc:<channel>`,
 `endpoint:electron-preload:<key>#<member>`, `endpoint:tauri:<command>`; attrs `protocol`, `transport`, `namespace`,
@@ -86,6 +90,9 @@ Protocol links ([protocols.md](protocols.md)): SENDS_TO✓ (code → endpoint; a
 request / invoke / enqueue, `library`, `process`, `room`, `ack`, `schema`), RECEIVED_BY✓ (endpoint → handler),
 MATCHES_ENDPOINT✓ (send-side endpoint → receive-side endpoint matched by wildcard / template; attrs `sender_name`,
 `pattern`, `segments`, `ambiguous`).
+External systems ([external.md](external.md)): CONNECTS_TO✓ (code / connection / settings module → external; attrs `op`
+connect | query | configure, `via`), CONFIGURED_BY (external → env / config node), CREDENTIAL_FROM (external → env node
+holding the secret; attr `secret_kind`).
 AI harnesses ([ai-tools.md](ai-tools.md)): OFFERS_TOOL✓ (agent → tool endpoint), HANDS_OFF_TO✓ (agent → agent);
 SENDS_TO with `role` = offer (schema / tools list given to the model) or invoke (MCP client call).
 Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind; Python test → fixture and

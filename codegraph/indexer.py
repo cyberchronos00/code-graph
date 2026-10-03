@@ -226,6 +226,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if pl:
         pl["seconds"] = round(time.time() - t_pl, 2)
         stats["platforms"] = pl
+    # external systems (#40): env address keys, Laravel connections, .env.example / docker-compose -> external:<protocol>:<target>
+    from .external import attach as attach_external
+    if (ex := attach_external(builder, project.root)):
+        stats["external"] = ex
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

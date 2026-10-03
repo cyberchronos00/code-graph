@@ -18,6 +18,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   for #40; `cg tools` / MCP `llm_tools`; cg's own MCP tools are endpoints now instead of decorator references
   ([docs/ai-tools.md](docs/ai-tools.md), [#66](https://github.com/cyberchronos00/code-graph/issues/66)).
 
+- External systems: `external:<protocol>:<target>` nodes for databases, caches, brokers, mail relays, directories,
+  file-transfer hosts and object stores from Laravel connections, env keys read by code, Python settings dicts and
+  URLs, `.env.example` values, docker-compose services and DSNs (CONNECTS_TO, CONFIGURED_BY, CREDENTIAL_FROM with
+  the location of the secret, never its value; TLS); one node per system across linked repos; `cg external` / MCP
+  `external_systems` ([docs/external.md](docs/external.md), [#40](https://github.com/cyberchronos00/code-graph/issues/40)).
+
 ## [0.7.1] - 2026-10-03
 
 ### Fixed

@@ -78,6 +78,9 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `tools [PATTERN] [--framework F] [--agent A] [--unmatched]`: LLM tools and MCP tools / resources / prompts: handler,
   tables it reaches, agents offering them, callers and checks (no_receiver, no_sender, name_collision); agents,
   dynamic dispatch and model calls. See [ai-tools.md](ai-tools.md).
+- `external [PATTERN] [--protocol P] [--source S] [--tls-off]`: external systems (databases, caches, brokers, mail
+  relays, directories, file-transfer hosts, object stores, third-party HTTP hosts) with the code and connections
+  using them, address source, credential source (location only) and TLS. See [external.md](external.md).
 - `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
   [channels-and-tests.md](channels-and-tests.md#tests).
 - `platforms [summary|divergence] [--target T] [--kind K]`: platform-specific code: the project's targets and where
@@ -639,6 +642,29 @@ options:
   --unmatched           only endpoints with a check (no_receiver, no_sender,
                         ambiguous, schema_mismatch, unguarded) or an external
                         peer
+```
+
+### `external`
+
+```
+usage: cg external [-h] --db DB [--json] [--protocol PROTOCOL]
+                   [--source SOURCE] [--tls-off] [--max-items MAX_ITEMS]
+                   [pattern]
+
+positional arguments:
+  pattern               external id, substring or glob (`external:postgres:*`,
+                        `redis`)
+
+options:
+  -h, --help            show this help message and exit
+  --db DB
+  --json
+  --protocol PROTOCOL   postgres, mysql, redis, smtp, amqp, mongodb, ldap,
+                        ssh, ftp, s3, https, ...
+  --source SOURCE       address or credential source: literal, env, env-
+                        example, compose, config
+  --tls-off             only systems known to be reached without TLS
+  --max-items MAX_ITEMS
 ```
 
 ### `tests`
