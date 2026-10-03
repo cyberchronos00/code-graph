@@ -450,6 +450,28 @@ What the findings are, from spot checks:
   notification-extension preferences.
 - **immich:** the mobile app talks to native code through Pigeon-generated APIs only, which are not modelled yet.
 
+Native events, Cordova and dynamic names (#61), before → after on the same commits:
+
+| Project | Commit | Endpoints | Linked | New endpoints | Unresolved (dynamic) | Nodes / edges |
+|---|---|---|---|---|---|---|
+| mattermost-mobile | e5be311 | 42 → 49 | 32 → 33 | 7 react-native-event | 4 | 23813 / 95635 → 23820 / 95643 |
+| capacitor-plugins (library) | 87c0bb8 | 81 → 96 | 0 → 0 | 15 capacitor-event (29 `notifyListeners` sends) | 6 | 1192 / 1847 → 1221 / 1876 |
+| EddyVerbruggen/Toast-PhoneGap-Plugin (Cordova) | 55856bc | 0 → 2 | 0 → 2 | 2 cordova | 0 | |
+| social-app | db23528 | 33 → 33 | 1 → 1 | none | 0 | unchanged |
+
+- **mattermost-mobile:** `DimensionsChanged` links the Swift `sendEvent(name:)` to `useWindowDimensions`'
+  `NativeEventEmitter(RNUtils)` listener (the Android side emits through an enum value, not followed). Three native
+  events have "no JS listener found": their listeners sit in the local `@mattermost/*` packages and take the name from
+  a constant object or a `switch` on the event. Three `DeviceEventEmitter` listeners belong to the app's JS event bus
+  (emitted with names built elsewhere) and are not flagged. No existing endpoint or check changed.
+- **capacitor-plugins:** a library, so the events have no JS listener; `appRestoredResult`, `backButton` and the
+  local / push notification action events are emitted on Android only. The unresolved sends are `notifyListeners`
+  calls with a variable name (Browser, StatusBar).
+- **Toast-PhoneGap-Plugin:** `show` / `hide` from `www/Toast.js` link to the Java `execute` actions (compared with
+  `ACTION_SHOW_EVENT.equals(action)` constants) and the Objective-C `CDVPlugin` methods on both platforms.
+- **social-app:** no native events or Cordova calls; its `addListener` calls are navigation, `Keyboard` and a web-only
+  `EventEmitter`, none of which became endpoints.
+
 ## Desktop process boundaries (Electron, Tauri) and declared targets
 
 `cg index <repo>` with no flags and no `.cg.yaml`, then `cg bridges`; Rust in heuristic mode

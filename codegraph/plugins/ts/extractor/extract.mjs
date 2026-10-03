@@ -1640,6 +1640,91 @@ function ipcFacts(node, callee, cur, r, line) {
   }
 }
 const BRIDGE_SKIP = new Set(['then', 'catch', 'finally', 'bind', 'call', 'apply', 'toString', 'hasOwnProperty'])
+// bridge calls whose module / method / event name is not a literal cg can evaluate (cg bridges lists them, #61)
+const bridgeDynamic = []
+// events React Native itself emits through DeviceEventEmitter / NativeEventEmitter (no project native sender)
+const RN_CORE_EVENTS = new Set(['keyboardWillShow', 'keyboardDidShow', 'keyboardWillHide', 'keyboardDidHide', 'keyboardWillChangeFrame',
+  'keyboardDidChangeFrame', 'hardwareBackPress', 'appStateDidChange', 'memoryWarning', 'change', 'url', 'didUpdateDimensions',
+  'accessibilityServiceChanged', 'screenReaderChanged', 'reduceMotionChanged', 'appearanceChanged', 'websocketMessage', 'websocketOpen',
+  'websocketClosed', 'websocketFailed', 'didReceiveNetworkResponse', 'didReceiveNetworkData', 'didCompleteNetworkResponse',
+  'remoteNotificationReceived', 'localNotificationReceived', 'remoteNotificationsRegistered', 'remoteNotificationRegistrationError'])
+const EXPO_EMITTER_PKGS = ['expo-modules-core', 'expo']
+// a React Native / Expo event emitter: new NativeEventEmitter(Module), DeviceEventEmitter, NativeAppEventEmitter,
+// new EventEmitter(ExpoModule) (expo-modules-core), an Expo native module handle itself -> {module, conf, via}
+function rnEmitterOf(e, depth) {
+  e = unwrap(e)
+  if (!e || depth > 4) return null
+  const k = bridgeLib(e, ['DeviceEventEmitter', 'NativeAppEventEmitter'], RN_PKGS)
+  if (k) return { module: null, conf: k, via: e.text }
+  if (ts.isNewExpression(e) && ts.isIdentifier(e.expression)) {
+    const nm = e.expression.text
+    const lib = FW.importSource ? FW.importSource(e.expression) : null
+    if ((nm === 'NativeEventEmitter' && (!lib || RN_PKGS.includes(lib))) || (nm === 'EventEmitter' && lib && EXPO_EMITTER_PKGS.includes(lib))) {
+      const bm = e.arguments && e.arguments[0] ? bridgeModuleOf(e.arguments[0], 0) : null
+      return { module: bm ? bm.module : null, conf: lib ? 'exact' : 'resolved', via: `new ${nm}` }
+    }
+    return null
+  }
+  if (ts.isIdentifier(e) || ts.isPropertyAccessExpression(e)) {
+    const bm = bridgeModuleOf(e, 0)
+    if (bm && bm.protocol === 'react-native' && bm.api === 'expo-modules') return { module: bm.module, conf: bm.conf, via: 'expo module' }
+    let sym
+    try { sym = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(e) ? e.name : e) } catch { return null }
+    for (const d of (sym && sym.declarations) || []) {
+      const init = (ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d) || ts.isPropertyAssignment(d)) ? d.initializer : null
+      const r = init && rnEmitterOf(init, depth + 1)
+      if (r) return r
+    }
+  }
+  return null
+}
+// JS side of native -> app events: Capacitor Plugin.addListener('evt', cb), RN emitter.addListener('evt', cb)
+// events the JS side emits itself (DeviceEventEmitter.emit('evt') as an in-app event bus): not a native bridge
+const jsEmitted = new Set()
+function listenerFacts(node, callee, cur, r, line, testSf) {
+  if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'emit') {
+    const evt = strArg(node)
+    if (evt && rnEmitterOf(callee.expression, 0)) jsEmitted.add(evt)
+    return
+  }
+  if (testSf || !ts.isPropertyAccessExpression(callee) || !['addListener', 'addEventListener'].includes(callee.name.text)) return
+  const h = handlerNode(node.arguments[1]) || (cur && !cur.startsWith('module:') ? { id: cur, conf: 'heuristic' } : null)
+  const bm = bridgeModuleOf(callee.expression, 0)
+  const evt = strArg(node)
+  if (bm && bm.protocol === 'capacitor') {
+    if (!evt) { bridgeDynamic.push({ file: r, line, protocol: 'capacitor-event', what: `${bm.module}.addListener(<dynamic>)` }); return }
+    if (h) bridgeReceivers.push({ protocol: 'capacitor-event', module: bm.module, method: evt, handler: h.id, file: r, line, conf: bm.conf === 'exact' ? h.conf : bm.conf,
+      via: `${bm.module}.addListener`, external: bm.external })
+    return
+  }
+  const em = rnEmitterOf(callee.expression, 0)
+  if (!em) return
+  if (!evt) { bridgeDynamic.push({ file: r, line, protocol: 'react-native-event', what: `${em.via}.addListener(<dynamic>)` }); return }
+  if (!em.module && RN_CORE_EVENTS.has(evt)) return
+  if (h) bridgeReceivers.push({ protocol: 'react-native-event', module: evt, method: null, handler: h.id, file: r, line, conf: em.conf === 'exact' ? h.conf : em.conf,
+    via: `${em.via}.addListener`, emitter_module: em.module || undefined })
+}
+// Cordova: cordova.exec(ok, fail, 'Service', 'action', args) / exec(...) from 'cordova/exec'
+function cordovaFacts(node, callee, cur, r, line, testSf) {
+  let ok = false
+  if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'exec' && /(^|\.)cordova$/.test(unwrap(callee.expression).getText())) ok = true
+  else if (ts.isIdentifier(callee) && callee.text === 'exec') {
+    const lib = FW.importSource ? FW.importSource(callee) : null
+    let req = false
+    try {
+      const d = ((checker.getSymbolAtLocation(callee) || {}).declarations || [])[0]
+      const init = d && ts.isVariableDeclaration(d) && unwrap(d.initializer)
+      req = !!(init && ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'require' && init.arguments[0]
+        && ts.isStringLiteralLike(init.arguments[0]) && init.arguments[0].text === 'cordova/exec')
+    } catch { }
+    ok = lib === 'cordova/exec' || req
+  }
+  if (!ok || node.arguments.length < 4) return
+  const sv = a => { const u = unwrap(a); if (u && ts.isStringLiteralLike(u)) return u.text; const v = u ? strVals(u) : []; return v.length === 1 && !/[\u0001{]/.test(v[0]) ? v[0] : null }
+  const svc = sv(node.arguments[2]), act = sv(node.arguments[3])
+  if (!svc || !act) { bridgeDynamic.push({ file: r, line, protocol: 'cordova', what: `cordova.exec(${svc || '<dynamic>'}, ${act || '<dynamic>'})` }); return }
+  bridges.push({ src: cur, file: r, line, protocol: 'cordova', module: svc, method: act, conf: 'resolved', via: ['cordova.exec'], test: testSf || undefined })
+}
 const CAP_BUILTIN = new Set(['addListener', 'removeAllListeners', 'removeListener', 'notifyListeners'])   // listener plumbing of the bridge
 const CAP_CORE_EXPORTS = new Set(['Capacitor', 'registerPlugin', 'Plugins', 'WebPlugin', 'CapacitorHttp', 'CapacitorCookies', 'WebView', 'SplashScreen'])
 const bridgeCache = new Map()
@@ -2007,12 +2092,20 @@ function handleCall(node, cur, sf, r, encFn) {
   }
   // Electron IPC / context bridge / Tauri commands -> endpoint:<protocol>:<name> (codegraph/bridges.py)
   if (ts.isCallExpression(node)) ipcFacts(node, callee, cur, r, line)
+  if (ts.isCallExpression(node)) { listenerFacts(node, callee, cur, r, line, testSf); cordovaFacts(node, callee, cur, r, line, testSf) }
   // web / native bridge sends: Capacitor.nativePromise('Plugin', 'method', ...) / nativeCallback (the low-level bridge)
   if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && ['nativePromise', 'nativeCallback'].includes(callee.name.text)
       && node.arguments.length >= 2 && /(^|\.)(Capacitor|cap)$/.test(unwrap(callee.expression).getText())) {
     const pn = strArg(node), mn = ts.isStringLiteralLike(unwrap(node.arguments[1])) ? unwrap(node.arguments[1]).text : null
     if (pn && mn) bridges.push({ src: cur, file: r, line, method: mn, protocol: 'capacitor', module: pn, conf: 'exact', via: [callee.name.text], test: testSf || undefined })
   } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && !BRIDGE_SKIP.has(callee.name.text)) {
+    const ce = unwrap(callee.expression)
+    if (ce && ts.isElementAccessExpression(ce) && !(ce.argumentExpression && ts.isStringLiteralLike(ce.argumentExpression))) {
+      if (bridgeLib(ce.expression, ['NativeModules'], RN_PKGS))
+        bridgeDynamic.push({ file: r, line, protocol: 'react-native', what: `NativeModules[${ce.argumentExpression ? ce.argumentExpression.getText().slice(0, 40) : '?'}].${callee.name.text}` })
+      else if (bridgeLib(ce.expression, ['Plugins'], CAP_PKGS))
+        bridgeDynamic.push({ file: r, line, protocol: 'capacitor', what: `Plugins[${ce.argumentExpression ? ce.argumentExpression.getText().slice(0, 40) : '?'}].${callee.name.text}` })
+    }
     const bm = bridgeModuleOf(callee.expression, 0)
     if (bm && !(bm.protocol === 'capacitor' && CAP_BUILTIN.has(callee.name.text)) && !(bm.jsOnly && bm.jsOnly.includes(callee.name.text))) {
       const { jsOnly, ...fact } = bm
@@ -2162,6 +2255,6 @@ stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.cal
 stats.config = { tsconfig: noConfig ? null : (parsed.packageConfigs ? null : rel(tsconfigPath)), root_files: rootNames.length,
   ...(parsed.packageConfigs ? { package_tsconfigs: parsed.packageConfigs } : {}) }
 fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts,
-  subscriptions, bridges, bridge_receivers: bridgeReceivers, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
+  subscriptions, bridges, bridge_receivers: bridgeReceivers.filter(b => !(b.protocol === 'react-native-event' && jsEmitted.has(b.module))), bridge_dynamic: bridgeDynamic, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
   skipped_links: [...new Set(skippedLinks)].sort(), stats }))
 console.log(JSON.stringify(stats))

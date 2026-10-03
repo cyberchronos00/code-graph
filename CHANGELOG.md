@@ -18,6 +18,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
     `pytester`, `sh`, plumbum), `-c` snippets that only import a project module, and scripts copied from a project
     file or template (`manage.py-tpl`) before they run.
 
+- Bridges (#61): React Native native events (`RCTDeviceEventEmitter.emit` / `sendEvent` / `sendEventWithName` / Expo
+  `sendEvent` to `NativeEventEmitter` / `DeviceEventEmitter` `addListener`, `endpoint:react-native-event:<event>`),
+  Capacitor plugin events (`notifyListeners` to `Plugin.addListener`, `endpoint:capacitor-event:<Plugin>#<event>`),
+  and Cordova plugins (`cordova.exec` to `CordovaPlugin.execute` actions / `CDVPlugin` methods, services from
+  `plugin.xml` / `config.xml`, `endpoint:cordova:<Service>#<action>`). Bridge calls with a dynamic module / method /
+  event name are listed by `cg bridges` as `unresolved` (`stats.bridges.dynamic`). `cg bridges --protocol` accepts
+  every bridge protocol.
+
 ### Changed
 
 - CLI output (#75):

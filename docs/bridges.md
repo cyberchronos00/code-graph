@@ -20,6 +20,7 @@ JS / Dart caller --SENDS_TO--> endpoint:<protocol>:<module>#<method> --RECEIVED_
 | `react-native` | `endpoint:react-native:CalendarModule#createEvent` | `NativeModules.X`, destructuring from `NativeModules`, `TurboModuleRegistry.get[Enforcing]('X')`, `require('./NativeX').default`, Expo `requireNativeModule('X')` (`attrs.api = expo-modules`) | `getName()` modules with `@ReactMethod`, `Native*Spec` overrides (Java / Kotlin); `RCT_EXPORT_MODULE` / `RCT_EXPORT_METHOD` / `RCT_REMAP_METHOD` (Objective-C); `RCT_EXTERN_MODULE` / `RCT_EXTERN_METHOD` mapped to the Swift method; Expo `Name("X")` + `Function` / `AsyncFunction` |
 | `flutter` | `endpoint:flutter:samples.flutter.dev/battery#getBatteryLevel` | `MethodChannel('name').invokeMethod('m')` (also `invokeMapMethod` / `invokeListMethod`), with the channel resolved through locals, fields, statics, top-level constants, getters and `late` fields | the `MethodChannel` / `FlutterMethodChannel` / `methodChannelWithName:` handler: `call.method == "m"`, `when` / `switch` cases, `isEqualToString:` |
 | `flutter-event` | `endpoint:flutter-event:<channel>` | `EventChannel('name').receiveBroadcastStream()` | the channel's `StreamHandler` |
+| `cordova` | `endpoint:cordova:Toast#show` | `cordova.exec(ok, fail, 'Toast', 'show', args)`, `exec(...)` from `require('cordova/exec')` (plugin JS under a `www/` next to `plugin.xml` / `config.xml` is indexed) | a `CordovaPlugin` subclass's `execute`: `"show".equals(action)`, `action.equals(SHOW)`, `case "show":` (Java / Kotlin); `- (void)show:(CDVInvokedUrlCommand*)command` in a `CDVPlugin` (Objective-C), `@objc func show(_ command: CDVInvokedUrlCommand)` (Swift). The service name comes from the `<feature name="Toast">` entry of `plugin.xml` / `config.xml` (else the class name, `heuristic`) |
 | `pigeon` | `endpoint:pigeon:NativeSyncApi#hashAssets` | a Dart call on the generated `@HostApi()` class: a field / variable / parameter typed with it, `Api()`, or a Riverpod `ref.read(p)` / `ref.watch(p)` of `final p = Provider<Api>(...)` | the Kotlin / Java / Swift class implementing the generated interface / protocol (`class Impl : ImplBase(ctx), Api`, `extension Impl: Api`); a method defined in a superclass (`ImplBase`, up to 3 levels) is found there |
 
 Pigeon APIs come from the definition files (a Dart library importing `package:pigeon/` with `@HostApi()` /
@@ -39,8 +40,22 @@ git-ignored. Calls inside the definition files are not senders.
   (`flutterApi = XFlutterApi(messenger)`, `var api: XFlutterApi?`) and its method calls, or `XFlutterApi(m).f(...)`.
   The receiver is the Dart class implementing / extending the API.
 
+- **native events** (#61): `endpoint:react-native-event:<event>` from React Native native code
+  (`getJSModule(RCTDeviceEventEmitter::class.java).emit("evt", ...)`, a `sendEvent(ctx, "evt", ...)` helper call,
+  `[self sendEventWithName:@"evt" body:...]`, Swift `sendEvent(withName: "evt", ...)` / `sendEvent(name: "evt")`, Expo
+  `sendEvent("evt", ...)`) to a JS `addListener('evt', cb)` on `new NativeEventEmitter(Module)`,
+  `DeviceEventEmitter` / `NativeAppEventEmitter`, `new EventEmitter(ExpoModule)` or an Expo module handle; and
+  `endpoint:capacitor-event:<Plugin>#<event>` from `notifyListeners("evt", data)` in a Capacitor plugin class to
+  `Plugin.addListener('evt', cb)`. Event names may be constants (`const val EVT = "..."`). React Native's own events
+  (`keyboardDidShow`, `hardwareBackPress`, ...) and events the JS side emits itself (`DeviceEventEmitter.emit('x')`,
+  an in-app event bus) are not endpoints.
+
 For these endpoints `platforms_sending` lists the platforms that send, and `missing_on` is not computed (the
-receiver is the shared Dart code).
+receiver is the shared Dart / JS code). An event emitted natively with no JS listener in the repo has
+`no_listener` (shown as "no JS listener found"; not a check: the listener may sit in a library or use a dynamic
+name). A listener without a native sender is `no_sender` when the module is implemented in the repo (a
+`NativeEventEmitter(Module)` of a native module here, a Capacitor plugin whose native code is here), `external` when
+it comes from a package (`@capacitor/keyboard`), and unchecked for `DeviceEventEmitter` listeners of no known module.
 
 The ids follow the shared protocol endpoint model of the protocol epic
 ([#29](https://github.com/cyberchronos00/code-graph/issues/29) /
@@ -124,7 +139,7 @@ tauri:secret  received in: core  ! NOT REGISTERED (missing from generate_handler
 | `missing_on` | the method is received on some platforms but not on all targets that implement the module (for example a Kotlin `@ReactMethod` without the Objective-C export) |
 | `no_receiver` | the module is implemented in the repo but this method is not |
 | `external` | nothing in the repo implements the module (a published plugin package; `package` names it) |
-| `no_sender` / `test_sender_only` | a native method no JS / Dart code calls (library repos: expected) |
+| `no_sender` / `test_sender_only` | a native method no JS / Dart code calls (library repos: expected); for an event, a JS listener of a module implemented here that no native code emits |
 
 Expected platforms are the project's mobile targets (android, ios; macos only when some bridge module is
 implemented for it). They are narrowed by:
@@ -152,7 +167,9 @@ cg bridges [PATTERN] [--protocol P] [--unmatched] [--json] --db out/app.db
 
 `PATTERN` is an endpoint name, a substring or a glob (`Echo#echo`, `Echo`, `samples.flutter.dev/*`). Each
 endpoint lists its senders (with entry points reaching them), test senders and receivers per platform, and the
-checks. The MCP server has the same `bridges(pattern?, protocol?, unmatched?)` tool. `impact`, `downstream`,
+checks. Bridge calls whose module, method or event name is not a literal cg can evaluate (`NativeModules[name].f()`,
+`emitter.addListener(evt, cb)`, `cordova.exec(ok, fail, svc, action)`, `notifyListeners(eventName)`) are listed at
+the end as `unresolved` (`stats.bridges.dynamic`: count and up to 20 samples) instead of being dropped silently. The MCP server has the same `bridges(pattern?, protocol?, unmatched?)` tool. `impact`, `downstream`,
 `path` and `tests` accept endpoint ids (`endpoint:react-native:CalendarModule#createEvent`) and native methods
 (`CalendarModule.createEvent`, `com.rnapp.CalendarModule.createEvent`).
 
@@ -172,13 +189,15 @@ capacitor:Echo#vibrate  received on: android  ! MISSING ON ios
 
 ## Not covered yet
 
-- `BasicMessageChannel`; Pigeon `@EventChannelApi`; React Native events (`sendEvent` / `RCTEventEmitter` to
-  `NativeEventEmitter.addListener`) and Capacitor `notifyListeners`; Cordova plugins; native UI components
-  (`requireNativeComponent`, view managers, Expo views).
+- `BasicMessageChannel`; Pigeon `@EventChannelApi`; native UI components (`requireNativeComponent`, view managers,
+  Expo views); React Native new-architecture codegen events (`emitOnX` from a spec's `EventEmitter<T>` member) and
+  events emitted through an enum value or a wrapper taking the name from elsewhere; Cordova `exec` calls whose service
+  / action come from a variable, and Cordova's `PluginResult` keep-alive callbacks as events.
 - A native `invokeMethod` on a channel passed in from elsewhere (a constructor parameter, a channel created in another
   file) is skipped unless the file creates exactly one channel.
 - Java and Objective-C are scanned for bridge registrations only (stub receivers, no call graph inside them).
-- Dynamic module or method names (a variable passed to `NativeModules[name]` or `invokeMethod(name)`) are skipped.
+- Dynamic module or method names are listed as `unresolved`, not linked; `invokeMethod(name)` on a Flutter channel is
+  still skipped.
 - Electron: `MessagePort` / `utilityProcess` / `webContents.ipc` messaging, preload event subscriptions mapped through
   a lookup table on the renderer side (`window.api.addEventListener('run')` to the channel `table['run']`), and
   `ipcRenderer.removeListener` are not modelled. Tauri: events (`emit` / `listen`), channels, commands invoked from

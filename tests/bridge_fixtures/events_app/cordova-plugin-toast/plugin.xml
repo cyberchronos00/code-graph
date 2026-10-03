@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0" id="cordova-plugin-toast" version="1.0.0">
+  <js-module src="www/toast.js" name="Toast"><clobbers target="Toast" /></js-module>
+  <platform name="android">
+    <config-file target="res/xml/config.xml" parent="/*">
+      <feature name="Toast"><param name="android-package" value="com.acme.toast.ToastPlugin" /></feature>
+    </config-file>
+    <source-file src="src/android/ToastPlugin.java" target-dir="src/com/acme/toast" />
+  </platform>
+  <platform name="ios">
+    <config-file target="config.xml" parent="/*">
+      <feature name="Toast"><param name="ios-package" value="CDVToast" /></feature>
+    </config-file>
+  </platform>
+</plugin>

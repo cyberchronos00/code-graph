@@ -55,7 +55,14 @@ PROTOCOLS = {
                     "ipcRenderer.on)",
     "electron-preload": "Electron context bridge member (window.<key>.<member>() -> contextBridge.exposeInMainWorld)",
     "tauri": "Tauri command (invoke('cmd') -> #[tauri::command] fn cmd registered in generate_handler!)",
+    "react-native-event": "React Native event (native sendEvent / RCTDeviceEventEmitter.emit / sendEventWithName / Expo "
+                          "sendEvent -> NativeEventEmitter / DeviceEventEmitter addListener in JS)",
+    "capacitor-event": "Capacitor plugin event (native notifyListeners('evt') -> Plugin.addListener('evt') in JS)",
+    "cordova": "Cordova plugin action (cordova.exec(ok, fail, 'Service', 'action') -> CordovaPlugin.execute / CDVPlugin "
+               "method; services from plugin.xml / config.xml <feature>)",
 }
+# native -> app events: the JS listener is the receiver; no_sender only where the repo sends some event natively
+EVENT_PROTOCOLS = ("react-native-event", "capacitor-event")
 # protocols between processes of one app (no per-platform receivers)
 PROCESS_PROTOCOLS = ("electron-ipc", "electron-preload", "tauri")
 TRANSPORT = {"electron-ipc": "ipc", "tauri": "ipc", "electron-preload": "local"}
@@ -255,7 +262,9 @@ class NativeFile:
 
 TRIGGER = re.compile(r"CapacitorPlugin|CAPPlugin|CAP_PLUGIN|ReactMethod|RCT_(?:EXPORT|EXTERN|REMAP)|ReactContextBaseJavaModule|"
                      r"BaseJavaModule|Native\w+Spec\b|ModuleDefinition|MethodChannel|EventChannel|MethodCallHandler|"
-                     r"StreamHandler|isEqualToString:\s*call\.method|call\.method|@objc\s*\(")
+                     r"StreamHandler|isEqualToString:\s*call\.method|call\.method|@objc\s*\(|"
+                     r"RCTEventEmitter|RCTDeviceEventEmitter|DeviceEventManagerModule|sendEventWithName|sendEvent\s*\(|"
+                     r"notifyListeners|CordovaPlugin|CDVPlugin|CDVInvokedUrlCommand")
 
 
 # ------------------------------------------------------------------ receivers found in native source text
@@ -604,6 +613,184 @@ def flutter_native_sends(builder, by_file, nfs: list) -> int:
     return n
 
 
+# ------------------------------------------------------------------ native -> JS events (#61)
+RN_EMIT = re.compile(r"\.\s*emit\s*\(\s*")
+RN_SEND_EVENT = re.compile(r"\bsendEvent\s*\(\s*(?:withName:\s*)?")
+OBJC_SEND_EVENT = re.compile(r"\[\s*(?:self|_?\w+)\s+sendEventWithName:\s*")
+CAP_NOTIFY = re.compile(r"\bnotifyListeners\s*\(\s*")
+OBJC_CAP_NOTIFY = re.compile(r"\[\s*(?:self|_?\w+)\s+notifyListeners:\s*")
+RN_EMITTER_HINT = re.compile(r"RCTDeviceEventEmitter|DeviceEventManagerModule|RCTNativeAppEventEmitter|RCTEventEmitter|"
+                             r"ModuleDefinition|ReactContext|ReactApplicationContext")
+
+
+def _first_value(nf: NativeFile, text: str, after: int, args: bool) -> tuple[str | None, str]:
+    """The event name at `after` (the first call argument, or an ObjC message argument): (value, raw text)."""
+    t = nf.t
+    if args:
+        a = t.args(after - 1) if after > 0 and t.code[after - 1] == "(" else t.args(t.code.rfind("(", 0, after))
+        if not a:
+            return None, ""
+        parts = [x[1].strip() for x in a]
+        # sendEvent(reactContext, "evt", params): the first string-valued argument among the first two
+        for raw in parts[:2]:
+            v = _str_value(nf, raw.split(":", 1)[1] if re.match(r"^\w+:", raw) else raw, _GLOBAL_CONSTS)
+            if v:
+                return v, raw
+        return None, parts[0] if parts else ""
+    m = re.match(r'(@?"[^"\n]*"|[\w.]+)', t.src[after:after + 200])
+    if not m:
+        return None, ""
+    return _str_value(nf, m.group(1), _GLOBAL_CONSTS), m.group(1)
+
+
+def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list) -> dict:
+    """Native code emitting an event to JS -> SENDS_TO endpoint (direction to_app) from the enclosing method:
+    React Native `RCTDeviceEventEmitter.emit("evt", ...)`, `sendEvent(ctx, "evt", ...)`, ObjC `sendEventWithName:`,
+    Swift `sendEvent(withName:)`, Expo `sendEvent("evt", ...)`; Capacitor `notifyListeners("evt", data)` in a plugin
+    class (the plugin name from its @CapacitorPlugin / CAPBridgedPlugin receivers in the same file)."""
+    cap_ns = defaultdict(set)
+    for r in recs:
+        if r.protocol == "capacitor":
+            cap_ns[r.file.rel].add(r.namespace)
+    n = defaultdict(int)
+    for nf in nfs:
+        t = nf.t
+        found = []                       # (protocol, namespace, method, pos, via)
+        if "notifyListeners" in t.code:
+            ns = cap_ns.get(nf.rel)
+            rx = OBJC_CAP_NOTIFY if nf.lang == "objc" else CAP_NOTIFY
+            for m in rx.finditer(t.code):
+                v, raw = _first_value(nf, t.code, m.end(), nf.lang != "objc")
+                if not ns or len(ns) != 1:
+                    continue
+                if v is None:
+                    dynamic.append({"file": nf.rel, "line": t.line(m.start()), "protocol": "capacitor-event",
+                                    "what": f"notifyListeners({raw[:40]})"})
+                    continue
+                found.append(("capacitor-event", next(iter(ns)), v, m.start(), "notifyListeners"))
+        swift_named = nf.lang == "swift" and re.search(r"\bsendEvent\s*\(\s*(?:withName|name)\s*:", t.code)
+        if RN_EMITTER_HINT.search(t.code) or swift_named:
+            sites = []
+            if nf.lang == "objc":
+                sites = [(m, False, "sendEventWithName") for m in OBJC_SEND_EVENT.finditer(t.code)]
+            else:
+                hint = bool(RN_EMITTER_HINT.search(t.code))
+                sites = [(m, True, "sendEvent") for m in RN_SEND_EVENT.finditer(t.code)
+                         if hint or "withName" in m.group(0) or re.match(r"name\s*:", t.code[m.end():])]
+                if re.search(r"RCTDeviceEventEmitter|RCTNativeAppEventEmitter", t.code):
+                    sites += [(m, True, "RCTDeviceEventEmitter.emit") for m in RN_EMIT.finditer(t.code)]
+            for m, is_args, via in sites:
+                # `fun sendEvent(name: String, ...)` / `private void sendEvent(...)`: the helper's own declaration
+                if re.search(r"\b(?:fun|void|func)\s+$", t.code[max(0, m.start() - 12):m.start() + 1]) or \
+                        re.search(r"\b(?:fun|void|func)\s+sendEvent\s*\($", t.code[max(0, m.start() - 20):m.end()]):
+                    continue
+                v, raw = _first_value(nf, t.code, m.end(), is_args)
+                if v is None:
+                    if raw and not re.match(r"^[a-z]\w*$", raw):     # a parameter (`eventName`) is the helper itself
+                        dynamic.append({"file": nf.rel, "line": t.line(m.start()), "protocol": "react-native-event",
+                                        "what": f"{via}({raw[:40]})"})
+                    continue
+                found.append(("react-native-event", v, None, m.start(), via))
+        for proto, ns, meth, pos, via in found:
+            line = t.line(pos)
+            fn = None
+            if nf.lang == "objc":            # inside RCT_EXPORT_METHOD(start:(NSString *)url) { ... }
+                for em in re.finditer(r"RCT_(?:EXPORT|REMAP)_METHOD\s*\(\s*(?:\w+\s*,\s*)?(\w+)", t.code[:pos]):
+                    ob = t.code.find("{", em.end())
+                    if 0 <= ob < pos <= t.match(ob):
+                        fn = em.group(1)
+            hid = _handler(builder, by_file, Receiver(proto, ns, meth, nf, pos, fn=fn), nf, line)
+            if hid is None:
+                continue
+            plat, _why = _platform_of(nf.rel, nf.lang)
+            protocol_send(builder, proto, ns, meth, hid, nf.rel, line, "resolved", via=f"{via} (native)", platform=plat,
+                          direction="to_app")
+            n[proto] += 1
+    return dict(n)
+
+
+# ------------------------------------------------------------------ Cordova: native side (#61)
+CORDOVA_JAVA_CLASS = re.compile(r"\bclass\s+(\w+)\s*(?:\([^)]*\))?\s*(?:extends|:)\s*(?:[\w.]+\.)?CordovaPlugin\b")
+_CDV_V = r'("[^"]+"|[A-Z_][\w.]*)'
+CORDOVA_ACTION = re.compile(r'\baction\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*' + _CDV_V + r'\s*\)|' + _CDV_V +
+                            r'\s*\.\s*equals(?:IgnoreCase)?\s*\(\s*action\s*\)|\baction\s*==\s*' + _CDV_V +
+                            r'|^\s*case\s+' + _CDV_V + r'\s*:|^\s*' + _CDV_V + r'\s*->', re.M)
+CORDOVA_OBJC_IFACE = re.compile(r"@interface\s+(\w+)\s*:\s*CDVPlugin\b")
+CORDOVA_SWIFT_CLASS = re.compile(r"(?:@objc\s*\(\s*(\w+)\s*\)\s*)?(?:(?:public|open|final|internal)\s+)*class\s+(\w+)\s*:\s*CDVPlugin\b")
+CORDOVA_OBJC_METHOD = re.compile(r"^\s*-\s*\(\s*void\s*\)\s*(\w+)\s*:\s*\(\s*CDVInvokedUrlCommand\s*\*\s*\)", re.M)
+CORDOVA_SWIFT_METHOD = re.compile(r"(?:@objc\s*\(\s*(\w+):?\s*\)\s*)?(?:(?:public|open|internal|private|final|override|dynamic)\s+)*"
+                                  r"func\s+(\w+)\s*\(\s*_?\s*\w+\s*:\s*CDVInvokedUrlCommand")
+FEATURE_RE = re.compile(r"<feature\s+name\s*=\s*\"([^\"]+)\"\s*>(.*?)</feature>", re.S)
+FEATURE_PARAM = re.compile(r"<param\s+name\s*=\s*\"(android-package|ios-package)\"\s+value\s*=\s*\"([^\"]+)\"")
+
+
+def cordova_services(root: Path) -> dict:
+    """plugin.xml / config.xml <feature name="Service"><param name="android-package" value="pkg.Cls"/> ->
+    {class simple name: service}; skips node_modules and platform build copies."""
+    out = {}
+    for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if d not in ("node_modules", ".git", "build", "Pods") and not d.startswith(".")]
+        for fn in fns:
+            if fn not in ("plugin.xml", "config.xml"):
+                continue
+            try:
+                txt = (Path(dp) / fn).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for m in FEATURE_RE.finditer(txt):
+                for pm in FEATURE_PARAM.finditer(m.group(2)):
+                    out.setdefault(pm.group(2).rsplit(".", 1)[-1], m.group(1))
+    return out
+
+
+def scan_cordova(nf: NativeFile, out: list, services: dict) -> None:
+    t = nf.t
+    if nf.lang in ("java", "kotlin"):
+        for m in CORDOVA_JAVA_CLASS.finditer(t.code):
+            cls = m.group(1)
+            c = nf.class_named(cls)
+            lo, hi = (c[1], c[2]) if c else (m.start(), len(t.code))
+            ex = re.compile(r"\bexecute\s*\(").search(t.code, lo, hi)
+            if not ex:
+                continue
+            svc = services.get(cls, cls)
+            seen = set()
+            for am in CORDOVA_ACTION.finditer(t.src, ex.start(), hi):
+                act = _str_value(nf, next(g for g in am.groups() if g), _GLOBAL_CONSTS)
+                if not act or act in seen:
+                    continue
+                seen.add(act)
+                out.append(Receiver("cordova", svc, act, nf, am.start(), fn="execute", cls=cls,
+                                    conf="resolved" if cls in services else "heuristic", via="CordovaPlugin.execute"))
+    elif nf.lang == "objc":
+        for m in CORDOVA_OBJC_IFACE.finditer(t.code):
+            cls = m.group(1)
+            svc = services.get(cls, cls)
+            for mm in CORDOVA_OBJC_METHOD.finditer(t.code):
+                c = nf.class_at(mm.start())
+                if c and c[0] != cls:
+                    continue
+                out.append(Receiver("cordova", svc, mm.group(1), nf, mm.start(1), fn=mm.group(1), cls=cls,
+                                    conf="resolved" if cls in services else "heuristic", via="CDVPlugin method"))
+        if "@implementation" in t.code and not CORDOVA_OBJC_IFACE.search(t.code):
+            for im in OBJC_IMPL_RE.finditer(t.code):          # the @interface is in the .h file
+                cls = im.group(1)
+                if cls not in services:
+                    continue
+                for mm in CORDOVA_OBJC_METHOD.finditer(t.code, im.end()):
+                    out.append(Receiver("cordova", services[cls], mm.group(1), nf, mm.start(1), fn=mm.group(1), cls=cls,
+                                        conf="resolved", via="CDVPlugin method"))
+    elif nf.lang == "swift":
+        for m in CORDOVA_SWIFT_CLASS.finditer(t.code):
+            objc_name, cls = m.group(1), m.group(2)
+            svc = services.get(objc_name or cls, services.get(cls, objc_name or cls))
+            end = t.match(t.code.find("{", m.end()))
+            for mm in CORDOVA_SWIFT_METHOD.finditer(t.code, m.end(), end):
+                out.append(Receiver("cordova", svc, mm.group(1) or mm.group(2), nf, mm.start(2), fn=mm.group(2), cls=cls,
+                                    conf="resolved" if (objc_name or cls) in services else "heuristic",
+                                    via="CDVPlugin method"))
+
+
 # ------------------------------------------------------------------ Pigeon: native side
 SWIFT_EXT = re.compile(r"\bextension\s+(\w+)\s*:\s*([^{]*)\{")
 SUPER_NAME = re.compile(r"(?<![\w.])(?:\w+\.)*([A-Z]\w*)(\s*\()?")
@@ -830,6 +1017,7 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
     # an API name or a name starting with it (`NativeSyncApiImplBase` holds methods its subclasses inherit)
     pigeon_rx = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(apis))) + r")") if apis else None
     nfs: list[NativeFile] = []
+    other_consts: dict[str, str] = {}
     _GLOBAL_CONSTS.clear()
     for rel in files:
         if clf is not None and clf.excludes(rel):
@@ -838,7 +1026,13 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
             src = (root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if len(src) > 2_000_000 or not (TRIGGER.search(src) or (pigeon_rx and pigeon_rx.search(src))):
+        if len(src) > 2_000_000:
+            continue
+        if not (TRIGGER.search(src) or (pigeon_rx and pigeon_rx.search(src))):
+            # not scanned, but its class constants name modules elsewhere (`getName() = FooImpl.NAME`): qualified only
+            if "String" in src and (cm := CLASS_RE.search(src)):
+                for m in CONST_RE.finditer(src):
+                    other_consts.setdefault(f"{cm.group(1)}.{m.group(1)}", m.group(2))
             continue
         nf = NativeFile(rel, src)
         nfs.append(nf)
@@ -848,6 +1042,8 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
             _GLOBAL_CONSTS.setdefault(k, v)
             if cls:
                 _GLOBAL_CONSTS.setdefault(f"{cls}.{k}", v)
+    for k, v in other_consts.items():
+        _GLOBAL_CONSTS.setdefault(k, v)
     if not nfs and not sends:
         return {}
     # TurboModule codegen spec classes: NativeFooSpec <- the JS spec file NativeFoo.ts naming the module
@@ -863,7 +1059,9 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
         if nf.lang == "objc":
             scan_objc_capacitor(nf, objc_plugins)
     recs: list[Receiver] = []
+    cdv = cordova_services(root) if any(re.search(r"CordovaPlugin|CDVPlugin", nf.t.code) for nf in nfs) else {}
     for nf in nfs:
+        scan_cordova(nf, recs, cdv)
         scan_capacitor(nf, recs, objc_plugins)
         scan_react_native(nf, recs, spec_names, extern)
         scan_expo(nf, recs)
@@ -926,6 +1124,8 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
             by_file[n.file].append(n)
     pigeon_sends = pigeon_native_sends(builder, by_file, nfs, apis) if apis else 0
     flutter_sends = flutter_native_sends(builder, by_file, nfs)
+    dynamic = list(getattr(builder, "bridge_dynamic", None) or [])
+    event_sends = event_native_sends(builder, by_file, nfs, recs, dynamic)
     n_recv, n_stub, marked = 0, 0, set()
     stats = defaultdict(lambda: defaultdict(int))
     seen = set()
@@ -961,8 +1161,13 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
         stats["pigeon"]["native_sends"] += pigeon_sends
     if flutter_sends:
         stats["flutter"]["native_sends"] += flutter_sends
-    return {"native_files_scanned": len(nfs), "receivers": n_recv, "stub_nodes": n_stub,
-            "per_protocol": {k: dict(v) for k, v in sorted(stats.items())}}
+    for proto, k in event_sends.items():
+        stats[proto]["native_sends"] += k
+    out = {"native_files_scanned": len(nfs), "receivers": n_recv, "stub_nodes": n_stub,
+           "per_protocol": {k: dict(v) for k, v in sorted(stats.items())}}
+    if dynamic:
+        out["dynamic"] = {"count": len(dynamic), "samples": dynamic[:20]}
+    return out
 
 
 _DECL_RX = {
@@ -1071,6 +1276,11 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
         a = eps[nid].attrs
         for e in es:
             ns_plat[(a["protocol"], a["namespace"])].add(e.attrs.get("platform"))
+    ev_sent = defaultdict(set)            # event protocol -> namespaces some native code emits on (None: any)
+    for nid, es in send.items():
+        a = eps[nid].attrs
+        if a["protocol"] in EVENT_PROTOCOLS and es:
+            ev_sent[a["protocol"]].update((None, a["namespace"]))
     proto_recv = defaultdict(set)
     for nid in recv:
         proto_recv[eps[nid].attrs["protocol"]].add(None)
@@ -1094,7 +1304,7 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
         if to_app:
             a["direction"] = "to_app"
             a["platforms_sending"] = sorted({e.attrs.get("platform") for e in send[nid]} - {None})
-        elif a["protocol"] in ("pigeon", "flutter", "flutter-event", "capacitor", "react-native"):
+        elif a["protocol"] in ("pigeon", "flutter", "flutter-event", "capacitor", "react-native", "cordova"):
             a["direction"] = "to_native"
         a.pop("checks", None)
         ck = []
@@ -1107,7 +1317,9 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
         base = a.get("method") in BASE_METHODS.get(a["protocol"], ())
         if base:
             a["base_method"] = True        # the framework's base class implements it on every platform; a module may override
-        if (send[nid] or tsend[nid]) and not recv[nid]:
+        if a["protocol"] in EVENT_PROTOCOLS and (send[nid] or tsend[nid]) and not recv[nid]:
+            a["no_listener"] = True        # emitted natively, no JS listener found (one may sit in a library / dynamic name)
+        elif (send[nid] or tsend[nid]) and not recv[nid]:
             if impl:
                 if not base:
                     ck.append("no_receiver")
@@ -1116,6 +1328,27 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
                 ext = sorted({e.attrs.get("external") for e in send[nid] + tsend[nid]} - {None})
                 if ext:
                     a["package"] = ext[0]
+        if a["protocol"] in EVENT_PROTOCOLS and recv[nid] and not send[nid]:
+            # a listener for an event no native code in the repo emits: a miss only where the repo's native side
+            # emits events at all (Capacitor: the same plugin's native code is here); else a library's event
+            if a["protocol"] == "capacitor-event":
+                here = a["namespace"] in ev_sent.get(a["protocol"], ()) or ns_plat.get(("capacitor", a["namespace"]))
+            else:
+                # NativeEventEmitter(Module) of a module implemented here; DeviceEventEmitter: where the repo's native
+                # code emits events at all
+                mods = {e.attrs.get("emitter_module") for e in recv[nid]}
+                here = any(m and ns_plat.get(("react-native", m)) for m in mods)
+                if not here and not any(mods):
+                    # DeviceEventEmitter / an emitter of an unknown module: often an in-app JS event bus whose emits
+                    # pass the name in a variable; not a bridge miss, not a library either
+                    base = True
+                    here = True
+            if not here:
+                a["external"] = True
+                ext = sorted({e.attrs.get("external") for e in recv[nid]} - {None})
+                if ext:
+                    a["package"] = ext[0]
+                base = True
         if recv[nid] and not send[nid] and not base:
             ck.append("no_sender" if not tsend[nid] else "test_sender_only")
         if a.get("unregistered"):
@@ -1192,7 +1425,8 @@ def bridges(st, pattern: str | None = None, protocol: str | None = None, unmatch
                 "checks": a.get("checks") or [], "missing_on": a.get("missing_on") or [], "external": bool(a.get("external")),
                 "package": a.get("package"), "test_only": bool(a.get("test_only")),
                 "base_method": bool(a.get("base_method")), "sender_platforms": a.get("sender_platforms"),
-                "senders": [], "test_senders": [],
+                "direction": a.get("direction"), "platforms_sending": a.get("platforms_sending") or [],
+                "no_listener": bool(a.get("no_listener")), "senders": [], "test_senders": [],
                 "receivers": []}
         for r in st.q("SELECT src, kind, file, line, confidence, attrs FROM edges WHERE dst=? AND kind IN ('SENDS_TO','TEST_CALLS') "
                       "ORDER BY file, line", (n["id"],)):
@@ -1220,15 +1454,22 @@ def bridges(st, pattern: str | None = None, protocol: str | None = None, unmatch
         for c in i["checks"]:
             s[c] += 1
         s["external"] += i["external"]
+    stats = (st.meta().get("stats") or {}).get("bridges") or {}
+    # bridge calls cg could not name (NativeModules[x], addListener(evtVar), cordova.exec(.., svc, act)): listed, not linked
+    dyn = [d for d in ((stats.get("dynamic") or {}).get("samples") or [])
+           if (not protocol or d.get("protocol") == protocol or (d.get("protocol") or "").startswith(protocol + "-"))
+           and (not pattern or pattern.lower() in (d.get("what") or "").lower() or pattern.lower() in (d.get("file") or "").lower())]
     return {"pattern": pattern, "protocol": protocol, "endpoints": out,
             "summary": {k: dict(v) for k, v in sorted(summ.items())},
-            "stats": (st.meta().get("stats") or {}).get("bridges") or {}}
+            "unresolved": dyn, "unresolved_total": (stats.get("dynamic") or {}).get("count", 0) if not (protocol or pattern) else len(dyn),
+            "stats": stats}
 
 
 def render_bridges(res: dict, max_items: int = 60) -> str:
     from .query import short_id
     eps = res["endpoints"]
-    if not eps:
+    dyn = res.get("unresolved") or []
+    if not eps and not dyn:
         return "no bridge endpoint matches " + repr(res["pattern"]) if res["pattern"] else "no web / native bridge calls in this graph"
     L = []
     for p, s in res["summary"].items():
@@ -1248,14 +1489,18 @@ def render_bridges(res: dict, max_items: int = 60) -> str:
                 flags.append("NO RECEIVER (this app handles other channels / commands, not this one)" if proc else
                              "NO NATIVE RECEIVER (the module is implemented here, this method is not)")
             elif c == "no_sender":
-                flags.append("no sender" if proc else "no JS / Dart sender")
+                flags.append("no sender" if proc else "no native sender" if i.get("direction") == "to_app" and
+                             i["protocol"] in EVENT_PROTOCOLS else "no JS / Dart sender")
             elif c == "unregistered":
                 flags.append("NOT REGISTERED (missing from generate_handler!)")
             elif c == "test_sender_only":
                 flags.append("sent from tests only")
+        if i.get("no_listener"):
+            flags.append("no JS listener found")
         if i["external"]:
             flags.append("external" + (f" ({i['package']})" if i.get("package") else ": implemented outside this repo"))
         where = (f"received in: {', '.join(sorted({r.get('process') or '?' for r in i['receivers']})) or '-'}" if proc else
+                 f"sent from: {', '.join(i['platforms_sending']) or '-'}" if i["protocol"] in EVENT_PROTOCOLS else
                  f"received on: {', '.join(i['platforms_received']) or '-'}")
         L.append(f"{i['id'].split(':', 1)[1]}  {where}"
                  + (f"  [{i['api']}]" if i.get("api") else "") + (f"  ! {'; '.join(flags)}" if flags else ""))
@@ -1274,4 +1519,10 @@ def render_bridges(res: dict, max_items: int = 60) -> str:
                      + f", receivers {len(i['receivers'])}")
     if len(eps) > max_items:
         L.append(f"... {len(eps) - max_items} more")
+    if dyn:
+        L.append(f"unresolved (name not a literal cg can evaluate): {res.get('unresolved_total') or len(dyn)}")
+        for d in dyn[:12]:
+            L.append(f"    {d['protocol']}: {d['what']} @ {d['file']}:{d['line']}")
+        if len(dyn) > 12:
+            L.append(f"    ... {len(dyn) - 12} more")
     return "\n".join(L)

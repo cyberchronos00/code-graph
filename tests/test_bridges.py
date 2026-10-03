@@ -343,3 +343,54 @@ def test_tauri_commands(monkeypatch):
     assert nattrs(st, "module:src/main.ts")["process"] == "webview"
     # impact of the Rust command lists the webview caller
     assert "function:src/main.ts#counter" in {c["id"] for c in Q.impact(st, "tauri_fixture::commands::increment")["callers"]}
+
+
+@needs_ts
+def test_native_events_cordova_and_dynamic_names():
+    """#61: native -> JS events (React Native sendEvent / RCTDeviceEventEmitter.emit / sendEventWithName, Capacitor
+    notifyListeners), Cordova cordova.exec -> CordovaPlugin.execute / CDVPlugin methods, and dynamic bridge names."""
+    st, res, db = graph("events_app")
+    eps = endpoints(st)
+    dp = eps["react-native-event:downloadProgress"]
+    assert dp["direction"] == "to_app" and not dp["checks"]
+    assert {s["fn"] for s in dp["senders"]} == {"method:com.evapp.DownloaderModule.start", "method:objc:Downloader.start"}
+    assert sorted(dp["platforms_sending"]) == ["android", "ios"]
+    assert any("watchDownloads" in r["handler"] for r in dp["receivers"])
+    # the constant EVT_DONE, emitted from a private helper of the module
+    assert senders(eps["react-native-event:downloadDone"]) == {"method:com.evapp.DownloaderModule.finish"}
+    assert eps["react-native-event:downloadCancelled"]["checks"] == ["no_sender"]     # the module is implemented here
+    assert not eps["react-native-event:neverEmitted"]["checks"]     # DeviceEventEmitter: maybe an in-app JS event bus
+    assert "react-native-event:keyboardDidShow" not in eps          # React Native's own event
+    assert not any(k.startswith("react-native-event:eventName") for k in eps)   # the helper's parameter
+    loc = eps["capacitor-event:Geo#locationChanged"]
+    assert senders(loc) == {"method:com.evapp.GeoPlugin.onLocation"} and loc["receivers"] and not loc["checks"]
+    assert eps["capacitor-event:Geo#geoMissing"]["checks"] == ["no_sender"]
+    kb = eps["capacitor-event:Keyboard#keyboardWillShow"]
+    assert kb["external"] and kb["package"] == "@capacitor/keyboard" and not kb["checks"]
+    show = eps["cordova:Toast#show"]
+    assert sorted(recv(show)) == ["android", "ios"] and show["senders"] and not show["checks"]
+    assert recv(show)["ios"] == "method:objc:CDVToast.show" and recv(show)["android"] == "method:com.acme.toast.ToastPlugin.execute"
+    assert eps["cordova:Toast#vibrate"]["checks"] == ["no_receiver"]
+    out = B.bridges(st)
+    whats = {d["what"] for d in out["unresolved"]}
+    assert "NativeModules[name].start" in whats and any("addListener(<dynamic>)" in w for w in whats)
+    assert out["stats"]["dynamic"]["count"] == 2
+    txt = B.render_bridges(out)
+    assert "unresolved (name not a literal cg can evaluate): 2" in txt and "no native sender" in txt
+    assert "sent from: android, ios" in txt
+
+
+def test_scanner_cordova_and_event_helpers():
+    from codegraph.bridges import NativeFile, scan_cordova
+    nf = NativeFile("src/android/X.java", 'package p;\nclass X extends CordovaPlugin {\n static final String A = "go";\n'
+                    ' public boolean execute(String action, JSONArray a, CallbackContext c) {\n'
+                    '  switch (action) {\n   case "stop": return true;\n  }\n  if (A.equals(action)) return true;\n'
+                    '  return false; }\n}\n')
+    out = []
+    scan_cordova(nf, out, {})
+    assert sorted(r.method for r in out) == ["go", "stop"] and {r.namespace for r in out} == {"X"}
+    nf = NativeFile("ios/P.swift", "@objc(CDVPay) class Pay: CDVPlugin {\n  @objc func pay(_ command: CDVInvokedUrlCommand) {}\n"
+                    "  func helper() {}\n}\n")
+    out = []
+    scan_cordova(nf, out, {"CDVPay": "Pay"})
+    assert [(r.namespace, r.method, r.conf) for r in out] == [("Pay", "pay", "resolved")]

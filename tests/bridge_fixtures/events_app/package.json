@@ -1,0 +1,1 @@
+{"name": "events-app", "private": true, "dependencies": {"react-native": "0.74.0", "@capacitor/core": "^6.0.0", "@capacitor/keyboard": "^6.0.0", "cordova-plugin-toast": "file:./cordova-plugin-toast"}}

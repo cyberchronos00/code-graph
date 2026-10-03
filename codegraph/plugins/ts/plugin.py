@@ -140,6 +140,23 @@ def package_tsconfigs(root: Path, need_package_json: bool = True) -> list[str]:
     return [str((d / "tsconfig.json").relative_to(root)) for d in out][:200]
 
 
+def cordova_www_dirs(root: Path) -> list[str]:
+    """Cordova plugin JS: www/ next to a plugin.xml (the repo root or a plugin folder up to two levels down) and a
+    Cordova app's www/ next to its config.xml (#61)."""
+    out = []
+    for xml in ("plugin.xml", "config.xml"):
+        for pat in (xml, f"*/{xml}", f"*/*/{xml}"):
+            for f in sorted(root.glob(pat))[:50]:
+                if any(part in PKG_SKIP or part.startswith(".") for part in f.relative_to(root).parts[:-1]):
+                    continue
+                w = f.parent / "www"
+                if w.is_dir():
+                    r = str(w.relative_to(root))
+                    if r not in out:
+                        out.append(r)
+    return out[:50]
+
+
 class TypeScriptPlugin(LanguagePlugin):
     name = "typescript"
 
@@ -149,6 +166,8 @@ class TypeScriptPlugin(LanguagePlugin):
     def detect(self, project: Project) -> bool:
         if project.exists("tsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
             return True
+        if project.exists("package.json") and cordova_www_dirs(project.root):
+            return True     # a Cordova plugin / app: plain JS under www/ calling cordova.exec (#61)
         if sub_tsconfigs(project.root):
             return True     # a monorepo with per-package tsconfigs only, or a non-JS repo with web/tsconfig.json
         if project.exists("package.json") and any((project.root / d).is_dir() for d in LARAVEL_ASSET_DIRS):
@@ -175,7 +194,8 @@ class TypeScriptPlugin(LanguagePlugin):
         # src/ and app/ (SPA / Next / Nuxt 4), and the Laravel + Vite asset dirs; the extractor falls back to the
         # tsconfig's own files when none of these hold any
         ctx.extractor_cfg = {"root": str(project.root), "tsconfig": "tsconfig.json", "kinds": [],
-                             "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]}
+                             "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]
+                             + cordova_www_dirs(project.root)}
         pkg_cfgs = sub_tsconfigs(project.root)
         if pkg_cfgs:
             ctx.extractor_cfg["package_tsconfigs"] = pkg_cfgs
@@ -383,8 +403,13 @@ class TypeScriptPlugin(LanguagePlugin):
                                                                or not (sent.get(key, set()) - {rv.get("process")}))):
                 continue
             protocol_receive(builder, rv["protocol"], rv["module"], rv["method"], rv["handler"], rv["file"], rv["line"],
-                             rv["conf"], via=rv.get("via"), process=rv.get("process"))
+                             rv["conf"], via=rv.get("via"), process=rv.get("process"), external=rv.get("external"),
+                             emitter_module=rv.get("emitter_module"))
             n_brr += 1
+        # bridge calls with a dynamic module / method / event name: listed by cg bridges as unresolved (#61)
+        dyn = facts.get("bridge_dynamic") or []
+        if dyn:
+            builder.__dict__.setdefault("bridge_dynamic", []).extend(dyn)
         # browser tests opening pages: resolved to page nodes once the framework plugin has set page routes
         pv = getattr(builder, "pending_visits", None)
         if pv is None:

@@ -631,9 +631,11 @@ def bridges(pattern: str | None = None, protocol: str | None = None, unmatched: 
     the repo (external). Desktop process boundaries too: Electron IPC channels (endpoint:electron-ipc:<channel>,
     ipcRenderer.invoke / send / webContents.send -> ipcMain.handle / on, ipcRenderer.on), the context bridge
     (endpoint:electron-preload:<key>#<member>) and Tauri commands (endpoint:tauri:<command>, invoke -> #[tauri::command]);
-    their receivers carry the process role (main / preload / renderer / webview / core). pattern: endpoint name,
-    substring or glob; protocol: capacitor | react-native | flutter | flutter-event | electron-ipc | electron-preload |
-    tauri; unmatched: only endpoints with a check."""
+    their receivers carry the process role (main / preload / renderer / webview / core). Native -> JS events
+    (react-native-event, capacitor-event) and Cordova actions (cordova) too; calls with a dynamic name are listed as
+    unresolved. pattern: endpoint name, substring or glob; protocol: capacitor | capacitor-event | cordova |
+    react-native | react-native-event | flutter | flutter-event | pigeon | electron-ipc | electron-preload | tauri;
+    unmatched: only endpoints with a check."""
     from .bridges import bridges as _br, render_bridges
     return render_bridges(_br(_st(), pattern, protocol=protocol, unmatched=unmatched))
 
