@@ -1428,7 +1428,8 @@ class PythonPlugin(LanguagePlugin):
         val_st = Values(prog, b).run()
         # programs started in a subprocess (`python -m pkg.cli`, console scripts) -> their entry points (subproc.py)
         from .subproc import Subprocesses
-        sub_st = Subprocesses(prog, b, Ctx, FuncInfo, ClassInfo, dotted, walk_body, rp).link()
+        sub_st = Subprocesses(prog, b, Ctx, FuncInfo, ClassInfo, dotted, walk_body, rp,
+                              root=project.root).link()
         if sub_st:
             refs["subprocess"] = sub_st
         # python-socketio / Flask-SocketIO events -> endpoint:socketio:<namespace>#<event> (protocol model, #31)

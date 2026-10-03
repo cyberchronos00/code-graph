@@ -8,6 +8,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Tests that run the project's programs in a subprocess (#60):
+  - Rust `CARGO_BIN_EXE_x` / `cargo_bin("x")`, Node `child_process` / `execa`, PHP `Process` / `exec` running
+    `php artisan x`, and Dart `Process.run` / `TestProcess.start` link to the entry point (`codegraph/process_runs.py`).
+    Laravel feature tests' `$this->artisan('x')` link to the command.
+  - Python: argument lists built with `append` / `extend` / `insert` / `+=`, installed runners (`scripttest`,
+    `pytester`, `sh`, plumbum), `-c` snippets that only import a project module, and scripts copied from a project
+    file or template (`manage.py-tpl`) before they run.
+
 ### Changed
 
 - CLI output (#75):

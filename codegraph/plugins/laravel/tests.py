@@ -61,6 +61,14 @@ class LaravelTests:
                 return
         elif kind != "func":
             return
+        args = f.get("args") or []
+        if ml == "artisan" and kind == "method" and args and args[0].get("k") == "str":
+            # $this->artisan('orders:prune --days=1'): the command runs in process (#60)
+            lb = self.lp.b
+            lb.add_edge(fn.id, lb.add_node("command", args[0]["v"].split(" ")[0]), "DISPATCHES", fn.file, f["line"],
+                        EXACT, via="$this->artisan")
+            self.lp.stats["test_artisan_calls"] += 1
+            return
         if ml not in HTTP_VERBS and ml not in GENERIC_VERB:
             self.maybe_helper.append((fn, ml, f))      # $this->getAs('/x') through a project test helper
             return

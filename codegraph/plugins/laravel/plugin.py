@@ -579,6 +579,10 @@ class LaravelPlugin(FrameworkPlugin):
                 self._config_read(fn, args[0]["v"], line, EXACT)
             if ml in ("bind", "singleton", "scoped", "instance", "bindif", "singletonif") and args and classconst(args[0]):
                 self.bindings.append((fn, f, ctx))
+            if ml == "artisan" and recv.get("k") == "this" and args and args[0].get("k") == "str":
+                # feature tests: $this->artisan('app:prune') runs the command in process (#60)
+                b.add_edge(fn.id, b.add_node("command", args[0]["v"].split(" ")[0]), "DISPATCHES", fn.file, line, EXACT, via="$this->artisan")
+                self.stats["test_artisan_calls"] += 1
             if ml in ("call", "callsilently", "callsilent") and recv.get("k") == "this" and args and args[0].get("k") == "str" and ":" in args[0]["v"]:
                 b.add_edge(fn.id, b.add_node("command", args[0]["v"].split(" ")[0]), "DISPATCHES", fn.file, line, EXACT, via="$this->call")
             if ml in ("command", "job") and (recv.get("k") == "var" and "Illuminate\\Console\\Scheduling\\Schedule" in types):

@@ -242,3 +242,137 @@ def test_bare_script_names_match_only_the_project_root(tmp_path):
     st = build(tmp_path, "bare", files)
     got = {(s.rsplit(".", 1)[-1], d) for s, d, a in edges(st, "TEST_CALLS") if a.get("via") == "subprocess"}
     assert got == {("test_root_manage", "script:manage"), ("test_nested", "script:tools.gen")}, got
+
+
+# ---------------------------------------------------------------- #60: step-by-step argv, runners, imports, templates
+MORE = {
+    "pyproject.toml": '''
+        [project]
+        name = "tool"
+        dependencies = ["pytest", "scripttest", "sh", "plumbum"]
+        [project.scripts]
+        mytool = "pkg.cli:main"
+        ''',
+    "pkg/__init__.py": "",
+    "pkg/cli.py": '''
+        def main():
+            return 0
+
+        if __name__ == "__main__":
+            main()
+        ''',
+    "pkg/plugin.py": '''
+        REGISTRY = {}
+        REGISTRY["x"] = 1
+        ''',
+    "conf/manage.py-tpl": '''
+        import sys
+
+        def main():
+            from pkg.cli import main as run
+            run()
+
+        if __name__ == "__main__":
+            main()
+        ''',
+    "tests/test_more.py": '''
+        import shutil
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        import sh
+        from plumbum import local
+        from scripttest import TestFileEnvironment
+
+        HERE = Path(__file__).parent
+
+        def test_appended():
+            cmd = [sys.executable]
+            cmd.append("-m")
+            cmd += ["pkg.cli"]
+            cmd.extend(["--verbose"])
+            subprocess.run(cmd, check=True)
+
+        def test_loop_built():
+            cmd = []
+            for part in ["mytool", "sync"]:
+                cmd.append(part)
+            subprocess.run(cmd)
+
+        def test_insert_front():
+            cmd = ["-m", "pkg.cli"]
+            cmd.insert(0, sys.executable)
+            subprocess.run(cmd)
+
+        def test_config_value(config):
+            cmd = config["command"]
+            cmd.append("--x")
+            subprocess.run(cmd)
+
+        def test_scripttest(tmp_path):
+            env = TestFileEnvironment(str(tmp_path))
+            env.run("mytool", "sync")
+
+        def test_pytester(pytester):
+            pytester.run(sys.executable, "-m", "pkg.cli")
+
+        def test_sh():
+            sh.mytool("sync")
+
+        def test_sh_command():
+            sh.Command("mytool")("sync")
+
+        def test_plumbum():
+            local["python"]["-m", "pkg.cli"]()
+
+        def test_import_only():
+            subprocess.run([sys.executable, "-c", "import pkg.plugin"], check=True)
+
+        def test_copied_template(tmp_path):
+            shutil.copyfile(HERE.parent / "conf" / "manage.py-tpl", tmp_path / "manage.py")
+            subprocess.run([sys.executable, str(tmp_path / "manage.py"), "check"])
+
+        def test_copied_module(tmp_path):
+            (tmp_path / "run.py").write_text((HERE.parent / "pkg" / "cli.py").read_text())
+            subprocess.run([sys.executable, str(tmp_path / "run.py")])
+        ''',
+    "tests/support.py": '''
+        from scripttest import TestFileEnvironment
+
+        class Env(TestFileEnvironment):
+            def tool(self, *args):
+                return self.run("mytool", *args)
+        ''',
+    "tests/test_support.py": '''
+        from tests.support import Env
+
+        def test_env_helper(tmp_path):
+            Env(str(tmp_path)).tool("sync")
+        ''',
+}
+
+
+def test_step_by_step_argv_runners_imports_and_templates(tmp_path):
+    st = build(tmp_path, "more", MORE)
+    sub = st.stats["plugins"]["python"]["subprocess"]
+    by_test = {}
+    for s, d, a in edges(st, "TEST_CALLS"):
+        if a.get("via") == "subprocess":
+            by_test.setdefault(s.rsplit(".", 1)[-1], set()).add((d, a["how"]))
+    assert by_test["test_appended"] == {("script:pkg.cli", "-m")}
+    assert by_test["test_loop_built"] == {("script:console_scripts:mytool", "console script")}
+    assert by_test["test_insert_front"] == {("script:pkg.cli", "-m")}
+    assert "test_config_value" not in by_test                     # a runtime config value: unknown
+    assert by_test["test_scripttest"] == {("script:console_scripts:mytool", "console script")}
+    assert by_test["test_pytester"] == {("script:pkg.cli", "-m")}
+    assert by_test["test_sh"] == by_test["test_sh_command"] == {("script:console_scripts:mytool", "console script")}
+    assert by_test["test_plumbum"] == {("script:pkg.cli", "-m")}
+    assert by_test["test_import_only"] == {("module:pkg.plugin", "-c import")}
+    assert by_test["test_copied_template"] == {("function:pkg.cli.main", "copied template")}
+    assert by_test["test_copied_module"] == {("script:pkg.cli", "copied script")}
+    # a project subclass of the installed runner: its method is the runner, the program fixed inside it
+    assert by_test["tool"] == {("script:console_scripts:mytool", "console script")}
+    assert sub["external_runner_calls"] >= 3 and sub["linked_copied_script"] == 2, sub
+    a = next(a for s, d, a in edges(st, "TEST_CALLS") if s.endswith("test_copied_template") and a.get("via") == "subprocess")
+    assert a["copied_from"] == "conf/manage.py-tpl"

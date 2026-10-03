@@ -230,6 +230,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     from .external import attach as attach_external
     if (ex := attach_external(builder, project.root)):
         stats["external"] = ex
+    # tests that run the project's programs in a subprocess, outside Python (Rust, Node, PHP artisan, Dart; #60)
+    from .process_runs import apply as apply_process_runs
+    if (pr := apply_process_runs(project, builder)):
+        stats["process_runs"] = pr
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

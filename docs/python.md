@@ -210,7 +210,15 @@ def run(module, *args):                                # the program is a parame
 ```
 
 `-m` modules, `-c` snippets (what they call), script paths and the console scripts the packaging metadata declares
-are recognised, also as `shutil.which("tool")` and shell strings; helpers are followed through up to 5 calls. Programs
+are recognised, also as `shutil.which("tool")` and shell strings; helpers are followed through up to 5 calls.
+Argument lists built step by step (`cmd.append(...)`, `cmd += [...]`, `cmd.extend(...)`, `cmd.insert(0, ...)`, an
+append of the loop variable in a `for` over a known list) are applied in order; `__file__`, `mod.__file__`,
+`os.path.dirname()` and `Path(...).parent` evaluate to project paths. Installed runners whose program is a
+parameter come from a table: `scripttest.TestFileEnvironment.run` (pip's `script.pip(...)` through its subclass),
+pytest's `Pytester.run` (the `pytester` / `testdir` fixtures), `sh.tool(...)` / `sh.Command("tool")(...)` and plumbum
+`local["tool"][...]()`. `python -c "import pkg.plugin"` (no project calls) links to the imported module; a script the
+function first copies from a project file or a template (`shutil.copyfile(".../manage.py-tpl", tmp / "manage.py")`)
+links to the source, a template being read as Python for what it calls (`how: copied template`). Programs
 outside the project (`git`, `-m pip`) add nothing. The Python plugin stats carry a `subprocess` block: process starts,
 runners (helpers whose program is a parameter), `linked` by kind, `outside_project` and `unresolved`, with samples.
 Rules: [channels-and-tests.md](channels-and-tests.md#tests).
@@ -222,12 +230,18 @@ Rules: [channels-and-tests.md](channels-and-tests.md#tests).
 | django/django | 5 (`-m django`, 2 through `AdminScriptTestCase.run_test`) | 0 -> 100 of 19,832 | 61.1 s -> 63.3 s |
 | mkdocs/mkdocs | 2 (`mkdocs build` from its integration script) | - (no test cases) | 1.2 s -> 1.2 s |
 | httpie, flake8 | 0 (their tests call the CLI in process; subprocess runs start `git`, `pyinstaller`, ...) | unchanged | unchanged |
+| pypa/pip (#60: `scripttest` runner) | 8 -> 15 | 6 -> 828 of 1,939 | within noise (9.7 s / 9.2 s) |
+| django/django (#60: copied `manage.py-tpl`, `runtests.py` re-running itself) | 5 -> 9 | 100 -> 218 of 19,837 | within noise (75 s / 71 s) |
+| pytest / pylint / httpie (#60) | 12 -> 13 / 13 -> 13 / 0 -> 1 | 1,260 -> 1,261 / 10 -> 10 / 0 -> 4 | unchanged |
 
 In pytest, 102 tests call `pytester.runpytest_subprocess()` (which runs `python -mpytest`) and 10 run `-m pytest`
 themselves; the other 1,148 reach it through `pytester.runpytest()`, which runs in a subprocess under
 `--runpytest=subprocess`. In Django the admin-script tests reach `django.__main__` through `run_django_admin()`;
-`run_manage()` runs a `./manage.py` the test copies into a temporary directory, which stays unresolved (a bare file
-name only matches the project root). No other edge changed in any of these repositories.
+`run_manage()` runs a `./manage.py` the test copies into a temporary directory from
+`django/conf/project_template/manage.py-tpl`; since #60 that copy links to `execute_from_command_line`, which the
+template calls. In pip, `PipTestEnvironment.pip()` runs the `pip` console script through scripttest's
+`TestFileEnvironment.run`, so the 828 tests that use the `script` fixture reach pip's CLI. No other edge changed in
+any of these repositories (#60: 0 edges lost on pytest, pylint, pip, Django, httpie, mkdocs, flake8).
 
 `cg coverage` adds a `python tests:` line (cases per framework, test files, fixtures, HTTP test requests and how many
 reached a route), and the Python plugin stats carry the same under `tests`.

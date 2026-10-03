@@ -150,10 +150,36 @@ routers and controllers that a TypeScript test builds for itself (`const app = e
   `shutil.which("mytool")`) -> `script:console_scripts:mytool`. A helper whose program is a parameter
   (`def run(*args): subprocess.run([sys.executable, *args])`) is followed to its call sites through up to 5 helpers
   (`run_django_admin(args)` -> `run_test(["-m", "django", *args])`, pytest's `runpytest_subprocess` ->
-  `run(*cmdargs)` -> `popen(cmdargs)`), with local reassignments read in order. Programs outside the project (`git`,
-  `-m pip`) and unknown argument lists add nothing; the Python plugin stats count them under `subprocess`. click /
-  typer `CliRunner().invoke(app, ...)` on a typer app or click group object also references the commands
-  registered on it.
+  `run(*cmdargs)` -> `popen(cmdargs)`), with local reassignments read in order and the `append` / `extend` /
+  `insert` / `+=` mutations between the assignment and the call applied (a mutation in a loop adds the loop's items
+  when it appends the loop variable of a `for` over a known list, else one unknown item). Installed runners stand in
+  through a table: `scripttest.TestFileEnvironment.run` (also a project subclass and its `super().run`), pytest's
+  `Pytester.run` / the `pytester` / `testdir` fixtures, `sh.mytool(...)` / `sh.Command("mytool")(...)` and plumbum
+  `local["mytool"][...]()`. A `-c` snippet that calls nothing of the project but imports a project module
+  (`python -c "import pkg.plugin"`) links to that module (`how: -c import`). A script the same function copies
+  from a project file first (`shutil.copy / copy2 / copyfile(src, dst)`, `dst.write_text(src.read_text()...)`) links
+  to the source (`how: copied script`, `copied_from`); a template that is not a module (`manage.py-tpl`) is read as
+  Python and links to what it calls (`how: copied template`). Programs outside the project (`git`, `-m pip`) and
+  unknown argument lists add nothing; the Python plugin stats count them under `subprocess`. click / typer
+  `CliRunner().invoke(app, ...)` on a typer app or click group object also references the commands registered on it.
+- Other languages' programs run in a subprocess (`codegraph/process_runs.py`, stats `process_runs`): `CALLS`
+  (`via: subprocess`, `how`, `command`; `TEST_CALLS` once test code is isolated) from the enclosing test or
+  function. Rust: `env!("CARGO_BIN_EXE_x")`, `Command::cargo_bin("x")` / `cargo_bin!` (also with
+  `env!("CARGO_PKG_NAME")`) -> the `main` of bin target `x`. Node: `child_process` `spawn / spawnSync / execFile /
+  execFileSync / fork / exec / execSync` and `execa / execaSync / execaNode / execaCommand` running `node`, `tsx`,
+  `ts-node`, `bun` or `process.execPath` with a project script, `fork(script)`, `npx <bin>` or a `package.json`
+  `bin` name -> the script's module node. PHP: `new Process(['php', 'artisan', 'x'])`, `Process::run('php artisan
+  x')`, `exec / shell_exec / system / passthru` -> the artisan command node; `$this->artisan('x')` in a feature test
+  (in process) is a `DISPATCHES` edge to the command, like `Artisan::call()`. Dart: `Process.run / runSync / start`
+  and `TestProcess.start` running `dart` / `flutter` / `Platform.resolvedExecutable` with a project `.dart` file ->
+  that file's `main`. The program and script come from string literals in the call or from the last assignment of
+  a name it passes earlier in the same function (or a module-level constant above it); values built elsewhere are
+  not followed. Measured on public repositories (October 2026, tests with a path to the entry point, before ->
+  after): koel (Laravel, `$this->artisan`) 0 -> 56 of 3,400, pixelfed 0 -> 89 of 1,410; dart-lang/dart_style 0 -> 6
+  of 18 test files (`compileFormatter` runs `bin/format.dart`); ripgrep 1 link (`Dir::bin` -> `rg` `main` through
+  `CARGO_BIN_EXE_rg`) but 0 tests, because its `rgtest!` macro bodies have no call edges; tj/commander.js 1 (a test
+  fixture program); eslint 0 (`bin/eslint.js` has only top-level code, so the TypeScript layer gives it no node;
+  counted as `script_without_node`). No existing edge changed.
 
 HTTP endpoints that only tests call are tagged `test_only` and kept out of the frontend → backend match rates.
 
