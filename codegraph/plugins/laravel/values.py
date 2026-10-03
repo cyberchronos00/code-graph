@@ -87,7 +87,7 @@ def sig_of(atoms: list[dict]) -> list[str]:
         elif k == "setting":
             add(f"setting:{a['key']}")
         elif k == "column":
-            add(f"column:{a['column']}")
+            add(f"column:{'|'.join(a.get('candidates') or [a['column']])}")
         elif k in ("config", "env"):
             add(f"{k}:{a['key']}")
         elif k == "call":
@@ -517,11 +517,22 @@ class ValueAnalysis:
             return self.call_atom(d, fn, line, depth, bind, seen, norm)
         if k == "prop":
             prop = d.get("n")
-            for t in self.types(d.get("of"), fn):
-                if t in self.lv.models and prop and prop.lower() not in self.lv.models[t]["relations"]:
-                    tbl = self.lv.table_of(t)
-                    return [{"kind": "column", "column": f"{tbl}.{prop}", "how": f"{t.split(chr(92))[-1]}->{prop}", "at": at,
-                             "norm": list(norm) or None}]
+            models = sorted(t for t in self.types(d.get("of"), fn)
+                            if t in self.lv.models and prop and prop.lower() not in self.lv.models[t]["relations"])
+            if models:
+                # #79: a receiver that can be several models (`Income|Expense $doc`) reads the column of each, in a
+                # stable order; narrowed to the tables whose migrations declare the column, else to the tables the
+                # migrations create (not an abstract base model's guessed table)
+                cands = [(t, self.lv.table_of(t)) for t in models]
+                declared = getattr(self.lv, "col_tables", {}).get(prop, ())
+                tables = getattr(self.lv, "tables", {})
+                cands = [c for c in cands if c[1] in declared] or [c for c in cands if c[1] in tables] or cands
+                cols = list(dict.fromkeys(f"{tb}.{prop}" for _, tb in cands))
+                a = {"kind": "column", "column": cols[0], "how": "|".join(t.split(chr(92))[-1] for t, _ in cands) + f"->{prop}",
+                     "at": at, "norm": list(norm) or None}
+                if len(cols) > 1:
+                    a["candidates"] = cols
+                return [a]
             return [{"kind": "expr", "text": self.text(d), "at": at}]
         return [{"kind": "expr", "text": self.text(d), "at": at}]
 
@@ -667,13 +678,15 @@ class ValueAnalysis:
                 b.add_edge(fn.id, rid, "HAS_RESOLUTION", fn.file, line, EXACT, target=target)
                 order = 0
                 for a in self._flat(atoms):
-                    dst = self._source_node(a)
-                    if dst:
+                    alts = a.get("candidates") if a["kind"] == "column" else None
+                    dsts = [d for d in ([self._source_node({**a, "column": c}) for c in alts] if alts else [self._source_node(a)]) if d]
+                    if dsts:
                         order += 1
+                    for dst in dsts:   # one fallback step; several columns when the receiver can be several models (#79)
                         b.add_edge(rid, dst, "FALLS_BACK_TO", a.get("at", "").rsplit(":", 1)[0] or fn.file,
                                    int(a["at"].rsplit(":", 1)[1]) if a.get("at") and a["at"].rsplit(":", 1)[1].isdigit() else line,
                                    EXACT if a["kind"] in ("setting", "input", "config", "env") else RESOLVED,
-                                   order=order, default=a.get("default"))
+                                   order=order, default=a.get("default"), **({"ambiguous": True, "candidates": alts} if alts else {}))
                 self.stats["resolutions"] += 1
 
     def _flat(self, atoms):

@@ -16,6 +16,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - Python indexing finishes on projects whose attributes are re-assigned from expressions over themselves (langgraph:
   did not finish in 400 s, now 14 s): attribute types are memoised per class and attribute, a cycle back to an
   attribute being inferred is unknown, and one inference has a work budget. The stats report `inference_limits`.
+- Laravel graphs no longer depend on the hash seed: a property read in a `??` chain on a receiver that can be several
+  models (`Income|Expense $document`) went to the column of whichever model came first in a set; it now reads one
+  column per model in one step (edges `ambiguous`, `candidates`), narrowed to the tables that declare the column.
 
 ## [0.8.0] - 2026-10-03
 
