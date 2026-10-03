@@ -10,6 +10,15 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Python tests that run the project's programs in a subprocess link to the entry point (`TEST_CALLS`,
+  `via: subprocess`): `python -m pkg.cli` (also `-mpkg`, `-Im`, `-X dev`), `python -c "<code>"` (what the snippet
+  calls), script paths, the console scripts the packaging metadata declares (also via `shutil.which`), in
+  `subprocess.*`, `asyncio.create_subprocess_*` and `os.system / popen / exec*`, with the argument list evaluated
+  through local variables, helper return values and shell strings. CLI helpers whose program is a parameter are
+  followed to their call sites through up to 5 calls (pytest's `runpytest_subprocess`, Django's `run_django_admin`).
+  `CliRunner().invoke(app)` on a typer app references its commands. pytest: 0 -> 1,260 of 3,512 tests reach an entry
+  point; pylint 0 -> 10; Django 0 -> 100.
+
 - Python web routes: apps / routers received as a parameter (`def register_routes(app)`, bound through the call
   that passes a known app or the pytest fixture of that name), returned by a factory (`app = create_app()`,
   `app.mount("/admin", make_admin())`) or built from a Flask subclass defined in a function; fastapi-utils

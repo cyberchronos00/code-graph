@@ -140,6 +140,20 @@ routers and controllers that a TypeScript test builds for itself (`const app = e
   unknown names no route, and a route name shared by many routes (unnamed routes inside a named group) is left
   unmatched.
 - `TEST_VISITS`: a browser test opens a frontend page (`page.goto('/boards/1')`, `cy.visit`).
+- Python programs run in a subprocess: `TEST_CALLS` (`via: subprocess`, `how`, `command`, `helper`) from the test
+  code to the entry point it starts, so the end-to-end tests that drive a CLI count for everything the CLI reaches.
+  Read from `subprocess.run / call / check_call / check_output / Popen / getoutput`, `asyncio.create_subprocess_exec
+  / _shell` and `os.system / popen / exec*` with an evaluable argument list: `[sys.executable, "-m", "pkg.cli", ...]`
+  (also `-mpkg`, `-Im`, `-X dev`) -> `script:pkg.cli` (`script:pkg.__main__` for a package, the module itself when
+  it has no `__main__` block); `-c "<code>"` -> what the snippet calls, its imports resolved; `"path/to/tool.py"` ->
+  that file's entry (matched by path suffix; a bare `manage.py` only at the project root); a console script the project declares (`["mytool", ...]`,
+  `shutil.which("mytool")`) -> `script:console_scripts:mytool`. A helper whose program is a parameter
+  (`def run(*args): subprocess.run([sys.executable, *args])`) is followed to its call sites through up to 5 helpers
+  (`run_django_admin(args)` -> `run_test(["-m", "django", *args])`, pytest's `runpytest_subprocess` ->
+  `run(*cmdargs)` -> `popen(cmdargs)`), with local reassignments read in order. Programs outside the project (`git`,
+  `-m pip`) and unknown argument lists add nothing; the Python plugin stats count them under `subprocess`. click /
+  typer `CliRunner().invoke(app, ...)` on a typer app or click group object also references the commands
+  registered on it.
 
 HTTP endpoints that only tests call are tagged `test_only` and kept out of the frontend → backend match rates.
 

@@ -195,6 +195,40 @@ tests: 1 direct, 1 transitive (of 2 test cases in the graph: pytest 2)
       test:tests.test_checks.test_validate_accepts_small_items -TEST_CALLS-> tests.test_checks.test_validate_accepts_small_items -TEST_CALLS-> checks.validate -CALLS-> checks.check_size
 ```
 
+**Tests that run a program.** A test that starts the project's own program in a subprocess gets `TEST_CALLS`
+(`via: subprocess`) to the entry point, so `cg tests` counts it for everything the program reaches:
+
+```python
+def test_cli_index(tmp_path):
+    subprocess.run([sys.executable, "-m", "pkg.cli", "index", str(tmp_path)])   # -> script:pkg.cli
+
+def run_cli(*args):                                    # a helper with the program fixed: CALLS -> script:pkg.cli,
+    return subprocess.run([sys.executable, "-m", "pkg.cli", *args])            # every test calling it reaches it
+
+def run(module, *args):                                # the program is a parameter: each call site is evaluated
+    return subprocess.run([sys.executable, "-X", "dev", "-m", module, *args])
+```
+
+`-m` modules, `-c` snippets (what they call), script paths and the console scripts the packaging metadata declares
+are recognised, also as `shutil.which("tool")` and shell strings; helpers are followed through up to 5 calls. Programs
+outside the project (`git`, `-m pip`) add nothing. The Python plugin stats carry a `subprocess` block: process starts,
+runners (helpers whose program is a parameter), `linked` by kind, `outside_project` and `unresolved`, with samples.
+Rules: [channels-and-tests.md](channels-and-tests.md#tests).
+
+| Project | subprocess runs linked | tests with a path to an entry point | index time |
+|---|---|---|---|
+| pytest-dev/pytest | 12 (11 `-m pytest` through `Pytester.run` / `popen`, 1 console script) | 0 -> 1,260 of 3,512 | 5.6 s -> 5.5 s |
+| pylint-dev/pylint | 13 (`-m pylint`) | 0 -> 10 of 737 | 5.6 s -> 5.5 s |
+| django/django | 5 (`-m django`, 2 through `AdminScriptTestCase.run_test`) | 0 -> 100 of 19,832 | 61.1 s -> 63.3 s |
+| mkdocs/mkdocs | 2 (`mkdocs build` from its integration script) | - (no test cases) | 1.2 s -> 1.2 s |
+| httpie, flake8 | 0 (their tests call the CLI in process; subprocess runs start `git`, `pyinstaller`, ...) | unchanged | unchanged |
+
+In pytest, 102 tests call `pytester.runpytest_subprocess()` (which runs `python -mpytest`) and 10 run `-m pytest`
+themselves; the other 1,148 reach it through `pytester.runpytest()`, which runs in a subprocess under
+`--runpytest=subprocess`. In Django the admin-script tests reach `django.__main__` through `run_django_admin()`;
+`run_manage()` runs a `./manage.py` the test copies into a temporary directory, which stays unresolved (a bare file
+name only matches the project root). No other edge changed in any of these repositories.
+
 `cg coverage` adds a `python tests:` line (cases per framework, test files, fixtures, HTTP test requests and how many
 reached a route), and the Python plugin stats carry the same under `tests`.
 

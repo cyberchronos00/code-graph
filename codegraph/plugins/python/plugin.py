@@ -1354,6 +1354,11 @@ class PythonPlugin(LanguagePlugin):
         for m in prog.modules.values():
             n_env += self.env_reads(prog, b, m.id, m.tree, Ctx(m, None, None), top_only=True)
         refs = self.references_and_entries(prog, b, conf_ct, rp)
+        # programs started in a subprocess (`python -m pkg.cli`, console scripts) -> their entry points (subproc.py)
+        from .subproc import Subprocesses
+        sub_st = Subprocesses(prog, b, Ctx, FuncInfo, ClassInfo, dotted, walk_body, rp).link()
+        if sub_st:
+            refs["subprocess"] = sub_st
         # pytest / unittest: test code marked attrs.test, test cases, fixtures, HTTP test requests (tests.py)
         with gc_paused():
             tests_st = self.tests.index()
