@@ -8,6 +8,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- AI harnesses: LLM tools and MCP primitives as protocol endpoints (`endpoint:llm_tool:<name>`,
+  `endpoint:mcp_tool|mcp_resource|mcp_prompt:<server>/<name>`, entry kind `llm_tool`) from FastMCP / MCPServer /
+  low-level servers, MCP client calls, OpenAI / Anthropic schema literals, Agents SDK `@function_tool` and
+  `Agent(tools, handoffs)` (`agent:<name>`, OFFERS_TOOL, HANDS_OFF_TO), LangChain, LlamaIndex and hand-written agent
+  loops (dict registries, `if` / `match` on the name; dynamic dispatch reported, not linked), model calls recorded
+  for #40; `cg tools` / MCP `llm_tools`; cg's own MCP tools are endpoints now instead of decorator references
+  ([docs/ai-tools.md](docs/ai-tools.md), [#66](https://github.com/cyberchronos00/code-graph/issues/66)).
+
 ## [0.7.1] - 2026-10-03
 
 ### Fixed

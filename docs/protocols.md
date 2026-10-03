@@ -59,7 +59,8 @@ Shared matchers (`codegraph/protocols/matchers.py`):
 | `glob` | shell-style `*` / `?` / `[...]` over the whole name | kafka (regex subscriptions written as globs), redis-pubsub (PSUBSCRIBE) |
 | `template` | whole-name `{param}` templates | socketio |
 | `dotted` | `.` segments with `{param}` | pusher |
-| `exact` | same name | bridges, nest-*, jobs, events |
+| `exact` | same name | bridges, nest-*, jobs, events, llm_tool |
+| `mcp` | `<server>/<name>`: `*` for a client that does not name the server, `{param}` URI templates | mcp_tool, mcp_resource, mcp_prompt ([ai-tools.md](ai-tools.md)) |
 
 ## Existing kinds in the same view
 

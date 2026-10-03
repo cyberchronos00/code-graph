@@ -95,6 +95,9 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
                           "@ReactMethod / channel handler); attrs.platform"),
     "MATCHES_ENDPOINT": (True, "send-side endpoint -> receive-side endpoint of the same protocol whose name matches by the "
                                "protocol's rules (wildcards, {param} templates); attrs.pattern, segments"),
+    # AI harnesses (#66): agents and the tools they expose (tools themselves are endpoint:llm_tool / mcp_tool nodes)
+    "OFFERS_TOOL": (True, "agent -> a tool endpoint it gives the model (Agents SDK Agent(tools=), create_react_agent)"),
+    "HANDS_OFF_TO": (True, "agent -> agent it can hand the conversation to (Agents SDK handoffs=[...])"),
     # generated / copied files (codegraph/core/generated.py), only with --include-generated
     "COPY_OF": (False, "copied file (Capacitor / Cordova web assets in a native project) -> the source file it is copied from"),
     # test code (tests/, *.spec.ts, ...). Never propagating: tests do not change blast radius, caller counts or entry
@@ -125,6 +128,9 @@ RUNTIME_ENTRY_KINDS += ("message_handler",)
 ENTRY_KINDS += ("channel_auth",)
 RUNTIME_ENTRY_KINDS += ("channel_auth",)
 OPERATOR_ENTRY_KINDS += ("cli_command",)
+# AI harnesses: a tool endpoint the model (agent runner) or an MCP client calls by name
+ENTRY_KINDS += ("llm_tool",)
+RUNTIME_ENTRY_KINDS += ("llm_tool",)
 
 
 @dataclass

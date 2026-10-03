@@ -75,6 +75,9 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   routes, Pusher channels, Nest messages, jobs, events, bridges, Socket.IO ...): a summary per protocol, or senders,
   receivers, guards, matches and checks (no_receiver, no_sender, ambiguous, schema_mismatch, unguarded) per endpoint.
   See [protocols.md](protocols.md).
+- `tools [PATTERN] [--framework F] [--agent A] [--unmatched]`: LLM tools and MCP tools / resources / prompts: handler,
+  tables it reaches, agents offering them, callers and checks (no_receiver, no_sender, name_collision); agents,
+  dynamic dispatch and model calls. See [ai-tools.md](ai-tools.md).
 - `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
   [channels-and-tests.md](channels-and-tests.md#tests).
 - `platforms [summary|divergence] [--target T] [--kind K]`: platform-specific code: the project's targets and where
@@ -588,6 +591,29 @@ options:
   --protocol {capacitor,react-native,flutter,flutter-event,electron-ipc,electron-preload,tauri}
   --unmatched           only endpoints with a check: missing on a platform, no
                         receiver, no sender, external
+```
+
+### `tools`
+
+```
+usage: cg tools [-h] --db DB [--json] [--framework FRAMEWORK] [--agent AGENT]
+                [--unmatched] [--max-items MAX_ITEMS]
+                [pattern]
+
+positional arguments:
+  pattern               tool name, substring or glob
+
+options:
+  -h, --help            show this help message and exit
+  --db DB
+  --json
+  --framework FRAMEWORK
+                        mcp, openai, anthropic, langchain, openai-agents,
+                        llamaindex, custom
+  --agent AGENT         only tools this agent offers (name or glob)
+  --unmatched           only tools with a check (no_receiver, no_sender,
+                        name_collision)
+  --max-items MAX_ITEMS
 ```
 
 ### `protocols`

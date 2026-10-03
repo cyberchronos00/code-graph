@@ -40,6 +40,10 @@ Protocol endpoints ([protocols.md](protocols.md), no lang): endpoint (`endpoint:
 `event`, `schema`, `test_only`; a received endpoint of a network protocol is a `message_handler` entry). Existing kinds
 (http, route, channel, channel_sub, message, job, event) keep their ids and are read as protocol endpoints by
 `cg protocols`.
+AI harnesses ([ai-tools.md](ai-tools.md), no lang): endpoint `endpoint:llm_tool:<name>`, `endpoint:mcp_tool:<server>/<name>`,
+`endpoint:mcp_resource:<server>/<uri template>`, `endpoint:mcp_prompt:<server>/<name>` (attrs `framework`, `description`,
+`params`, `schema_source`, `toolset`, `server`; a received one is an `llm_tool` entry); agent (`agent:<name>`, attrs
+`framework`, `model`, `tools`). Functions may carry `attrs.llm_dynamic_dispatch` and `attrs.llm_calls`.
 Web / native bridges ([bridges.md](bridges.md), no lang): endpoint (`endpoint:<protocol>:<module>#<method>`, protocol
 capacitor, react-native, flutter; `endpoint:flutter-event:<channel>`; desktop processes: `endpoint:electron-ipc:<channel>`,
 `endpoint:electron-preload:<key>#<member>`, `endpoint:tauri:<command>`; attrs `protocol`, `transport`, `namespace`,
@@ -82,6 +86,8 @@ Protocol links ([protocols.md](protocols.md)): SENDS_TO✓ (code → endpoint; a
 request / invoke / enqueue, `library`, `process`, `room`, `ack`, `schema`), RECEIVED_BY✓ (endpoint → handler),
 MATCHES_ENDPOINT✓ (send-side endpoint → receive-side endpoint matched by wildcard / template; attrs `sender_name`,
 `pattern`, `segments`, `ambiguous`).
+AI harnesses ([ai-tools.md](ai-tools.md)): OFFERS_TOOL✓ (agent → tool endpoint), HANDS_OFF_TO✓ (agent → agent);
+SENDS_TO with `role` = offer (schema / tools list given to the model) or invoke (MCP client call).
 Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind; Python test → fixture and
 fixture → fixture with `via` = fixture / autouse fixture and `attrs.fixture`), TEST_HTTP (test → route),
 TEST_VISITS (browser test → page). None of them propagate, so tests never count as callers.
@@ -109,7 +115,7 @@ MAPS_TO_TABLE, HAS_RELATION, CONTAINS, EXTENDS, IMPLEMENTS, USES_TRAIT, INSTANTI
 - `heuristic`: a unique-method-name fallback, or a column-name literal.
 
 **Entry kinds:**
-- Runtime: `http_route`, `channel_auth` (a broadcast channel's authorization callback), `websocket` (Django Channels routes), `scheduled`, `queue_job` (Laravel jobs, Celery tasks), `listener` (Laravel listeners, Django signal receivers), `message_handler` (Nest microservice / WebSocket / gRPC handlers, MCP server tools / resources / prompts in Python).
+- Runtime: `http_route`, `channel_auth` (a broadcast channel's authorization callback), `websocket` (Django Channels routes), `scheduled`, `queue_job` (Laravel jobs, Celery tasks), `listener` (Laravel listeners, Django signal receivers), `message_handler` (Nest microservice / WebSocket / gRPC handlers, MCP server tools / resources / prompts in Python), `llm_tool` (an LLM tool or MCP tool / resource / prompt endpoint: called by a model or an MCP client).
 - Operator: `artisan_command`, `management_command` (Django `manage.py <name>`), `cli_command` (nest-commander, click / typer / Flask CLI commands), `admin_panel` (Filament, Django admin).
 - `observer`.
 - Program entry: `main` (Rust bin targets, `#[tokio::main]`, C/C++ `main`; Python `__main__` blocks, `pkg/__main__.py`,

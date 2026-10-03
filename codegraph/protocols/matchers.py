@@ -109,13 +109,28 @@ def template(send: str, recv: str) -> dict | None:
     return None
 
 
+def mcp(send: str, recv: str) -> dict | None:
+    """MCP primitives `<server>/<name or uri template>`: a client that does not know the server sends `*/<name>`; the
+    rest matches exactly or by `{param}` URI template (`notes://{id}` ~ `notes://42`)."""
+    ss, _, sr = send.partition("/")
+    rs, _, rr = recv.partition("/")
+    if ss not in ("*", rs):
+        return None
+    i = template(sr, rr)
+    if i is None:
+        return None
+    if ss == "*":
+        i["wild"] += 1
+    return i
+
+
 mqtt = topic("/", "+", "#")
 nats = topic(".", "*", ">", many_min=1)
 amqp_topic = topic(".", "*", "#", many_last=False)
 dotted = topic(".", None, None)          # `{param}` templates only (Laravel channel names, Socket.IO rooms)
 
 MATCHERS = {"exact": exact, "glob": glob, "path": path, "template": template, "mqtt": mqtt, "nats": nats, "amqp_topic": amqp_topic,
-            "dotted": dotted}
+            "dotted": dotted, "mcp": mcp}
 
 
 def rank(info: dict) -> tuple:

@@ -54,3 +54,12 @@ register(Protocol("redis-pubsub", "tcp", "Redis PUBLISH -> SUBSCRIBE / PSUBSCRIB
                   fanout=True, ports=(6379,), schemes=("redis", "rediss")))
 register(Protocol("socketio", "tcp", "Socket.IO event (<namespace>#<event>; emit -> on, both directions; python-socketio "
                   "server and client)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True))
+
+# ---- AI harnesses (#66, codegraph/plugins/python/aitools.py): tools the model or an MCP client calls by name
+register(Protocol("llm_tool", "local", "LLM tool / function: schema offered to the model (OpenAI, Anthropic, LangChain, "
+                  "Agents SDK, LlamaIndex) -> handler (decorated function, dict registry, agent-loop branch)",
+                  entry_kind="llm_tool"))
+for _n, _d in (("mcp_tool", "MCP tool"), ("mcp_resource", "MCP resource (URI template)"), ("mcp_prompt", "MCP prompt")):
+    register(Protocol(_n, "tcp", f"{_d}: <server>/<name>; client call_tool / read_resource / get_prompt -> FastMCP / "
+                      "MCPServer handler (`*/<name>` from a client that does not name the server)", matcher=M.mcp,
+                      entry_kind="llm_tool", schemes=("stdio", "http", "https")))

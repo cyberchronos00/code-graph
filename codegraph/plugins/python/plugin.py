@@ -1383,6 +1383,11 @@ class PythonPlugin(LanguagePlugin):
         sio_st = socketio_index(prog, b, walk_body)
         if sio_st:
             refs["socketio"] = sio_st
+        # LLM tools, MCP servers / clients, agents -> endpoint:llm_tool / mcp_* (protocol model, #66)
+        from .aitools import index as ai_index
+        ai_st = ai_index(prog, b, walk_body, Ctx)
+        if ai_st:
+            refs["ai_tools"] = ai_st
         # pytest / unittest: test code marked attrs.test, test cases, fixtures, HTTP test requests (tests.py)
         with gc_paused():
             tests_st = self.tests.index()

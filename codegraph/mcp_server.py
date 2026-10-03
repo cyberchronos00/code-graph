@@ -3,7 +3,7 @@
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
 Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, starters, index, downstream, path,
-api_calls, resolutions, channels, bridges, protocol_links, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+api_calls, resolutions, channels, bridges, protocol_links, llm_tools, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -649,6 +649,19 @@ def protocol_links(pattern: str | None = None, protocol: str | None = None, side
     packages). impact / reaches / path / downstream follow SENDS_TO / RECEIVED_BY / MATCHES_ENDPOINT as usual."""
     from .protocols.view import protocols as _pr, render_protocols
     return render_protocols(_pr(_st(), pattern, protocol=protocol, side=side, unmatched=unmatched))
+
+
+@tool
+def llm_tools(pattern: str | None = None, framework: str | None = None, unmatched: bool = False, agent: str | None = None) -> str:
+    """LLM tools and MCP primitives (#66): tools offered to a model (OpenAI / Anthropic schema literals, LangChain @tool /
+    StructuredTool / BaseTool, Agents SDK @function_tool, LlamaIndex FunctionTool, dict registries and if / match branches
+    of agent loops) and MCP server tools / resources / prompts (FastMCP / MCPServer, low-level call_tool) with their
+    handler, the tables the handler reaches, the agents offering them and the code calling them (MCP client call_tool /
+    read_resource / get_prompt). Checks: no_receiver, no_sender, name_collision; plus agents (model, tools, handoffs),
+    dynamic_dispatch (an agent loop picking the tool by a runtime name, not linked) and model calls. framework: mcp |
+    openai | anthropic | langchain | openai-agents | llamaindex | custom."""
+    from .aitools import render_tools, tools as _tools
+    return render_tools(_tools(_st(), pattern, framework=framework, unmatched=unmatched, agent=agent))
 
 
 @tool

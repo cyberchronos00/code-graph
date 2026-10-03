@@ -44,6 +44,7 @@ class Protocol:
     source: str = "endpoint"             # endpoint (protocol_send / protocol_receive) | the adapter of an existing kind
     kinds: tuple = ("endpoint",)         # node kinds holding its endpoints
     aliases: tuple = field(default_factory=tuple)
+    entry_kind: str = "message_handler"  # entry kind of a receiving endpoint (llm_tool: called by a model / MCP client)
     framework_senders: tuple = ()        # name globs the framework itself sends (Django's post_save, ...): never no_sender
 
 
@@ -125,7 +126,7 @@ def protocol_receive(builder, protocol: str, name: str, handler: str, file: str 
     if guards is not None:
         n.attrs["guards"] = sorted(set(n.attrs.get("guards") or []) | set(guards))
     if (p is None or p.entry) and not n.entry_kind:
-        n.entry_kind = "message_handler"
+        n.entry_kind = p.entry_kind if p else "message_handler"
     builder.add_edge(nid, handler, "RECEIVED_BY", file=file, line=line, confidence=confidence,
                      **{k: v for k, v in attrs.items() if v not in (None, [], "")})
     return nid

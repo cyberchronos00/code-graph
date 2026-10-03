@@ -39,6 +39,9 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 - `protocol_links(pattern?, protocol?, side?, unmatched?)`: every protocol endpoint (HTTP, Pusher channels, Nest
   messages, jobs, events, bridges, Socket.IO ...) with senders, receivers, guards, matches and the checks no_receiver,
   no_sender, ambiguous, schema_mismatch, unguarded (see [protocols.md](protocols.md));
+- `llm_tools(pattern?, framework?, unmatched?, agent?)`: LLM tools and MCP tools / resources / prompts with their
+  handler, the tables it reaches, the agents offering them and the code calling them; agents, dynamic dispatch and
+  model calls (see [ai-tools.md](ai-tools.md));
 - `tests_covering(target, min_confidence?, paths?)`: the tests that exercise a symbol, route or table, direct and
   transitive, closest first, with the test cases in the graph per framework (PHPUnit, Pest, Vitest, Jest,
   Playwright, Cypress, pytest, unittest; see [channels-and-tests.md](channels-and-tests.md#tests));

@@ -16,6 +16,7 @@
   python -m codegraph.cli channels [PATTERN] --db ...   (who can join, which events publish, which client code listens)
   python -m codegraph.cli tests <spec> --db ...          (tests covering a symbol / route / table: direct + transitive)
   python -m codegraph.cli bridges [PATTERN] --db ... [--protocol capacitor] [--unmatched]   (web / native bridge calls)
+  python -m codegraph.cli tools [PATTERN] --db ... [--framework F] [--agent A] [--unmatched]   (LLM / MCP tools: handler, tables, agents, checks)
   python -m codegraph.cli protocols [PATTERN] --db ... [--protocol P] [--side send|receive] [--unmatched]   (every protocol endpoint: senders, receivers, checks)
   python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
   reaches / impact / downstream / path / routes / search take --platform TARGET: only code built for that target
@@ -132,6 +133,14 @@ def main(argv=None):
     p.add_argument("--side", choices=["send", "receive"]); p.add_argument("--max-items", type=int, default=60)
     p.add_argument("--unmatched", action="store_true", help="only endpoints with a check (no_receiver, no_sender, ambiguous, "
                                                             "schema_mismatch, unguarded) or an external peer")
+    p = sub.add_parser("tools", help="LLM tools and MCP tools / resources / prompts: handler, tables it reaches, agents "
+                                      "offering it, callers, checks; agents, dynamic dispatch, model calls")
+    p.add_argument("pattern", nargs="?", help="tool name, substring or glob")
+    p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("--framework", help="mcp, openai, anthropic, langchain, openai-agents, llamaindex, custom")
+    p.add_argument("--agent", help="only tools this agent offers (name or glob)")
+    p.add_argument("--unmatched", action="store_true", help="only tools with a check (no_receiver, no_sender, name_collision)")
+    p.add_argument("--max-items", type=int, default=60)
     p = sub.add_parser("tests", help="tests covering a symbol / route / table: direct (test code calls it) and transitive (through app code)")
     p.add_argument("spec", help="Class::method, Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-paths", action="store_true")
@@ -296,6 +305,12 @@ def main(argv=None):
         from .bridges import bridges, render_bridges
         res = bridges(st, a.pattern, protocol=a.protocol, unmatched=a.unmatched)
         print(json.dumps(res, indent=1, default=str) if a.json else render_bridges(res))
+        return
+    if a.cmd == "tools":
+        from .aitools import render_tools, tools
+        res = tools(st, a.pattern, framework=a.framework, unmatched=a.unmatched, agent=a.agent,
+                    max_items=max(a.max_items, 200) if a.json else a.max_items)
+        print(json.dumps(res, indent=1, default=str) if a.json else render_tools(res, max_items=a.max_items))
         return
     if a.cmd == "protocols":
         from .protocols.view import protocols, render_protocols
