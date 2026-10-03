@@ -109,7 +109,11 @@ foreach ($w in ($With.Split(",") | Where-Object { $_ })) {
             else { Say "rust: install Rust from https://rustup.rs, then: rustup component add rust-analyzer" }
         }
         { $_ -in "c", "cpp" } { Say "c: scip-clang has no Windows release binary; C / C++ stays heuristic (docs/native.md)" }
-        "kotlin" { Say "kotlin: install a JDK 17+ (https://adoptium.net) and coursier (https://get-coursier.io), then: cs install scip-java; opt in with CODEGRAPH_KOTLIN_SCIP=1" }
+        "kotlin" {
+            Say "kotlin: install a JDK 17+ (https://adoptium.net) and coursier (https://get-coursier.io), then: cs install scip-java (0.12: Kotlin <= 2.1 builds); opt in with CODEGRAPH_KOTLIN_SCIP=1"
+            # install.sh also fetches the scip-java 0.13.1 launcher (Kotlin 2.2.0 - 2.2.10); that release ships only a POSIX sh launcher
+            Say "kotlin: scip-java 0.13.x (Kotlin 2.2.0 - 2.2.10 builds) has no Windows launcher; under WSL use install.sh --with kotlin, or index with --scip index.scip (docs/kotlin.md#exact-mode)"
+        }
         "swift" { Say "swift: install the Swift toolchain (https://www.swift.org/install/windows/); opt in with CODEGRAPH_SWIFT_INDEX=1" }
         default { Say "-With: unknown '$w' (rust, c, kotlin, swift)" }
     }

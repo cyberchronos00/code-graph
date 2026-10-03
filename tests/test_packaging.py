@@ -137,6 +137,14 @@ def test_install_script_syntax_and_dry_run(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "git+https://github.com/cyberchronos00/code-graph@v9.9.9" in r.stderr
     assert not any(l.startswith("cg-install: + sudo") for l in r.stderr.splitlines())   # never runs sudo
+    # --with kotlin (#67): the checksum-verified scip-java 0.13.1 launcher next to the coursier 0.12 one
+    r = subprocess.run(["sh", str(sh), "--dry-run", "--no-extractors", "--with", "kotlin"], capture_output=True, text=True,
+                       env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert r.returncode == 0, r.stderr
+    assert "releases/download/v0.13.1/scip-java-v0.13.1.sha256" in r.stderr and "scip-java-0.13.1" in r.stderr
+    assert not (tmp_path / ".local" / "bin").exists()            # a dry run writes nothing
+    ps = (ROOT / "install.ps1").read_text()
+    assert "scip-java 0.13.x" in ps and ps.count("{") == ps.count("}")
     r = subprocess.run(["sh", str(sh), "--bogus"], capture_output=True, text=True, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert r.returncode != 0 and "unknown option" in r.stderr
 
@@ -188,3 +196,21 @@ def test_doctor_project_checks(tmp_path):
     (tmp_path / "tsconfig.json").write_text("{}")
     pr = {x["language"]: x for x in report(tmp_path)["project"]}
     assert not pr["kotlin"]["ok"] and pr["kotlin"]["fix"] and pr["typescript"]["what"].startswith("tsconfig.json at the root")
+
+
+def test_doctor_scip_java_releases_for_the_kotlin_version(tmp_path, monkeypatch):
+    """#67: `cg doctor <root>` names the installed scip-java releases with their Kotlin ranges and the one that fits."""
+    from codegraph.doctor import report
+    from codegraph.plugins.kotlin import exact
+    (tmp_path / "M.kt").write_text("fun main() {}\n")
+    monkeypatch.setattr(exact, "scip_java_candidates", lambda: ["/t/scip-java", "/t/scip-java-0.13.1/scip-java"])
+    monkeypatch.setattr(exact, "_generation", lambda t: 13 if "0.13" in t else 12)
+    for kv, ok, pick in (("2.2.10", True, "0.13.1"), ("2.0.21", True, "/t/scip-java "), ("2.3.0", False, None)):
+        (tmp_path / "build.gradle.kts").write_text(f'plugins {{ kotlin("jvm") version "{kv}" }}\n')
+        row = [x for x in report(tmp_path)["project"] if x["language"] == "kotlin" and "scip-java" in x["what"]
+               and "installed:" in x["what"]][0]
+        assert row["ok"] is ok and "0.13: Kotlin 2.2.0 - 2.2.10" in row["what"]
+        if ok:
+            assert pick in row["what"].split("(installed")[0] + " "
+        else:
+            assert "2.2.20+" in row["fix"]

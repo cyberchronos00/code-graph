@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Kotlin (#67): Compose Navigation routes held in string constants (`composable(Destinations.TASKS_ROUTE)`, constants
+  inside route and `navigate("${Screens.TASKS}/$id")` strings) become pages and `NAVIGATES_TO` edges; `cg doctor
+  <root>` lists the installed scip-java releases with their Kotlin ranges and the one that fits the build;
+  `install.sh --with kotlin` also installs the scip-java 0.13.1 launcher (Kotlin 2.2.0 - 2.2.10); `install.ps1` says
+  how to get it on Windows (WSL, or `--scip`).
+
 - Packaging follow-up (#65):
   - `cg setup --prune [--dry-run]` removes extractor installs of an older lock file; installs into one directory take
     `<dir>/.install.lock`, so concurrent first runs do not run npm / composer / dart pub there twice.

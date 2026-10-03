@@ -219,6 +219,7 @@ class KotlinPlugin(LanguagePlugin):
         self.st = defaultdict(int)
         self.values: dict[str, dict[str, str]] = defaultdict(dict)   # owner fqn / pkg:<package> -> name -> id
         self.value_fq: dict[str, str] = {}                           # fqn -> id (imports name them)
+        self.const_str: dict[str, tuple] = {}     # constant id -> (string literal source, KFile, owner Decl) (#67)
         kfiles, failed = [], []
         errs: dict[str, list] = {}
         for rel in files:
@@ -431,7 +432,11 @@ class KotlinPlugin(LanguagePlugin):
             elif ty == "property_declaration" and fn is None and self._is_constant(c, cls):
                 nm = self._name(next((d for d in c.children if d.type == "variable_declaration"), c))
                 if nm:
-                    self._value(cls, "constant", nm, kf, c)
+                    nid = self._value(cls, "constant", nm, kf, c)
+                    eq = next((i for i, x in enumerate(c.children) if x.type == "="), None)
+                    init = c.children[eq + 1] if eq is not None and eq + 1 < len(c.children) else None
+                    if init is not None and init.type == "string_literal":
+                        self.const_str[nid] = (self.t(init), kf, cls)
             elif ty in ("property_declaration",) and cls is None:
                 pass
             else:
@@ -469,6 +474,80 @@ class KotlinPlugin(LanguagePlugin):
             self.b.add_edge(cls.id, nid, "CONTAINS", kf.rel, line, EXACT)
         self.values[owner.fqn if owner is not None else f"pkg:{kf.package}"].setdefault(nm, nid)
         self.value_fq.setdefault(fq, nid)
+        return nid
+
+    def _const_id(self, expr: str, kf: KFile, cls: Decl | None) -> str | None:
+        """The constant `NAME` / `Obj.NAME` / `a.b.Obj.NAME` names, seen from a class (its own and its companion's
+        constants) in file kf: imports, then the file's package."""
+        expr = expr.strip()
+        if not re.fullmatch(r"[A-Za-z_][\w.]*", expr):
+            return None
+        if "." in expr:
+            tgt, nm = expr.rsplit(".", 1)
+            t = self.classes.get(tgt) or (self._class_of(tgt, kf) if "." not in tgt and tgt[:1].isupper() else None)
+            if t is not None:
+                if t.name == "Companion" and t.cls:
+                    t = self.classes.get(t.cls) or t
+                return self.values.get(t.fqn, {}).get(nm)
+            return self.value_fq.get(expr)
+        c = cls
+        while c is not None:                       # own constants, then those of the enclosing classes
+            if c.name == "Companion" and c.cls:
+                c = self.classes.get(c.cls) or c
+            vid = self.values.get(c.fqn, {}).get(expr)
+            if vid is not None:
+                return vid
+            c = self.classes.get(c.cls) if c.cls else None
+        fq = kf.imports.get(expr)
+        if fq:
+            return self.value_fq.get(fq)
+        return self.values.get(f"pkg:{kf.package}", {}).get(expr)
+
+    def _expand(self, raw: str, kf: KFile, cls: Decl | None, depth: int = 0) -> str:
+        """A string literal's source with the `$NAME` / `${Obj.NAME}` of string constants put in (#67:
+        `const val TASKS_ROUTE = "$TASKS_SCREEN?$ARG={$ARG}"`); other templates stay for template()."""
+        def rep(m):
+            expr = m.group(1) if m.group(1) is not None else m.group(2)
+            vid = self._const_id(expr, kf, cls) if depth < 4 else None
+            got = self.const_str.get(vid) if vid else None
+            if got is None:
+                return m.group(0)
+            body = self._expand(got[0], got[1], got[2], depth + 1)
+            return body[3:-3] if body.startswith('"""') else body[1:-1]
+        return TEMPLATE.sub(rep, raw)
+
+    def _route_arg(self, args, kf: KFile, decl: Decl | None, named: str | None = None) -> str | None:
+        """The route string of `composable(...)` / `navigate(...)`: a string literal (constants in it expanded) or a
+        string constant (`Destinations.TASKS_ROUTE`), positional or `route = ...`."""
+        if args is None:
+            return None
+        x = None
+        for a in args.children:
+            if a.type != "value_argument":
+                continue
+            kids = [k for k in a.children if k.is_named]
+            if a.children and any(k.type == "=" for k in a.children):
+                if named and kids and self.t(kids[0]) == named and len(kids) > 1:
+                    x = kids[-1]
+                    break
+                continue
+            if x is None and kids:
+                x = kids[0]
+                if not named:
+                    break
+        if x is None:
+            return None
+        cls = self.classes.get(decl.cls) if decl is not None and decl.kind != "class" and decl.cls else \
+            (decl if decl is not None and decl.kind == "class" else None)
+        if x.type == "string_literal":
+            return template(self._expand(self.t(x), kf, cls))
+        if x.type in ("identifier", "simple_identifier", "navigation_expression"):
+            vid = self._const_id(self.t(x), kf, cls)
+            got = self.const_str.get(vid) if vid else None
+            if got is not None:
+                self.st["routes_from_constants"] += 1
+                return template(self._expand(got[0], got[1], got[2]))
+        return None
 
     def _variant(self, kf: KFile, mods: set) -> str:
         return f"@{kf.source_set}" if "actual" in mods and kf.source_set else ""
@@ -637,8 +716,9 @@ class KotlinPlugin(LanguagePlugin):
                 hid = self._ktor_route(kf, name.upper(), uri, c, owner, ctx)
                 self._refs(lam, kf, hid, decl, {**ctx, "routing": False})
                 return True
-            if name == "composable" and sarg is not None:
-                pid = self._page(kf, template(sarg), c)
+            route = self._route_arg(args, kf, decl, "route") if name in ("composable", "dialog") and targs is None else None
+            if route is not None:
+                pid = self._page(kf, route, c)
                 self._refs(lam, kf, pid, decl, ctx)
                 return True
             # composable<Route>(deepLinks = ...) { }, Navigation 3 entry<Key>(metadata = ...) { }, Ktor get<Res>(...) { }
@@ -687,9 +767,10 @@ class KotlinPlugin(LanguagePlugin):
                     self.api_base[api].add(base)
         if name == "navigate" and args is not None:
             first = self._first_arg(args)
+            route = self._route_arg(args, kf, decl, "route") if first is not None else None
             if first is not None:
-                if first.type == "string_literal":
-                    self.navs.append((owner, template(self.t(first)), None, kf.rel, line))
+                if route is not None:
+                    self.navs.append((owner, route, None, kf.rel, line))
                 else:
                     m = re.match(r"([A-Z]\w*)", self.t(first))
                     if m:

@@ -391,7 +391,7 @@ Python 3.11+ (tested with 3.11 and 3.13) runs the indexer, CLI and MCP server fo
 | Dart / Flutter | Dart SDK 3.x (tested 3.13); the target project needs no `pub get` | `dart` on PATH or `$DART`; the extractor's packages are fetched on first use |
 | Rust | rust-analyzer for exact mode (any 2024+ release) | `rustup component add rust-analyzer` (`install.sh --with rust`) |
 | C / C++ | scip-clang 0.4+ and a `compile_commands.json` for exact mode | `install.sh --with c`; compile database: [docs/native.md](docs/native.md#c-and-c) |
-| Kotlin | a JDK and scip-java 0.12+ for exact mode (Kotlin ≤ 2.1 builds) | `install.sh --with kotlin`; opt-in: [docs/kotlin.md](docs/kotlin.md#exact-mode) |
+| Kotlin | a JDK and scip-java 0.12 (Kotlin ≤ 2.1 builds) / 0.13 (2.2.0 - 2.2.10) for exact mode | `install.sh --with kotlin` (both); opt-in: [docs/kotlin.md](docs/kotlin.md#exact-mode) |
 | Swift | a Swift toolchain (5.9+, Linux or Xcode) for exact mode | `install.sh --with swift`; opt-in: [docs/swift.md](docs/swift.md#exact-mode) |
 | Go, Java | an existing SCIP index | `cg index <root> --scip index.scip` |
 

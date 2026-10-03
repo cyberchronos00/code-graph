@@ -275,6 +275,9 @@ UPGRADE_HINT = ("upgrade cg (`uv tool upgrade codegraph` / `install.sh --update`
                 "`cg doctor` output, and meanwhile reinstall cg under a newer Python (`uv tool install --python 3.12 ...`)")
 
 
+SCIP_JAVA_RANGES = {12: "0.12: Kotlin <= 2.1", 13: "0.13: Kotlin 2.2.0 - 2.2.10"}
+
+
 def project_checks(root: Path, present: set) -> list[dict]:
     """`cg doctor <root>`: what the project gives the exact layers and the TypeScript program (#65)."""
     out = []
@@ -305,6 +308,21 @@ def project_checks(root: Path, present: set) -> list[dict]:
             add("kotlin", True, f"{builds[0]} at the root" + (f"; Kotlin {'.'.join(map(str, kv))}" if kv else
                 "; Kotlin version not declared in the root build files")
                 + (f"; Android modules (no scip-java variant, heuristic there): {', '.join(andr[:4])}" if andr else ""))
+            from .plugins.kotlin.exact import _generation, _supports, scip_java_candidates
+            tools = scip_java_candidates()
+            if tools:                    # #67: each scip-java release's Kotlin plugin loads into a narrow range
+                gens = [(t, _generation(t)) for t in tools]
+                desc = "; ".join(f"{t} ({SCIP_JAVA_RANGES.get(g, '?')})" for t, g in gens)
+                fits = [t for t, g in gens if _supports(g, kv)]
+                kvs = ".".join(map(str, kv)) if kv else "undeclared"
+                if fits:
+                    add("kotlin", True, f"scip-java for Kotlin {kvs}: {fits[0]}  (installed: {desc})")
+                else:
+                    add("kotlin", False, f"no installed scip-java loads into Kotlin {kvs} (installed: {desc})",
+                        "Kotlin 2.2.20+ has no released scip-java yet (docs/kotlin.md#exact-mode); "
+                        "pass --scip index.scip from another indexer" if kv and kv >= (2, 2, 20) else
+                        "install the scip-java release for this Kotlin version next to the other one "
+                        "(scip-java-<version>/scip-java in ~/tools), docs/kotlin.md#exact-mode")
     if "swift" in present:
         from .xcode import _manifests, _projects
         pk, xp = _manifests(root), _projects(root)

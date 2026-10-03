@@ -11,6 +11,7 @@ set -eu
 REPO_URL="https://github.com/cyberchronos00/code-graph"
 PKG="codegraph"
 MIN_PY="3.11"
+SCIP_JAVA_13="0.13.1"
 ACTION="install"; VERSION=""; SOURCE=""; WITH=""; EXTRACTORS=1; DRY=0
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 ORIG_PATH="$PATH"
@@ -166,6 +167,23 @@ with_kotlin() {
   elif command -v cs >/dev/null 2>&1; then say "kotlin: installing scip-java with coursier"; run cs install scip-java
   else
     say "kotlin: scip-java not found. Install coursier (https://get-coursier.io, no sudo), then: cs install scip-java"
+  fi
+  # scip-java 0.13 (Kotlin 2.2.0 - 2.2.10) next to the coursier one (0.12, Kotlin <= 2.1): cg picks the release that
+  # fits the build's Kotlin version (docs/kotlin.md#exact-mode)
+  sj13="$HOME/.local/bin/scip-java-$SCIP_JAVA_13"
+  if [ -x "$sj13" ] || [ -x "$HOME/tools/scip-java-$SCIP_JAVA_13/scip-java" ]; then say "kotlin: scip-java $SCIP_JAVA_13 already installed"
+  elif command -v curl >/dev/null 2>&1; then
+    say "kotlin: installing the scip-java $SCIP_JAVA_13 launcher (Kotlin 2.2.0 - 2.2.10) as $sj13"
+    base="https://github.com/scip-code/scip-java/releases/download/v$SCIP_JAVA_13/scip-java-v$SCIP_JAVA_13"
+    run mkdir -p "$HOME/.local/bin"
+    run curl -fsSL -o "$sj13.part" "$base"
+    run curl -fsSL -o "$sj13.sha256" "$base.sha256"
+    if [ "$DRY" != 1 ]; then
+      want=$(cut -d' ' -f1 < "$sj13.sha256"); got=$( (sha256sum "$sj13.part" 2>/dev/null || shasum -a 256 "$sj13.part") | cut -d' ' -f1)
+      rm -f "$sj13.sha256"
+      if [ -n "$want" ] && [ "$want" = "$got" ]; then chmod +x "$sj13.part" && mv "$sj13.part" "$sj13"
+      else rm -f "$sj13.part"; say "kotlin: scip-java $SCIP_JAVA_13 checksum mismatch, not installed"; fi
+    fi
   fi
   say "kotlin: exact mode runs the project's Gradle / Maven build; opt in per run with CODEGRAPH_KOTLIN_SCIP=1"
 }
