@@ -243,6 +243,18 @@ Issues and pull requests that extend it are welcome.
 - **Not modelled:** Cargo build-script outputs (`OUT_DIR` includes), `include!`, cross-crate graphs for crates outside
   the workspace (dependencies are external), C++20 modules, Objective-C, CUDA.
 
+## Kotlin
+
+- **Exact mode is opt-in and version-bound:** the scip-java run executes the Gradle / Maven build, so cg only starts
+  it with `CODEGRAPH_KOTLIN_SCIP=1` (or takes a prebuilt index via `--scip` / `CODEGRAPH_KOTLIN_SCIP_FILE`). scip-java
+  0.12.3's semanticdb-kotlinc plugin loads into Kotlin ≤ 2.1 compilers only; Kotlin 2.2+ builds, and Android modules
+  without an SDK, fall back to heuristic mode with the reason in `cg coverage`. Only call / constructor edges come
+  from the index; declarations, framework facts and type relations stay those of the syntax layer.
+- **Heuristic facts by name:** Spring Data reads / writes are classified by method name and need a receiver typed as
+  the repository; Exposed access needs the table object as the direct receiver; `SecurityFilterChain` rules are read
+  from string patterns in source order (beans with custom `RequestMatcher`s or several chains with `securityMatcher`
+  are not separated). Navigation routes built from constants (`composable(Routes.TASKS)`) give no page.
+
 ## Platform-specific code
 
 - **Conditions are read from the source text and evaluated per target.** Conditions on feature flags, build

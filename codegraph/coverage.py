@@ -67,7 +67,8 @@ HINTS = {
               "index the directory that holds your code",
     "kotlin": "heuristic mode (tree-sitter syntax layer, name-based call resolution); the layer needs "
               "`pip install tree-sitter tree-sitter-kotlin`. For compiler-resolved references index the Gradle / Maven "
-              "build with scip-java and pass `--scip index.scip` (docs/kotlin.md)",
+              "build with scip-java: set CODEGRAPH_KOTLIN_SCIP=1 (runs scip-java on the Gradle / Maven build; needs a JDK) or "
+              "pass `--scip index.scip` (docs/kotlin.md#exact-mode)",
     "swift": "heuristic mode (tree-sitter syntax layer, name-based call resolution; runs on Linux without Xcode); "
              "the layer needs `pip install tree-sitter tree-sitter-swift` (docs/swift.md)",
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
@@ -213,7 +214,14 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
         return "heuristic", ("tree-sitter syntax layer with name-based call resolution (no compiler index; works "
                              "without Xcode or a Swift toolchain)")
     if lang == "kotlin" and mode == "heuristic":
-        return "heuristic", "tree-sitter syntax layer with name-based call resolution (no compiler index)"
+        why = (st.get("scip") or {}).get("status") if isinstance(st.get("scip"), dict) else None
+        return "heuristic", ("tree-sitter syntax layer with name-based call resolution; no compiler index"
+                             + (f": {why}" if why else ""))
+    if lang == "kotlin" and mode == "scip":
+        sc = st.get("scip") if isinstance(st.get("scip"), dict) else {}
+        n, k = st.get("scip_files"), st.get("kt_files") or st.get("files")
+        part = f"; {k - n} of {k} Kotlin files not in the index keep heuristic calls" if n is not None and k and n < k else ""
+        return "exact", f"scip-java index ({sc.get('source', 'scip')}){part}"
     if lang == "typescript" and st.get("program_files") == 0 and not st.get("nodes"):
         return "not_indexed", "the TypeScript plugin ran but found no source files (tsconfig include / source dirs)"
     return "exact", None
@@ -472,6 +480,9 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
             out += _paths_lines(e, all_files)
             if e.get("hint"):
                 out.append(f"    fix: {e['hint']}")
+        for e in (cov or {}).get("languages", []):     # which mode an exact-capable language ran in, and why
+            if e["language"] == "kotlin" and not _is_gap(e) and e.get("reason"):
+                out.append(f"  {e['language']}: {e['files']} files {e['status']}: {e['reason']}")
         if all_files:
             for e in (cov or {}).get("languages", []):
                 if not _is_gap(e) and e.get("excluded"):

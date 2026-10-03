@@ -116,6 +116,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     t0 = time.time()
     project = Project(root=Path(root).resolve(), name=name or Path(root).name)
     project.options["config"] = cfg = load_config(project.root)
+    if scip:
+        project.options["scip"] = list(scip)     # a language plugin may consume its own index (Kotlin: scip-java)
     if python_roots:
         project.options["python_roots"] = list(dict.fromkeys(norm_root(r, "--python-root") for r in python_roots))
     gates_from = "flag" if gates else None
@@ -192,6 +194,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if scip:
         from .plugins.scip.importer import import_scip
         for s in scip:
+            if s in (project.options.get("scip_consumed") or []):
+                stats["plugins"][f"scip:{s}"] = {"status": "imported by the Kotlin plugin (exact layer)"}
+                continue
             stats["plugins"][f"scip:{s}"] = import_scip(s, builder)
     # generated / copied / vendored files: out of the graph (default) or labelled (attrs.generated)
     stats["generated"] = apply_generated(builder, clf)

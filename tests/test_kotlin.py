@@ -111,3 +111,71 @@ def test_android_sample_path_from_compose_screen_to_table():
     res = Q.path_between(st, "page:kotlin:checkout/{bookId}", "table:catalog_order")
     text = json.dumps(res, default=str)
     assert "http:POST /api/orders/" in text and "function:catalog.api.place_order" in text
+
+
+FACTS = ROOT / "tests" / "kotlin_facts_fixture"
+
+
+def facts():
+    if "facts" not in _S:
+        d = Path(tempfile.mkdtemp(prefix="codegraph-kt-"))
+        _S["facts_stats"] = index_project(FACTS, d / "facts.db", "kotlin-facts")
+        _S["facts"] = sqlite3.connect(d / "facts.db")
+    return _S["facts"]
+
+
+def _attrs(nid):
+    r = facts().execute("select attrs from nodes where id=?", (nid,)).fetchone()
+    assert r is not None, nid
+    return json.loads(r[0] or "{}")
+
+
+def _edge(src, dst, kind):
+    return facts().execute("select confidence, attrs from edges where src=? and dst=? and kind=?", (src, dst, kind)).fetchone()
+
+
+def test_spring_data_and_exposed_tables():
+    svc = "method:facts.OwnerService"
+    # Spring Data: the repository's entity table (@Table(name) or Spring Boot's snake_case default), read / write by
+    # method name, inherited CrudRepository methods included
+    assert _edge(f"{svc}.rename", "table:owners", "READS_TABLE")[0] == "resolved"
+    assert json.loads(_edge(f"{svc}.rename", "table:owners", "WRITES_TABLE")[1])["via"] == "OwnerRepository.save"
+    assert _edge(f"{svc}.typeCount", "table:pet_type", "READS_TABLE") is not None
+    # Exposed: object X : IntIdTable("name") / qualified Table() (default name: the object name)
+    assert _edge(f"{svc}.users", "table:app_users", "WRITES_TABLE") is not None
+    assert _edge(f"{svc}.users", "table:app_users", "READS_TABLE") is not None
+    assert _edge(f"{svc}.users", "table:AuditLog", "WRITES_TABLE") is not None
+    assert _edge(f"{svc}.users", "table:AuditLog", "READS_TABLE") is None
+
+
+def test_spring_security_filter_chain_guards():
+    assert _attrs("route:GET /admin/users/{id}")["middleware"] == ["hasRole(ADMIN)"]
+    assert _attrs("route:POST /api/orders")["middleware"] == ["authenticated"]      # anyRequest().authenticated()
+    assert "middleware" not in _attrs("route:GET /public/health")                    # permitAll matched first
+    assert _attrs("route:GET /admin/users/{id}")["security"].startswith("SecurityFilterChain")
+
+
+def test_typed_navigation_and_navigation3_entries():
+    for key in ("TopicRoute", "SearchKey", "ForYouKey"):
+        assert _attrs(f"page:kotlin:{key}")["via"] == "compose-navigation (typed)"
+    # composable<Route>(deepLinks = ...) { } and entry<Key>(metadata = ...) { }: the lambda belongs to the page
+    assert _edge("page:kotlin:ForYouKey", "page:kotlin:TopicRoute", "NAVIGATES_TO")[0] == "exact"
+    assert facts().execute("select count(*) from edges where src='page:kotlin:TopicRoute' and kind='CALLS' "
+                           "and dst='function:facts.TopicScreen'").fetchone()[0] == 1
+
+
+def test_retrofit_base_urls_and_ktor_client_builders():
+    # baseUrl(BuildConfig.API_URL) resolves through buildConfigField; each interface keeps its own Retrofit base URL
+    assert _attrs("http:GET /v2/topics")["origin"] == "https://api.example.com"
+    assert _attrs("http:POST /login")["origin"] == "https://auth.example.com"
+    # client.get { url("...") } and client.request { method = HttpMethod.Post; url("...") }
+    assert _edge("method:facts.DogApi.breeds", "http:GET https://dog.example.com/api/breeds/list/all", "HTTP_CALLS")
+    assert _edge("method:facts.DogApi.vote", "http:POST https://dog.example.com/api/votes", "HTTP_CALLS")
+
+
+def test_ktor_type_safe_resources():
+    st = _S.get("facts_stats") or (facts() and _S["facts_stats"])
+    assert st["plugins"]["kotlin"]["routes_ktor_resources"] == 3
+    for r in ("GET /articles", "GET /articles/{id}", "POST /articles/new"):
+        a = _attrs(f"route:{r}")
+        assert a["framework"] == "ktor"

@@ -10,6 +10,15 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Kotlin exact mode: a scip-java index of the Gradle / Maven build (`--scip`, `CODEGRAPH_KOTLIN_SCIP_FILE`, or an
+  opted-in `scip-java index` run with `CODEGRAPH_KOTLIN_SCIP=1` through the native runner cache) replaces the
+  name-based call edges with compiler-resolved ones on the syntax layer's ids; `cg coverage` reports which mode ran
+  and why (no build file, no JDK, scip-java missing, not opted in, run failed), index stats carry exact-vs-heuristic
+  precision / recall. More Kotlin facts: Spring Data repositories and Exposed tables as `READS_TABLE` /
+  `WRITES_TABLE`, `SecurityFilterChain` URL rules as route guards, typed `composable<Route>(...) { }` and
+  Navigation 3 `entry<Key> { }` pages, Ktor type-safe resources `get<Res> { }`, Ktor client builder blocks
+  (`client.get { url(...) }`, `client.request { method = ... }`), Retrofit base URLs per interface and from
+  `buildConfigField`.
 - Desktop process boundaries on the bridge endpoint model: Electron IPC (`endpoint:electron-ipc:<channel>`,
   `ipcRenderer.invoke` / `send`, `webContents.send` → `ipcMain.handle` / `on`, `ipcRenderer.on`; enum and `const`
   channels, wrappers named after the Electron objects, union-typed channels), the context bridge

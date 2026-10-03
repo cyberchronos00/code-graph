@@ -120,9 +120,11 @@ def _prune_tmp(name: str, max_age: float = 86400) -> None:
 
 
 def run_cached(name: str, key: str, cmd: list[str], cwd: Path, out_path_arg: str | None, timeout: int,
-               out_flag_style: str = "space") -> tuple[Path | None, dict]:
+               out_flag_style: str = "space", env: dict | None = None,
+               notes: str | None = None) -> tuple[Path | None, dict]:
     """Run `cmd` (which writes a SCIP file) unless a cached result exists. The output path is appended to `cmd`
-    as `<out_path_arg> <path>` (style 'space') or `<out_path_arg>=<path>` (style 'eq').
+    as `<out_path_arg> <path>` (style 'space') or `<out_path_arg>=<path>` (style 'eq'). `env` replaces the child's
+    environment; output lines matching the `notes` regex are kept in info["notes"] (a build error far above the tail).
     Safe for concurrent processes: one run per key at a time (key_lock; the others wait and get a cache hit), each
     run writes its own temporary file and moves it into the cache atomically."""
     _prune_legacy(name)
@@ -138,10 +140,11 @@ def run_cached(name: str, key: str, cmd: list[str], cwd: Path, out_path_arg: str
             info["cache"] = "hit"
             return out, info
         _prune_tmp(name)
-        return _run(cmd, cwd, out, out_path_arg, out_flag_style, timeout, info)
+        return _run(cmd, cwd, out, out_path_arg, out_flag_style, timeout, info, env, notes)
 
 
-def _run(cmd, cwd, out: Path, out_path_arg, out_flag_style, timeout, info) -> tuple[Path | None, dict]:
+def _run(cmd, cwd, out: Path, out_path_arg, out_flag_style, timeout, info, env=None,
+         notes=None) -> tuple[Path | None, dict]:
     tmp = out.with_name(f"{out.stem}.{os.getpid()}.{secrets.token_hex(4)}.tmp.scip")
     full = list(cmd)
     if out_path_arg:
@@ -149,7 +152,7 @@ def _run(cmd, cwd, out: Path, out_path_arg, out_flag_style, timeout, info) -> tu
     t0 = time.time()
     try:
         try:
-            r = subprocess.run(full, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run(full, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
             info["error"] = f"timeout after {timeout}s"
             return None, info
@@ -159,6 +162,11 @@ def _run(cmd, cwd, out: Path, out_path_arg, out_flag_style, timeout, info) -> tu
         info["seconds"] = round(time.time() - t0, 2)
         tail = (r.stderr or "").strip().splitlines()[-8:]
         info["stderr_tail"] = tail
+        if notes:
+            rx = re.compile(notes)
+            hits = [x.strip()[:300] for x in ((r.stdout or "") + "\n" + (r.stderr or "")).splitlines() if rx.search(x)]
+            if hits:
+                info["notes"] = list(dict.fromkeys(hits))[:6]
         if r.returncode != 0 or not tmp.exists():
             info["error"] = f"exit {r.returncode}" + ("" if tmp.exists() else ", no SCIP output written")
             if r.returncode == 0 and out.exists():    # the cache file appeared meanwhile (unlocked fallback)

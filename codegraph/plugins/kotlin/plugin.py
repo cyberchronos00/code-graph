@@ -4,21 +4,28 @@ Heuristic mode: a tree-sitter-kotlin syntax layer. Declarations (packages, class
 objects, top-level / extension functions, methods) become nodes; calls are resolved by name: the enclosing class and
 its supertypes, then a parameter / property type (`api.order()` with `api: OrdersApi`), imports, the same package, and
 finally a project-wide unique name. Every resolved reference is labelled `heuristic`, as for Rust and C / C++ without
-their indexers. An exact layer can be added with a scip-java index (`--scip`).
+their indexers. Exact mode (exact.py): a scip-java index of the Gradle / Maven build (`--scip`,
+CODEGRAPH_KOTLIN_SCIP_FILE, or an opted-in scip-java run with CODEGRAPH_KOTLIN_SCIP=1) replaces the call edges with
+compiler-resolved ones; without a JDK / scip-java the heuristic layer stays, and coverage says why.
 
 Framework facts read from the same syntax tree:
   HTTP clients    Retrofit interfaces (@GET("users/{id}") ...; base URL from Retrofit.Builder().baseUrl("...")),
-                  Ktor client (client.get("...")), OkHttp Request.Builder().url("...") -> http:<METHOD> <path>
-  servers         Ktor routing { route("/a") { get("/{id}") { } } } with authenticate("x") { } as a guard;
+                  per-interface / BuildConfig base URLs, Ktor client (client.get("..."), client.get { url("...") },
+                  client.request { method = HttpMethod.Post }), OkHttp Request.Builder().url("...") -> http:<METHOD> <path>
+  servers         Ktor routing { route("/a") { get("/{id}") { } } } and type-safe resources get<Res> { } with
+                  authenticate("x") { } as a guard; SecurityFilterChain requestMatchers(...).hasRole(...) as guards;
                   Spring @RestController / @RequestMapping / @GetMapping ... with @PreAuthorize / @Secured /
                   @RolesAllowed -> route:<METHOD> <uri>; @Scheduled (scheduled) and @KafkaListener / @RabbitListener /
                   @JmsListener / @EventListener (listener) entry points
   Android         AndroidManifest.xml activities (ui_page), services / receivers / providers (listener) and deep links
                   (<data scheme/host/path>) as pages; Worker / CoroutineWorker / JobService subclasses (queue_job);
-                  Jetpack Compose Navigation composable("orders/{id}") / composable<OrderRoute> as pages and
+                  Jetpack Compose Navigation composable("orders/{id}") / composable<OrderRoute>(...) { } / Navigation 3
+                  entry<Key> { } as pages and
                   navController.navigate(...) as NAVIGATES_TO
   Multiplatform   KMP source sets (androidMain, iosMain, jvmMain, jsMain ...) as platform conditions (#7 tags), and
                   `expect` declarations -> their `actual` implementations (IMPLEMENTED_BY)
+  tables          Spring Data repositories (JpaRepository<Entity, ID> ...) and Exposed table objects -> READS_TABLE /
+                  WRITES_TABLE
 Test code (src/test, src/androidTest, *Test source sets, *Test.kt) carries attrs.test; @Test functions are `test`
 entries.
 """
@@ -33,7 +40,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ...core.fsutil import keep_file
-from ...core.model import EXACT, HEURISTIC
+from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.paths import rules as path_rules
 from ...core.plugin import GraphBuilder, LanguagePlugin, Project
 from ..native.ts import TreeSitterMissing
@@ -43,6 +50,16 @@ VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
 RETROFIT = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
 SPRING_MAP = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE",
               "PatchMapping": "PATCH", "RequestMapping": None}
+# Spring Data repository interfaces (`interface OwnerRepository : JpaRepository<Owner, Int>`) and Exposed tables
+# (`object Users : IntIdTable("users")`): calls on them read / write the table
+REPO_SUPERS = r"(?:Jpa|Crud|ListCrud|PagingAndSorting|ListPagingAndSorting|CoroutineCrud|CoroutineSorting|ReactiveCrud|" \
+              r"ReactiveSorting|R2dbc|Mongo|ReactiveMongo|Kotlin)?Repository"
+EXPOSED_TABLES = r"(?:Table|IdTable|IntIdTable|LongIdTable|UUIDTable|UIntIdTable|ULongIdTable|CompositeIdTable)"
+DATA_WRITE = re.compile(r"^(save|delete|remove|insert|update|upsert|batchInsert|batchUpsert|replace|persist|merge|"
+                        r"flush|truncate)")
+DATA_READ = re.compile(r"^(find|get|read|query|search|stream|count|exists|select|selectAll|all|slice|fetch|load)")
+# Spring Security SecurityFilterChain rules: requestMatchers("/admin/**").hasRole("ADMIN") / Kotlin DSL authorize(...)
+SEC_AUTH = r"(hasRole|hasAnyRole|hasAuthority|hasAnyAuthority|authenticated|fullyAuthenticated|permitAll|denyAll|access)"
 SPRING_GUARDS = {"PreAuthorize", "Secured", "RolesAllowed", "PostAuthorize"}
 LISTENERS = {"KafkaListener", "RabbitListener", "JmsListener", "SqsListener", "EventListener", "StreamListener"}
 WORKER_BASES = {"Worker", "CoroutineWorker", "ListenableWorker", "RxWorker", "JobService", "JobIntentService"}
@@ -136,6 +153,7 @@ class Decl:
     receiver: str | None = None
     types: dict = field(default_factory=dict)          # param / property name -> type name
     test: bool = False
+    name_line: int | None = None                        # line of the name identifier (SCIP definitions sit there)
 
 
 class KFile:
@@ -177,6 +195,8 @@ class KotlinPlugin(LanguagePlugin):
         self.http: list[dict] = []
         self.navs: list[tuple] = []
         self.base_urls: set[str] = set()
+        self.api_base: dict[str, set] = defaultdict(set)    # Retrofit interface short name -> base URLs it is built with
+        self.build_config = self._build_config(project.root, files)
         self.st = defaultdict(int)
         kfiles, failed = [], []
         for rel in files:
@@ -194,6 +214,7 @@ class KotlinPlugin(LanguagePlugin):
             self.cur = kf
             self._header(kf)
             self._decls(kf.tree.root_node, kf, None, None)
+        self._data_models(kfiles)
         for kf in kfiles:            # pass 2: references and framework facts
             self.cur = kf
             fid = self._file_node(kf)
@@ -202,14 +223,40 @@ class KotlinPlugin(LanguagePlugin):
                 self._mark_platform(kf)
         self._resolve_calls()
         self._hierarchy()
+        self._security_rules(kfiles)
         self._emit_http()
         self._link_navs()
         self._manifests(project)
         self.file_report = {"seen": [kf.rel for kf in kfiles] + failed, "parse_failed": failed}
+        mode = self._exact(project, files)
         st = dict(self.st)
-        st.update({"mode": "heuristic", "files": len(kfiles), "declarations": len(self.decls),
+        st.update({"mode": mode, "files": len(kfiles), "kt_files": sum(1 for kf in kfiles if kf.rel.endswith(".kt")),
+                   "declarations": len(self.decls),
                    "seconds": round(time.time() - t0, 2)})
         return st
+
+    def _exact(self, project: Project, files: list[str]) -> str:
+        """The scip-java layer when an index is available (codegraph/plugins/kotlin/exact.py), else heuristic."""
+        from .exact import ExactLayer, find_index
+        t1 = time.time()
+        path, info = find_index(project, [f for f in files if f.endswith(EXTS)])
+        mode = "heuristic"
+        if path is not None:
+            sst: dict = {}
+            try:
+                if ExactLayer(self).apply(path, sst):
+                    mode = "scip"
+                else:
+                    info["status"] = "the SCIP index has no Kotlin documents"
+            except Exception as e:          # a corrupt / foreign index must not lose the heuristic graph
+                info["status"] = f"SCIP import failed ({type(e).__name__}: {e})"
+            for k in ("exact_vs_heuristic", "scip_documents", "scip_files", "scip_defs_matched", "scip_defs_unmatched",
+                      "scip_references", "scip_refs_external"):
+                if k in sst:
+                    self.st[k] = sst[k]
+        info["seconds"] = round(time.time() - t1, 2)
+        self.st["scip"] = info
+        return mode
 
     def _file_node(self, kf: KFile) -> str:
         return self.b.add_node("file", f"kotlin:{kf.rel}", name=kf.rel, file=kf.rel, line=1, lang="kotlin",
@@ -262,11 +309,19 @@ class KotlinPlugin(LanguagePlugin):
                     mods.update(self.t(m).split())
         return anns, mods
 
-    def _name(self, n) -> str | None:
+    def _name_node(self, n):
         x = n.child_by_field_name("name")
         if x is None:
             x = next((c for c in n.children if c.type in ("identifier", "type_identifier", "simple_identifier")), None)
+        return x
+
+    def _name(self, n) -> str | None:
+        x = self._name_node(n)
         return self.t(x) if x is not None else None
+
+    def _name_line(self, n) -> int:
+        x = self._name_node(n)
+        return (x if x is not None else n).start_point[0] + 1
 
     def _decls(self, n, kf: KFile, cls: Decl | None, fn: Decl | None):
         for c in n.children:
@@ -294,7 +349,8 @@ class KotlinPlugin(LanguagePlugin):
                     if d.type == "primary_constructor":
                         types.update(self._params(d))
                 dc = Decl(f"class:{key}", "class", nm, fq, kf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
-                          cls.fqn if cls else None, supers, anns, mods, types=types, test=kf.test)
+                          cls.fqn if cls else None, supers, anns, mods, types=types, test=kf.test,
+                          name_line=self._name_line(c))
                 self._add_decl(dc, kk)
                 body = next((d for d in c.children if d.type in ("class_body", "enum_class_body")), None)
                 if body is not None:
@@ -319,7 +375,7 @@ class KotlinPlugin(LanguagePlugin):
                 params = next((d for d in c.children if d.type == "function_value_parameters"), None)
                 dc = Decl(f"{kind}:{fq}{self._variant(kf, mods)}", kind, nm, fq, kf.rel, c.start_point[0] + 1,
                           c.end_point[0] + 1, cls.fqn if cls else None, [], anns, mods, recv,
-                          self._params(params) if params is not None else {}, kf.test)
+                          self._params(params) if params is not None else {}, kf.test, self._name_line(c))
                 self._add_decl(dc, kind)
             elif ty in ("property_declaration",) and cls is None:
                 pass
@@ -434,11 +490,10 @@ class KotlinPlugin(LanguagePlugin):
                 if self._call(c, kf, owner, decl, ctx):
                     continue
             elif ty == "binary_expression":
-                m = re.match(r"composable\s*<\s*([\w.]+)\s*>", self.t(c))
+                m = re.match(r"(composable|entry|dialog|(?:get|post|put|delete|patch|head|options))\s*<\s*([\w.]+)\s*>",
+                             self.t(c))
                 lam = next((x for x in c.children if x.type in ("lambda_literal", "annotated_lambda")), None)
-                if m and lam is not None:
-                    pid = self._page(kf, m.group(1).split(".")[-1], c, typed=True)
-                    self._refs(lam, kf, pid, decl, ctx)
+                if m and lam is not None and self._typed_block(m.group(1), m.group(2), c, lam, kf, owner, decl, ctx):
                     continue
             self._refs(c, kf, owner, decl, ctx)
 
@@ -448,8 +503,10 @@ class KotlinPlugin(LanguagePlugin):
         callee = c.children[0] if c.children else None
         lam = next((x for x in c.children if x.type == "annotated_lambda"), None)
         args = next((x for x in c.children if x.type == "value_arguments"), None)
+        targs = None
         if callee is not None and callee.type == "call_expression" and lam is not None:   # f("x") { ... }
             args = next((x for x in callee.children if x.type == "value_arguments"), None)
+            targs = next((x for x in callee.children if x.type == "type_arguments"), None)
             callee = callee.children[0] if callee.children else None
         if callee is None:
             return False
@@ -485,12 +542,25 @@ class KotlinPlugin(LanguagePlugin):
                 pid = self._page(kf, template(sarg), c)
                 self._refs(lam, kf, pid, decl, ctx)
                 return True
+            # composable<Route>(deepLinks = ...) { }, Navigation 3 entry<Key>(metadata = ...) { }, Ktor get<Res>(...) { }
+            if targs is not None and self._typed_block(name, self.t(targs).strip("<> "), c, lam, kf, owner, decl, ctx):
+                return True
         # ---- HTTP clients
-        if name in VERBS and recv is not None and re.search(r"(?i)client|http", rtext or "") and args is not None:
+        if (name in VERBS or name == "request") and recv is not None and re.search(r"(?i)client|http", rtext or ""):
             first = self._first_arg(args)
             if first is not None and first.type == "string_literal":
-                self.http.append({"src": owner, "method": name.upper(), "url": template(self.t(first)), "client": "ktor",
-                                  "file": kf.rel, "line": line})
+                self.http.append({"src": owner, "method": "GET" if name == "request" else name.upper(),
+                                  "url": template(self.t(first)), "client": "ktor", "file": kf.rel, "line": line})
+            elif first is None and lam is not None:
+                # builder block: client.get { url("...") } / client.request { method = HttpMethod.Post; url { path("...") } }
+                body = self.t(lam)
+                mu = re.search(r'\burl\s*\(\s*("(?:[^"\\]|\\.)*")', body) or \
+                    re.search(r'\b(?:path|encodedPath\s*=|appendPathSegments)\s*\(?\s*("(?:[^"\\]|\\.)*")', body)
+                mm = re.search(r"\bmethod\s*=\s*HttpMethod\.(\w+)", body)
+                if mu:
+                    verb = mm.group(1).upper() if mm else ("GET" if name == "request" else name.upper())
+                    self.http.append({"src": owner, "method": verb, "url": template(mu.group(1)), "client": "ktor",
+                                      "file": kf.rel, "line": line})
         if name == "url" and rtext and "Request.Builder" in rtext and sarg is not None:
             whole = c
             while whole.parent is not None and whole.parent.type in ("navigation_expression", "call_expression"):
@@ -499,8 +569,23 @@ class KotlinPlugin(LanguagePlugin):
             m = re.search(r"\.(post|put|delete|patch|head)\s*\(", tail)
             self.http.append({"src": owner, "method": m.group(1).upper() if m else "GET", "url": template(self._raw_first(args)),
                               "client": "okhttp", "file": kf.rel, "line": line})
-        if name == "baseUrl" and sarg is not None:
-            self.base_urls.add(template(self._raw_first(args)))
+        if name == "baseUrl" and args is not None:
+            first = self._first_arg(args)
+            raw = sarg
+            if raw is None and first is not None:
+                bc = re.fullmatch(r"(?:[\w.]+\.)?BuildConfig\.(\w+)", self.t(first).strip())
+                vals = self.build_config.get(bc.group(1)) if bc else None
+                raw = f'"{vals[0]}"' if vals and len(vals) == 1 else None
+            if raw is not None:
+                base = template(raw)
+                self.base_urls.add(base)
+                whole = c                  # Retrofit.Builder().baseUrl(X)...build().create(Api::class.java)
+                while whole.parent is not None and whole.parent.type in ("navigation_expression", "call_expression",
+                                                                         "value_argument", "value_arguments"):
+                    whole = whole.parent
+                for api in re.findall(r"create\s*\(\s*(\w+)::class", self.t(whole)) + \
+                        re.findall(r"create<\s*(\w+)\s*>", self.t(whole)):
+                    self.api_base[api].add(base)
         if name == "navigate" and args is not None:
             first = self._first_arg(args)
             if first is not None:
@@ -538,13 +623,15 @@ class KotlinPlugin(LanguagePlugin):
         for nm, a in anns.items():
             if nm in RETROFIT and a[1] is not None:
                 self.http.append({"src": d.id, "method": nm, "url": template('"' + a[1] + '"'), "client": "retrofit",
-                                  "file": d.file, "line": d.line, "relative": True})
+                                  "file": d.file, "line": d.line, "relative": True,
+                                  "iface": (d.cls or "").split(".")[-1]})
             elif nm == "HTTP":
                 m = re.search(r'method\s*=\s*"(\w+)"', a[2])
                 pm = re.search(r'path\s*=\s*"([^"]*)"', a[2])
                 if m and pm:
                     self.http.append({"src": d.id, "method": m.group(1).upper(), "url": template('"' + pm.group(1) + '"'),
-                                      "client": "retrofit", "file": d.file, "line": d.line, "relative": True})
+                                      "client": "retrofit", "file": d.file, "line": d.line, "relative": True,
+                                      "iface": (d.cls or "").split(".")[-1]})
         # Spring MVC / WebFlux annotations
         if cls is not None and any(nm in SPRING_MAP for nm in anns):
             canns = {a[0]: a for a in cls.annotations}
@@ -653,6 +740,7 @@ class KotlinPlugin(LanguagePlugin):
 
     def _resolve_calls(self):
         for owner, name, recv, line, kf, decl in self.calls:
+            self._data_access(owner, name, recv, line, kf, decl)
             targets = self._targets(name, recv, kf, decl)
             if not targets:
                 self.st["calls_unresolved"] += 1
@@ -759,11 +847,209 @@ class KotlinPlugin(LanguagePlugin):
                     self.b.add_edge(d.id, m.id, "REFERENCES_FN", m.file, m.line, EXACT, how="framework lifecycle")
         self.st[f"entries_{kind}"] += 1
 
+    # ------------------------------------------------------------------ typed navigation / resources
+    def _typed_block(self, name: str, typ: str, c, lam, kf: KFile, owner: str, decl: Decl | None, ctx: dict) -> bool:
+        """`composable<Route>(...) { }` / Navigation 3 `entry<Key> { }` as typed pages; Ktor type-safe resources
+        `get<Articles> { }` inside routing as routes (path from the @Resource class)."""
+        short = typ.split(".")[-1].split("<")[0].strip()
+        if not re.fullmatch(r"[A-Z]\w*", short or ""):
+            return False
+        if name in ("composable", "entry", "dialog"):
+            pid = self._page(kf, short, c, typed=True)
+            self._refs(lam, kf, pid, decl, ctx)
+            return True
+        if name in VERBS and ctx.get("routing"):
+            path = self._resource_path(short, kf)
+            if path is None:
+                return False
+            hid = self._ktor_route(kf, name.upper(), join_path(ctx["prefix"], path), c, owner, ctx)
+            self.st["routes_ktor_resources"] += 1
+            self._refs(lam, kf, hid, decl, {**ctx, "routing": False})
+            return True
+        return False
+
+    def _resource_path(self, short: str, kf: KFile, depth: int = 0) -> str | None:
+        """Path of a Ktor @Resource class; a `parent` property typed with another resource prefixes it."""
+        cls = self._class_of(short, kf)
+        if cls is None or depth > 6:
+            return None
+        ann = next((a for a in cls.annotations if a[0] == "Resource"), None)
+        if ann is None or ann[1] is None:
+            return None
+        path = template('"' + ann[1] + '"')
+        ptype = cls.types.get("parent")
+        if ptype:
+            pp = self._resource_path(ptype.split(".")[-1].rstrip("?"), kf, depth + 1)
+            if pp is not None:
+                return join_path(pp, path)
+        if cls.cls and depth == 0 and not path.startswith("/"):      # nested class of a resource without `parent`
+            outer = self.classes.get(cls.cls)
+            pp = self._resource_path(outer.name, kf, depth + 1) if outer else None
+            if pp is not None:
+                return join_path(pp, path)
+        return path
+
+    # ------------------------------------------------------------------ Gradle buildConfigField
+    def _build_config(self, root: Path, files: list[str]) -> dict[str, list[str]]:
+        """String buildConfigField values of the Gradle build files (`buildConfigField("String", "BASE_URL",
+        "\\"https://...\\"")`): Retrofit `baseUrl(BuildConfig.BASE_URL)` resolves through them."""
+        out: dict[str, list[str]] = defaultdict(list)
+        cands = [f for f in files if f.endswith(("build.gradle.kts",))]
+        for d in {Path(f).parent for f in files if f.endswith(".kt")}:
+            for up in [d, *d.parents][:8]:
+                g = up / "build.gradle"
+                if (root / g).is_file():
+                    cands.append(str(g))
+        rx = re.compile(r'buildConfigField\s*\(?\s*["\']String["\']\s*,\s*["\'](\w+)["\']\s*,\s*'
+                        r'(?:"\\"([^"\\]*)\\""|\'"([^"\']*)"\')')
+        for f in sorted(set(cands)):
+            try:
+                txt = (root / f).read_text(errors="replace")
+            except OSError:
+                continue
+            for m in rx.finditer(txt):
+                v = m.group(2) if m.group(2) is not None else m.group(3)
+                if v not in out[m.group(1)]:
+                    out[m.group(1)].append(v)
+        return dict(out)
+
+    # ------------------------------------------------------------------ Spring Data / Exposed tables
+    def _data_models(self, kfiles: list[KFile]):
+        self.repos: dict[str, str] = {}       # repository interface short name -> table
+        self.exposed: dict[str, str] = {}     # Exposed table object short name -> table
+        rx_repo = re.compile(r"\binterface\s+(\w+)\s*(?:<[^>{]*>)?\s*:[^{]*?\b" + REPO_SUPERS + r"\s*<\s*([\w.]+)")
+        rx_tab = re.compile(r"\bobject\s+(\w+)\s*:\s*(?:[\w.]+\.)?" + EXPOSED_TABLES + r"(?:<[^>]*>)?\s*\(\s*(?:name\s*=\s*)?"
+                            r"(\"[^\"]*\")?")
+        for kf in kfiles:
+            txt = kf.src.decode("utf-8", "replace")
+            if "Repository" in txt:
+                for m in rx_repo.finditer(txt):
+                    self.repos[m.group(1)] = self._entity_table(m.group(2).split(".")[-1], kf)
+            if "Table" in txt and "exposed" in txt:
+                for m in rx_tab.finditer(txt):
+                    name = m.group(2).strip('"') if m.group(2) else re.sub(r"Table$", "", m.group(1))
+                    self.exposed[m.group(1)] = name or m.group(1)
+
+    def _entity_table(self, entity: str, kf: KFile) -> str:
+        """@Table(name = "owners") on the entity, else Spring Boot's default naming (CamelCase -> snake_case)."""
+        cls = self._class_of(entity, kf)
+        if cls is not None:
+            ann = next((a for a in cls.annotations if a[0] in ("Table", "Document")), None)
+            if ann is not None and ann[1]:
+                return ann[1]
+        return re.sub(r"(?<!^)(?=[A-Z])", "_", entity).lower()
+
+    def _table(self, name: str, via: str) -> str:
+        tid = self.b.add_node("table", name, lang="sql", attrs={"inferred": True, "via": via})
+        return tid
+
+    def _data_access(self, owner: str, name: str, recv: str | None, line: int, kf: KFile, decl: Decl | None):
+        if not (self.repos or self.exposed):
+            return
+        kind = "WRITES_TABLE" if DATA_WRITE.match(name) else "READS_TABLE" if DATA_READ.match(name) else None
+        if kind is None:
+            return
+        rname = re.sub(r"[?!]", "", recv).split(".")[-1].strip() if recv else None
+        if rname in self.exposed:                                       # Users.selectAll() / Users.insert { }
+            self.b.add_edge(owner, self._table(self.exposed[rname], "exposed"), kind, kf.rel, line, RESOLVED,
+                            via=f"exposed {name}")
+            self.st["table_access_exposed"] += 1
+            return
+        repo = None
+        if recv is None or recv == "this":
+            if decl is not None and decl.cls and decl.cls.split(".")[-1] in self.repos:   # default method of the repo
+                repo = decl.cls.split(".")[-1]
+        else:
+            cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
+            ty = decl.types.get(rname) if decl is not None else None
+            if ty is None and cls is not None:
+                ty = self._field_type(cls, rname)
+            ty = (ty or "").split(".")[-1].split("<")[0].rstrip("?")
+            if ty in self.repos:
+                repo = ty
+        if repo is not None:                                            # owners.findById(id) on an OwnerRepository
+            self.b.add_edge(owner, self._table(self.repos[repo], "spring-data"), kind, kf.rel, line, RESOLVED,
+                            via=f"{repo}.{name}")
+            self.st["table_access_spring_data"] += 1
+
+    # ------------------------------------------------------------------ Spring Security
+    def _security_rules(self, kfiles: list[KFile]):
+        """URL rules of SecurityFilterChain beans (`requestMatchers("/admin/**").hasRole("ADMIN")`, Kotlin DSL
+        `authorize("/admin/**", hasRole("ADMIN"))`), first match wins, as guards on the Spring routes they cover."""
+        rules = []
+        rx_chain = re.compile(r"\b(?:requestMatchers|antMatchers|mvcMatchers|pathMatchers)\s*\(([^()]*)\)\s*\.\s*"
+                              + SEC_AUTH + r"\s*\(([^()]*)\)")
+        rx_dsl = re.compile(r"\bauthorize\s*\(\s*(?:HttpMethod\.(\w+)\s*,\s*)?(\"[^\"]*\"|anyRequest)\s*,\s*"
+                            + SEC_AUTH + r"\b(?:\s*\(([^()]*)\))?")
+        rx_any = re.compile(r"\banyRequest\s*\(\s*\)\s*\.\s*" + SEC_AUTH + r"\s*\(([^()]*)\)")
+        for kf in kfiles:
+            txt = kf.src.decode("utf-8", "replace")
+            if "SecurityFilterChain" not in txt and "SecurityWebFilterChain" not in txt:
+                continue
+            found = []
+            for m in rx_chain.finditer(txt):
+                meth = re.search(r"HttpMethod\.(\w+)", m.group(1))
+                pats = re.findall(r'"([^"]*)"', m.group(1))
+                found.append((m.start(), meth.group(1).upper() if meth else None, pats, m.group(2), m.group(3)))
+            for m in rx_dsl.finditer(txt):
+                pats = ["/**"] if m.group(2) == "anyRequest" else [m.group(2).strip('"')]
+                found.append((m.start(), (m.group(1) or "").upper() or None, pats, m.group(3), m.group(4) or ""))
+            for m in rx_any.finditer(txt):
+                found.append((m.start(), None, ["/**"], m.group(1), m.group(2)))
+            for _, meth, pats, auth, arg in sorted(found, key=lambda x: x[0]):
+                roles = ",".join(re.findall(r'"([^"]*)"', arg))
+                g = None if auth == "permitAll" else (f"{auth}({roles})" if roles else auth)
+                rules.append((meth, [self._ant(p) for p in pats if p], g, kf.rel))
+        if not rules:
+            return
+        self.st["security_rules"] = len(rules)
+        for nid, n in self.b.nodes.items():
+            if n.kind != "route" or n.lang != "kotlin" or n.attrs.get("framework") != "spring":
+                continue
+            uri, meth = n.attrs.get("uri", ""), n.attrs.get("method")
+            probe = re.sub(r"\{\w+\}", "x", uri)
+            for rm, rxs, g, rel in rules:
+                if rm and rm != meth:
+                    continue
+                if any(r.fullmatch(probe) for r in rxs):
+                    if g:
+                        mw = n.attrs.setdefault("middleware", [])
+                        if g not in mw:
+                            mw.append(g)
+                        n.attrs.setdefault("security", f"SecurityFilterChain ({rel})")
+                        self.st["routes_guarded_by_security_chain"] += 1
+                    break
+
+    @staticmethod
+    def _ant(p: str):
+        """Spring path pattern -> regex: `**` any depth, `*` one segment part, `{x}` one segment."""
+        out, i = "", 0
+        while i < len(p):
+            if p.startswith("/**", i):
+                out += r"(?:/.*)?"
+                i += 3
+            elif p.startswith("**", i):
+                out += r".*"
+                i += 2
+            elif p[i] == "*":
+                out += r"[^/]*"
+                i += 1
+            elif p[i] == "{":
+                j = p.find("}", i)
+                out += r"[^/]+"
+                i = j + 1 if j > 0 else len(p)
+            else:
+                out += re.escape(p[i])
+                i += 1
+        return re.compile(out)
+
     def _emit_http(self):
         bases = sorted(self.base_urls)
         base = bases[0] if len(bases) == 1 else None
         for r in self.http:
             url = r["url"]
+            own = self.api_base.get(r.get("iface") or "")
+            base = sorted(own)[0] if own and len(own) == 1 else (bases[0] if len(bases) == 1 else None)
             if r.get("relative") and base and not re.match(r"^[a-zA-Z][\w+.-]*://", url):
                 bo, bp = split_url(base)
                 origin, path = bo, (join_path(bp, url) if not url.startswith("/") else url)

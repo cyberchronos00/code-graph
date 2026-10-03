@@ -271,7 +271,42 @@ Heuristic mode (tree-sitter-kotlin 1.1.0), shallow clones, `cg index` on the def
 | touchlab/KaMPKit | 38 | 114 | 167 / 562 | 2 `expect` → `actual` links, 5 KMP source-set files, 1 activity | 0.1 s |
 
 Unresolved calls are mostly library and standard-library calls (Compose, coroutines, collections), which have no
-node in the graph. An exact-mode comparison (scip-java) is on the roadmap in [kotlin.md](kotlin.md).
+node in the graph.
+
+Framework facts added with exact mode (same corpora, before → after; every other node and edge unchanged apart from
+calls now owned by the new page / route-handler nodes): nowinandroid 2 → 7 pages (Navigation 3 `entry<Key>`), 0 → 3
+`NAVIGATES_TO`; ktor-samples 77 → 90 routes (type-safe resources), 3 Exposed tables with 14 reads / writes, 8 → 11
+Ktor client calls (builder blocks); spring-petclinic-kotlin 4 tables with 17 Spring Data reads / writes (plus 38 from
+tests). KaMPKit (URL built in a helper) and android/architecture-samples (routes from `const val` strings) are unchanged.
+No corpus has a `SecurityFilterChain`; the fixture covers it.
+
+### Kotlin exact mode (scip-java)
+
+scip-java 0.12.3 standalone launcher, JDK 17, `CODEGRAPH_KOTLIN_SCIP_FILE` pointing at the index. scip-java's
+semanticdb-kotlinc plugin only loads into Kotlin ≤ 2.1, and these builds use Kotlin 2.4: each was indexed from a copy
+with the Kotlin Gradle plugin pinned to 2.1.20 (Ktor samples also with `-Xskip-metadata-version-check`, since Ktor 3.6
+is compiled with Kotlin 2.3 metadata); the sources are unchanged. Precision: share of heuristic call edges (`CALLS` /
+`INSTANTIATES`, same source and target) that the index confirms; recall: share of compiler edges the heuristic layer
+found.
+
+| Project | Kotlin files in index | Defs matched / unmatched | Heuristic edges | Exact edges | Agree | Precision | Recall | scip-java run |
+|---|---|---|---|---|---|---|---|---|
+| spring-petclinic-kotlin | 38 / 38 | 140 / 4 | 98 | 96 | 96 | 0.98 | 1.00 | ~2 min cold, 24 s warm |
+| ktor-samples/kweet | 16 / 16 | 74 / 7 | 77 | 95 | 74 | 0.96 | 0.78 | 28 s |
+| ktor-samples/mvc-web | 12 / 12 | 30 / 1 | 25 | 32 | 25 | 1.00 | 0.78 | 21 s |
+| ktor-samples/youkube | 9 / 9 | 24 / 2 | 25 | 29 | 25 | 1.00 | 0.86 | 27 s |
+| ktor-samples/postgres | 7 / 7 | 14 / 1 | 11 | 11 | 11 | 1.00 | 1.00 | 24 s |
+| 8 smaller ktor-samples (1–2 files each) | 11 / 11 | 100 / 12 | 17 | 28 | 15 | 0.88 | 0.54 | 17–26 s |
+| **Total (13 Gradle builds)** | 93 | 382 / 27 | 253 | 291 | 246 | **0.97** | **0.85** | |
+
+The heuristic layer's misses are mostly extension functions called on a library receiver (`call.redirect(...)`),
+overloads and lambda receivers (`it.area()`); its few disagreeing edges attribute a call to the file instead of the
+enclosing function, or pick a same-named function. Unmatched definitions (SCIP definitions with no syntax-layer
+declaration on that line) get no edges. Not run: chat, h2, opentelemetry (the build does not
+configure with the pinned plugin), httpbin (needs Kotlin 2.2 language features), and the Android projects
+(nowinandroid, KaMPKit, architecture-samples: no Android SDK on the validation machine). Without a JDK, or with the
+unpinned Kotlin 2.4 build, the index completes in heuristic mode and `cg coverage` names the reason (`no JDK`, or
+`scip-java run failed (exit 1: ...)`).
 
 ## Swift
 
