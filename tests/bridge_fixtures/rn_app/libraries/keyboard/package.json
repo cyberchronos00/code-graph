@@ -1,0 +1,11 @@
+{
+  "name": "@acme/keyboard",
+  "version": "0.0.0",
+  "main": "src/index",
+  "codegenConfig": {
+    "name": "KeyboardSpec",
+    "type": "modules",
+    "jsSrcsDir": "src",
+    "platforms": ["android"]
+  }
+}

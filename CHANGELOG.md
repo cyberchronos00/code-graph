@@ -8,6 +8,20 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Web / native bridges: Capacitor plugin calls (`registerPlugin`, `Plugins.X`, `@capacitor/*` package exports,
+  `nativePromise`), React Native / Expo native module calls (`NativeModules`, `TurboModuleRegistry`,
+  `requireNativeModule`) and Flutter method / event channel calls link through a shared
+  `endpoint:<protocol>:<module>#<method>` node (SENDS_TO / RECEIVED_BY, the protocol endpoint model of #31) to their
+  Kotlin, Java, Swift and Objective-C receivers per platform (`@PluginMethod`, `CAPPluginMethod` / `CAP_PLUGIN`,
+  `@ReactMethod`, `RCT_EXPORT_METHOD` / `RCT_EXTERN_METHOD`, Expo `Function`, `call.method` handlers). `cg bridges` /
+  MCP `bridges` list methods missing on a platform, without a receiver, without a sender or implemented outside the
+  repo; `impact`, `downstream`, `tests` and `--platform` cross the bridge, and Kotlin / Swift / Java `Class.method`
+  specs resolve. Local `file:` / workspace packages resolve without `node_modules`, and platform regions understand
+  guard clauses (`if (Platform.OS !== 'ios') return`) and JS without semicolons
+  ([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
+
 ## [0.6.0] - 2026-10-03
 
 ### Added

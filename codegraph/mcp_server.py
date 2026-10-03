@@ -3,7 +3,7 @@
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
 Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, starters, index, downstream, path,
-api_calls, resolutions, channels, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+api_calls, resolutions, channels, bridges, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -72,6 +72,10 @@ server = MCPServer(
         "android, web) to reaches / impact / downstream / path / routes / search to see that target's build only. "
         "`platforms` lists the targets and tagged code, `platform_divergence` the gaps: a target no variant covers, "
         "API differences between variants, calls into code that is not built on a target. "
+        "Bridges: web / native bridge calls (Capacitor plugins, React Native / Expo modules, Flutter platform channels) go "
+        "JS / Dart call -SENDS_TO-> endpoint:<protocol>:<module>#<method> -RECEIVED_BY-> Kotlin / Java / Swift / ObjC "
+        "method (each receiver tagged with its platform), so impact / reaches cross the bridge; `bridges` lists them with "
+        "methods missing on a platform, unreceived sends and external modules. "
         "When a query finds nothing, the reply says why and which query to run instead. "
         "`starters` lists first questions derived from this graph (unguarded write routes, most-reached tables, "
         "most-called functions), each with the call to run. "
@@ -125,7 +129,8 @@ def _display(p) -> str | None:
 EMPTY_MARKERS = ("no method matches", "no symbol matches", "not found:", "no node matches", "no matches for",
                  "nothing depends", "no writers recorded", "no table ", "no path", "no forward path",
                  "has no recorded callers", "no callers found in indexed code", "no direct callers", "no siblings found", "no routes, tables", "no indexed test reaches",
-                 "nothing matched the spec", "no channel matches", "no broadcast channels")
+                 "nothing matched the spec", "no channel matches", "no broadcast channels", "no bridge endpoint matches",
+                 "no web / native bridge calls")
 
 
 def _coverage_note() -> str:
@@ -599,6 +604,21 @@ def channels(pattern: str | None = None, source: bool = True) -> str:
     listened for). Flags private channels without a callback and subscriptions that match no backend channel."""
     from .realtime import channels as _ch, render_channels
     return render_channels(_ch(_st(), pattern, with_source=source))
+
+
+@tool
+def bridges(pattern: str | None = None, protocol: str | None = None, unmatched: bool = False) -> str:
+    """Web / native bridge calls: Capacitor plugins (registerPlugin / Plugins.X -> @CapacitorPlugin @PluginMethod,
+    CAPPlugin), React Native and Expo native modules (NativeModules / TurboModuleRegistry / requireNativeModule ->
+    @ReactMethod, Native*Spec overrides, RCT_EXPORT_METHOD / RCT_EXTERN_METHOD, Expo Function / AsyncFunction) and
+    Flutter platform channels (MethodChannel.invokeMethod / EventChannel -> setMethodCallHandler / setStreamHandler).
+    One endpoint per module method (endpoint:<protocol>:<module>#<method>) with its JS / Dart senders and the native
+    receivers per platform; flags methods missing on a target (missing_on), sent methods of a module implemented here
+    that no native code receives (no_receiver), native methods nothing sends (no_sender) and modules implemented outside
+    the repo (external). pattern: endpoint name, substring or glob; protocol: capacitor | react-native | flutter |
+    flutter-event; unmatched: only endpoints with a check."""
+    from .bridges import bridges as _br, render_bridges
+    return render_bridges(_br(_st(), pattern, protocol=protocol, unmatched=unmatched))
 
 
 @tool

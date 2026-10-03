@@ -300,6 +300,15 @@ def declared_targets(root: Path, cfg: dict, marks: list, langs: set[str]) -> tup
             for t in ex.get("platforms") or ["ios", "android"]:
                 if norm(t):
                     src.setdefault(norm(t), f"{app.relative_to(root).as_posix()} expo.platforms")
+    for cap in [*root.glob("capacitor.config.*"), *root.glob("*/capacitor.config.*"), *root.glob("*/*/capacitor.config.*")]:
+        if cap.suffix not in (".ts", ".js", ".json") or not COMMON_SKIP.isdisjoint(cap.parts):
+            continue
+        where = cap.relative_to(root).as_posix()
+        for d in ("android", "ios"):
+            if (cap.parent / d).is_dir():
+                src.setdefault(d, f"Capacitor {d}/ project next to {where}")
+        if src:
+            src.setdefault("web", f"Capacitor web build ({where})")
     if not src and langs & {"ts", "typescript"} and uses_react_native(root):
         for d in ("ios", "android"):
             src.setdefault(d, "React Native")
@@ -309,6 +318,11 @@ def declared_targets(root: Path, cfg: dict, marks: list, langs: set[str]) -> tup
     if not src and (_has_dep(root, "electron") or (root / "src-tauri" / "tauri.conf.json").is_file()):
         for d in DESKTOP:
             src.setdefault(d, "Electron / Tauri desktop app")
+    if not src and marks and all(m.get("bridge") for m in marks):
+        for m in marks:            # only native bridge modules are platform-specific: their platforms
+            for p, x in m["cond"].values().items():
+                if x is True:
+                    src.setdefault(p, f"native bridge module {m['file']}")
     if not src and marks:
         for d in DESKTOP:
             src[d] = "desktop default (native code conditions)" if langs & {"rust", "c_cpp"} else "desktop default"

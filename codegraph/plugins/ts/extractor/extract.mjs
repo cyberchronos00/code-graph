@@ -105,6 +105,42 @@ if (options.moduleResolution === ts.ModuleResolutionKind.Classic) options.module
 // does (the project's own tsconfig moduleSuffixes win); the Python side links the sibling variants
 if (cfg.platform_suffixes && !options.moduleSuffixes) options.moduleSuffixes = cfg.platform_suffixes
 const pathsBase = options.pathsBasePath || options.baseUrl || path.dirname(tsconfigPath)
+// local packages (package.json `"x": "file:./libraries/x"` / `link:` dependencies, workspace packages) with no installed
+// node_modules link: imports of them resolve to the package source, as the package manager's symlink would
+const localPkgs = []
+{
+  const readJson = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')) } catch { return null } }
+  const pj = readJson(path.join(ROOT, 'package.json'))
+  const dirs = []
+  if (pj) {
+    for (const [name, spec] of Object.entries({ ...(pj.dependencies || {}), ...(pj.devDependencies || {}) })) {
+      const m = typeof spec === 'string' && spec.match(/^(?:file|link):(.+)$/)
+      if (m) dirs.push([name, path.resolve(ROOT, m[1])])
+    }
+    const ws = Array.isArray(pj.workspaces) ? pj.workspaces : ((pj.workspaces || {}).packages || [])
+    for (const w of ws) {
+      if (typeof w !== 'string' || !/^[\w@./-]+(\/\*)?$/.test(w)) continue
+      const base = path.resolve(ROOT, w.replace(/\/\*$/, ''))
+      let subs = [base]
+      if (w.endsWith('/*')) { try { subs = fs.readdirSync(base, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => path.join(base, e.name)) } catch { subs = [] } }
+      for (const d of subs) { const p = readJson(path.join(d, 'package.json')); if (p && p.name) dirs.push([p.name, d]) }
+    }
+  }
+  for (const [name, dir] of dirs) {
+    if (fs.existsSync(path.join(ROOT, 'node_modules', name)) || !dir.startsWith(ROOT + path.sep)) continue
+    const p = readJson(path.join(dir, 'package.json'))
+    if (!p) continue
+    const cands = [p['react-native'], p.source, p.main, 'src/index', 'index'].filter(e => typeof e === 'string')
+      .map(e => path.resolve(dir, e).replace(/\.(js|jsx|ts|tsx|mjs|cjs)$/, ''))
+    const hit = cands.find(c => ['.ts', '.tsx', '.js', '.jsx'].some(x => fs.existsSync(c + x)))
+    if (!hit) continue
+    options.paths = { ...(options.paths || {}) }
+    if (!options.baseUrl && !options.pathsBasePath) options.pathsBasePath = ROOT
+    if (!options.paths[name]) options.paths[name] = [hit]
+    if (!options.paths[name + '/*']) options.paths[name + '/*'] = [dir + '/*']
+    localPkgs.push(name)
+  }
+}
 
 // symlinks: a link to a file is indexed, a link to a directory is not followed, a dangling link (e.g. to a file
 // outside the checkout) is skipped with a warning; an unreadable directory is skipped, never fatal
@@ -1147,6 +1183,160 @@ function realtimeSub(node, callee) {
   return null
 }
 
+// ---------- web / native bridges: Capacitor plugins, React Native native modules, Expo modules ----------
+// A call `X.m()` whose receiver X evaluates to a native module handle (registerPlugin('Name'), Plugins.Name,
+// NativeModules.Name, TurboModuleRegistry.get('Name'), requireNativeModule('Name'), an @capacitor/* plugin export) is
+// a bridge send: {protocol, module, method}. codegraph/bridges.py links it to the Kotlin / Java / Swift / ObjC side.
+const bridges = []
+const BRIDGE_SKIP = new Set(['then', 'catch', 'finally', 'bind', 'call', 'apply', 'toString', 'hasOwnProperty'])
+const CAP_BUILTIN = new Set(['addListener', 'removeAllListeners', 'removeListener', 'notifyListeners'])   // listener plumbing of the bridge
+const CAP_CORE_EXPORTS = new Set(['Capacitor', 'registerPlugin', 'Plugins', 'WebPlugin', 'CapacitorHttp', 'CapacitorCookies', 'WebView', 'SplashScreen'])
+const bridgeCache = new Map()
+const atOf = e => { const sf = e.getSourceFile(); return rel(realFile(sf)) + ':' + lineOf(e, sf) }
+function bridgeLib(e, names, pkgs) {
+  const id = unwrap(e)
+  if (!id || !ts.isIdentifier(id) || !names.includes(id.text)) return null
+  const lib = FW.importSource ? FW.importSource(id) : null
+  if (lib && pkgs.some(p => lib === p || lib.startsWith(p + '/'))) return 'exact'
+  if (lib) return null      // a local NativeModules / Plugins of another library
+  try { const s = checker.getSymbolAtLocation(id); if (s && (s.declarations || []).some(d => projectSf(d.getSourceFile()))) return null } catch { }
+  return 'resolved'
+}
+const RN_PKGS = ['react-native', 'react-native-web', 'react-native-windows', 'react-native-macos']
+const CAP_PKGS = ['@capacitor/core']
+const EXPO_PKGS = ['expo-modules-core', 'expo']
+function strArg(c) {
+  const a = c.arguments && unwrap(c.arguments[0])
+  if (!a) return null
+  if (ts.isStringLiteralLike(a)) return a.text
+  const v = strVals(a)
+  return v.length === 1 && !/[\u0001{]/.test(v[0]) ? v[0] : null
+}
+function moduleFile(spec, fromSf) {
+  if (!spec.startsWith('.')) {
+    let f = null
+    try { f = (ts.resolveModuleName(spec, fromSf.fileName, options, host).resolvedModule || {}).resolvedFileName } catch { }
+    return f ? program.getSourceFile(f) || null : null
+  }
+  const base = path.resolve(path.dirname(fromSf.fileName), spec)
+  for (const ext of ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js']) {
+    const sf = program.getSourceFile(base + ext)
+    if (sf) return sf
+  }
+  return null
+}
+function defaultExportOf(sf) {
+  for (const st of sf.statements) if (ts.isExportAssignment(st) && !st.isExportEquals) return st.expression
+  return null
+}
+// {protocol, module, conf, via, api?, external?} for a native module handle expression, else null
+function bridgeModuleOf(e, depth) {
+  e = unwrap(e)
+  if (!e || depth > 8) return null
+  if (ts.isPropertyAccessExpression(e) || ts.isElementAccessExpression(e)) {
+    const name = ts.isPropertyAccessExpression(e) ? e.name.text : (e.argumentExpression && ts.isStringLiteralLike(e.argumentExpression) ? e.argumentExpression.text : null)
+    if (name) {
+      let k = bridgeLib(e.expression, ['NativeModules'], RN_PKGS)
+      if (k) return { protocol: 'react-native', module: name, conf: k, via: ['NativeModules'], at: atOf(e) }
+      k = bridgeLib(e.expression, ['Plugins'], CAP_PKGS)
+      if (k) return { protocol: 'capacitor', module: name, conf: k, via: ['Plugins'], at: atOf(e) }
+      // Capacitor.Plugins.Name / window.Capacitor.Plugins.Name
+      const pe = unwrap(e.expression)
+      if (ts.isPropertyAccessExpression(pe) && pe.name.text === 'Plugins' && /(^|\.)(Capacitor|cap)$/.test(unwrap(pe.expression).getText()))
+        return { protocol: 'capacitor', module: name, conf: 'resolved', via: ['Capacitor.Plugins'], at: atOf(e) }
+    }
+    // require('./NativeFoo').default
+    if (ts.isPropertyAccessExpression(e) && e.name.text === 'default') {
+      const c = unwrap(e.expression)
+      if (c && ts.isCallExpression(c) && ts.isIdentifier(c.expression) && c.expression.text === 'require' && c.arguments[0] && ts.isStringLiteralLike(c.arguments[0])) {
+        const sf = moduleFile(c.arguments[0].text, e.getSourceFile())
+        const x = sf && defaultExportOf(sf)
+        const r = x && bridgeModuleOf(x, depth + 1)
+        if (r) return { ...r, via: [...r.via, 'require'] }
+        return null
+      }
+    }
+    if (!ts.isPropertyAccessExpression(e)) return null
+  }
+  if (ts.isCallExpression(e)) {
+    const c = unwrap(e.expression)
+    // registerPlugin('Name') (imported from @capacitor/core, or a local re-export of it) / Capacitor.registerPlugin('Name')
+    if ((ts.isIdentifier(c) && c.text === 'registerPlugin') || (ts.isPropertyAccessExpression(c) && c.name.text === 'registerPlugin'
+        && /(^|\.)(Capacitor|cap)$/.test(unwrap(c.expression).getText()))) {
+      const lib = ts.isIdentifier(c) && FW.importSource ? FW.importSource(c) : null
+      const n = strArg(e)
+      if (n && (!lib || lib === '@capacitor/core' || lib.startsWith('.'))) return { protocol: 'capacitor', module: n, conf: lib === '@capacitor/core' ? 'exact' : 'resolved', via: ['registerPlugin'], at: atOf(e) }
+    }
+    if (ts.isPropertyAccessExpression(c) && ['get', 'getEnforcing'].includes(c.name.text)) {
+      const k = bridgeLib(c.expression, ['TurboModuleRegistry'], RN_PKGS)
+      const n = k && strArg(e)
+      if (n) return { protocol: 'react-native', module: n, conf: k, via: ['TurboModuleRegistry'], at: atOf(e) }
+    }
+    // Object.assign(NativeModule, { helpers }) is still the native module
+    // (the members the other arguments add are JS helpers, not native methods)
+    if (ts.isPropertyAccessExpression(c) && c.name.text === 'assign' && ts.isIdentifier(c.expression) && c.expression.text === 'Object' && e.arguments.length) {
+      const r = bridgeModuleOf(e.arguments[0], depth + 1)
+      if (!r) return null
+      const js = [...(r.jsOnly || [])]
+      for (const a of e.arguments.slice(1)) {
+        const o = unwrap(a)
+        if (o && ts.isObjectLiteralExpression(o)) for (const p of o.properties) if (p.name && (ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name))) js.push(p.name.text)
+      }
+      return js.length ? { ...r, jsOnly: js } : r
+    }
+    if (ts.isIdentifier(c) && ['requireNativeModule', 'requireOptionalNativeModule'].includes(c.text)) {
+      const lib = FW.importSource ? FW.importSource(c) : null
+      const n = strArg(e)
+      if (n && (!lib || EXPO_PKGS.includes(lib))) return { protocol: 'react-native', module: n, conf: lib ? 'exact' : 'resolved', via: [c.text], api: 'expo-modules', at: atOf(e) }
+    }
+    return null
+  }
+  if (ts.isConditionalExpression(e)) return bridgeModuleOf(e.whenFalse, depth + 1) || bridgeModuleOf(e.whenTrue, depth + 1)
+  if (ts.isBinaryExpression(e) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(e.operatorToken.kind))
+    return bridgeModuleOf(e.left, depth + 1) || bridgeModuleOf(e.right, depth + 1)
+  if (!ts.isIdentifier(e) && !ts.isPropertyAccessExpression(e)) return null
+  let sym
+  try { sym = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(e) ? e.name : e) } catch { return null }
+  if (!sym) return null
+  if (bridgeCache.has(sym)) return bridgeCache.get(sym)
+  bridgeCache.set(sym, null)
+  let out = null
+  const first = (sym.declarations || [])[0]
+  // an import from an @capacitor/* plugin package (node_modules is not indexed): the export name is the plugin name
+  if (first && ts.isImportSpecifier(first)) {
+    let p = first; while (p && !ts.isImportDeclaration(p)) p = p.parent
+    const lib = p && ts.isStringLiteral(p.moduleSpecifier) ? p.moduleSpecifier.text : ''
+    const nm = (first.propertyName || first.name).text
+    if (/^@capacitor(-community)?\/|^@capawesome(-team)?\//.test(lib) && lib !== '@capacitor/core' && /^[A-Z]/.test(nm) && !CAP_CORE_EXPORTS.has(nm)) {
+      let target = null
+      try { target = checker.getAliasedSymbol(sym) } catch { }
+      const td = target && (target.declarations || [])[0]
+      if (!td || !projectSf(td.getSourceFile())) out = { protocol: 'capacitor', module: nm, conf: 'heuristic', via: ['package-export'], external: lib }
+    }
+  }
+  if (!out) {
+    let s = sym
+    for (let i = 0; i < 6 && s && (s.flags & ts.SymbolFlags.Alias); i++) { try { s = checker.getAliasedSymbol(s) } catch { s = null } }
+    for (const d of (s && s.declarations) || []) {
+      if (ts.isVariableDeclaration(d) && d.initializer) out = bridgeModuleOf(d.initializer, depth + 1)
+      else if ((ts.isPropertyDeclaration(d) || ts.isPropertyAssignment(d)) && d.initializer) out = bridgeModuleOf(d.initializer, depth + 1)
+      else if (ts.isExportAssignment(d)) out = bridgeModuleOf(d.expression, depth + 1)
+      else if (ts.isBindingElement(d) && ts.isObjectBindingPattern(d.parent) && ts.isVariableDeclaration(d.parent.parent) && d.parent.parent.initializer) {
+        const nm = d.propertyName && ts.isIdentifier(d.propertyName) ? d.propertyName.text : (ts.isIdentifier(d.name) ? d.name.text : null)
+        const init = d.parent.parent.initializer
+        if (nm) {
+          let k = bridgeLib(init, ['NativeModules'], RN_PKGS)
+          if (k) out = { protocol: 'react-native', module: nm, conf: k, via: ['NativeModules'], at: atOf(d) }
+          else if ((k = bridgeLib(init, ['Plugins'], CAP_PKGS))) out = { protocol: 'capacitor', module: nm, conf: k, via: ['Plugins'], at: atOf(d) }
+        }
+      }
+      if (out) break
+    }
+  }
+  bridgeCache.set(sym, out)
+  return out
+}
+
 function edgeKindFor(targetId, isCall) {
   const k = targetId.split(':')[0]
   if (k === 'composable') return 'USES_COMPOSABLE'
@@ -1315,6 +1505,18 @@ function handleCall(node, cur, sf, r, encFn) {
     if (depParams.length && encFn) deferredParamCalls.push({ rec, encFn, urlExpr: http.urlExpr })
     apiCalls.push(rec)
   }
+  // web / native bridge sends: Capacitor.nativePromise('Plugin', 'method', ...) / nativeCallback (the low-level bridge)
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && ['nativePromise', 'nativeCallback'].includes(callee.name.text)
+      && node.arguments.length >= 2 && /(^|\.)(Capacitor|cap)$/.test(unwrap(callee.expression).getText())) {
+    const pn = strArg(node), mn = ts.isStringLiteralLike(unwrap(node.arguments[1])) ? unwrap(node.arguments[1]).text : null
+    if (pn && mn) bridges.push({ src: cur, file: r, line, method: mn, protocol: 'capacitor', module: pn, conf: 'exact', via: [callee.name.text], test: testSf || undefined })
+  } else if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(callee) && !BRIDGE_SKIP.has(callee.name.text)) {
+    const bm = bridgeModuleOf(callee.expression, 0)
+    if (bm && !(bm.protocol === 'capacitor' && CAP_BUILTIN.has(callee.name.text)) && !(bm.jsOnly && bm.jsOnly.includes(callee.name.text))) {
+      const { jsOnly, ...fact } = bm
+      bridges.push({ src: cur, file: r, line, method: callee.name.text, ...fact, test: testSf || undefined })
+    }
+  }
   // call edges
   let sym = null
   if (ts.isIdentifier(callee)) sym = checker.getSymbolAtLocation(callee)
@@ -1421,6 +1623,8 @@ stats.edges = edges.length
 stats.api_calls = apiCalls.length
 stats.api_calls_param_expanded = expanded
 stats.subscriptions = subscriptions.length
+stats.bridge_sends = bridges.length
+stats.local_packages = localPkgs.length ? localPkgs : undefined
 stats.test_visits = visits.length
 stats.program_files = program.getSourceFiles().length
 stats.seconds_program = (tProgram - t0) / 1000
@@ -1431,6 +1635,6 @@ stats.seconds_fw_facts = tFw / 1000
 stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
 stats.config = { tsconfig: noConfig ? null : rel(tsconfigPath), root_files: rootNames.length }
 fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts,
-  subscriptions, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
+  subscriptions, bridges, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
   skipped_links: [...new Set(skippedLinks)].sort(), stats }))
 console.log(JSON.stringify(stats))

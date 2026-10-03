@@ -195,6 +195,11 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
             stats["plugins"][f"scip:{s}"] = import_scip(s, builder)
     # generated / copied / vendored files: out of the graph (default) or labelled (attrs.generated)
     stats["generated"] = apply_generated(builder, clf)
+    # web / native bridges: native receivers of Capacitor / React Native / Flutter calls (platform marks on their files)
+    from . import bridges as bridges_mod
+    t_br = time.time()
+    br = bridges_mod.apply(project, builder, scanned)
+    br_seconds = time.time() - t_br
     # platform-specific code: platform tags on nodes / edges, variant implementations linked, divergence
     from .platforms import apply as apply_platforms
     t_pl = time.time()
@@ -205,6 +210,11 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)
+    t_br = time.time()
+    br = bridges_mod.finalize(project, builder, br, (pl or {}).get("targets") or bridges_mod.project_targets(project, builder))
+    if br:
+        br["seconds"] = round(br_seconds + time.time() - t_br, 2)
+        stats["bridges"] = br
     from .tests_index import link_local_channels
     if (ch := link_local_channels(builder)):
         stats["channels_linked"] = ch

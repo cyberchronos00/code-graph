@@ -47,6 +47,12 @@ aliases (`win32`, `darwin`, `osx`, `mac`, `wasm`, `browser`, ...). A project's o
 | Dart / Flutter | `Platform.isIOS` / `isAndroid` / ..., `kIsWeb`, `defaultTargetPlatform == TargetPlatform.x` and `switch` on it, `if` / `else` chains, `?:`, Dart 3 `switch` expressions | conditional imports and exports (`import 'stub.dart' if (dart.library.io) 'io.dart' if (dart.library.js_interop) 'web.dart'`) |
 | TypeScript / JavaScript | React Native `Platform.OS === 'ios'`, `Platform.select({ios, android, native, web, default})`, `switch (Platform.OS)`; Node / Electron `process.platform === 'win32'`, `os.platform()` | `.ios.ts` / `.android.ts` / `.native.ts` / `.web.ts` files and the base file next to them; imports resolve through the platform suffixes (`moduleSuffixes`) |
 
+A guard clause (`if (Platform.OS !== 'ios') return`, `if (!Platform.isIOS) return;`) tags the rest of the enclosing
+block with the negated condition, and a JS / TS branch without braces or semicolons ends at its line (automatic
+semicolon insertion). Native files that receive [web / native bridge](bridges.md) calls are tagged with the platform of
+their folder (`android/`, `ios/`, `macos/`), and a Capacitor project's targets come from `capacitor.config.*` with
+`android/` / `ios/` next to it, plus web.
+
 Each condition is evaluated per target to true, false or unknown. A condition that does not decide the target
 (`feature = "x"`, `HAVE_SOUND`, `Platform.Version > 30`) counts as unknown, and the code under it stays in every
 target's view. `cg platforms` and `cg coverage` list how many conditions are unknown, with samples.

@@ -280,6 +280,12 @@ def scan(src: str, lang: str) -> list[tuple]:
             prev.append(cur_cond)
             k = T.skip_ws(end)
             if not m.startswith("else", k) or (k + 4 < len(m) and (m[k + 4].isalnum() or m[k + 4] == "_")):
+                # guard clause `if (Platform.OS !== 'ios') return`: the rest of the enclosing block runs only where
+                # the condition is false
+                if len(prev) == 1 and _exits(m, body, end):
+                    close = _enclosing_close(T, hit.start())
+                    if close is not None:
+                        region(end, close, ("not", cond), f"after if ({ctext}) return", start)
                 break
             k = T.skip_ws(k + 4)
             if m.startswith("if", k) and not (m[k + 2].isalnum() or m[k + 2] == "_"):
@@ -491,8 +497,55 @@ def _stmt_end(T: _Text, i: int, lang: str) -> int:
             d -= 1
         elif c == ";" and d == 0:
             return j + 1
+        elif c == "\n" and d == 0 and lang == "ts" and _asi_break(m, i, j):
+            return j
         j += 1
     return j
+
+
+_EXIT_RX = re.compile(r"\{?\s*(?:return|throw|continue|break)\b[^{};]*;?\s*\}?\s*$")
+
+
+def _exits(m: str, a: int, z: int) -> bool:
+    """The body [a, z) is a single return / throw / continue / break (optionally in braces)."""
+    return bool(_EXIT_RX.fullmatch(m[a:z].strip()))
+
+
+def _enclosing_close(T: _Text, i: int) -> int | None:
+    """Offset of the `}` closing the innermost block around offset i (None at top level)."""
+    m, d = T.m, 0
+    for j in range(i - 1, -1, -1):
+        c = m[j]
+        if c in ")]}":
+            d += 1
+        elif c in "([{":
+            if d == 0:
+                return T.match_close(j) if c == "{" else None
+            d -= 1
+    return None
+
+
+_CONT_END = set("=+-*/%&|^<>?:,.!~({[")
+_CONT_START = set(".?:+-*/%&|^,=)]}")
+
+
+def _asi_break(m: str, i: int, j: int) -> bool:
+    """A JS / TS statement without a semicolon ends at this newline (automatic semicolon insertion): `if (x) return`
+    on its own line does not swallow the next statement."""
+    k = j - 1
+    while k >= i and m[k] in " \t\r":
+        k -= 1
+    if k < i:
+        return False
+    n = j + 1
+    while n < len(m) and m[n] in " \t\r\n":
+        n += 1
+    if n >= len(m):
+        return False
+    word = re.search(r"(\w+)$", m[i:k + 1])
+    if word and word.group(1) in ("return", "break", "continue", "throw") and m[i:k + 1].strip() == word.group(1):
+        return True                 # restricted productions: `return` + newline always ends the statement
+    return m[k] not in _CONT_END and m[n] not in _CONT_START
 
 
 _STOP_WORDS = ("return", "await", "yield", "final", "var", "const", "let")

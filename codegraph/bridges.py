@@ -1,0 +1,939 @@
+"""Web / native bridges: Capacitor plugins, React Native (and Expo) native modules, Flutter platform channels.
+
+A bridge call is local message passing between the JS / Dart side of an app and its Kotlin / Java / Swift / ObjC side.
+It is modelled with the protocol endpoint model of #31 (epic #29), so the bridge path is
+
+    JS / Dart call site  -SENDS_TO->  endpoint:<protocol>:<namespace>#<method>  -RECEIVED_BY->  native method
+
+  protocol      capacitor | react-native (NativeModules, TurboModules, Expo Modules: attrs.api = expo-modules)
+                | flutter (MethodChannel) | flutter-event (EventChannel, no method part: endpoint:flutter-event:<channel>)
+  namespace     Capacitor plugin name, React Native module name, Flutter channel name
+  RECEIVED_BY   one edge per native implementation, in the native file: the platform conventions of platforms.py tag it
+                (android/ ios/ macos/ directories, else Kotlin / Java = android, Swift / ObjC = ios), so `--platform ios`
+                drops the Android receivers and `impact` / `reaches` cross the bridge in both directions
+
+The send side comes from the language plugins (TypeScript extractor facts, codegraph/plugins/dart/bridges.py); the
+receive side is a source-text pass over the native files run here, after the language plugins (Java and ObjC have no
+language plugin: their receivers become stub method nodes with attrs.bridge_stub). `finalize` then records per
+endpoint which platforms receive it and the checks: missing_on (sent, received on some mobile targets of the project
+but not on these), no_receiver (the namespace is implemented in this repo, the method is not), no_sender, external
+(nothing in this repo implements the namespace: an npm / pub plugin package).
+"""
+from __future__ import annotations
+
+import bisect
+import fnmatch
+import json
+import os
+import re
+from collections import defaultdict
+from pathlib import Path
+
+PROTOCOLS = {
+    "capacitor": "Capacitor plugin method (registerPlugin / Plugins.X -> @CapacitorPlugin / CAPPlugin)",
+    "react-native": "React Native native module method (NativeModules / TurboModuleRegistry / requireNativeModule -> "
+                    "@ReactMethod / RCT_EXPORT_METHOD / Expo Function)",
+    "flutter": "Flutter MethodChannel method (invokeMethod -> setMethodCallHandler)",
+    "flutter-event": "Flutter EventChannel stream (receiveBroadcastStream -> setStreamHandler)",
+}
+MOBILE = ("android", "ios", "macos")
+# Capacitor Plugin / CAPPlugin base-class methods: handled by the bridge on every platform unless a plugin overrides them
+CAP_BASE_METHODS = {"checkPermissions", "requestPermissions", "addListener", "removeAllListeners", "removeListener"}
+# NativeEventEmitter plumbing (RCTEventEmitter implements it on iOS) and the TurboModule constants getter
+RN_BASE_METHODS = {"addListener", "removeListeners", "getConstants"}
+BASE_METHODS = {"capacitor": CAP_BASE_METHODS, "react-native": RN_BASE_METHODS}
+
+
+def _flutter_folders(root: Path, rel: str | None, cache: dict) -> set | None:
+    """Platform folders (android/, ios/, macos/) next to the nearest pubspec.yaml above a Dart file."""
+    if not rel:
+        return None
+    d = Path(rel).parent
+    while True:
+        key = ("pubspec", str(d))
+        if key not in cache:
+            cache[key] = ({p for p in ("android", "ios", "macos") if (root / d / p).is_dir()}
+                          if (root / d / "pubspec.yaml").is_file() else None)
+        if cache[key] is not None:
+            return cache[key]
+        if d == d.parent or str(d) in ("", "."):
+            return None
+        d = d.parent
+
+
+def _codegen_platforms(root: Path, rel: str, cache: dict) -> list[str] | None:
+    """platforms of the nearest package.json's React Native codegenConfig (a module declared for android only)."""
+    d = Path(rel).parent
+    while True:
+        key = str(d)
+        if key not in cache:
+            cache[key] = None
+            pj = root / d / "package.json"
+            if pj.is_file():
+                try:
+                    cfg = json.loads(pj.read_text(encoding="utf-8", errors="replace")).get("codegenConfig") or {}
+                    plats = cfg.get("platforms") if isinstance(cfg, dict) else None
+                    cache[key] = [p for p in plats if isinstance(p, str)] if isinstance(plats, list) else []
+                except (OSError, ValueError, AttributeError):
+                    cache[key] = []
+        if cache[key] is not None:
+            return cache[key] or None
+        if d == d.parent or str(d) in ("", "."):
+            return None
+        d = d.parent
+NATIVE_EXTS = (".kt", ".java", ".swift", ".m", ".mm")
+
+
+# ------------------------------------------------------------------ protocol helpers (the #31 builder helper shape)
+def endpoint_key(protocol: str, namespace: str, method: str | None = None) -> str:
+    """Key of endpoint:<protocol>:<name>, name = <namespace>#<method> (or the namespace alone for streams)."""
+    return f"{protocol}:{namespace}#{method}" if method else f"{protocol}:{namespace}"
+
+
+def _endpoint(builder, protocol: str, namespace: str, method: str | None) -> str:
+    key = endpoint_key(protocol, namespace, method)
+    name = key.split(":", 1)[1]
+    return builder.add_node("endpoint", key, name, fqn=name,
+                            attrs={"protocol": protocol, "transport": "local", "namespace": namespace, "method": method})
+
+
+def protocol_send(builder, protocol: str, namespace: str, method: str | None, src: str, file: str | None,
+                  line: int | None, confidence: str, test: bool = False, **attrs) -> str:
+    """Code `src` sends to an endpoint (SENDS_TO; test code: TEST_CALLS with orig SENDS_TO)."""
+    nid = _endpoint(builder, protocol, namespace, method)
+    n = builder.nodes[nid]
+    if test:
+        n.attrs.setdefault("test_only", True)
+    else:
+        n.attrs["test_only"] = False
+    a = {k: v for k, v in attrs.items() if v not in (None, [], "")}
+    if test:
+        builder.add_edge(src, nid, "TEST_CALLS", file=file, line=line, confidence=confidence, orig="SENDS_TO", **a)
+    else:
+        builder.add_edge(src, nid, "SENDS_TO", file=file, line=line, confidence=confidence, role="invoke", **a)
+    return nid
+
+
+def protocol_receive(builder, protocol: str, namespace: str, method: str | None, handler: str, file: str | None,
+                     line: int | None, confidence: str, **attrs) -> str:
+    """An endpoint is handled by `handler` (RECEIVED_BY, endpoint -> handler)."""
+    nid = _endpoint(builder, protocol, namespace, method)
+    builder.add_edge(nid, handler, "RECEIVED_BY", file=file, line=line, confidence=confidence,
+                     **{k: v for k, v in attrs.items() if v not in (None, [], "")})
+    return nid
+
+
+# ------------------------------------------------------------------ source text helpers
+_TOKEN = re.compile(r'"(?:\\.|[^"\\\n])*"|//[^\n]*|/\*.*?\*/', re.S)
+
+
+def strip_comments(src: str) -> str:
+    """Comments blanked (newlines kept, so offsets and line numbers stay), string literals kept."""
+    def rep(m):
+        t = m.group(0)
+        if t.startswith('"'):
+            return t
+        return re.sub(r"[^\n]", " ", t)
+    return _TOKEN.sub(rep, src)
+
+
+def _blank_strings(src: str) -> str:
+    return re.sub(r'"(?:\\.|[^"\\\n])*"', lambda m: '"' + " " * (len(m.group(0)) - 2) + '"', src)
+
+
+class Text:
+    def __init__(self, src: str):
+        self.src = strip_comments(src)
+        self.code = _blank_strings(self.src)        # for brace matching: braces inside strings do not count
+        self.nl = [i for i, c in enumerate(self.src) if c == "\n"]
+
+    def line(self, pos: int) -> int:
+        return bisect.bisect_right(self.nl, pos - 1) + 1
+
+    def match(self, pos: int, open_: str = "{", close: str = "}") -> int:
+        """Offset of the bracket closing the one at pos (or the first `open_` at / after pos); len(src) if unbalanced."""
+        i = self.code.find(open_, pos)
+        if i < 0:
+            return len(self.code)
+        depth = 0
+        for j in range(i, len(self.code)):
+            c = self.code[j]
+            if c == open_:
+                depth += 1
+            elif c == close:
+                depth -= 1
+                if depth == 0:
+                    return j
+        return len(self.code)
+
+    def args(self, open_pos: int) -> list[tuple[int, str]]:
+        """Top-level comma-separated arguments of the call whose `(` is at open_pos: [(offset, text)]."""
+        end = self.match(open_pos, "(", ")")
+        out, depth, start = [], 0, open_pos + 1
+        for j in range(open_pos + 1, end):
+            c = self.code[j]
+            if c in "([{":
+                depth += 1
+            elif c in ")]}":
+                depth -= 1
+            elif c == "," and depth == 0:
+                out.append((start, self.src[start:j].strip()))
+                start = j + 1
+        tail = self.src[start:end].strip()
+        if tail:
+            out.append((start, tail))
+        return out
+
+
+CLASS_RE = re.compile(r"\b(?:class|object|struct|actor)\s+(\w+)[^{;=]*\{")
+OBJC_IMPL_RE = re.compile(r"@implementation\s+(\w+)")
+CONST_RE = re.compile(r"\b(?:val|var|let|const\s+val|static\s+let|static\s+var|(?:public\s+|private\s+|protected\s+)?"
+                      r"(?:static\s+)?final\s+String|String)\s+(\w+)\s*(?::\s*String\??)?\s*=\s*\"([^\"\\\n]*)\"")
+OBJC_CONST_RE = re.compile(r"NSString\s*\*\s*(?:const\s+)?(\w+)\s*=\s*@\"([^\"\n]*)\"|#define\s+(\w+)\s+@\"([^\"\n]*)\"")
+PACKAGE_RE = re.compile(r"^\s*package\s+([\w.]+)", re.M)
+
+
+class NativeFile:
+    def __init__(self, rel: str, src: str):
+        self.rel, self.t = rel, Text(src)
+        self.ext = os.path.splitext(rel)[1]
+        self.lang = {".kt": "kotlin", ".java": "java", ".swift": "swift", ".m": "objc", ".mm": "objc"}[self.ext]
+        m = PACKAGE_RE.search(self.t.src)
+        self.package = m.group(1) if m and self.lang in ("kotlin", "java") else None
+        self.classes: list[tuple[str, int, int]] = []          # (name, start, end) offsets
+        for m in CLASS_RE.finditer(self.t.code):
+            self.classes.append((m.group(1), m.start(), self.t.match(m.end() - 1)))
+        if self.lang == "objc":
+            for m in OBJC_IMPL_RE.finditer(self.t.code):
+                e = self.t.code.find("@end", m.end())
+                self.classes.append((m.group(1), m.start(), e if e >= 0 else len(self.t.code)))
+        self.consts = {}
+        for m in CONST_RE.finditer(self.t.src):
+            self.consts.setdefault(m.group(1), m.group(2))
+        for m in OBJC_CONST_RE.finditer(self.t.src):
+            if m.group(1):
+                self.consts.setdefault(m.group(1), m.group(2))
+            else:
+                self.consts.setdefault(m.group(3), m.group(4))
+
+    def class_at(self, pos: int) -> tuple[str, int, int] | None:
+        best = None
+        for c in self.classes:
+            if c[1] <= pos <= c[2] and (best is None or c[1] > best[1]):
+                best = c
+        return best
+
+    def class_named(self, name: str):
+        return next((c for c in self.classes if c[0] == name), None)
+
+
+TRIGGER = re.compile(r"CapacitorPlugin|CAPPlugin|CAP_PLUGIN|ReactMethod|RCT_(?:EXPORT|EXTERN|REMAP)|ReactContextBaseJavaModule|"
+                     r"BaseJavaModule|Native\w+Spec\b|ModuleDefinition|MethodChannel|EventChannel|MethodCallHandler|"
+                     r"StreamHandler|isEqualToString:\s*call\.method|call\.method|@objc\s*\(")
+
+
+# ------------------------------------------------------------------ receivers found in native source text
+class Receiver:
+    __slots__ = ("protocol", "namespace", "method", "file", "pos", "fn", "cls", "conf", "via", "api", "lookup")
+
+    def __init__(self, protocol, namespace, method, nf: NativeFile, pos, fn=None, cls=None, conf="resolved", via=None,
+                 api=None, lookup=None):
+        self.protocol, self.namespace, self.method = protocol, namespace, method
+        self.file, self.pos, self.fn, self.cls, self.conf, self.via, self.api = nf, pos, fn, cls, conf, via, api
+        self.lookup = lookup          # (swift / objc class name, method name): implemented in another file
+
+
+ANN_TAIL = r"\s*(?:@\w+(?:\.\w+)*(?:\([^)]*\))?\s*)*(?:(?:public|private|protected|internal|static|final|override|open|" \
+           r"suspend|synchronized|native)\s+)*(?:fun\s+(?:<[^>]*>\s*)?(\w+)|[\w<>\[\],.?]+(?:\s*<[^>]*>)?\s+(\w+))\s*\("
+CAP_PLUGIN_ANN = re.compile(r"@CapacitorPlugin\b\s*(\()?")
+PLUGIN_METHOD = re.compile(r"@PluginMethod\b(?:\s*\([^)]*\))?" + ANN_TAIL)
+REACT_METHOD = re.compile(r"@ReactMethod\b(?:\s*\([^)]*\))?" + ANN_TAIL)
+JAVA_CLASS = re.compile(r"\bclass\s+(\w+)\s*(?:\([^)]*\))?\s*(?::|extends)\s*([^{]*)\{")
+GET_NAME = re.compile(r"\bgetName\s*\(\s*\)\s*(?::\s*String\s*)?(?:=\s*|\{\s*return\s+)(\"([^\"]*)\"|([\w.]+))")
+OVERRIDE_FUN = re.compile(r"(?:\boverride\s+fun\s+(\w+)\s*\(|@Override\s+(?:public\s+)?(?:synchronized\s+)?[\w<>\[\],.?]+\s+(\w+)\s*\()")
+SPEC_SKIP = {"getName", "getConstants", "getTypedExportedConstants", "initialize", "invalidate", "onCatalystInstanceDestroy",
+             "canOverrideExistingModule", "hasConstants", "getExportedConstants", "toString", "equals", "hashCode",
+             "onHostResume", "onHostPause", "onHostDestroy", "onActivityResult", "onNewIntent", "createNativeModules",
+             "createViewManagers", "getReactModuleInfoProvider", "getModule"}
+SWIFT_CLASS = re.compile(r"(?:@objc\s*\(\s*(\w+)\s*\)\s*)?(?:(?:public|open|final|internal|private)\s+)*class\s+(\w+)\s*:\s*([^{]*)\{")
+CAP_METHOD_NAME = re.compile(r"CAPPluginMethod\s*\(\s*name:\s*\"(\w+)\"|CAPPluginMethod\s*\(\s*\"(\w+)\"")
+JS_NAME = re.compile(r"\bjsName\s*=\s*\"([^\"]+)\"")
+OBJC_FUNC = re.compile(r"@objc(?:\s*\([^)]*\))?\s+(?:(?:public|open|internal|private|final|override|dynamic)\s+)*func\s+(\w+)\s*\(")
+SWIFT_FUNC = re.compile(r"\bfunc\s+(\w+)\s*(?:<[^>]*>)?\s*\(")
+RCT_MODULE = re.compile(r"\bRCT_EXPORT_MODULE\s*\(\s*(\w*)\s*\)")
+RCT_EXPORT = re.compile(r"\bRCT_(?:EXPORT_METHOD|EXPORT_BLOCKING_SYNCHRONOUS_METHOD)\s*\(\s*(\w+)|"
+                        r"\bRCT_(?:REMAP_METHOD|REMAP_BLOCKING_SYNCHRONOUS_METHOD)\s*\(\s*(\w+)\s*,")
+RCT_EXTERN_MODULE = re.compile(r"\bRCT_EXTERN_MODULE\s*\(\s*(\w+)\s*,|\bRCT_EXTERN_REMAP_MODULE\s*\(\s*(\w*)\s*,\s*(\w+)\s*,")
+RCT_EXTERN_METHOD = re.compile(r"\bRCT_EXTERN_(?:_BLOCKING_SYNCHRONOUS_)?METHOD\s*\(\s*(\w+)")
+EXPO_NAME = re.compile(r"\bName\s*\(\s*\"([^\"]+)\"\s*\)")
+EXPO_FN = re.compile(r"\b(?:AsyncFunction|Function)\s*\(\s*\"(\w+)\"")
+CHANNEL_NEW = re.compile(r"(?<![\w.])(?:new\s+)?(?:io\.flutter\.plugin\.common\.)?(Method|Event|OptionalMethod)Channel\s*\(")
+SWIFT_CHANNEL_NEW = re.compile(r"\bFlutter(Method|Event)Channel\s*\(\s*name:\s*")
+OBJC_CHANNEL_NEW = re.compile(r"\[\s*Flutter(Method|Event)Channel\s+(?:methodChannel|eventChannel)WithName:\s*(@\"[^\"]*\"|\w+)")
+METHOD_EQ = re.compile(r"\b\w+\.method\s*==\s*\"([^\"]+)\"|\"([^\"]+)\"\s*==\s*\w+\.method\b|"
+                       r"\"([^\"]+)\"\.equals\s*\(\s*\w+\.method\s*\)|\b\w+\.method\.equals\s*\(\s*\"([^\"]+)\"\s*\)|"
+                       r"\[\s*@\"([^\"]+)\"\s+isEqualToString:\s*\w+\.method\s*\]|\[\s*\w+\.method\s+isEqualToString:\s*@\"([^\"]+)\"\s*\]")
+SWITCH_ON = re.compile(r"\b(?:when|switch)\s*\(?\s*\w+\.method\s*\)?\s*\{")
+CASE_STR = re.compile(r"(?:\bcase\s+((?:\"[^\"]+\"\s*,\s*)*\"[^\"]+\")\s*:|^\s*((?:\"[^\"]+\"\s*,\s*)*\"[^\"]+\")\s*->)", re.M)
+
+
+def _str_value(nf: NativeFile, expr: str, consts: dict) -> str | None:
+    e = expr.strip()
+    if e.startswith("name:"):
+        e = e[5:].strip()
+    m = re.fullmatch(r'@?"([^"\\\n]*)"', e)
+    if m:
+        return m.group(1)
+    if re.fullmatch(r"[\w.]+", e):
+        last = e.split(".")[-1]
+        if last in nf.consts:
+            return nf.consts[last]
+        if e in consts:
+            return consts[e]
+        if last in consts:
+            return consts[last]
+    return None
+
+
+def scan_capacitor(nf: NativeFile, out: list, objc_plugins: dict) -> None:
+    t = nf.t
+    if nf.lang in ("kotlin", "java"):
+        for m in CAP_PLUGIN_ANN.finditer(t.code):
+            name = None
+            if m.group(1):
+                end = t.match(m.end() - 1, "(", ")")
+                nm = re.search(r"\bname\s*=\s*\"([^\"]+)\"", t.src[m.end():end])
+                name = nm.group(1) if nm else None
+            cm = re.compile(r"\bclass\s+(\w+)").search(t.code, m.end())
+            if not cm:
+                continue
+            cls = nf.class_named(cm.group(1))
+            ns = name or cm.group(1)
+            lo, hi = (cls[1], cls[2]) if cls else (cm.start(), len(t.code))
+            for pm in PLUGIN_METHOD.finditer(t.code, lo, hi):
+                fn = pm.group(1) or pm.group(2)
+                out.append(Receiver("capacitor", ns, fn, nf, pm.start(pm.lastindex), fn=fn, cls=cm.group(1), conf="exact",
+                                    via="@PluginMethod"))
+    elif nf.lang == "swift":
+        for m in SWIFT_CLASS.finditer(t.code):
+            bases = m.group(3)
+            if not re.search(r"\bCAPPlugin\b|\bCAPBridgedPlugin\b", bases):
+                continue
+            cls = m.group(2)
+            end = t.match(m.end() - 1)
+            body = t.src[m.start():end]
+            jm = JS_NAME.search(body)
+            listed = [a or b for a, b in CAP_METHOD_NAME.findall(body)]
+            objc_name = m.group(1) or cls
+            reg = objc_plugins.get(objc_name) or objc_plugins.get(cls)
+            ns = jm.group(1) if jm else (reg[0] if reg else None)
+            if not ns:
+                continue
+            names = set(listed) | set(reg[1] if reg else ())
+            funcs = {f.group(1): f.start(1) for f in OBJC_FUNC.finditer(t.code, m.start(), end)}
+            for fn in sorted(names) if names else sorted(funcs):
+                if fn in funcs:
+                    out.append(Receiver("capacitor", ns, fn, nf, funcs[fn], fn=fn, cls=cls, conf="exact",
+                                        via="CAPPluginMethod" if fn in listed else "CAP_PLUGIN_METHOD" if names else "@objc func"))
+
+
+def scan_objc_capacitor(nf: NativeFile, objc_plugins: dict) -> None:
+    """CAP_PLUGIN(Class, "JsName", CAP_PLUGIN_METHOD(m, ...); ...) registrations (old-style Capacitor iOS plugins)."""
+    t = nf.t
+    for m in re.finditer(r"\bCAP_PLUGIN\s*\(", t.code):
+        args = t.args(m.end() - 1)
+        if len(args) < 2:
+            continue
+        cls, js = args[0][1], re.fullmatch(r'"([^"]+)"', args[1][1])
+        if not js:
+            continue
+        rest = t.src[args[1][0]:t.match(m.end() - 1, "(", ")")]
+        methods = [x.group(1) for x in re.finditer(r"CAP_PLUGIN_METHOD\s*\(\s*(\w+)", rest)]
+        objc_plugins[cls] = (js.group(1), methods, nf, m.start())
+
+
+def scan_react_native(nf: NativeFile, out: list, spec_names: dict, extern: dict) -> None:
+    t = nf.t
+    if nf.lang in ("kotlin", "java"):
+        for m in JAVA_CLASS.finditer(t.code):
+            bases = m.group(2)
+            spec = re.search(r"\b(Native\w+Spec)\b", bases)
+            if not (spec or re.search(r"\b(?:ReactContextBaseJavaModule|BaseJavaModule)\b", bases)):
+                continue
+            cls = m.group(1)
+            end = t.match(m.end() - 1)
+            body = t.src[m.start():end]
+            ns = None
+            gm = GET_NAME.search(body)
+            if gm:
+                ns = gm.group(2) if gm.group(2) is not None else _str_value(nf, gm.group(3), _GLOBAL_CONSTS)
+            if not ns and spec:
+                ns = spec_names.get(spec.group(1)) or spec.group(1)[len("Native"):-len("Spec")]
+            if not ns:
+                ns = nf.consts.get("NAME")
+            if not ns:
+                continue
+            seen = set()
+            for rm in REACT_METHOD.finditer(t.code, m.start(), end):
+                fn = rm.group(1) or rm.group(2)
+                seen.add(fn)
+                out.append(Receiver("react-native", ns, fn, nf, rm.start(rm.lastindex), fn=fn, cls=cls, conf="exact",
+                                    via="@ReactMethod"))
+            if spec:
+                for om in OVERRIDE_FUN.finditer(t.code, m.start(), end):
+                    fn = om.group(1) or om.group(2)
+                    if fn in seen or fn in SPEC_SKIP:
+                        continue
+                    seen.add(fn)
+                    out.append(Receiver("react-native", ns, fn, nf, om.start(om.lastindex), fn=fn, cls=cls, conf="exact",
+                                        via=spec.group(1)))
+    elif nf.lang == "objc":
+        for m in RCT_MODULE.finditer(t.code):
+            c = nf.class_at(m.start())
+            cls = c[0] if c else None
+            ns = m.group(1) or (re.sub(r"^RCT", "", cls) if cls else None)
+            if not ns:
+                continue
+            lo, hi = (c[1], c[2]) if c else (0, len(t.code))
+            for em in RCT_EXPORT.finditer(t.code, lo, hi):
+                fn = em.group(1) or em.group(2)
+                out.append(Receiver("react-native", ns, fn, nf, em.start(), fn=fn, cls=cls, conf="exact",
+                                    via="RCT_EXPORT_METHOD"))
+        for m in RCT_EXTERN_MODULE.finditer(t.code):
+            cls = m.group(1) or m.group(3)
+            ns = m.group(2) or cls
+            e = t.code.find("@end", m.end())
+            hi = e if e >= 0 else len(t.code)
+            for em in RCT_EXTERN_METHOD.finditer(t.code, m.end(), hi):
+                extern.setdefault(cls, []).append((ns, em.group(1), nf, em.start()))
+
+
+def scan_expo(nf: NativeFile, out: list) -> None:
+    t = nf.t
+    if nf.lang not in ("kotlin", "swift") or "ModuleDefinition" not in t.code:
+        return
+    for m in re.finditer(r"\bdefinition\s*\(\s*\)", t.code):
+        end = t.match(m.end())
+        body_lo = t.code.find("{", m.end())
+        nm = EXPO_NAME.search(t.src, m.end(), end)
+        c = nf.class_at(m.start())
+        ns = nm.group(1) if nm else (c[0] if c else None)
+        if not ns or body_lo < 0:
+            continue
+        for fm in EXPO_FN.finditer(t.src, body_lo, end):
+            out.append(Receiver("react-native", ns, fm.group(1), nf, m.start(), fn="definition", cls=c[0] if c else None,
+                                conf="exact", via="Expo " + fm.group(0).split("(")[0].strip(), api="expo-modules"))
+
+
+def scan_flutter(nf: NativeFile, out: list, handler_classes: dict, pending_sites: list) -> None:
+    """MethodChannel / EventChannel registrations with their handler regions, and `call.method` sites."""
+    t = nf.t
+    regs = []        # (kind 'method'|'event', name, pos, region (lo, hi) or None, handler class name or None)
+    news = []
+    if nf.lang in ("kotlin", "java"):
+        for m in CHANNEL_NEW.finditer(t.code):
+            args = t.args(m.end() - 1)
+            if len(args) >= 2:
+                news.append(("event" if m.group(1) == "Event" else "method", args[1][1], m.start(), t.match(m.end() - 1, "(", ")")))
+    elif nf.lang == "swift":
+        for m in SWIFT_CHANNEL_NEW.finditer(t.code):
+            args = t.args(t.code.rfind("(", 0, m.end()))
+            if args:
+                news.append(("event" if m.group(1) == "Event" else "method", args[0][1], m.start(),
+                             t.match(t.code.rfind("(", 0, m.end()), "(", ")")))
+    else:
+        for m in OBJC_CHANNEL_NEW.finditer(t.src):
+            news.append(("event" if m.group(1) == "Event" else "method", m.group(2), m.start(), t.match(m.start(), "[", "]")))
+    for kind, expr, pos, close in news:
+        name = _str_value(nf, expr, _GLOBAL_CONSTS)
+        if not name:
+            continue
+        setter = "setStreamHandler" if kind == "event" else "setMethodCallHandler"
+        region, hcls = None, None
+        # chained: MethodChannel(...).setMethodCallHandler(...) / held in a variable: x = MethodChannel(...); x.set...(...)
+        after = t.code[close + 1:close + 200]
+        sm = re.match(r"\s*\??\.\s*" + setter + r"\b", after)
+        hpos = close + 1 + sm.end() if sm else None
+        if hpos is None:
+            head = t.code[max(0, pos - 160):pos]
+            vm = re.search(r"(?:\b(?:val|var|let|final\s+\w+|\w+)\s+)?(?:self\.|this\.)?(\w+)\s*(?::\s*[\w.<>?]+\s*)?=\s*(?:new\s+)?$",
+                           head)
+            if vm:
+                hm = re.compile(r"\b" + re.escape(vm.group(1)) + r"\s*[?!]?\s*\.\s*" + setter + r"\b").search(t.code, close)
+                if hm:
+                    hpos = hm.end()
+        if hpos is not None:
+            rest = t.code[hpos:hpos + 400]
+            lm = re.match(r"\s*\(?\s*(\{)", rest)            # trailing lambda / closure
+            cm = re.match(r"\s*\(\s*(?:new\s+)?(\w+)\s*(?:\(|\))", rest)
+            if lm:
+                lo = hpos + lm.start(1)
+                region = (lo, t.match(lo))
+            elif cm and cm.group(1) in ("this", "self"):
+                c = nf.class_at(pos)
+                region = (c[1], c[2]) if c else None
+            elif cm and cm.group(1)[:1].isupper():
+                hcls = cm.group(1)
+                c = nf.class_named(hcls)
+                region = (c[1], c[2]) if c else None
+        regs.append((kind, name, pos, region, hcls))
+    sites = []
+    for m in METHOD_EQ.finditer(t.src):
+        sites.append((next(g for g in m.groups() if g is not None), m.start()))
+    for m in SWITCH_ON.finditer(t.code):
+        end = t.match(m.end() - 1)
+        for cm in CASE_STR.finditer(t.src, m.end(), end):
+            for s in re.findall(r'"([^"]+)"', cm.group(1) or cm.group(2)):
+                sites.append((s, cm.start()))
+    mregs = [r for r in regs if r[0] == "method"]
+    for kind, name, pos, region, hcls in regs:
+        if hcls:
+            handler_classes.setdefault(hcls, []).append((kind, name, nf, pos))
+        if kind == "event":
+            # the stream handler: onListen of the handler class / region, else the registering function
+            if region:
+                lm = re.compile(r"\bonListen\b").search(t.code, region[0], region[1])
+                out.append(Receiver("flutter-event", name, None, nf, lm.start() if lm else pos, conf="resolved",
+                                    via="setStreamHandler"))
+            elif hcls:
+                pending_sites.append(("event", name, hcls, nf, pos))
+            else:
+                out.append(Receiver("flutter-event", name, None, nf, pos, conf="heuristic", via="EventChannel"))
+    for meth, spos in sites:
+        owners = [r for r in mregs if r[3] and r[3][0] <= spos <= r[3][1]]
+        if owners:
+            for r in owners[-1:]:
+                out.append(Receiver("flutter", r[1], meth, nf, spos, conf="resolved", via="setMethodCallHandler"))
+            continue
+        c = nf.class_at(spos)
+        if c:
+            pending_sites.append(("method", meth, c[0], nf, spos))       # a handler class registered elsewhere
+        if len(mregs) == 1 and not (c and any(r[4] == c[0] for r in mregs)):
+            out.append(Receiver("flutter", mregs[0][1], meth, nf, spos, conf="heuristic", via="call.method"))
+        elif len(mregs) > 1:
+            for r in mregs:
+                out.append(Receiver("flutter", r[1], meth, nf, spos, conf="heuristic", via="call.method"))
+
+
+_GLOBAL_CONSTS: dict[str, str] = {}
+
+
+# ------------------------------------------------------------------ the index pass
+def _platform_of(rel: str, lang: str) -> tuple[str, str]:
+    parts = [p.lower() for p in rel.split("/")[:-1]]
+    for p in ("android", "ios", "macos"):
+        if p in parts:
+            return p, f"{p}/ directory"
+    for p in parts:
+        if p in ("androidmain", "androidtest"):
+            return "android", f"{p}/ source set"
+        if p in ("iosmain",):
+            return "ios", f"{p}/ source set"
+    if lang in ("kotlin", "java"):
+        return "android", f"{lang} native module"
+    return "ios", f"{lang} native module"
+
+
+def _native_files(project, scanned, builder) -> list[str]:
+    out = []
+    if scanned is not None:
+        for e in (".kt", ".swift"):
+            out += scanned.paths.get(e, [])
+        out += getattr(scanned, "bridge_paths", [])
+    return sorted(set(out))
+
+
+def apply(project, builder, scanned=None, sends_only: bool = False) -> dict:
+    """Index pass: native receivers of every bridge protocol -> RECEIVED_BY edges (+ stub nodes for Java / ObjC) and
+    platform marks on their files. Returns the bridges stats (empty when there is no bridge code)."""
+    from .platforms import BIG, Cond, _plat_atom, mark
+    sends = [e for e in builder.edges.values() if e.kind == "SENDS_TO" or (e.kind == "TEST_CALLS" and e.attrs.get("orig") == "SENDS_TO")]
+    root = Path(project.root)
+    files = _native_files(project, scanned, builder)
+    if not sends and not files:
+        return {}
+    clf = project.options.get("generated")
+    nfs: list[NativeFile] = []
+    _GLOBAL_CONSTS.clear()
+    for rel in files:
+        if clf is not None and clf.excludes(rel):
+            continue
+        try:
+            src = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if len(src) > 2_000_000 or not TRIGGER.search(src):
+            continue
+        nf = NativeFile(rel, src)
+        nfs.append(nf)
+    for nf in nfs:            # NAME constants of other classes (getName() = FooImpl.NAME, channel names in a Constants file)
+        cls = nf.classes[0][0] if nf.classes else None
+        for k, v in nf.consts.items():
+            _GLOBAL_CONSTS.setdefault(k, v)
+            if cls:
+                _GLOBAL_CONSTS.setdefault(f"{cls}.{k}", v)
+    if not nfs and not sends:
+        return {}
+    # TurboModule codegen spec classes: NativeFooSpec <- the JS spec file NativeFoo.ts naming the module
+    spec_names = {}
+    for e in sends:
+        at = e.attrs.get("module_at")
+        if at and e.attrs.get("via") and "TurboModuleRegistry" in e.attrs["via"]:
+            stem = os.path.splitext(at.split(":")[0].rsplit("/", 1)[-1])[0]
+            nid = e.dst
+            spec_names.setdefault(stem + "Spec", nid.split(":", 2)[2].split("#")[0])
+    objc_plugins, extern, handler_classes, pending = {}, {}, {}, []
+    for nf in nfs:
+        if nf.lang == "objc":
+            scan_objc_capacitor(nf, objc_plugins)
+    recs: list[Receiver] = []
+    for nf in nfs:
+        scan_capacitor(nf, recs, objc_plugins)
+        scan_react_native(nf, recs, spec_names, extern)
+        scan_expo(nf, recs)
+        scan_flutter(nf, recs, handler_classes, pending)
+    # CAP_PLUGIN / RCT_EXTERN_MODULE registrations whose Swift class was not found: ObjC stubs at the macro
+    swift_cls = {}
+    for nf in nfs:
+        if nf.lang == "swift":
+            for m in SWIFT_CLASS.finditer(nf.t.code):
+                end = nf.t.match(m.end() - 1)
+                funcs = {f.group(1): f.start(1) for f in SWIFT_FUNC.finditer(nf.t.code, m.start(), end)}
+                for nm in {m.group(1), m.group(2)} - {None}:
+                    swift_cls.setdefault(nm, (nf, m.group(2), funcs))
+    have = {(r.protocol, r.namespace, r.method, r.file.rel) for r in recs}
+    for cls, (js, methods, nf, pos) in objc_plugins.items():
+        sw = swift_cls.get(cls)
+        for meth in methods:
+            if sw and meth in sw[2]:
+                if ("capacitor", js, meth, sw[0].rel) not in have:
+                    recs.append(Receiver("capacitor", js, meth, sw[0], sw[2][meth], fn=meth, cls=sw[1], conf="exact",
+                                         via="CAP_PLUGIN_METHOD"))
+            else:
+                recs.append(Receiver("capacitor", js, meth, nf, pos, fn=meth, cls=cls, conf="resolved", via="CAP_PLUGIN_METHOD"))
+    for cls, items in extern.items():
+        sw = swift_cls.get(cls)
+        for ns, meth, nf, pos in items:
+            node = None if sw and meth in sw[2] else builder.nodes.get(f"method:{cls}.{meth}")
+            if node is not None and node.file:
+                recs.append(Receiver("react-native", ns, meth, NativeFile(node.file, ""), 0, fn=meth, cls=cls, conf="exact",
+                                     via="RCT_EXTERN_METHOD", lookup=(node.id, node.line)))
+            elif sw and meth in sw[2]:
+                recs.append(Receiver("react-native", ns, meth, sw[0], sw[2][meth], fn=meth, cls=sw[1], conf="exact",
+                                     via="RCT_EXTERN_METHOD"))
+            else:
+                recs.append(Receiver("react-native", ns, meth, nf, pos, fn=meth, cls=cls, conf="resolved", via="RCT_EXTERN_METHOD"))
+    # method sites / stream handlers in handler classes registered from another place
+    fam = {"kotlin": "jvm", "java": "jvm", "swift": "apple", "objc": "apple"}
+    for kind, meth, cls, nf, spos in pending:
+        for hk, name, rnf, rpos in handler_classes.get(cls, ()):
+            if kind == "method" and hk == "method" and fam[nf.lang] == fam[rnf.lang]:
+                recs.append(Receiver("flutter", name, meth, nf, spos, conf="resolved", via="setMethodCallHandler(handler class)"))
+    for cls, regs in handler_classes.items():
+        for hk, name, rnf, rpos in regs:
+            if hk != "event":
+                continue
+            target = next(((nf, c) for nf in nfs for c in nf.classes if c[0] == cls and fam[nf.lang] == fam[rnf.lang]), None)
+            if target:
+                nf, c = target
+                lm = re.compile(r"\bonListen\b").search(nf.t.code, c[1], c[2])
+                recs.append(Receiver("flutter-event", name, None, nf, lm.start() if lm else c[1], conf="resolved",
+                                     via="setStreamHandler(handler class)"))
+            else:
+                recs.append(Receiver("flutter-event", name, None, rnf, rpos, conf="heuristic", via="setStreamHandler"))
+    # receivers -> handler nodes
+    by_file = defaultdict(list)
+    for n in builder.nodes.values():
+        if n.file and n.kind in ("method", "function") and n.line:
+            by_file[n.file].append(n)
+    n_recv, n_stub, marked = 0, 0, set()
+    stats = defaultdict(lambda: defaultdict(int))
+    seen = set()
+    for r in recs:
+        nf = r.file
+        if r.lookup:                         # resolved to a language plugin node directly
+            hid, line = r.lookup
+        else:
+            line = nf.t.line(r.pos)
+            hid = _handler(builder, by_file, r, nf, line)
+        if hid is None:
+            continue
+        if builder.nodes[hid].attrs.get("bridge_stub"):
+            n_stub += 1
+        plat, why = _platform_of(nf.rel, nf.lang)
+        key = (r.protocol, r.namespace, r.method, hid)
+        if key in seen:
+            continue
+        seen.add(key)
+        protocol_receive(builder, r.protocol, r.namespace, r.method, hid, nf.rel, line, r.conf, platform=plat, via=r.via,
+                         api=r.api)
+        if r.api:
+            builder.nodes["endpoint:" + endpoint_key(r.protocol, r.namespace, r.method)].attrs["api"] = r.api
+        stats[r.protocol]["receivers"] += 1
+        n_recv += 1
+        if nf.rel not in marked:
+            marked.add(nf.rel)
+            mark(builder, nf.rel, 1, BIG, Cond("tree", _plat_atom(plat), why), line=1)
+            builder.platform_marks[-1]["bridge"] = True
+    for e in sends:
+        stats[e.attrs.get("protocol") or e.dst.split(":", 2)[1]]["sends" if e.kind == "SENDS_TO" else "test_sends"] += 1
+    return {"native_files_scanned": len(nfs), "receivers": n_recv, "stub_nodes": n_stub,
+            "per_protocol": {k: dict(v) for k, v in sorted(stats.items())}}
+
+
+_DECL_RX = {
+    "java": re.compile(r"(?:(?:public|private|protected|static|final|synchronized|native|abstract)\s+)+[\w<>\[\],.?]+\s+(\w+)\s*"
+                       r"\([^;{)]*\)\s*(?:throws\s+[\w., ]+)?\{"),
+    "objc": re.compile(r"^\s*[-+]\s*\([^)]*\)\s*(\w+)[^{;]*\{", re.M),
+    "swift": re.compile(r"\bfunc\s+(\w+)\s*(?:<[^>]*>)?\s*\([^{]*\{"),
+    "kotlin": re.compile(r"\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?(\w+)\s*\([^{=]*\{"),
+}
+
+
+def _enclosing_decl(nf: NativeFile, pos: int) -> tuple[str, int, int] | None:
+    """Enclosing Java / ObjC method (name, start, end) for receivers in files without a language plugin."""
+    t = nf.t
+    rx = _DECL_RX[nf.lang]
+    best = None
+    for m in rx.finditer(t.code, 0, pos + 1):
+        end = t.match(m.end() - 1)
+        if m.start() <= pos <= end or m.start(1) <= pos <= m.end(1):
+            best = (m.group(1), m.start(), end)
+    return best
+
+
+def _handler(builder, by_file, r: Receiver, nf: NativeFile, line: int) -> str | None:
+    cands = by_file.get(nf.rel, [])
+    if r.fn:
+        hit = [n for n in cands if n.name == r.fn and n.line <= line <= (n.end_line or n.line)]
+        hit = hit or [n for n in cands if n.name == r.fn and abs(n.line - line) <= 3]
+        if hit:
+            return min(hit, key=lambda n: (n.end_line or n.line) - n.line).id
+    else:
+        hit = [n for n in cands if n.line <= line <= (n.end_line or n.line)]
+        if hit:
+            return min(hit, key=lambda n: (n.end_line or n.line) - n.line).id
+    # no language plugin node (Java, ObjC, or the Kotlin / Swift plugin did not run): a stub method node
+    fn, lo, hi = r.fn, r.pos, r.pos
+    d = _enclosing_decl(nf, r.pos)
+    if d and (not r.fn or d[0] == r.fn or nf.lang == "java"):
+        fn, lo, hi = r.fn or d[0], d[1], d[2]
+    if not fn:
+        return None
+    c = nf.class_at(r.pos)
+    cls = r.cls or (c[0] if c else None)
+    if nf.lang == "objc":
+        fqn = f"objc:{cls}.{fn}" if cls else f"objc:{nf.rel}#{fn}"
+    elif nf.lang == "swift":
+        fqn = f"{cls}.{fn}" if cls else f"{nf.rel}#{fn}"
+    else:
+        fqn = ".".join(x for x in (nf.package, cls, fn) if x)
+    nid = builder.add_node("method", fqn, fn, fqn=fqn, file=nf.rel, line=nf.t.line(lo), end_line=nf.t.line(hi), lang=nf.lang,
+                           attrs={"bridge_stub": True})
+    by_file[nf.rel].append(builder.nodes[nid])
+    return nid
+
+
+def project_targets(project, builder) -> list[str]:
+    """Targets of a project without platform-specific code (platforms.apply returned nothing)."""
+    from .platforms import declared_targets
+    langs = {n.lang for n in builder.nodes.values() if n.lang}
+    try:
+        return declared_targets(Path(project.root), project.options.get("config") or {}, [], langs)[0]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
+    """Per endpoint: platforms receiving it, sides seen, checks. Called after platforms.apply (targets known)."""
+    eps = {nid: n for nid, n in builder.nodes.items() if n.kind == "endpoint" and n.attrs.get("protocol") in PROTOCOLS}
+    if not eps:
+        return st
+    recv = defaultdict(list)
+    send = defaultdict(list)
+    tsend = defaultdict(list)
+    for e in builder.edges.values():
+        if e.kind == "RECEIVED_BY" and e.src in eps:
+            recv[e.src].append(e)
+        elif e.kind == "SENDS_TO" and e.dst in eps:
+            send[e.dst].append(e)
+        elif e.kind == "TEST_CALLS" and e.attrs.get("orig") == "SENDS_TO" and e.dst in eps:
+            tsend[e.dst].append(e)
+    ns_plat = defaultdict(set)          # (protocol, namespace) -> platforms implementing any method of it
+    for nid, es in recv.items():
+        a = eps[nid].attrs
+        for e in es:
+            ns_plat[(a["protocol"], a["namespace"])].add(e.attrs.get("platform"))
+    # macOS counts only where some bridge module is implemented for it (a Flutter macos/ runner)
+    used = {e.attrs.get("platform") for es in recv.values() for e in es}
+    mobile = [p for p in (targets or []) if p in ("android", "ios") or (p == "macos" and p in used)]
+    checks = defaultdict(int)
+    root = Path(project.root)
+    pj_cache: dict = {}
+    for nid, n in eps.items():
+        a = n.attrs
+        rp = sorted({e.attrs.get("platform") for e in recv[nid]} - {None})
+        a["platforms_received"] = rp
+        a["side"] = "both" if send[nid] and recv[nid] else "send" if send[nid] or tsend[nid] else "receive"
+        a.pop("checks", None)
+        ck = []
+        impl = ns_plat.get((a["protocol"], a["namespace"]))
+        base = a.get("method") in BASE_METHODS.get(a["protocol"], ())
+        if base:
+            a["base_method"] = True        # the framework's base class implements it on every platform; a module may override
+        if (send[nid] or tsend[nid]) and not recv[nid]:
+            if impl:
+                if not base:
+                    ck.append("no_receiver")
+            else:
+                a["external"] = True
+                ext = sorted({e.attrs.get("external") for e in send[nid] + tsend[nid]} - {None})
+                if ext:
+                    a["package"] = ext[0]
+        if recv[nid] and not send[nid] and not base:
+            ck.append("no_sender" if not tsend[nid] else "test_sender_only")
+        if recv[nid] and impl and not base:
+            expected = mobile or sorted(impl - {None})
+            if a["protocol"] == "react-native":
+                declared = set()
+                for e in recv[nid]:
+                    dn = builder.nodes.get(e.dst)
+                    cp = dn and dn.file and _codegen_platforms(root, dn.file, pj_cache)
+                    if not cp:
+                        declared = None
+                        break
+                    declared |= set(cp)
+                if declared:
+                    expected = [p for p in expected if p in declared]
+            # Flutter: only the platform folders of the sending app's package (an iOS-only sample has no android/)
+            if a["protocol"] in ("flutter", "flutter-event") and send[nid]:
+                folders = [_flutter_folders(root, e.file, pj_cache) for e in send[nid]]
+                if all(f is not None for f in folders):
+                    have = set().union(*folders)
+                    expected = [p for p in expected if p in have]
+            # every sender is gated to some platforms (`Platform.OS === 'android'`, kIsWeb, ...): only those need it
+            gated = [e.attrs.get("platforms") for e in send[nid]]
+            if gated and all(gated):
+                only = sorted({p for g in gated for p in g})
+                a["sender_platforms"] = only
+                expected = [p for p in expected if p in only]
+            miss = [p for p in expected if p not in rp]
+            if miss:
+                a["missing_on"] = miss
+                ck.append("missing_on")
+            else:
+                a.pop("missing_on", None)
+        if ck:
+            a["checks"] = ck
+            for c in ck:
+                checks[c] += 1
+        if a.get("external"):
+            checks["external"] += 1
+    st = dict(st or {})
+    st["endpoints"] = len(eps)
+    st["linked"] = sum(1 for nid in eps if send[nid] and recv[nid])
+    st["checks"] = dict(sorted(checks.items()))
+    st["targets"] = mobile
+    return st
+
+
+# ------------------------------------------------------------------ query: cg bridges / MCP bridges
+def _attrs(r) -> dict:
+    return json.loads(r["attrs"] or "{}") if r["attrs"] else {}
+
+
+def bridges(st, pattern: str | None = None, protocol: str | None = None, unmatched: bool = False) -> dict:
+    """Bridge endpoints with their senders (JS / Dart call sites, entry points reaching them) and receivers per
+    platform, plus the checks (missing_on, no_receiver, no_sender, external)."""
+    rows = [dict(r) for r in st.q("SELECT * FROM nodes WHERE kind='endpoint' ORDER BY id")]
+    out = []
+    for n in rows:
+        a = _attrs(n)
+        if a.get("protocol") not in PROTOCOLS or (protocol and a["protocol"] != protocol):
+            continue
+        name = n["name"]
+        if pattern:
+            p = pattern[len("endpoint:"):] if pattern.startswith("endpoint:") else pattern
+            if not (fnmatch.fnmatchcase(name, p) or fnmatch.fnmatchcase(n["id"].split(":", 1)[1], p)
+                    or p.lower() in name.lower()):
+                continue
+        if unmatched and not (a.get("checks") or a.get("external")):
+            continue
+        item = {"id": n["id"], "protocol": a["protocol"], "namespace": a.get("namespace"), "method": a.get("method"),
+                "api": a.get("api"), "platforms_received": a.get("platforms_received") or [],
+                "checks": a.get("checks") or [], "missing_on": a.get("missing_on") or [], "external": bool(a.get("external")),
+                "package": a.get("package"), "test_only": bool(a.get("test_only")),
+                "base_method": bool(a.get("base_method")), "sender_platforms": a.get("sender_platforms"),
+                "senders": [], "test_senders": [],
+                "receivers": []}
+        for r in st.q("SELECT src, kind, file, line, confidence, attrs FROM edges WHERE dst=? AND kind IN ('SENDS_TO','TEST_CALLS') "
+                      "ORDER BY file, line", (n["id"],)):
+            ea = _attrs(r)
+            ents = {e["entry_kind"]: e["entry_count"] for e in
+                    st.q("SELECT entry_kind, entry_count FROM node_entry WHERE node_id=?", (r["src"],))}
+            s = {"fn": r["src"], "at": f"{r['file']}:{r['line']}", "confidence": r["confidence"], "via": ea.get("via"),
+                 "entry_kinds": ents}
+            (item["senders"] if r["kind"] == "SENDS_TO" else item["test_senders"]).append(s)
+        for r in st.q("SELECT dst, file, line, confidence, attrs FROM edges WHERE src=? AND kind='RECEIVED_BY' ORDER BY file, line",
+                      (n["id"],)):
+            ea = _attrs(r)
+            item["receivers"].append({"handler": r["dst"], "at": f"{r['file']}:{r['line']}", "platform": ea.get("platform"),
+                                      "via": ea.get("via"), "confidence": r["confidence"],
+                                      "stub": bool(_attrs(st.node(r["dst"]) or {"attrs": None}).get("bridge_stub"))})
+        out.append(item)
+    summ = defaultdict(lambda: defaultdict(int))
+    for i in out:
+        s = summ[i["protocol"]]
+        s["endpoints"] += 1
+        s["linked"] += bool(i["senders"] and i["receivers"])
+        for c in i["checks"]:
+            s[c] += 1
+        s["external"] += i["external"]
+    return {"pattern": pattern, "protocol": protocol, "endpoints": out,
+            "summary": {k: dict(v) for k, v in sorted(summ.items())},
+            "stats": (st.meta().get("stats") or {}).get("bridges") or {}}
+
+
+def render_bridges(res: dict, max_items: int = 60) -> str:
+    from .query import short_id
+    eps = res["endpoints"]
+    if not eps:
+        return "no bridge endpoint matches " + repr(res["pattern"]) if res["pattern"] else "no web / native bridge calls in this graph"
+    L = []
+    for p, s in res["summary"].items():
+        extra = ", ".join(f"{k} {v}" for k, v in s.items() if k not in ("endpoints", "linked") and v)
+        L.append(f"{p}: {s['endpoints']} endpoint(s), {s.get('linked', 0)} linked" + (f"  ({extra})" if extra else ""))
+    tg = (res.get("stats") or {}).get("targets")
+    if tg:
+        L.append(f"mobile targets: {', '.join(tg)}")
+    detail = len(eps) <= 6
+    for i in eps[:max_items]:
+        flags = []
+        if i["missing_on"]:
+            flags.append("MISSING ON " + ", ".join(i["missing_on"]))
+        for c in i["checks"]:
+            if c == "no_receiver":
+                flags.append("NO NATIVE RECEIVER (the module is implemented here, this method is not)")
+            elif c == "no_sender":
+                flags.append("no JS / Dart sender")
+            elif c == "test_sender_only":
+                flags.append("sent from tests only")
+        if i["external"]:
+            flags.append("external" + (f" ({i['package']})" if i.get("package") else ": implemented outside this repo"))
+        L.append(f"{i['id'].split(':', 1)[1]}  received on: {', '.join(i['platforms_received']) or '-'}"
+                 + (f"  [{i['api']}]" if i.get("api") else "") + (f"  ! {'; '.join(flags)}" if flags else ""))
+        if detail:
+            for s in i["senders"][:8]:
+                ek = ", ".join(f"{k}({v})" for k, v in sorted(s["entry_kinds"].items()))
+                L.append(f"    sent by {short_id(s['fn'])} @ {s['at']} [{s['confidence']}]" + (f"  entries: {ek}" if ek else ""))
+            for s in i["test_senders"][:4]:
+                L.append(f"    test {short_id(s['fn'])} @ {s['at']}")
+            for r in i["receivers"]:
+                L.append(f"    received by {short_id(r['handler'])} @ {r['at']} [{r['platform']}, {r['via']}]"
+                         + ("  (stub: no language plugin)" if r["stub"] else ""))
+        else:
+            L.append(f"    senders {len(i['senders'])}" + (f" (+{len(i['test_senders'])} test)" if i["test_senders"] else "")
+                     + f", receivers {len(i['receivers'])}")
+    if len(eps) > max_items:
+        L.append(f"... {len(eps) - max_items} more")
+    return "\n".join(L)

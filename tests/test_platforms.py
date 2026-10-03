@@ -72,6 +72,15 @@ def test_scanner_regions():
     assert len(regs) == 3                       # if / else-if / else; strings and comments are masked
     els = next(r for r in regs if r[5].startswith("else of"))
     assert PF.eval_tree(els[4], "web") is True and PF.eval_tree(els[4], "ios") is False
+    # no semicolons: the single-statement body of an early return ends at its newline (ASI)
+    guard = scan("function f() {\n  if (Platform.OS !== 'ios') return\n  native.call(x)\n}\n", "ts")
+    assert len(guard) == 2 and guard[0][0] == guard[0][2] == 2
+    # ... and the rest of the function runs only where the guard is false (ios)
+    rest = guard[1]
+    assert (rest[0], rest[2]) == (2, 4) and PF.eval_tree(rest[4], "ios") is True and PF.eval_tree(rest[4], "android") is False
+    assert len(scan("function f() {\n  if (Platform.OS === 'ios') { a() }\n  b()\n}\n", "ts")) == 1
+    multi = scan("if (Platform.OS === 'ios')\n  a\n    .b()\nc()\n", "ts")
+    assert len(multi) == 1 and (multi[0][0], multi[0][2]) == (2, 3)
 
 
 # ------------------------------------------------------------------ Rust

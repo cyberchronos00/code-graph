@@ -101,7 +101,6 @@ Results on public repositories are in [validation.md](validation.md#generated-an
 
 ## Next
 
-Links across the web / native bridge (`BRIDGE_CALLS` from a Capacitor `registerPlugin('Name')` call, a React
-Native `NativeModules.Name` call or a Flutter `MethodChannel` to the native method it reaches) build on this
-classification. They come with the Kotlin and Swift plugins
-([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
+Links across the web / native bridge (a Capacitor plugin call, a React Native `NativeModules.Name` call or a Flutter
+`MethodChannel` to the native method that receives it) are in [bridges.md](bridges.md). Copied web assets are not
+senders: only the source `webDir` files are indexed.

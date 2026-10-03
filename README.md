@@ -363,6 +363,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
 | Go, Java | via SCIP (experimental) | definitions and references imported from an existing SCIP index |
 | Platform-specific code | Rust `#[cfg]` / `cfg!`, C / C++ `#if` and platform paths, Dart `Platform.isX` / `kIsWeb` / conditional imports, React Native `Platform.OS` / `Platform.select` / `.ios.ts` files | every symbol and reference carries the targets it is built for; `--platform ios` views one target's build; `cg platforms divergence` lists variants that leave a target uncovered, API differences and calls into code a target does not build ([docs/platforms.md](docs/platforms.md)) |
+| Web / native bridges | Capacitor plugins, React Native / Expo native modules, Flutter method and event channels | each JS / Dart call linked through a shared `endpoint:<protocol>:<module>#<method>` node to its Kotlin, Java, Swift or Objective-C receiver per platform; `cg bridges` lists methods missing on a platform, without a receiver or implemented outside the repo; `impact` / `tests` / `--platform` cross the bridge ([docs/bridges.md](docs/bridges.md)) |
 | Generated and copied files | detected (`.gitattributes`, generator banners, framework build paths, generator file names, Capacitor / Cordova copy targets, `.openapi-generator/FILES`) | kept out of the graph and listed by `cg coverage` by reason; copies map back to their source; `--include-generated` indexes them labelled `attrs.generated` ([docs/generated.md](docs/generated.md)) |
 
 ## Prerequisites per language
@@ -584,9 +585,8 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Swift exact mode from the compiler's index store, Moya / Fluent / `canImport` support
   ([#23](https://github.com/cyberchronos00/code-graph/issues/23)); Electron / Tauri main ↔ renderer IPC as edges
   between the processes.
-- Web / native bridge links: Capacitor plugins, React Native native modules and Flutter platform channels as
-  `BRIDGE_CALLS` edges to the Kotlin and Swift methods they reach, with the Kotlin and Swift plugins
-  ([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
+- Web / native bridges beyond Capacitor, React Native and Flutter channels: Pigeon APIs, native → Dart / JS calls,
+  Cordova plugins and native UI components ([docs/bridges.md](docs/bridges.md#not-covered-yet)).
 - More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
 
 ## Documentation
@@ -605,6 +605,7 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 | [docs/plans.md](docs/plans.md) | plan schema, every check, verify mode, overlay legend |
 | [docs/viz.md](docs/viz.md) | visual view and static export |
 | [docs/configuration.md](docs/configuration.md) | project config file (`.cg.yaml`, `cg config show`), framework presets, gates, viz presets and starter queries, plans dir, environment variables |
+| [docs/bridges.md](docs/bridges.md) | web / native bridges: endpoint model, supported registration forms, checks, `cg bridges` |
 | [docs/platforms.md](docs/platforms.md) | platform-specific code: targets, recognised conditions and variants, `--platform`, `cg platforms divergence`, `.cg.yaml` `platforms` |
 | [docs/generated.md](docs/generated.md) | generated, copied and vendored files: detection rules, coverage output, `--include-generated`, `COPY_OF`, `.cg.yaml` `generated` |
 | [docs/completeness.md](docs/completeness.md) | file completeness, unsupported source types, blind-spot detectors, notes on partial answers, the MCP `completeness` object |

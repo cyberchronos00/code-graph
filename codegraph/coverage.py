@@ -87,6 +87,7 @@ class Scan:
         self.counts: Counter = Counter()
         self.paths: dict[str, list[str]] = {}
         self.scripts: Counter = Counter()
+        self.bridge_paths: list[str] = []      # Java / ObjC files: no language plugin, scanned for bridge receivers
 
     def files(self, exts) -> list[str]:
         return [f for e in exts for f in self.paths.get(e, [])]
@@ -150,6 +151,8 @@ def scan_tree(root: str | Path, rules=None, classifier=None) -> Scan:
                 sc.counts[ext] += 1
                 if ext in _SUPPORTED_EXTS:
                     sc.paths.setdefault(ext, []).append(rel_dir + fn)
+                elif ext in (".java", ".m", ".mm"):
+                    sc.bridge_paths.append(rel_dir + fn)
             elif not fn.startswith(".") and is_real_file(p):
                 lang = _shebang(p)
                 if lang:

@@ -288,3 +288,45 @@ Unresolved calls are mostly SDK calls (SwiftUI modifiers, Foundation, Combine), 
 IceCubesApp and isowords call their APIs through typed endpoint enums and a swift-parsing router, which are not HTTP
 client forms the plugin reads yet. The Vapor template's `routes.swift` contains Mustache markup, so its two
 closure routes do not parse. The exact-mode comparison (compiler index store) is on the roadmap in [swift.md](swift.md).
+
+## Web / native bridges
+
+`cg index <repo>` with no flags and no `.cg.yaml`, then `cg bridges` ([bridges.md](bridges.md)). The two Capacitor
+repositories are monorepos without a root `tsconfig.json`; a scratch copy with one added (`include` of the packages'
+`src` dirs) lets the TypeScript plugin run. Index time is one run each on a shared box (the spread between repeated
+runs of the same build was 2–4 s); the bridge pass itself takes the time shown.
+
+| Project | Commit | Endpoints | Linked | Receivers (stubs) | Checks | Bridge pass | Index before → after |
+|---|---|---|---|---|---|---|---|
+| ionic-team/capacitor (framework) | ba28569 | 24 | 1 | 39 (19) | 4 external, 1 missing_on, 19 no_sender | 0.10 s | |
+| ionic-team/capacitor-plugins (library) | 87c0bb8 | 81 | 0 | 159 (86) | 2 missing_on, 75 no_sender | 0.10 s | |
+| flutter/samples (platform_channels, add_to_app, pigeon, platform_view_swift) | a05867d | 8 | 8 | 19 (7) | none | 0.02 s | |
+| mattermost/mattermost-mobile (React Native) | e5be311 | 42 | 32 | 71 (30) | 3 no_sender | 0.05 s | 23.1–24.2 s → 24.3–25.0 s; 21639 / 81163 → 21711 / 81297 nodes / edges |
+| bluesky-social/social-app (Expo modules) | db23528 | 33 | 1 | 62 (0) | 4 missing_on, 32 no_sender | 0.03 s | 15.6–19.2 s → 16.7–18.1 s; 9900 / 47568 → 9933 / 47632 |
+| social-app with `include: [modules]` | db23528 | 33 | 21 | 62 (0) | 12 no_sender | 0.03 s | |
+| immich-app/immich `mobile/` (Flutter) | c5e06dc | 0 | 0 | 0 | | | Pigeon only |
+
+What the findings are, from spot checks:
+
+- **capacitor:** the framework's own core plugins (CapacitorHttp, CapacitorCookies, WebView, Console) are received on
+  both platforms; `CapacitorHttp#request` is the one method the framework's own web code sends (through
+  `nativePromise`), the others are the plugins' public API, called by apps. `Console#log` exists on iOS only (Android logs through the web
+  view). The external endpoints are test literals and `App#exitApp` from the `@capacitor/app` package.
+- **capacitor-plugins:** a library repository, so no senders. The two `missing_on` are real: `TextZoom.get` / `set`
+  are Android methods (iOS has `getPreferred` only).
+- **flutter/samples:** every channel method is linked on both platforms. `platform_view_swift` is an iOS-only app
+  (no `android/` next to its `pubspec.yaml`), so its `switchView` is not reported missing on Android. The stubs are
+  Swift methods the Swift plugin does not index (multi-line `application(...)` signatures, `viewDidLoad` overrides).
+- **mattermost-mobile:** the app imports its modules from local `file:` packages (`@mattermost/rnutils`,
+  `@mattermost/calls-native`, ...) without `node_modules`; they resolve to their source, through
+  `isTurboModuleEnabled ? require('./NativeX').default : NativeModules.X`, `X || new Proxy(...)` and
+  `Object.assign(X, { onEvent })` (whose helpers are not endpoints). `setNavigationBarColor` is Android-only and its
+  only call is under `Platform.OS === 'android'`, so it is not missing on iOS. The 3 senderless `MattermostShare`
+  methods are called from `share_extension/`, which the default source dirs do not index; the module is declared
+  `codegenConfig.platforms: ["android"]`.
+- **social-app:** the Expo modules are called from wrapper functions inside `modules/*/src`, which is outside the
+  default source dirs; with `include: [modules]` 21 methods link and no platform gap remains
+  (`ExpoBlueskyReferrer` is called from an `.android.ts` file, `setAudioActive` after
+  `if (Platform.OS !== 'ios') return`). The senderless methods are view-ref methods (`GifView.playAsync`) and
+  notification-extension preferences.
+- **immich:** the mobile app talks to native code through Pigeon-generated APIs only, which are not modelled yet.

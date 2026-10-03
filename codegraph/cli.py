@@ -15,6 +15,7 @@
   python -m codegraph.cli search <name> --db ... [--kind route]
   python -m codegraph.cli channels [PATTERN] --db ...   (who can join, which events publish, which client code listens)
   python -m codegraph.cli tests <spec> --db ...          (tests covering a symbol / route / table: direct + transitive)
+  python -m codegraph.cli bridges [PATTERN] --db ... [--protocol capacitor] [--unmatched]   (web / native bridge calls)
   python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
   reaches / impact / downstream / path / routes / search take --platform TARGET: only code built for that target
 spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class::method | Class
@@ -103,6 +104,12 @@ def main(argv=None):
     p = sub.add_parser("channels", help="broadcast channels: who can join (auth callback + checks), which events publish on it, which client code / pages listen")
     p.add_argument("pattern", nargs="?", help="channel pattern or concrete name (orders.{id}, orders.42, orders.*); omit to list all")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-source", action="store_true")
+    p = sub.add_parser("bridges", help="web / native bridge calls (Capacitor plugins, React Native / Expo modules, Flutter platform "
+                                        "channels): JS / Dart senders, native receivers per platform, methods missing on a platform")
+    p.add_argument("pattern", nargs="?", help="endpoint name, substring or glob (Echo#echo, Echo, samples.flutter.dev/*); omit to list all")
+    p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("--protocol", choices=["capacitor", "react-native", "flutter", "flutter-event"])
+    p.add_argument("--unmatched", action="store_true", help="only endpoints with a check: missing on a platform, no receiver, no sender, external")
     p = sub.add_parser("tests", help="tests covering a symbol / route / table: direct (test code calls it) and transitive (through app code)")
     p.add_argument("spec", help="Class::method, Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-paths", action="store_true")
@@ -235,6 +242,11 @@ def main(argv=None):
         from .realtime import channels, render_channels
         res = channels(st, a.pattern, with_source=not a.no_source)
         print(json.dumps(res, indent=1, default=str) if a.json else render_channels(res))
+        return
+    if a.cmd == "bridges":
+        from .bridges import bridges, render_bridges
+        res = bridges(st, a.pattern, protocol=a.protocol, unmatched=a.unmatched)
+        print(json.dumps(res, indent=1, default=str) if a.json else render_bridges(res))
         return
     if a.cmd == "tests":
         res = Q.tests_covering(st, a.spec, min_conf=a.min_confidence)

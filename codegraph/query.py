@@ -18,7 +18,9 @@ CALL_LIKE = ["CALLS", "IMPLEMENTED_BY", "OVERRIDDEN_BY", "BOUND_TO", "ROUTES_TO"
              # native code: function pointers / callbacks / dispatch tables
              "REFERENCES_FN",
              # realtime: broadcasting auth route -> channel callbacks; client subscriptions -> backend channels
-             "AUTHORIZES_CHANNEL", "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL"]
+             "AUTHORIZES_CHANNEL", "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL",
+             # protocol endpoints: web / native bridges (JS / Dart call -> endpoint -> Kotlin / Swift handler)
+             "SENDS_TO", "RECEIVED_BY"]
 TS_CODE_KINDS = ("composable", "store", "component", "module")
 CODE_KINDS = ("method", "function", "script") + TS_CODE_KINDS
 ENTRY_NODE_KINDS = ("route", "command", "schedule", "job", "listener", "admin", "observer", "page", "layout", "app", "message",
@@ -60,6 +62,12 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
         # a dotted suffix of a Python fqn: `PyProgram.load`, `plugin.PyProgram.load`, `checks.validate` in a package
         rows = st.q("""SELECT id FROM nodes WHERE lang='python' AND kind IN ('function','method','class')
                        AND fqn LIKE ? ESCAPE '\\'""", ("%." + spec.replace("_", "\\_"),))
+        if rows:
+            return [r["id"] for r in rows]
+        # Kotlin / Swift (and the Java / ObjC bridge stubs): pkg.Class.method, Class.method
+        rows = st.q("""SELECT id FROM nodes WHERE lang IN ('kotlin','swift','java','objc') AND kind IN ('function','method','class')
+                       AND (fqn=? OR fqn LIKE ? ESCAPE '\\' OR fqn LIKE ? ESCAPE '\\')""",
+                    (spec, "%." + _like(spec), "%:" + _like(spec)))
         if rows:
             return [r["id"] for r in rows]
         rows = st.q("SELECT id FROM nodes WHERE id=?", (f"column:{spec}",))
@@ -888,7 +896,7 @@ def siblings(st: GraphStore, spec: str, limit=40) -> dict:
 
 
 DOWNSTREAM_SINKS = ("table", "column", "connection", "config", "env", "route", "http", "job", "command",
-                    "unsafe", "ffi", "feature", "cfg", "define")
+                    "unsafe", "ffi", "feature", "cfg", "define", "endpoint")
 
 
 def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, kinds=None, sinks=DOWNSTREAM_SINKS,
@@ -1027,7 +1035,7 @@ def _bfs_path(st: GraphStore, srcs: list[str], dsts: set[str], min_conf: str, ma
 
 
 def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=("route", "table", "column", "connection", "config", "env", "job", "command", "http",
-                                                                               "unsafe", "ffi", "feature", "cfg", "define")) -> str:
+                                                                               "unsafe", "ffi", "feature", "cfg", "define", "endpoint")) -> str:
     out = [f"targets: {', '.join(res['targets'][:6])}", f"reached nodes: {res['reached']}"]
     if res.get("platform"):
         from .platforms import render_filter

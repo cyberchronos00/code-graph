@@ -370,6 +370,11 @@ class DartPlugin(LanguagePlugin):
                         b.add_edge(fn.id, tt[1].id, "PARSES_JSON", fn.file, f.get("l"), RESOLVED, role="toJson")
         # ---- HTTP
         n_http, http_stats = self.emit_http(project, prog, b)
+        # ---- Flutter platform channels (send side; codegraph/bridges.py adds the native receivers)
+        from .bridges import emit as emit_bridges
+        bst = emit_bridges(prog, UrlEval(prog, prog.env_values), b)
+        if bst["flutter"] or bst["flutter-event"] or bst["unresolved_channel"]:
+            st["platform_channel_sends"] = bst
         st.update({"libraries": len(prog.libs), "classes": len(prog.classes),
                    "functions": sum(1 for f in prog.funcs.values() if f.cls is None),
                    "methods": sum(1 for f in prog.funcs.values() if f.cls is not None), "imports": n_imp, "extends": n_ext,

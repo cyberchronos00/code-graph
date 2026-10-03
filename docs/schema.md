@@ -35,6 +35,11 @@ route, table, column, config (`settings.X`), env, job (Celery task), listener (s
 command), admin, event (signal). See [python.md](python.md#entry-points-and-function-references).
 Dart (lang='dart'): module (library), class (incl. enums, mixins, extensions), method, function, http (client endpoint, incl.
 `WS` for WebSockets), page (Navigator/go_router/auto_route routes, `page:dart:<package>:<path>`), env (`String.fromEnvironment`, dotenv).
+Web / native bridges ([bridges.md](bridges.md), no lang): endpoint (`endpoint:<protocol>:<module>#<method>`, protocol
+capacitor, react-native, flutter; `endpoint:flutter-event:<channel>`; attrs `protocol`, `transport`, `namespace`,
+`method`, `platforms_received`, `side`, `checks`, `missing_on`, `external`, `package`, `base_method`,
+`sender_platforms`). Java / Objective-C receivers (and Kotlin / Swift methods the plugins missed) are method nodes
+with `attrs.bridge_stub` (lang java, objc, kotlin or swift).
 TS server frameworks (NestJS, Next.js, Express-style; see [ts-frameworks.md](ts-frameworks.md)) reuse the backend kinds:
 route (`route:<METHOD> <uri>`, also `GRAPHQL Query.x` and `ACTION <file>#<fn>` for server actions), schedule, job (`job:<queue>`),
 event, listener, message (`message:<transport>:<pattern>`: microservice, WebSocket, gRPC), command (`command:nest:<name>`),
@@ -61,6 +66,8 @@ Dart/Flutter: EMITS_STATE (bloc → state), HANDLES_STATE (UI → state check), 
 Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (event → channel; attrs `name`, `visibility`,
 `site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs
 `visibility_mismatch`), LISTENS_FOR (channel_sub → event).
+Web / native bridges ([bridges.md](bridges.md)): SENDS_TO✓ (JS / Dart code → endpoint; attrs `role` = invoke, `via`,
+`module_at`, `external`), RECEIVED_BY✓ (endpoint → native handler; attrs `platform`, `via`).
 Tests: TEST_CALLS, TEST_USES (test code → code; `attrs.orig` = the original edge kind; Python test → fixture and
 fixture → fixture with `via` = fixture / autouse fixture and `attrs.fixture`), TEST_HTTP (test → route),
 TEST_VISITS (browser test → page). None of them propagate, so tests never count as callers.

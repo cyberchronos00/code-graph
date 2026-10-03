@@ -301,6 +301,18 @@ class TypeScriptPlugin(LanguagePlugin):
                                  line=sub["line"], confidence=sub["conf"], client=sub["client"], visibility=sub["visibility"],
                                  events=sub.get("events") or None)
                 n_sub += 1
+        # web / native bridge sends (Capacitor, React Native, Expo) -> endpoint:<protocol>:<module>#<method>
+        from ...bridges import protocol_send
+        n_br = 0
+        for br in facts.get("bridges") or []:
+            if not builder.has(br["src"]):
+                continue
+            protocol_send(builder, br["protocol"], br["module"], br["method"], br["src"], br["file"], br["line"], br["conf"],
+                          test=bool(br.get("test")), via=br.get("via"), module_at=br.get("at"), external=br.get("external"),
+                          api=br.get("api"))
+            if br.get("api"):
+                builder.nodes["endpoint:" + f"{br['protocol']}:{br['module']}#{br['method']}"].attrs["api"] = br["api"]
+            n_br += 1
         # browser tests opening pages: resolved to page nodes once the framework plugin has set page routes
         pv = getattr(builder, "pending_visits", None)
         if pv is None:
@@ -325,7 +337,7 @@ class TypeScriptPlugin(LanguagePlugin):
             st["skipped_dangling_symlinks"] = facts["skipped_links"]
             print(f"typescript: skipped {len(facts['skipped_links'])} dangling symlink(s): "
                   + ", ".join(facts["skipped_links"][:5]), file=sys.stderr)
-        st.update({"literal_fallbacks": n_fb, "channel_subscriptions": n_sub,
+        st.update({"literal_fallbacks": n_fb, "channel_subscriptions": n_sub, "bridge_sends": n_br,
                    "config_base_urls": {k: f"{v['value']} ({v['from']})" for k, v in sorted(base_hits.items())},
                    "config_base_urls_unresolved": sorted(base_unresolved), "http_url_unknown": n_url_unknown})
         st.update({"extract_seconds": round(t_extract, 2), "http_edges": n_http, "http_endpoints": len(ctx.http_nodes),

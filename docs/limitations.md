@@ -203,8 +203,9 @@ Issues and pull requests that extend it are welcome.
   its `.gitignore` lists it or `angular.json` builds into it; a hand-written `webDir` stays source. `dist/` and
   `build/` are listed as build output directories without counting their files. Copies map back to their source per
   file; source maps of minified bundles are not read.
-  Web / native bridge calls (Capacitor plugins, React Native modules, Flutter platform channels) are not linked to
-  the native side yet ([#20](https://github.com/cyberchronos00/code-graph/issues/20)).
+  Web / native bridge calls are linked for Capacitor plugins, React Native / Expo modules and Flutter method / event
+  channels ([bridges.md](bridges.md)); Pigeon APIs, native → Dart / JS calls, Cordova plugins and native UI
+  components are not, and Java / Objective-C receivers are stubs without a call graph inside them.
 - **Symlinks.** Dangling symlinks (for example ones that point outside the checkout) are skipped with a warning per
   file instead of stopping the language; the TypeScript stats list them as `skipped_dangling_symlinks`, and the
   TypeScript walker does not follow symlinked directories.
