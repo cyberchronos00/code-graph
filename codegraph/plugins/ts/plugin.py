@@ -91,6 +91,36 @@ def join_url(base: str | None, url: str) -> str:
 
 
 LARAVEL_ASSET_DIRS = ("resources/js", "resources/ts", "resources/assets/js", "resources/scripts", "app/javascript")
+PKG_SKIP = {"node_modules", "dist", "build", "out", "coverage", "vendor", "Pods", "DerivedData", "example", "examples",
+            "e2e", "test", "tests", "__tests__", "fixtures", "templates", "android-template", "ios-pods-template",
+            "ios-spm-template"}
+
+
+def package_tsconfigs(root: Path) -> list[str]:
+    """A monorepo without a root tsconfig.json / jsconfig.json (lerna / nx / npm workspaces with per-package configs,
+    e.g. Capacitor and its plugins): the tsconfig.json of each package (a directory holding package.json and
+    tsconfig.json) one or two levels down. The extractor indexes them as one program, like a solution config."""
+    root = Path(root)
+    if (root / "tsconfig.json").is_file() or (root / "jsconfig.json").is_file():
+        return []
+    out = []
+
+    def pkg(d: Path) -> bool:
+        return (d / "package.json").is_file() and (d / "tsconfig.json").is_file()
+
+    def subdirs(d: Path):
+        try:
+            return sorted(x for x in d.iterdir() if x.is_dir() and not x.name.startswith(".") and x.name not in PKG_SKIP
+                          and not x.is_symlink())
+        except OSError:
+            return []
+
+    for d in subdirs(root):
+        if pkg(d):
+            out.append(d)
+        elif not (d / "package.json").is_file():          # packages/<name>, libs/<name>
+            out += [x for x in subdirs(d) if pkg(x)]
+    return [str((d / "tsconfig.json").relative_to(root)) for d in out][:200]
 
 
 class TypeScriptPlugin(LanguagePlugin):
@@ -102,6 +132,8 @@ class TypeScriptPlugin(LanguagePlugin):
     def detect(self, project: Project) -> bool:
         if project.exists("tsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
             return True
+        if project.exists("package.json") and package_tsconfigs(project.root):
+            return True     # a monorepo with per-package tsconfigs only
         if project.exists("package.json") and any((project.root / d).is_dir() for d in LARAVEL_ASSET_DIRS):
             return True     # Laravel / Rails-style app with a plain-JS frontend under resources/js (allowJs)
         from ..tsweb.common import has_server_framework   # plain-JS server projects (Express, Koa, ...): allowJs
@@ -127,6 +159,9 @@ class TypeScriptPlugin(LanguagePlugin):
         # tsconfig's own files when none of these hold any
         ctx.extractor_cfg = {"root": str(project.root), "tsconfig": "tsconfig.json", "kinds": [],
                              "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]}
+        pkg_cfgs = package_tsconfigs(project.root)
+        if pkg_cfgs:
+            ctx.extractor_cfg["package_tsconfigs"] = pkg_cfgs
         for fw in frameworks:
             fw.register_hooks(ctx)
         # the walks' directory rules (codegraph/presets: common + typescript skip_dirs, the test walk's

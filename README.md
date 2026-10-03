@@ -363,7 +363,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 | Frontend → backend | resolved, or heuristic for suffix-only matches | client HTTP calls (fetch, axios, `$fetch`/ofetch, ky, SWR, OpenAPI-generated clients, Dart clients) matched to Laravel, Django, Nest, Next and Express routes (`link`), plus a request/response field check |
 | Go, Java | via SCIP (experimental) | definitions and references imported from an existing SCIP index |
 | Platform-specific code | Rust `#[cfg]` / `cfg!`, C / C++ `#if` and platform paths, Dart `Platform.isX` / `kIsWeb` / conditional imports, React Native `Platform.OS` / `Platform.select` / `.ios.ts` files | every symbol and reference carries the targets it is built for; `--platform ios` views one target's build; `cg platforms divergence` lists variants that leave a target uncovered, API differences and calls into code a target does not build ([docs/platforms.md](docs/platforms.md)) |
-| Web / native bridges | Capacitor plugins, React Native / Expo native modules, Flutter method and event channels | each JS / Dart call linked through a shared `endpoint:<protocol>:<module>#<method>` node to its Kotlin, Java, Swift or Objective-C receiver per platform; `cg bridges` lists methods missing on a platform, without a receiver or implemented outside the repo; `impact` / `tests` / `--platform` cross the bridge ([docs/bridges.md](docs/bridges.md)) |
+| Web / native bridges | Capacitor plugins, React Native / Expo native modules, Flutter method and event channels, Pigeon APIs | each JS / Dart call (and each native `invokeMethod` / Pigeon `@FlutterApi` call into Dart) linked through a shared `endpoint:<protocol>:<module>#<method>` node to its Kotlin, Java, Swift or Objective-C receiver per platform; `cg bridges` lists methods missing on a platform, without a receiver or implemented outside the repo; `impact` / `tests` / `--platform` cross the bridge ([docs/bridges.md](docs/bridges.md)) |
 | Desktop processes | Electron `ipcMain` / `ipcRenderer` / `webContents.send` and `contextBridge.exposeInMainWorld`; Tauri `invoke` → `#[tauri::command]` | `endpoint:electron-ipc:<channel>`, `endpoint:electron-preload:<key>#<member>`, `endpoint:tauri:<command>` with SENDS_TO / RECEIVED_BY across the processes, process roles (main / preload / renderer, webview / core) on module nodes; checks for channels nobody receives and unregistered commands ([docs/bridges.md](docs/bridges.md#desktop-process-boundaries-electron-and-tauri)) |
 | Generated and copied files | detected (`.gitattributes`, generator banners, framework build paths, generator file names, Capacitor / Cordova copy targets, `.openapi-generator/FILES`) | kept out of the graph and listed by `cg coverage` by reason; copies map back to their source; `--include-generated` indexes them labelled `attrs.generated` ([docs/generated.md](docs/generated.md)) |
 
@@ -587,8 +587,8 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Electron `MessagePort` / `utilityProcess` and Tauri events (`emit` / `listen`) between processes.
 - Swift: `URLComponents` and helper-built URLs, `Info.plist` / `.xcconfig` base URLs, OS-version conditions, App Intents /
   widget entries, `navigationDestination(for:)` values ([docs/swift.md](docs/swift.md#not-covered-yet)).
-- Web / native bridges beyond Capacitor, React Native and Flutter channels: Pigeon APIs, native → Dart / JS calls,
-  Cordova plugins and native UI components ([docs/bridges.md](docs/bridges.md#not-covered-yet)).
+- Web / native bridges beyond Capacitor, React Native, Flutter channels and Pigeon: React Native events, Capacitor
+  `notifyListeners`, Cordova plugins and native UI components ([docs/bridges.md](docs/bridges.md#not-covered-yet)).
 - More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
 
 ## Documentation

@@ -56,6 +56,9 @@ class GraphBuilder:
         # imports / exports ({file, line, default, configs: [(name, value, file)]}); applied after all plugins ran
         self.platform_marks: list[dict] = []
         self.platform_imports: list[dict] = []
+        # Pigeon API definitions found by the Dart plugin ({Api: {kind: host | flutter, methods, file}}): bridges.py
+        # links their native implementations / native callers
+        self.pigeon_apis: dict = {}
 
     def add_node(self, kind: str, key: str, name: str | None = None, **kw) -> str:
         nid = node_id(kind, key)

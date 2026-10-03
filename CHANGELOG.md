@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Bridges: Pigeon APIs (`endpoint:pigeon:<Api>#<method>`) from the `@HostApi()` / `@FlutterApi()` definitions: Dart
+  calls on the host API (fields, variables, Riverpod `Provider<Api>`) to the Kotlin / Java / Swift implementation,
+  including methods inherited from an `ImplBase` superclass, and native `@FlutterApi` calls to the Dart class
+  implementing it. Native → Dart MethodChannel calls (`channel.invokeMethod("m")` in Kotlin / Java / Swift /
+  Objective-C) link to the Dart `setMethodCallHandler` testing `call.method == 'm'` (endpoint `direction = to_app`,
+  `platforms_sending`). TypeScript monorepos without a root `tsconfig.json` index their per-package tsconfigs as one
+  program (capacitor, capacitor-plugins). A Kotlin primary constructor with a default value no longer hides the class
+  from the bridge scanner.
 - Python tests that run the project's programs in a subprocess link to the entry point (`TEST_CALLS`,
   `via: subprocess`): `python -m pkg.cli` (also `-mpkg`, `-Im`, `-X dev`), `python -c "<code>"` (what the snippet
   calls), script paths, the console scripts the packaging metadata declares (also via `shutil.which`), in

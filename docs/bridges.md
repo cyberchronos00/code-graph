@@ -20,6 +20,27 @@ JS / Dart caller --SENDS_TO--> endpoint:<protocol>:<module>#<method> --RECEIVED_
 | `react-native` | `endpoint:react-native:CalendarModule#createEvent` | `NativeModules.X`, destructuring from `NativeModules`, `TurboModuleRegistry.get[Enforcing]('X')`, `require('./NativeX').default`, Expo `requireNativeModule('X')` (`attrs.api = expo-modules`) | `getName()` modules with `@ReactMethod`, `Native*Spec` overrides (Java / Kotlin); `RCT_EXPORT_MODULE` / `RCT_EXPORT_METHOD` / `RCT_REMAP_METHOD` (Objective-C); `RCT_EXTERN_MODULE` / `RCT_EXTERN_METHOD` mapped to the Swift method; Expo `Name("X")` + `Function` / `AsyncFunction` |
 | `flutter` | `endpoint:flutter:samples.flutter.dev/battery#getBatteryLevel` | `MethodChannel('name').invokeMethod('m')` (also `invokeMapMethod` / `invokeListMethod`), with the channel resolved through locals, fields, statics, top-level constants, getters and `late` fields | the `MethodChannel` / `FlutterMethodChannel` / `methodChannelWithName:` handler: `call.method == "m"`, `when` / `switch` cases, `isEqualToString:` |
 | `flutter-event` | `endpoint:flutter-event:<channel>` | `EventChannel('name').receiveBroadcastStream()` | the channel's `StreamHandler` |
+| `pigeon` | `endpoint:pigeon:NativeSyncApi#hashAssets` | a Dart call on the generated `@HostApi()` class: a field / variable / parameter typed with it, `Api()`, or a Riverpod `ref.read(p)` / `ref.watch(p)` of `final p = Provider<Api>(...)` | the Kotlin / Java / Swift class implementing the generated interface / protocol (`class Impl : ImplBase(ctx), Api`, `extension Impl: Api`); a method defined in a superclass (`ImplBase`, up to 3 levels) is found there |
+
+Pigeon APIs come from the definition files (a Dart library importing `package:pigeon/` with `@HostApi()` /
+`@FlutterApi()` abstract classes), so they link even when the generated `*.g.dart` / `.g.kt` / `.g.swift` files are
+git-ignored. Calls inside the definition files are not senders.
+
+**Native → app calls.** Some endpoints go the other way (`attrs.direction = to_app`; the others are `to_native`):
+
+- a Flutter `MethodChannel` call from native code, `channel.invokeMethod("m", args)` (Kotlin / Java / Swift,
+  `[channel invokeMethod:@"m" ...]` in Objective-C), on a channel held in a variable or property whose name is known
+  (`channel = MethodChannel(messenger, "name")`; when the file creates exactly one channel, the call is matched to it
+  with `heuristic` confidence). The sender is the enclosing native method (`attrs.platform`), the receiver the Dart
+  `setMethodCallHandler` handler of the same channel: a method reference (`_channel.setMethodCallHandler(_handle)`)
+  or a closure, testing `call.method == 'm'` or `switch (call.method) { case 'm': }` (`side = dart`, `via =
+  setMethodCallHandler (Dart)`).
+- a Pigeon `@FlutterApi()` call from native code: a variable / property holding the generated class
+  (`flutterApi = XFlutterApi(messenger)`, `var api: XFlutterApi?`) and its method calls, or `XFlutterApi(m).f(...)`.
+  The receiver is the Dart class implementing / extending the API.
+
+For these endpoints `platforms_sending` lists the platforms that send, and `missing_on` is not computed (the
+receiver is the shared Dart code).
 
 The ids follow the shared protocol endpoint model of the protocol epic
 ([#29](https://github.com/cyberchronos00/code-graph/issues/29) /
@@ -36,7 +57,7 @@ and RECEIVED_BY edges, so other protocols (IPC, message queues) use the same kin
   screen reaches the native handlers on every platform. `--platform android` keeps only the Android receivers.
 - Endpoint attrs: `protocol`, `transport = local`, `namespace` (module / plugin / channel), `method`,
   `platforms_received`, `side` (send, receive, both), `checks`, `missing_on`, `external` + `package`,
-  `base_method`, `sender_platforms`.
+  `base_method`, `sender_platforms`, `direction` (to_native, to_app) and `platforms_sending` (to_app).
 
 Receivers in Kotlin and Swift files are the plugin's method nodes. Java and Objective-C files have no language
 plugin yet: their receiving methods become small stub nodes (`method:<package>.<Class>.<method>` for Java,
@@ -151,9 +172,11 @@ capacitor:Echo#vibrate  received on: android  ! MISSING ON ios
 
 ## Not covered yet
 
-- Pigeon-generated APIs and `BasicMessageChannel`; calls from native into Dart / JS (a native `invokeMethod`
-  received by `setMethodCallHandler`, React Native events); Cordova plugins; native UI components
+- `BasicMessageChannel`; Pigeon `@EventChannelApi`; React Native events (`sendEvent` / `RCTEventEmitter` to
+  `NativeEventEmitter.addListener`) and Capacitor `notifyListeners`; Cordova plugins; native UI components
   (`requireNativeComponent`, view managers, Expo views).
+- A native `invokeMethod` on a channel passed in from elsewhere (a constructor parameter, a channel created in another
+  file) is skipped unless the file creates exactly one channel.
 - Java and Objective-C are scanned for bridge registrations only (stub receivers, no call graph inside them).
 - Dynamic module or method names (a variable passed to `NativeModules[name]` or `invokeMethod(name)`) are skipped.
 - Electron: `MessagePort` / `utilityProcess` / `webContents.ipc` messaging, preload event subscriptions mapped through

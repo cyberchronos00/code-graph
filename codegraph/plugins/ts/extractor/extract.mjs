@@ -94,6 +94,30 @@ if (parsed && !parsed.fileNames.length && parsed.projectReferences && parsed.pro
     if (sub && sub.fileNames.length) { parsed = { ...sub, fileNames: [...new Set([...parsed.fileNames, ...sub.fileNames])], options: { ...sub.options, ...parsed.options, paths: parsed.options.paths || sub.options.paths, baseUrl: parsed.options.baseUrl || sub.options.baseUrl, pathsBasePath: parsed.options.pathsBasePath || sub.options.pathsBasePath } } }
   }
 }
+// no root config, but per-package tsconfigs (a lerna / nx / workspaces monorepo; the Python side lists them): one
+// program over all their files, each package's `paths` kept with absolute targets
+const pkgDirs = []
+if (!parsed && Array.isArray(cfg.package_tsconfigs) && cfg.package_tsconfigs.length) {
+  const names = new Set(), paths = {}
+  let base = null
+  for (const r of cfg.package_tsconfigs) {
+    const p = path.resolve(ROOT, r)
+    const sub = fs.existsSync(p) ? parseConfig(p) : null
+    if (!sub || !sub.fileNames.length) continue
+    pkgDirs.push(path.dirname(p))
+    for (const f of sub.fileNames) names.add(f)
+    const pb = sub.options.pathsBasePath || sub.options.baseUrl || path.dirname(p)
+    for (const [k, v] of Object.entries(sub.options.paths || {})) if (!paths[k]) paths[k] = v.map(x => path.resolve(pb, x))
+    if (!base) base = sub
+  }
+  if (base) {
+    const o = { ...base.options }
+    for (const k of ['rootDir', 'outDir', 'declarationDir', 'composite', 'baseUrl', 'paths', 'pathsBasePath', 'tsBuildInfoFile']) delete o[k]
+    if (Object.keys(paths).length) { o.paths = paths; o.pathsBasePath = ROOT }
+    parsed = { options: o, fileNames: [...names], packageConfigs: cfg.package_tsconfigs.length }
+    tsconfigPath = path.join(ROOT, 'tsconfig.json')
+  }
+}
 const noConfig = !parsed
 if (!parsed) parsed = { options: {}, fileNames: [] }
 const options = { ...parsed.options, noEmit: true, skipLibCheck: true }
@@ -169,7 +193,12 @@ let srcDirs = (cfg.src_dirs || ['app']).map(d => path.resolve(ROOT, d)).filter(f
 {
   const inside = f => srcDirs.some(d => f.startsWith(d + path.sep))
   const own = (parsed.fileNames || []).filter(f => !sourceSkipped(path.relative(ROOT, f).split(path.sep).join('/')) && !f.endsWith('.d.ts'))
-  if (own.length && !own.some(inside)) {
+  if (parsed.packageConfigs && pkgDirs.length) {
+    // each package directory is a source dir: files next to its tsconfig that `files` / `include` leave out (a
+    // bridge script bundled by its own rollup config) are code of the package too
+    srcDirs = pkgDirs
+    process.stderr.write(`codegraph: source dirs from package tsconfigs: ${pkgDirs.map(rel).join(', ')}\n`)
+  } else if (own.length && !own.some(inside)) {
     const tops = new Set(own.map(f => { const r = path.relative(ROOT, f).split(path.sep); return r.length > 1 ? r.slice(0, Math.min(r.length - 1, 3)).join(path.sep) : '.' }))
     const dirs = [...tops].sort((a, b) => a.length - b.length).filter((d, i, all) => !all.slice(0, i).some(p => p === '.' || d.startsWith(p + path.sep)))
     srcDirs = dirs.map(d => path.resolve(ROOT, d))
@@ -1888,7 +1917,8 @@ const top = Object.entries(stats.unknown_tags).sort((a, b) => b[1] - a[1]).slice
 stats.unknown_tags = Object.fromEntries(top)
 stats.seconds_fw_facts = tFw / 1000
 stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
-stats.config = { tsconfig: noConfig ? null : rel(tsconfigPath), root_files: rootNames.length }
+stats.config = { tsconfig: noConfig ? null : (parsed.packageConfigs ? null : rel(tsconfigPath)), root_files: rootNames.length,
+  ...(parsed.packageConfigs ? { package_tsconfigs: parsed.packageConfigs } : {}) }
 fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts,
   subscriptions, bridges, bridge_receivers: bridgeReceivers, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
   skipped_links: [...new Set(skippedLinks)].sort(), stats }))

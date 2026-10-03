@@ -210,8 +210,9 @@ Issues and pull requests that extend it are welcome.
   its `.gitignore` lists it or `angular.json` builds into it; a hand-written `webDir` stays source. `dist/` and
   `build/` are listed as build output directories without counting their files. Copies map back to their source per
   file; source maps of minified bundles are not read.
-  Web / native bridge calls are linked for Capacitor plugins, React Native / Expo modules and Flutter method / event
-  channels ([bridges.md](bridges.md)); Pigeon APIs, native → Dart / JS calls, Cordova plugins and native UI
+  Web / native bridge calls are linked for Capacitor plugins, React Native / Expo modules, Flutter method / event
+  channels and Pigeon APIs, including Flutter `invokeMethod` and Pigeon `@FlutterApi` calls from native into Dart
+  ([bridges.md](bridges.md)); React Native events, Capacitor `notifyListeners`, Cordova plugins and native UI
   components are not, and Java / Objective-C receivers are stubs without a call graph inside them. Electron IPC /
   context bridge and Tauri commands are linked across processes; Electron `MessagePort` / `utilityProcess`, Tauri
   events and commands invoked from `.svelte` files are not.

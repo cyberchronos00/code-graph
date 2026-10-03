@@ -175,6 +175,11 @@ similarity of their callee sets.
   when `node_modules` has them) and `types/components.d.ts` with Nuxt's path-prefixed component names, and warns that
   `npx nuxi prepare` gives the full picture. The source directory is `srcDir`, else `app/` or `src/` when they hold Nuxt
   directories, else the root.
+- **Monorepos without a root tsconfig.** When the root has a `package.json` but no `tsconfig.json` / `jsconfig.json`,
+  the tsconfig of each package (a directory with `package.json` and `tsconfig.json`, one level down or under a
+  `packages/`-style directory) joins one program: their file lists are merged, the first package's compiler options
+  are used without `rootDir` / `outDir` / `baseUrl`, each package's `paths` keep absolute targets, and the package
+  directories are the source dirs (`stats.config.package_tsconfigs`).
 - **Vue SFCs** are parsed with `@vue/compiler-sfc`. Each `.vue` becomes a virtual `X.vue.ts` in the program: `<script>` /
   `<script setup>` text stays at its original offsets (other bytes blanked, so line numbers are 1:1), and every template
   expression / `v-on` handler is appended as a stub function (v-for / slot scope variables become `any` params) with a line map back

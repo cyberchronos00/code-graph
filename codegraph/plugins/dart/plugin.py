@@ -373,8 +373,16 @@ class DartPlugin(LanguagePlugin):
         # ---- Flutter platform channels (send side; codegraph/bridges.py adds the native receivers)
         from .bridges import emit as emit_bridges
         bst = emit_bridges(prog, UrlEval(prog, prog.env_values), b)
-        if bst["flutter"] or bst["flutter-event"] or bst["unresolved_channel"]:
+        if bst["flutter"] or bst["flutter-event"] or bst["unresolved_channel"] or bst.get("dart_handlers"):
             st["platform_channel_sends"] = bst
+        # ---- Pigeon APIs (definitions -> endpoint:pigeon:<Api>#<method>; bridges.py adds the native side)
+        from .bridges import emit_pigeon, pigeon_apis
+        apis = pigeon_apis(prog)
+        if apis:
+            b.pigeon_apis = apis
+            st["pigeon"] = {"apis": len(apis), "host_apis": sum(1 for v in apis.values() if v["kind"] == "host"),
+                            "flutter_apis": sum(1 for v in apis.values() if v["kind"] == "flutter"),
+                            **emit_pigeon(prog, b, apis)}
         st.update({"libraries": len(prog.libs), "classes": len(prog.classes),
                    "functions": sum(1 for f in prog.funcs.values() if f.cls is None),
                    "methods": sum(1 for f in prog.funcs.values() if f.cls is not None), "imports": n_imp, "extends": n_ext,

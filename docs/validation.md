@@ -366,19 +366,20 @@ names the reason (`Swift toolchain found but the package was not built ...`, `no
 ## Web / native bridges
 
 `cg index <repo>` with no flags and no `.cg.yaml`, then `cg bridges` ([bridges.md](bridges.md)). The two Capacitor
-repositories are monorepos without a root `tsconfig.json`; a scratch copy with one added (`include` of the packages'
-`src` dirs) lets the TypeScript plugin run. Index time is one run each on a shared box (the spread between repeated
+repositories are monorepos without a root `tsconfig.json`; the TypeScript plugin indexes their per-package
+tsconfigs as one program (capacitor: 794 / 1664 → 1633 / 4521 nodes / edges, before that the plugin did not run;
+capacitor-plugins: 589 / 640 → 959 / 1367, 20 package tsconfigs instead of 3–4 files picked up by the fallback). Index time is one run each on a shared box (the spread between repeated
 runs of the same build was 2–4 s); the bridge pass itself takes the time shown.
 
 | Project | Commit | Endpoints | Linked | Receivers (stubs) | Checks | Bridge pass | Index before → after |
 |---|---|---|---|---|---|---|---|
 | ionic-team/capacitor (framework) | ba28569 | 24 | 1 | 39 (19) | 4 external, 1 missing_on, 19 no_sender | 0.10 s | |
 | ionic-team/capacitor-plugins (library) | 87c0bb8 | 81 | 0 | 159 (86) | 2 missing_on, 75 no_sender | 0.10 s | |
-| flutter/samples (platform_channels, add_to_app, pigeon, platform_view_swift) | a05867d | 8 | 8 | 19 (7) | none | 0.02 s | |
+| flutter/samples (platform_channels, add_to_app, pigeon, platform_view_swift) | a05867d | 14 | 14 | 21 (7) | none | 0.05 s | 599 / 999 → 605 / 1023 |
 | mattermost/mattermost-mobile (React Native) | e5be311 | 42 | 32 | 71 (30) | 3 no_sender | 0.05 s | 23.1–24.2 s → 24.3–25.0 s; 21639 / 81163 → 21711 / 81297 nodes / edges |
 | bluesky-social/social-app (Expo modules) | db23528 | 33 | 1 | 62 (0) | 4 missing_on, 32 no_sender | 0.03 s | 15.6–19.2 s → 16.7–18.1 s; 9900 / 47568 → 9933 / 47632 |
 | social-app with `include: [modules]` | db23528 | 33 | 21 | 62 (0) | 12 no_sender | 0.03 s | |
-| immich-app/immich `mobile/` (Flutter) | c5e06dc | 0 | 0 | 0 | | | Pigeon only |
+| immich-app/immich `mobile/` (Flutter, Pigeon) | c5e06dc | 45 | 43 | 86 (0) | 3 missing_on, 2 no_sender | 0.08 s | 7443 / 22989 → 7488 / 23131 |
 
 What the findings are, from spot checks:
 
@@ -388,7 +389,16 @@ What the findings are, from spot checks:
   view). The external endpoints are test literals and `App#exitApp` from the `@capacitor/app` package.
 - **capacitor-plugins:** a library repository, so no senders. The two `missing_on` are real: `TextZoom.get` / `set`
   are Android methods (iOS has `getPreferred` only).
-- **flutter/samples:** every channel method is linked on both platforms. `platform_view_swift` is an iOS-only app
+- **immich mobile:** 11 Pigeon APIs (10 `@HostApi`, 1 `@FlutterApi`) from `mobile/pigeon/*.dart` (the generated
+  files are git-ignored): 50 Dart sends, 86 Kotlin / Swift receivers, 3 native sends to the Dart
+  `BackgroundWorkerBgService`. Kotlin implementations inherit shared methods from `NativeSyncApiImplBase`
+  (`hashAssets` is received there on Android and in `NativeSyncApiImpl` on iOS). The `missing_on` are real
+  (`BackgroundWorkerLockApi` and `ViewIntentHostApi` are implemented on Android only), as are the two `no_sender`
+  (`NetworkApi#addCertificate`, `NativeSyncApi#clearSyncCheckpoint` have no Dart caller).
+- **flutter/samples:** every channel method is linked on both platforms. Native → Dart: `reportCounter`
+  (add_to_app fullscreen, Kotlin and Swift), `setCount` (multiple_flutters) and `setCellNumber` (android_view list
+  cells) are sent by `invokeMethod` and received by the Dart `setMethodCallHandler`; the books sample's Pigeon
+  `HostBookApi` / `FlutterBookApi` link both ways. `platform_view_swift` is an iOS-only app
   (no `android/` next to its `pubspec.yaml`), so its `switchView` is not reported missing on Android. The stubs are
   Swift methods the Swift plugin does not index (multi-line `application(...)` signatures, `viewDidLoad` overrides).
 - **mattermost-mobile:** the app imports its modules from local `file:` packages (`@mattermost/rnutils`,

@@ -8,7 +8,10 @@ It is modelled with the protocol endpoint model of #31 (epic #29), so the bridge
 
   protocol      capacitor | react-native (NativeModules, TurboModules, Expo Modules: attrs.api = expo-modules)
                 | flutter (MethodChannel) | flutter-event (EventChannel, no method part: endpoint:flutter-event:<channel>)
-  namespace     Capacitor plugin name, React Native module name, Flutter channel name
+                | pigeon (@HostApi / @FlutterApi classes of the Pigeon definition files)
+  namespace     Capacitor plugin name, React Native module name, Flutter channel name, Pigeon API class
+  direction     to_native (app code sends, native receives) or to_app: a native `invokeMethod` received by a Dart
+                `setMethodCallHandler`, a native @FlutterApi call received by the Dart class implementing it
   RECEIVED_BY   one edge per native implementation, in the native file: the platform conventions of platforms.py tag it
                 (android/ ios/ macos/ directories, else Kotlin / Java = android, Swift / ObjC = ios), so `--platform ios`
                 drops the Android receivers and `impact` / `reaches` cross the bridge in both directions
@@ -46,6 +49,8 @@ PROTOCOLS = {
                     "@ReactMethod / RCT_EXPORT_METHOD / Expo Function)",
     "flutter": "Flutter MethodChannel method (invokeMethod -> setMethodCallHandler)",
     "flutter-event": "Flutter EventChannel stream (receiveBroadcastStream -> setStreamHandler)",
+    "pigeon": "Pigeon API method (@HostApi: Dart call -> Kotlin / Swift / Java implementation of the generated "
+              "interface; @FlutterApi: native call -> Dart class extending the generated API)",
     "electron-ipc": "Electron IPC channel (ipcRenderer.invoke / send -> ipcMain.handle / on; webContents.send -> "
                     "ipcRenderer.on)",
     "electron-preload": "Electron context bridge member (window.<key>.<member>() -> contextBridge.exposeInMainWorld)",
@@ -55,6 +60,7 @@ PROTOCOLS = {
 PROCESS_PROTOCOLS = ("electron-ipc", "electron-preload", "tauri")
 TRANSPORT = {"electron-ipc": "ipc", "tauri": "ipc", "electron-preload": "local"}
 MOBILE = ("android", "ios", "macos")
+APP_LANGS = ("dart", "ts")          # the app side of a bridge (receivers there: a native -> app call)
 # Capacitor Plugin / CAPPlugin base-class methods: handled by the bridge on every platform unless a plugin overrides them
 CAP_BASE_METHODS = {"checkPermissions", "requestPermissions", "addListener", "removeAllListeners", "removeListener"}
 # NativeEventEmitter plumbing (RCTEventEmitter implements it on iOS) and the TurboModule constants getter
@@ -204,7 +210,8 @@ class Text:
         return out
 
 
-CLASS_RE = re.compile(r"\b(?:class|object|struct|actor)\s+(\w+)[^{;=]*\{")
+CLASS_RE = re.compile(r"\b(?:class|object|struct|actor)\s+(\w+)\s*(?:<[^{;()]*?>)?\s*"
+                      r"(?:\((?:[^()]|\([^()]*\))*\))?[^{;=]*\{")     # a primary constructor may hold `= default`
 OBJC_IMPL_RE = re.compile(r"@implementation\s+(\w+)")
 CONST_RE = re.compile(r"\b(?:val|var|let|const\s+val|static\s+let|static\s+var|(?:public\s+|private\s+|protected\s+)?"
                       r"(?:static\s+)?final\s+String|String)\s+(\w+)\s*(?::\s*String\??)?\s*=\s*\"([^\"\\\n]*)\"")
@@ -536,6 +543,194 @@ def scan_flutter(nf: NativeFile, out: list, handler_classes: dict, pending_sites
 
 _GLOBAL_CONSTS: dict[str, str] = {}
 
+# ------------------------------------------------------------------ Flutter MethodChannel: native -> Dart
+NATIVE_INVOKE = re.compile(r"(?:\b(?:self|this)\s*\.\s*)?(\w+)\s*[?!]*\s*\.\s*invokeMethod\s*(?:<[^>]*>)?\s*\(\s*")
+OBJC_INVOKE = re.compile(r"\[\s*(?:self\.|_)?(\w+)\s+invokeMethod:\s*")
+
+
+def flutter_native_sends(builder, by_file, nfs: list) -> int:
+    """`channel.invokeMethod("m", args)` in Kotlin / Java / Swift / ObjC on a MethodChannel whose name is known
+    (the variable the channel was assigned to, or the file's only channel) -> SENDS_TO endpoint:flutter:<channel>#m
+    from the enclosing native method; the Dart `setMethodCallHandler` that tests `call.method == 'm'` receives it."""
+    n = 0
+    for nf in nfs:
+        t = nf.t
+        if "invokeMethod" not in t.code:
+            continue
+        chans = {}                      # variable -> channel name
+        names = []
+        if nf.lang in ("kotlin", "java"):
+            news = [(m.start(), t.args(m.end() - 1)) for m in CHANNEL_NEW.finditer(t.code) if m.group(1) != "Event"]
+            news = [(p, a[1][1]) for p, a in news if len(a) >= 2]
+        elif nf.lang == "swift":
+            news = []
+            for m in SWIFT_CHANNEL_NEW.finditer(t.code):
+                if m.group(1) == "Event":
+                    continue
+                a = t.args(t.code.rfind("(", 0, m.end()))
+                if a:
+                    news.append((m.start(), a[0][1]))
+        else:
+            news = [(m.start(), m.group(2)) for m in OBJC_CHANNEL_NEW.finditer(t.src) if m.group(1) != "Event"]
+        for pos, expr in news:
+            name = _str_value(nf, expr, _GLOBAL_CONSTS)
+            if not name:
+                continue
+            names.append(name)
+            head = t.code[max(0, pos - 160):pos]
+            vm = re.search(r"(?:self\.|this\.|_)?(\w+)\s*(?::\s*[\w.<>?]+\s*)?=\s*(?:new\s+)?(?:\[\s*)?$", head)
+            if vm:
+                chans.setdefault(vm.group(1), name)
+        if not names:
+            continue
+        rx = OBJC_INVOKE if nf.lang == "objc" else NATIVE_INVOKE
+        for m in rx.finditer(t.code):
+            var = m.group(1).lstrip("_")
+            name = chans.get(var) or chans.get(m.group(1)) or (names[0] if len(set(names)) == 1 else None)
+            if not name:
+                continue
+            sm = re.match(r'@?"([^"\n]+)"', t.src[m.end():m.end() + 200])
+            if not sm:
+                continue
+            conf = "resolved" if (var in chans or m.group(1) in chans) else "heuristic"
+            line = t.line(m.start())
+            hid = _handler(builder, by_file, Receiver("flutter", name, sm.group(1), nf, m.start()), nf, line)
+            if hid is None:
+                continue
+            plat, _why = _platform_of(nf.rel, nf.lang)
+            protocol_send(builder, "flutter", name, sm.group(1), hid, nf.rel, line, conf, via="invokeMethod (native)",
+                          platform=plat, direction="to_app")
+            n += 1
+    return n
+
+
+# ------------------------------------------------------------------ Pigeon: native side
+SWIFT_EXT = re.compile(r"\bextension\s+(\w+)\s*:\s*([^{]*)\{")
+SUPER_NAME = re.compile(r"(?<![\w.])(?:\w+\.)*([A-Z]\w*)(\s*\()?")
+
+
+def _decl_rx(lang: str, m: str):
+    if lang == "kotlin":
+        return re.compile(r"\bfun\s+(?:<[^>]*>\s*)?" + re.escape(m) + r"\s*\(")
+    if lang == "swift":
+        return re.compile(r"\bfunc\s+" + re.escape(m) + r"\s*[(<]")
+    if lang == "java":
+        return re.compile(r"[\w<>\[\],.?]+\s+" + re.escape(m) + r"\s*\([^;{)]*\)\s*(?:throws\s+[\w., ]+)?\{")
+    return re.compile(r"^\s*-\s*\([^)]*\)\s*" + re.escape(m) + r"\b", re.M)
+
+
+def _supers(nf: NativeFile, start: int) -> list[tuple[str, bool]]:
+    """Supertype names of the class / extension declared at `start`: (name, called-as-constructor)."""
+    code = nf.t.code
+    head = code[start:code.find("{", start)]
+    if nf.lang == "java":
+        m = re.search(r"\b(?:extends|implements)\b(.*)", head, re.S)
+        tail = m.group(1) if m else ""
+    else:
+        i, depth = -1, 0           # the ':' outside a Kotlin primary constructor `class X(ctx: Context) : Base(ctx), Api`
+        for j, ch in enumerate(head):
+            if ch in "(<":
+                depth += 1
+            elif ch in ")>":
+                depth -= 1
+            elif ch == ":" and depth == 0:
+                i = j
+                break
+        tail = head[i + 1:] if i >= 0 else ""
+    tail = re.sub(r"<[^<>]*>", "", tail)
+    tail = re.sub(r"\bwhere\b.*", "", tail, flags=re.S)
+    return [(m.group(1), bool(m.group(2))) for m in SUPER_NAME.finditer(tail)]
+
+
+def scan_pigeon_hosts(nfs: list, apis: dict, out: list) -> None:
+    """@HostApi implementations: a Kotlin / Swift / Java class (or Swift extension) that implements the generated
+    interface / protocol `Api`; each API method is looked up in the class, then in its superclasses (an
+    `ApiImplBase` holding the shared methods)."""
+    host = {k: v for k, v in apis.items() if v["kind"] == "host"}
+    if not host:
+        return
+    decls = defaultdict(list)            # class name -> [(nf, start, end)]
+    for nf in nfs:
+        for name, lo, hi in nf.classes:
+            decls[name].append((nf, lo, hi))
+        if nf.lang == "swift":
+            for m in SWIFT_EXT.finditer(nf.t.code):
+                decls[m.group(1)].append((nf, m.start(), nf.t.match(m.end() - 1)))
+
+    def find(cls, meth, lang_fam, depth=0):
+        for nf, lo, hi in decls.get(cls, ()):
+            if FAM[nf.lang] != lang_fam:
+                continue
+            hit = _decl_rx(nf.lang, meth).search(nf.t.code, lo, hi)
+            if hit:
+                return nf, hit.start(), cls
+        if depth < 3:
+            for nf, lo, _hi in decls.get(cls, ()):
+                for sup, _call in _supers(nf, lo):
+                    if sup != cls and sup not in host:
+                        got = find(sup, meth, lang_fam, depth + 1)
+                        if got:
+                            return got
+        return None
+
+    seen = set()
+    for cls, items in decls.items():
+        for nf, lo, _hi in items:
+            for sup, called in _supers(nf, lo):
+                if sup not in host or called:
+                    continue
+                for meth in host[sup]["methods"]:
+                    got = find(cls, meth, FAM[nf.lang])
+                    if not got:
+                        continue
+                    rnf, pos, rcls = got
+                    key = (sup, meth, rnf.rel, pos)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(Receiver("pigeon", sup, meth, rnf, pos, fn=meth, cls=rcls, conf="resolved",
+                                        via=f"Pigeon HostApi ({cls} : {sup})"))
+
+
+FAM = {"kotlin": "jvm", "java": "jvm", "swift": "apple", "objc": "apple"}
+
+
+def pigeon_native_sends(builder, by_file, nfs: list, apis: dict) -> int:
+    """@FlutterApi calls from native code: a variable / property holding the generated class
+    (`flutterApi = BackgroundWorkerFlutterApi(binaryMessenger)`, `var api: XFlutterApi?`) and its method calls
+    (`flutterApi?.onAndroidUpload(...)`) -> SENDS_TO endpoint:pigeon:<Api>#<method> from the enclosing native method."""
+    flutter = {k: v for k, v in apis.items() if v["kind"] == "flutter"}
+    n = 0
+    for nf in nfs:
+        code = nf.t.code
+        for api, info in flutter.items():
+            if api not in code:
+                continue
+            vars_ = set()
+            for m in re.finditer(r"(\w+)\s*:\s*(?:[\w.]+\.)?" + re.escape(api) + r"\b\s*[?!]?", code):
+                vars_.add(m.group(1))
+            for m in re.finditer(r"(\w+)\s*=\s*(?:new\s+)?(?:[\w.]+\.)?" + re.escape(api) + r"\s*\(", code):
+                vars_.add(m.group(1))
+            meths = "|".join(map(re.escape, info["methods"]))
+            if not meths:
+                continue
+            pats = []
+            if vars_:
+                pats.append(re.compile(r"(?<![\w])(?:(?:self|this)\s*\.\s*)?(?:" + "|".join(map(re.escape, sorted(vars_)))
+                                       + r")\s*[?!]*\s*\.\s*(" + meths + r")\s*[({]"))
+            pats.append(re.compile(re.escape(api) + r"\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*[?!]*\s*\.\s*(" + meths + r")\s*[({]"))
+            for rx in pats:
+                for m in rx.finditer(code):
+                    line = nf.t.line(m.start(1))
+                    hid = _handler(builder, by_file, Receiver("pigeon", api, m.group(1), nf, m.start(1)), nf, line)
+                    if hid is None:
+                        continue
+                    plat, _why = _platform_of(nf.rel, nf.lang)
+                    protocol_send(builder, "pigeon", api, m.group(1), hid, nf.rel, line, "resolved",
+                                  via="Pigeon FlutterApi call", platform=plat, direction="to_app")
+                    n += 1
+    return n
+
 
 # ------------------------------------------------------------------ the index pass
 def _platform_of(rel: str, lang: str) -> tuple[str, str]:
@@ -631,6 +826,9 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
     if not sends and not files:
         return {}
     clf = project.options.get("generated")
+    apis = getattr(builder, "pigeon_apis", None) or {}
+    # an API name or a name starting with it (`NativeSyncApiImplBase` holds methods its subclasses inherit)
+    pigeon_rx = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(apis))) + r")") if apis else None
     nfs: list[NativeFile] = []
     _GLOBAL_CONSTS.clear()
     for rel in files:
@@ -640,7 +838,7 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
             src = (root / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if len(src) > 2_000_000 or not TRIGGER.search(src):
+        if len(src) > 2_000_000 or not (TRIGGER.search(src) or (pigeon_rx and pigeon_rx.search(src))):
             continue
         nf = NativeFile(rel, src)
         nfs.append(nf)
@@ -719,11 +917,15 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
                                      via="setStreamHandler(handler class)"))
             else:
                 recs.append(Receiver("flutter-event", name, None, rnf, rpos, conf="heuristic", via="setStreamHandler"))
+    if apis:
+        scan_pigeon_hosts(nfs, apis, recs)
     # receivers -> handler nodes
     by_file = defaultdict(list)
     for n in builder.nodes.values():
         if n.file and n.kind in ("method", "function") and n.line:
             by_file[n.file].append(n)
+    pigeon_sends = pigeon_native_sends(builder, by_file, nfs, apis) if apis else 0
+    flutter_sends = flutter_native_sends(builder, by_file, nfs)
     n_recv, n_stub, marked = 0, 0, set()
     stats = defaultdict(lambda: defaultdict(int))
     seen = set()
@@ -755,6 +957,10 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
             builder.platform_marks[-1]["bridge"] = True
     for e in sends:
         stats[e.attrs.get("protocol") or e.dst.split(":", 2)[1]]["sends" if e.kind == "SENDS_TO" else "test_sends"] += 1
+    if pigeon_sends:
+        stats["pigeon"]["native_sends"] += pigeon_sends
+    if flutter_sends:
+        stats["flutter"]["native_sends"] += flutter_sends
     return {"native_files_scanned": len(nfs), "receivers": n_recv, "stub_nodes": n_stub,
             "per_protocol": {k: dict(v) for k, v in sorted(stats.items())}}
 
@@ -880,6 +1086,16 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
         rp = sorted({e.attrs.get("platform") for e in recv[nid]} - {None})
         a["platforms_received"] = rp
         a["side"] = "both" if send[nid] and recv[nid] else "send" if send[nid] or tsend[nid] else "receive"
+        # native -> app (Pigeon @FlutterApi, a native invokeMethod handled in Dart): the app side receives on every
+        # platform; the platforms are the senders'
+        to_app = any(e.attrs.get("direction") == "to_app" for e in send[nid]) or (
+            recv[nid] and all((builder.nodes.get(e.dst) is not None and builder.nodes[e.dst].lang in APP_LANGS)
+                              for e in recv[nid]))
+        if to_app:
+            a["direction"] = "to_app"
+            a["platforms_sending"] = sorted({e.attrs.get("platform") for e in send[nid]} - {None})
+        elif a["protocol"] in ("pigeon", "flutter", "flutter-event", "capacitor", "react-native"):
+            a["direction"] = "to_native"
         a.pop("checks", None)
         ck = []
         proc = a["protocol"] in PROCESS_PROTOCOLS
@@ -904,7 +1120,7 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
             ck.append("no_sender" if not tsend[nid] else "test_sender_only")
         if a.get("unregistered"):
             ck.append("unregistered")
-        if recv[nid] and impl and not base and not proc:
+        if recv[nid] and impl and not base and not proc and not to_app:
             expected = mobile or sorted(impl - {None})
             if a["protocol"] == "react-native":
                 declared = set()
@@ -918,7 +1134,7 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
                 if declared:
                     expected = [p for p in expected if p in declared]
             # Flutter: only the platform folders of the sending app's package (an iOS-only sample has no android/)
-            if a["protocol"] in ("flutter", "flutter-event") and send[nid]:
+            if a["protocol"] in ("flutter", "flutter-event", "pigeon") and send[nid]:
                 folders = [_flutter_folders(root, e.file, pj_cache) for e in send[nid]]
                 if all(f is not None for f in folders):
                     have = set().union(*folders)
