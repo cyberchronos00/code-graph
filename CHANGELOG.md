@@ -15,6 +15,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   caller layers folded into counted clusters that expand in place, keeps labels at 11 px or more, fits its toolbar
   from 1024 px and loads without console errors or warnings; `shoot.mjs` checks this at 1280 and 1920 (#82).
 
+## [0.8.1] - 2026-10-03
+
+Fixes only: Swift and Kotlin call binding regressions from 0.8.0 (#83), bare free-function names in every language,
+Python attribute inference on self-referencing attributes (#78) and hash-seed independent Laravel fallback columns
+(#79).
+
 ### Fixed
 
 - A bare free-function name (`cg tests formatPrice`, `cg impact initConnection`) resolves in every language, as
@@ -520,7 +526,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/cyberchronos00/code-graph/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/cyberchronos00/code-graph/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/cyberchronos00/code-graph/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/cyberchronos00/code-graph/compare/v0.6.0...v0.7.0
