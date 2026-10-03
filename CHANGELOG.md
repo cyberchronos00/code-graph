@@ -8,6 +8,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- A bare free-function name (`cg tests formatPrice`, `cg impact initConnection`) resolves in every language, as
+  `cg search` finds it; it matched only TypeScript, Python and Dart names before, so Swift, Kotlin, PHP, Rust and C
+  free functions needed the `function:` id.
+
 ## [0.8.0] - 2026-10-03
 
 What the graph sees beyond code calling code: AI harnesses (LLM tools, MCP servers and clients, agents) and external

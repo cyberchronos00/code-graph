@@ -64,6 +64,14 @@ def test_mixed_xctest_and_swift_testing():
                   "`checkout sums the items`": "swift-testing"}
 
 
+def test_bare_free_function_name_resolves():
+    st = store("swift_testing_fixture")
+    assert Q.resolve_targets(st, "formatPrice") == ["function:formatPrice"]
+    res = Q.tests_covering(st, "formatPrice")
+    assert names(res, "direct") == ["backtickedAttribute", "testFormat"]
+    assert Q.resolve_targets(st, "Pricing") and "class:Pricing" in Q.resolve_targets(st, "Pricing")
+
+
 def test_raw_identifier_names_and_backticked_attributes():
     ek, a = attrs("swift_testing_fixture", "method:`Cart checkout tests`.`checkout sums the items`")
     assert ek == "test" and a["suite"] == "`Cart checkout tests`"
