@@ -25,7 +25,10 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `clean [ROOT] [--all [--extractors]] [--stale] [--db DB] [--dry-run] [--json]`: remove cache entries: those of one
   project (and of every project indexed below ROOT), the stale ones, or all of them except the extractors; `--db`
   also deletes a graph DB with its `-wal` / `-shm` files. `doctor` shows the cache size per kind ([clean](#clean)).
-- `coverage --db DB [--json] [--all-files]`: which languages and files the index covers: parser mode (`exact`,
+- `coverage --db DB [--json] [--details] [--all-files]`: a short summary by default (one line per repo, one per
+  language that is not fully indexed with its reason, Python source roots when the layout uses more than the indexed
+  root, syntax error counts, files per platform target, blind spots;
+  `cg index` prints the same on stderr), the full report with `--details` (or `--all-files`): which languages and files the index covers: parser mode (`exact`,
   `heuristic` when the exact-mode indexer is missing, `skipped` when the toolchain is missing, with the install hint),
   file completeness (discovered / indexed / parse failed / over size limit / unmapped / excluded, the first 5 paths
   per bucket or all with `--all-files`), unsupported source types (by extension or `#!` line) and blind spots (route /
@@ -59,8 +62,13 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `routes [--writes [TABLE]] [--reaches SPEC...] [--missing NAME] [--unguarded] [--auth-pattern RE]`: routes with their
   middleware / guards / auth, scoped to what they write or reach, with one evidence chain each and the frontend
   callers on a combined graph (see [Routes and guards](#routes-and-guards)).
-- `search NAME [--kind K]`: nodes by name / FQN substring, plus the routes whose middleware, guard or auth names match.
+- `search NAME [--kind K]`: nodes by name / FQN substring (with their root-relative `file:line`), plus the routes whose
+  middleware, guard or auth names match.
 - `writers TABLE`, `siblings SYMBOL`, `node SPEC`, `stats`: writers of a table, similar code, node details, counts.
+  `node` prints the node (location, fqn, platforms, attrs) and its outgoing / incoming edges, the same edge from one
+  site once with a count; `stats` prints the project, its languages, the coverage summary line and the node / edge
+  counts. With `--json` each prints one JSON document (`node`: a list of `{node, out, in}`; `stats`: `{project, root,
+  indexed_at, nodes, edges, nodes_by_kind, edges_by_kind, stats}` with the full index stats).
   `siblings` prints text (`--json` for the raw result).
 - `api-calls SPEC`: client endpoints with call sites, request keys and the matched route. SPEC is `all`, `unmatched`, a
   substring, or a `*` glob matched against the endpoint, its path, the route, the controller, the caller or the
@@ -106,7 +114,9 @@ the filter and how many conditions could not be evaluated ([platforms.md](platfo
 - `connection:warehouse`, `connection:tenant_*`: DB connection(s) from `config/database.php`, plus dynamic ones
   registered via `Config::set('database.connections.…')`.
 - `env:WAREHOUSE_DB_HOST`, `config:database.connections.warehouse`: env / config keys.
-- `Class::method`, `Class`, short or FQN: code symbols (suffix match).
+- `Class.method` or `Class::method`, `Class`, short or FQN: code symbols (suffix match). Either separator works in every
+  language: a spec that matches nothing with its own separator is retried with the other one (Swift / Kotlin / Python /
+  TS / Dart fqns use `.`, PHP / Rust / C++ `::`).
 - `Sub.method` / `Sub::method` for a method `Sub` inherits without redefining it: resolves through the class's
   ancestors (EXTENDS / IMPLEMENTS / trait use, nearest first) to the definition, and the answer says so
   (`B.run -> inherited from Base.run`, short names; `--json` has the fqns). The callers are those of the inherited
@@ -278,14 +288,16 @@ options:
 ### `coverage`
 
 ```
-usage: python -m codegraph.cli coverage [-h] --db DB [--json] [--all-files]
+usage: python -m codegraph.cli coverage [-h] --db DB [--json] [--details] [--all-files]
 
 options:
   -h, --help   show this help message and exit
   --db DB
   --json
-  --all-files  list every file per bucket (default: the first 5), excluded
-               files too
+  --details    the full report: file lists (the first 5 per bucket), fix
+               hints, syntax error lines, Python source roots (default: a
+               short summary)
+  --all-files  the full report with every file per bucket, excluded files too
 ```
 
 ### `link`
@@ -463,7 +475,7 @@ options:
   --writes [TABLE]      routes reaching a DB write (any table, or TABLE)
   --reaches SPEC [SPEC ...]
                         routes reaching any of these nodes (table, column,
-                        connection:, env:, Class::method)
+                        connection:, env:, Class.method)
   --missing NAME        keep routes with no guard whose name contains NAME
                         (e.g. auth:api, ApiKeyGuard)
   --unguarded           keep routes with no auth guard (framework presets, the
@@ -678,7 +690,8 @@ usage: python -m codegraph.cli tests [-h] --db DB [--json] [--no-paths]
                        spec
 
 positional arguments:
-  spec                  Class::method, Class, route:VERB /uri, `VERB /path`,
+  spec                  Class.method or Class::method (either separator, any
+                        language), Class, route:VERB /uri, `VERB /path`,
                         /path, table.column ...
 
 options:

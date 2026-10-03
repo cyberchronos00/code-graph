@@ -59,23 +59,43 @@ HINTS = {
     "php": "install PHP 8.2+ and Composer, then run `cg setup php` (`cg doctor` checks the toolchains)",
     "typescript": "install Node.js 20+ (with npm), then run `cg setup typescript` (`cg doctor` checks the toolchains)",
     "dart": "install the Dart SDK 3.x (`dart` on PATH or $DART), then run `cg setup dart`",
-    "rust": "exact mode needs rust-analyzer (`rustup component add rust-analyzer`); the tree-sitter layer needs "
-            "`pip install tree-sitter tree-sitter-rust`",
-    "c_cpp": "exact mode needs scip-clang and a compile_commands.json (docs/native.md); the tree-sitter layer needs "
-             "`pip install tree-sitter tree-sitter-c tree-sitter-cpp`",
+    "rust": "exact mode needs rust-analyzer (`rustup component add rust-analyzer`){layer}",
+    "c_cpp": "exact mode needs scip-clang and a compile_commands.json (docs/native.md){layer}",
     "python": "the .py files are only in directories the Python plugin skips (virtualenvs, build output, static/, media/); "
               "index the directory that holds your code",
-    "kotlin": "heuristic mode (tree-sitter syntax layer, name-based call resolution); the layer needs "
-              "`pip install tree-sitter tree-sitter-kotlin`. For compiler-resolved references index the Gradle / Maven "
+    "kotlin": "heuristic mode (tree-sitter syntax layer, name-based call resolution){layer}. For compiler-resolved "
+              "references index the Gradle / Maven "
               "build with scip-java: set CODEGRAPH_KOTLIN_SCIP=1 (runs scip-java on the Gradle / Maven build; needs a JDK) or "
               "pass `--scip index.scip` (docs/kotlin.md#exact-mode)",
-    "swift": "heuristic mode (tree-sitter syntax layer, name-based call resolution; runs on Linux without Xcode); "
-             "the layer needs `pip install tree-sitter tree-sitter-swift`. For compiler-resolved calls set "
+    "swift": "heuristic mode (tree-sitter syntax layer, name-based call resolution; runs on Linux without Xcode){layer}. "
+             "For compiler-resolved calls set "
              "CODEGRAPH_SWIFT_INDEX=1 (SwiftPM: runs `swift build --enable-index-store`; needs a Swift toolchain) or "
              "CODEGRAPH_SWIFT_INDEX_STORE to an existing index store (docs/swift.md#exact-mode)",
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
     "java": "no native plugin: index with scip-java and pass `--scip index.scip`",
 }
+# tree-sitter modules of the syntax layer per language: the hint names the ones missing (none: no install hint, #75)
+LAYER_MODULES = {"rust": ("tree_sitter", "tree_sitter_rust"), "c_cpp": ("tree_sitter", "tree_sitter_c", "tree_sitter_cpp"),
+                 "kotlin": ("tree_sitter", "tree_sitter_kotlin"), "swift": ("tree_sitter", "tree_sitter_swift")}
+
+
+def hint(lang: str) -> str | None:
+    """The fix hint of a language; the tree-sitter install part only names modules that are missing here."""
+    h = HINTS.get(lang)
+    if h is None or "{layer}" not in h:
+        return h
+    import importlib.util
+    miss = []
+    for m in LAYER_MODULES.get(lang, ()):
+        try:
+            ok = importlib.util.find_spec(m) is not None
+        except (ImportError, ValueError):
+            ok = False
+        if not ok:
+            miss.append(m.replace("_", "-"))
+    return h.format(layer=f"; the layer needs `pip install {' '.join(miss)}`" if miss else "")
+
+
 # dependency / build / cache directories the scan never descends into (codegraph/presets/common.yaml)
 SKIP_DIRS = presets.skip_dirs("common", "scan_skip_dirs")
 SHOW_ROOTS = 6      # Python source roots shown by default
@@ -259,7 +279,7 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
         if reason:
             e["reason"] = reason
         if status in ("skipped", "heuristic", "not_indexed"):
-            e["hint"] = HINTS.get(lang)
+            e["hint"] = hint(lang)
         if status == "not_indexed" and lang == "typescript":
             # the plugin did not run (nothing to install) or ran without source files: say which
             if st is None:
@@ -318,7 +338,7 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
         if o["status"] == "unsupported":
             if scip_imported and o["language"] in ("go", "java"):
                 o["status"] = "scip"
-            o["hint"] = HINTS.get(o["language"], "no plugin for this language")
+            o["hint"] = hint(o["language"]) or "no plugin for this language"
         langs.append(o)
     out = {"languages": langs, "gaps": sum(1 for e in langs if _is_gap(e))}
     if blind_spots:
@@ -532,6 +552,59 @@ def platform_lines(pc: dict | None) -> list[str]:
         out.append(f"    {pc['unevaluated_conditions']} of {pc.get('conditions', '?')} platform conditions could not be "
                    f"evaluated and count for every target (e.g. {(pc.get('unevaluated_samples') or ['?'])[0]})")
     return out
+
+
+SUMMARY_MORE = "details: `cg coverage --details` (file lists, fix hints, syntax error lines), `--json` for all of it"
+
+
+def render_summary(covs: dict[str, dict | None], db: str | None = None) -> str:
+    """`cg coverage` text (#75): per repo the summary line, then one line per language that is not fully indexed (its
+    reason; a fix only where something can be installed or pointed elsewhere), syntax error counts, per-target file
+    counts, blind spots and warnings in one line each. `render` (--details) has the file lists and every hint."""
+    out = []
+    any_gap = False
+    for repo, cov in covs.items():
+        out.append(summary_line(cov, repo if len(covs) > 1 or repo else None))
+        if (cov or {}).get("setup"):
+            out.append(setup_line(cov["setup"]))
+        for e in (cov or {}).get("languages", []):        # Python roots: only when not the plain layout, or warnings
+            if e["language"] == "python":
+                out += python_roots_lines(e)
+        for e in gaps(cov):
+            any_gap = True
+            if e["status"] == "unsupported" and not e.get("reason"):
+                continue                                  # in the summary line already; nothing to do about it
+            line = f"  {_entry_text(e)}" + (f": {e['reason']}" if e.get("reason") else "")
+            if e["status"] in ("skipped", "not_indexed") and e.get("hint"):
+                line += f"; fix: {e['hint']}"
+            out.append(line)
+        for e in (cov or {}).get("languages", []):        # the mode an exact-capable language ran in, and why
+            if e["language"] in ("kotlin", "swift") and not _is_gap(e) and e.get("reason"):
+                out.append(f"  {e['language']} {e['files']} {e['status']}: {e['reason']}")
+        se = [e for e in (cov or {}).get("languages", []) if e.get("syntax_errors")]
+        if se:
+            out.append("  syntax errors: " + "; ".join(
+                f"{e['language']} {e.get('syntax_error_files', len(e['syntax_errors']))} files, {e.get('decls_lost', 0)} "
+                f"declaration{'s' if e.get('decls_lost', 0) != 1 else ''} lost" for e in se))
+        pc = (cov or {}).get("platforms") or {}
+        pt = pc.get("per_target") or {}
+        if pc.get("targets") and pt:
+            out.append("  platforms: " + ", ".join(f"{p} {pt[p]['files']} files" for p in pc["targets"] if p in pt)
+                       + (f" ({pc['unevaluated_conditions']} conditions not evaluated)" if pc.get("unevaluated_conditions") else ""))
+        bs = blind_spots(cov)
+        if bs:
+            b0 = bs[0]
+            out.append(f"  blind spots: {_bs_count(bs)} (e.g. {b0['what']}: {(b0.get('samples') or ['?'])[0]})")
+        for w in (cov or {}).get("warnings") or ():
+            out.append(f"  warning: {w}")
+    if any_gap:
+        out.append("not covered or heuristic only: " + FALLBACK + ".")
+    elif any(blind_spots(c) for c in covs.values()):
+        out.append("every source file cg found is indexed; at the blind spots, use your normal search and file reading.")
+    else:
+        out.append("every source file cg found is indexed; edges still carry their own exact / resolved / heuristic label.")
+    out.append(SUMMARY_MORE if not db else SUMMARY_MORE.replace("cg coverage --details", f"cg coverage --db {db} --details"))
+    return "\n".join(out)
 
 
 def render(covs: dict[str, dict | None], all_files: bool = False) -> str:

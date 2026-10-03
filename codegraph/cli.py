@@ -21,7 +21,8 @@
   python -m codegraph.cli protocols [PATTERN] --db ... [--protocol P] [--side send|receive] [--unmatched]   (every protocol endpoint: senders, receivers, checks)
   python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
   reaches / impact / downstream / path / routes / search take --platform TARGET: only code built for that target
-spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class::method | Class
+spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class.method or Class::method (either
+  separator, every language) | Class
   | src/app.ts#listOrders (TS / JS symbol in one file; path suffix ok)
 """
 from __future__ import annotations
@@ -84,7 +85,9 @@ def main(argv=None):
     p.add_argument("--quiet", action="store_true")
     p = sub.add_parser("coverage", help="which source files / languages the index covers: exact, heuristic, skipped (indexer missing) or unsupported")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
-    p.add_argument("--all-files", action="store_true", help="list every file per bucket (default: the first 5), excluded files too")
+    p.add_argument("--details", action="store_true", help="the full report: file lists (the first 5 per bucket), fix hints, "
+                                                          "syntax error lines, Python source roots (default: a short summary)")
+    p.add_argument("--all-files", action="store_true", help="the full report with every file per bucket, excluded files too")
     p = sub.add_parser("link", help="combine a backend and a frontend graph and match client HTTP calls to backend routes")
     p.add_argument("--backend", required=True); p.add_argument("--frontend", required=True); p.add_argument("--db", required=True)
     p.add_argument("--backend-name", default="backend"); p.add_argument("--frontend-name", default="frontend")
@@ -118,7 +121,7 @@ def main(argv=None):
     p = sub.add_parser("routes", help="routes with their middleware / guards / auth; scope by what they write or reach, filter by missing guards")
     p.add_argument("--db", required=True)
     p.add_argument("--writes", nargs="?", const="*", metavar="TABLE", help="routes reaching a DB write (any table, or TABLE)")
-    p.add_argument("--reaches", nargs="+", metavar="SPEC", help="routes reaching any of these nodes (table, column, connection:, env:, Class::method)")
+    p.add_argument("--reaches", nargs="+", metavar="SPEC", help="routes reaching any of these nodes (table, column, connection:, env:, Class.method)")
     p.add_argument("--missing", metavar="NAME", help="keep routes with no guard whose name contains NAME (e.g. auth:api, ApiKeyGuard)")
     p.add_argument("--unguarded", action="store_true", help="keep routes with no auth guard (framework presets, the auth name pattern, .cg.yaml auth.extra_patterns and --auth-pattern)")
     p.add_argument("--auth-pattern", help="extra regex for guard names that count as auth")
@@ -162,7 +165,7 @@ def main(argv=None):
     p.add_argument("--unmatched", action="store_true", help="only tools with a check (no_receiver, no_sender, name_collision)")
     p.add_argument("--max-items", type=int, default=60)
     p = sub.add_parser("tests", help="tests covering a symbol / route / table: direct (test code calls it) and transitive (through app code)")
-    p.add_argument("spec", help="Class::method, Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
+    p.add_argument("spec", help="Class.method or Class::method (either separator, any language), Class, route:VERB /uri, `VERB /path`, /path, table.column ...")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-paths", action="store_true")
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
@@ -219,8 +222,8 @@ def main(argv=None):
             print(f"cg index: {ex}", file=sys.stderr)
             return 2
         print(json.dumps(st, indent=2, default=str))
-        from .coverage import render
-        print(render({"": st.get("coverage")}), file=sys.stderr)  # stdout stays pure JSON
+        from .coverage import render_summary
+        print(render_summary({"": st.get("coverage")}, db=a.db), file=sys.stderr)  # stdout stays pure JSON
         return
     if a.cmd == "doctor":
         from .doctor import render, report
@@ -267,12 +270,15 @@ def main(argv=None):
         return setup(a.languages or None, quiet=a.quiet)
     if a.cmd == "coverage":
         from .core.store import GraphStore as _GS
-        from .coverage import for_graph, render
+        from .coverage import for_graph, render, render_summary
         if not os.path.isfile(a.db) or os.path.getsize(a.db) == 0:
             print(f"no graph at {a.db}: run `cg index` first", file=sys.stderr)
             return 2
         covs = for_graph(_GS(a.db))
-        print(json.dumps(covs, indent=2) if a.json else render(covs, all_files=a.all_files))
+        if a.json:
+            print(json.dumps(covs, indent=2))
+        else:
+            print(render(covs, all_files=a.all_files) if a.details or a.all_files else render_summary(covs))
         return
     if a.cmd == "link":
         from .link import link, write_match_report
@@ -408,7 +414,7 @@ def main(argv=None):
         for line in Q.override_lines(res):
             print(line)
         if not res["callers"] and not res["entry_points"]:
-            print(Q.explain_no_callers(st, a.spec, res["targets"])); return
+            print(Q.explain_no_callers(st, a.spec, res["targets"], a.min_confidence)); return
         print(f"callers (transitive): {len(res['callers'])}")
         for c in res["callers"]:
             loc = f"  @ {c['file']}:{c['line']}" if Q.NATIVE_FILE_RE.search(c.get("file") or "") else ""
@@ -446,13 +452,14 @@ def main(argv=None):
         res = Q.siblings(st, a.spec)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_siblings(st, a.spec, res))
     elif a.cmd == "node":
-        for nid in Q.resolve_targets(st, a.spec)[:20]:
-            n = st.node(nid)
-            print(json.dumps(dict(n), indent=1))
-            for e in st.q("SELECT kind,dst,file,line,confidence FROM edges WHERE src=? ORDER BY kind,line", (nid,)):
-                print(f"   -> {e['kind']} {e['dst']} @{e['file']}:{e['line']} {e['confidence']}")
-            for e in st.q("SELECT kind,src,file,line,confidence FROM edges WHERE dst=? ORDER BY kind,line", (nid,)):
-                print(f"   <- {e['kind']} {e['src']} @{e['file']}:{e['line']} {e['confidence']}")
+        ids = list(dict.fromkeys(Q.resolve_targets(st, a.spec)))[:20]
+        docs = [node_doc(st, nid) for nid in ids]
+        if a.json:
+            print(json.dumps(docs, indent=1, default=str))
+        elif not docs:
+            print(f"no node matches {a.spec!r}; try `search` with part of the name")
+        else:
+            print("\n\n".join(render_node(d) for d in docs))
     elif a.cmd == "path":
         p = Q.path_between(st, a.src, a.dst, min_conf=a.min_confidence, platform=a.platform)
         if a.platform:
@@ -471,14 +478,92 @@ def main(argv=None):
         rows = Q.api_calls(st, a.spec)
         print(json.dumps(rows, indent=1, default=str) if a.json else Q.render_api_calls(rows))
     elif a.cmd == "stats":
-        m = st.meta()
-        print(json.dumps(m.get("stats"), indent=1, default=str))
-        print("nodes by kind:")
-        for r in st.q("SELECT kind, COUNT(*) c FROM nodes GROUP BY kind ORDER BY c DESC"):
-            print(f"  {r['kind']:16} {r['c']}")
-        print("edges by kind / confidence:")
-        for r in st.q("SELECT kind, confidence, COUNT(*) c FROM edges GROUP BY kind, confidence ORDER BY kind, confidence"):
-            print(f"  {r['kind']:22} {r['confidence']:10} {r['c']}")
+        doc = stats_doc(st)
+        print(json.dumps(doc, indent=1, default=str) if a.json else render_stats(st, doc))
+
+def node_doc(st, nid: str) -> dict:
+    """One node with its attrs parsed and its outgoing / incoming edges (`cg node --json`, #75)."""
+    n = dict(st.node(nid))
+    try:
+        n["attrs"] = json.loads(n.get("attrs") or "{}")
+    except ValueError:
+        pass
+
+    def edges(col, other):
+        out = []
+        for e in st.q(f"SELECT kind, {other}, file, line, confidence, attrs FROM edges WHERE {col}=? ORDER BY kind, line, {other}", (nid,)):
+            d = {"kind": e["kind"], other: e[other], "file": e["file"], "line": e["line"], "confidence": e["confidence"]}
+            if e["attrs"] and e["attrs"] != "{}":
+                d["attrs"] = json.loads(e["attrs"])
+            out.append(d)
+        return out
+    return {"node": n, "out": edges("src", "dst"), "in": edges("dst", "src")}
+
+
+def render_node(d: dict) -> str:
+    """`cg node` text: the node's location, kind and attrs, then its edges; the same edge from one site (one row per
+    gate scenario or accessor) is listed once with a count."""
+    n, at = d["node"], d["node"].get("attrs") if isinstance(d["node"].get("attrs"), dict) else {}
+    span = f"{n['file']}:{n['line']}" + (f"-{n['end_line']}" if n.get("end_line") and n["end_line"] != n["line"] else "")
+    out = [f"{n['id']}  ({n['kind']}{', ' + n['lang'] if n.get('lang') else ''})",
+           f"  at: {span}" if n.get("file") else "  at: (no source location)"]
+    if n.get("fqn") and n["fqn"] != n.get("name"):
+        out.append(f"  fqn: {n['fqn']}")
+    if n.get("module"):
+        out.append(f"  module: {n['module']}")
+    if n.get("entry_kind"):
+        out.append(f"  entry: {n['entry_kind']}")
+    if "platforms" in at:
+        unk = at.get("platform_unknown") or []
+        ps = ", ".join(p + ("?" if p in unk else "") for p in at["platforms"]) or "none of the targets"
+        out.append(f"  platforms: {ps}" + (f"  ({at['platform_expr']})" if at.get("platform_expr") else ""))
+    rest = {k: v for k, v in at.items() if k not in ("platforms", "platform_unknown", "platform_expr", "platform_at", "platforms_other")}
+    if rest:
+        out.append("  attrs: " + ", ".join(f"{k}={v if isinstance(v, str) else json.dumps(v, default=str, ensure_ascii=False)}"
+                                         for k, v in rest.items()))
+    if n.get("doc"):
+        out.append("  doc: " + " ".join(str(n["doc"]).split())[:200])
+    for key, arrow, other in (("out", "->", "dst"), ("in", "<-", "src")):
+        es = d[key]
+        out.append(f"  {'outgoing' if key == 'out' else 'incoming'} ({len(es)}):" if es else f"  {'outgoing' if key == 'out' else 'incoming'}: none")
+        seen: dict = {}
+        for e in es:
+            k = (e["kind"], e[other], e["file"], e["line"], e["confidence"])
+            seen[k] = seen.get(k, 0) + 1
+        for (kind, o, f, line, conf), c in seen.items():
+            out.append(f"    {arrow} {kind} {o}  @{f}:{line} {conf}" + (f"  ×{c}" if c > 1 else ""))
+    return "\n".join(out)
+
+
+def stats_doc(st) -> dict:
+    """`cg stats --json`: one document, the index stats plus node / edge counts (#75)."""
+    m = st.meta()
+    nodes = {r["kind"]: r["c"] for r in st.q("SELECT kind, COUNT(*) c FROM nodes GROUP BY kind ORDER BY c DESC")}
+    edges: dict = {}
+    for r in st.q("SELECT kind, confidence, COUNT(*) c FROM edges GROUP BY kind, confidence ORDER BY kind, confidence"):
+        edges.setdefault(r["kind"], {})[r["confidence"]] = r["c"]
+    return {"project": m.get("project"), "root": m.get("root"), "indexed_at": m.get("indexed_at"),
+            "nodes": sum(nodes.values()), "edges": sum(sum(v.values()) for v in edges.values()),
+            "nodes_by_kind": nodes, "edges_by_kind": edges, "stats": m.get("stats")}
+
+
+def render_stats(st, doc: dict) -> str:
+    s = doc.get("stats") or {}
+    det = s.get("detected") or {}
+    out = [f"project {doc.get('project') or '?'}  root {doc.get('root') or '?'}  indexed {doc.get('indexed_at') or '?'}"
+           + (f" in {s['index_seconds']} s" if s.get("index_seconds") is not None else "")]
+    langs = ", ".join(det.get("languages") or {}) or ", ".join((s.get("presets") or {}).get("languages") or []) or "none"
+    fws = ", ".join(sorted((s.get("presets") or {}).get("frameworks") or det.get("frameworks") or {})) or "none"
+    out.append(f"languages: {langs} | frameworks: {fws} | nodes {doc['nodes']} | edges {doc['edges']}")
+    from .coverage import for_graph, summary_line
+    for repo, cov in for_graph(st).items():
+        out.append(summary_line(cov, repo or None))
+    out.append("nodes by kind:")
+    out += [f"  {k:16} {c}" for k, c in doc["nodes_by_kind"].items()]
+    out.append("edges by kind / confidence:")
+    out += [f"  {k:22} {conf:10} {c}" for k, v in doc["edges_by_kind"].items() for conf, c in v.items()]
+    out.append("full index stats (plugins, presets, platforms, coverage): cg stats --json")
+    return "\n".join(out)
 
 
 def _completeness(st, ids) -> dict:

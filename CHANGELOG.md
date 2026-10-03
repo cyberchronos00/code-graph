@@ -8,7 +8,27 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Changed
+
+- CLI output (#75):
+  - `cg coverage` prints a short summary by default: one line per language that isn't fully indexed, syntax error
+    counts, files per platform target and blind spots. `--details` gives the full report, which is what `--all-files`
+    also prints. `cg index` shows the same summary on stderr.
+  - `cg stats` and `cg node` print text, and with `--json` one JSON document. Before, they mixed JSON and text on
+    stdout. `node` lists an edge from the same site once, with a count.
+  - `cg search` prints root-relative paths.
+
 ### Fixed
+
+- Specs (#75): `Class.method` and `Class::method` both work in every language, and the `cg tests` help example no
+  longer suggests a form that matches nothing in Swift or Kotlin. Other fixes:
+  - The coverage install hint for a tree-sitter language names only the modules that are missing.
+  - `detected.languages` lists every language a plugin indexed. An Xcode app with no root `Package.swift` used to
+    get `{}`.
+  - `impact --min-confidence resolved` on a heuristic graph says the callers were filtered by the threshold.
+  - `cg routes` on a SwiftUI (or other) app with screens and no HTTP routes points to the screens.
+  - A repo whose root is not a JS project (no `package.json`), with `web/tsconfig.json`, now gets its TypeScript
+    indexed.
 
 - Apple platforms (#74): an Xcode project's targets come from its `project.pbxproj` (`SUPPORTED_PLATFORMS`,
   `SDKROOT`, `SUPPORTS_MACCATALYST`), so an Apple-only app no longer gets windows / linux as "desktop default"

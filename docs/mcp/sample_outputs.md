@@ -47,14 +47,14 @@ coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "mode": "exact"}}}`
 
-## `search {'name': 'reserve'}`  (379 chars)
+## `search {'name': 'reserve'}`  (516 chars)
 
 ```
-route      route:POST /v1/stock/reserve  api.php:19
-method     method:App\Services\StockService::reserve  StockService.php:10
-method     method:App\Services\StockService::reserveLocal  StockService.php:20
-method     method:App\Http\Controllers\StockController::reserve  StockController.php:14
-method     method:App\Services\StockService::reserveFromWarehouse  StockService.php:30
+route      route:POST /v1/stock/reserve  bookstore-api/routes/api.php:19
+method     method:App\Services\StockService::reserve  bookstore-api/app/Services/StockService.php:10
+method     method:App\Services\StockService::reserveLocal  bookstore-api/app/Services/StockService.php:20
+method     method:App\Http\Controllers\StockController::reserve  bookstore-api/app/Http/Controllers/StockController.php:14
+method     method:App\Services\StockService::reserveFromWarehouse  bookstore-api/app/Services/StockService.php:30
 ```
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "mode": "exact"}}}`

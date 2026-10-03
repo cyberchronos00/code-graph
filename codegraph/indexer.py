@@ -288,6 +288,13 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     stats["coverage"] = compute(project.root, {k: v for k, v in stats["plugins"].items() if "/" not in k and not k.startswith("scip:")},
                                 scip_imported=bool(scip), reports=file_reports, scanned=scanned, blind_spots=bspots,
                                 warnings=scip_warnings(stats["plugins"]))
+    # detected.languages: the root marker files (detect), plus every language a plugin indexed source files of: an
+    # Xcode app has no root Package.swift, a monorepo no root tsconfig.json (#75)
+    dl = stats["detected"].setdefault("languages", {})
+    for e in stats["coverage"].get("languages") or []:
+        pst = stats["plugins"].get(e["language"])
+        if e["files"] and e["language"] not in dl and isinstance(pst, dict) and pst.get("status") not in ("skipped", "error", "stub"):
+            dl[e["language"]] = ["source files (" + ", ".join(f"{x} {n}" for x, n in sorted(e["by_ext"].items())) + ")"]
     gsum = clf.summary()
     if gsum["files"] or gsum.get("build_dirs"):
         stats["coverage"]["generated"] = gsum

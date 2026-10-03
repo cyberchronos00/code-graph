@@ -96,7 +96,24 @@ PKG_SKIP = {"node_modules", "dist", "build", "out", "coverage", "vendor", "Pods"
             "ios-spm-template"}
 
 
-def package_tsconfigs(root: Path) -> list[str]:
+# a PHP / Python backend at the root: its frontend directory is indexed on its own and combined with `cg link`
+BACKEND_MARKERS = ("composer.json", "artisan", "pyproject.toml", "setup.py", "setup.cfg", "manage.py", "requirements.txt")
+
+
+def sub_tsconfigs(root: Path) -> list[str]:
+    """The sub-project tsconfigs indexed as one program when the root has none: per-package configs of a JS monorepo
+    (root package.json), or, in a repo whose root is not a JS project at all (a Swift / Kotlin / Rust / Dart app with
+    a web/ directory), every tsconfig.json one or two levels down, package.json or not (#75). A PHP / Python
+    backend root keeps its frontend separate (index it on its own; `cg link` combines the graphs)."""
+    root = Path(root)
+    if (root / "package.json").is_file():
+        return package_tsconfigs(root)
+    if any((root / m).exists() for m in BACKEND_MARKERS):
+        return []
+    return package_tsconfigs(root, need_package_json=False)
+
+
+def package_tsconfigs(root: Path, need_package_json: bool = True) -> list[str]:
     """A monorepo without a root tsconfig.json / jsconfig.json (lerna / nx / npm workspaces with per-package configs,
     e.g. Capacitor and its plugins): the tsconfig.json of each package (a directory holding package.json and
     tsconfig.json) one or two levels down. The extractor indexes them as one program, like a solution config."""
@@ -106,7 +123,7 @@ def package_tsconfigs(root: Path) -> list[str]:
     out = []
 
     def pkg(d: Path) -> bool:
-        return (d / "package.json").is_file() and (d / "tsconfig.json").is_file()
+        return (d / "tsconfig.json").is_file() and (not need_package_json or (d / "package.json").is_file())
 
     def subdirs(d: Path):
         try:
@@ -132,8 +149,8 @@ class TypeScriptPlugin(LanguagePlugin):
     def detect(self, project: Project) -> bool:
         if project.exists("tsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
             return True
-        if project.exists("package.json") and package_tsconfigs(project.root):
-            return True     # a monorepo with per-package tsconfigs only
+        if sub_tsconfigs(project.root):
+            return True     # a monorepo with per-package tsconfigs only, or a non-JS repo with web/tsconfig.json
         if project.exists("package.json") and any((project.root / d).is_dir() for d in LARAVEL_ASSET_DIRS):
             return True     # Laravel / Rails-style app with a plain-JS frontend under resources/js (allowJs)
         from ..tsweb.common import has_server_framework   # plain-JS server projects (Express, Koa, ...): allowJs
@@ -159,7 +176,7 @@ class TypeScriptPlugin(LanguagePlugin):
         # tsconfig's own files when none of these hold any
         ctx.extractor_cfg = {"root": str(project.root), "tsconfig": "tsconfig.json", "kinds": [],
                              "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]}
-        pkg_cfgs = package_tsconfigs(project.root)
+        pkg_cfgs = sub_tsconfigs(project.root)
         if pkg_cfgs:
             ctx.extractor_cfg["package_tsconfigs"] = pkg_cfgs
         for fw in frameworks:

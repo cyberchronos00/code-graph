@@ -224,7 +224,20 @@ def inherited_lines(res: dict) -> list[str]:
     return out
 
 
+# `Class::method` and `Class.method` name the same member in every language (#75): a spec that matches nothing with
+# its own separator is retried with the other one (Swift / Kotlin / Python / TS / Dart fqns use `.`, PHP / Rust / C++ `::`)
+MEMBER_PATH_RE = re.compile(r"\\?[A-Za-z_$][\w$\\]*(?:(?:\.|::)[A-Za-z_$][\w$]*)+")
+
+
 def _resolve_direct(st: GraphStore, spec: str) -> list[str]:
+    out = _resolve_direct_one(st, spec)
+    if out or not MEMBER_PATH_RE.fullmatch(spec) or re.search(r"\.(vue|[cm]?[jt]sx?|py|dart|rs|c|h|cc|cpp|cxx|hh|hpp|hxx|m|mm|swift|kt|php)$", spec):
+        return out
+    alt = spec.replace("::", ".") if "::" in spec else spec.replace(".", "::")
+    return _resolve_direct_one(st, alt)
+
+
+def _resolve_direct_one(st: GraphStore, spec: str) -> list[str]:
     if spec.startswith("page:/"):
         rows = st.q("SELECT id FROM nodes WHERE kind='page' AND json_extract(attrs,'$.route')=?", (spec[5:],))
         return [r["id"] for r in rows]
@@ -1523,7 +1536,7 @@ def render_search(res: dict, limit_routes: int = 8) -> str:
             out.append(f"{res['platform']['matches_not_built']} matching symbols are not built for {res['platform']['platform']} "
                        f"(search without platform lists them)")
     for r in res["nodes"]:
-        out.append(f"{r['kind']:10} {r['id']}  {os.path.basename(r['file'] or '?')}:{r['line']}{platform_label(r)}")
+        out.append(f"{r['kind']:10} {r['id']}  {r['file'] or '?'}:{r['line']}{platform_label(r)}")
     if res["guards"]:
         if out:
             out.append("")
@@ -1569,12 +1582,29 @@ def explain_siblings(st: GraphStore, spec: str, res: dict) -> str:
             ".\ntry: " + "; ".join(tips))
 
 
-def explain_no_callers(st: GraphStore, spec: str, targets: list[str]) -> str:
+def explain_no_callers(st: GraphStore, spec: str, targets: list[str], min_conf: str = "heuristic") -> str:
     if not targets:
         return f"no method matches {spec!r}; try search() with part of the name."
     t = targets[0]
     n = dict(st.node(t) or {})
     s = short_id(t)
+    if CONFIDENCE_RANK.get(min_conf, 1) > CONFIDENCE_RANK["heuristic"]:
+        # callers exist, below the confidence threshold: name the filter, not "no callers" (#75)
+        q = ",".join("?" * len(targets))
+        low = st.q(f"SELECT kind, confidence, count(*) c FROM edges WHERE dst IN ({q}) AND kind IN ({','.join('?' * len(PROPAGATING))}) "
+                   f"AND conf_rank < ? GROUP BY kind, confidence ORDER BY c DESC", (*targets, *PROPAGATING, CONFIDENCE_RANK[min_conf]))
+        if low:
+            langs = {r["lang"] for r in st.q(f"SELECT DISTINCT lang FROM nodes WHERE id IN ({q})", tuple(targets))}
+            why = {"swift": "Swift resolved / exact edges need the compiler index store (docs/swift.md#exact-mode)",
+                   "kotlin": "Kotlin resolved / exact edges need scip-java (docs/kotlin.md#exact-mode)",
+                   "rust": "Rust exact edges need rust-analyzer (docs/native.md)",
+                   "c": "C / C++ exact edges need scip-clang and a compile_commands.json (docs/native.md)",
+                   "cpp": "C / C++ exact edges need scip-clang and a compile_commands.json (docs/native.md)"}
+            notes = [why[x] for x in sorted(x for x in langs if x in why)]
+            return (f"{s}: no callers at --min-confidence {min_conf}; "
+                    + ", ".join(f"{r['c']} {r['kind']} edge{'s' if r['c'] != 1 else ''} ({r['confidence']})" for r in low)
+                    + f" are below the threshold. Rerun with --min-confidence heuristic (min_confidence='heuristic') to see them"
+                    + (f"; {'; '.join(notes)}" if notes else "") + ".")
     if n.get("entry_kind"):
         return f"{s} has no recorded callers; it is itself an entry point ({n['entry_kind']}). try: downstream('{s}') for what it reaches."
     refs = st.q("SELECT kind, count(*) c FROM edges WHERE dst=? GROUP BY kind", (t,))

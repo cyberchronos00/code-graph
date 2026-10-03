@@ -120,6 +120,8 @@ def test_coverage_lists_files_with_syntax_errors_spans_and_lost_declarations():
     assert sw["syntax_error_files"] == 2 and sw["parsed_with_errors"] == 2 and sw["decls_lost"] == 1
     r = cg("coverage", "--db", fix_db())
     assert r.returncode == 0, r.stderr
+    assert "syntax errors: swift 2 files, 1 declaration lost" in r.stdout        # the summary (#75)
+    r = cg("coverage", "--db", fix_db(), "--details")
     assert "swift 8 heuristic, 2 parsed with syntax errors" in r.stdout
     assert "swift: syntax errors in 2 files, 1 declaration lost" in r.stdout
     assert "Sources/App/Invalid.swift:6 (1 declaration lost: broken:6)" in r.stdout

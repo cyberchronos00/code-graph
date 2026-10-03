@@ -321,6 +321,19 @@ def _pinfo(st: GraphStore, platform: str) -> dict:
 def explain_empty(st: GraphStore, res: dict) -> str:
     """Why a routes query came back empty, and what to run instead."""
     if not res["total_routes"]:
+        pages = st.q("SELECT lang, count(*) c FROM nodes WHERE kind='page' GROUP BY lang ORDER BY c DESC")
+        if pages:       # a mobile / desktop app: screens and navigations, not HTTP routes (#75)
+            nav = st.q("SELECT count(*) c FROM edges WHERE kind='NAVIGATES_TO'")[0]["c"]
+            via = {"swift": "SwiftUI WindowGroup / NavigationLink / navigationDestination", "dart": "Flutter routes",
+                   "kotlin": "Compose navigation", "ts": "file-based or router pages"}
+            kinds = "; ".join(f"{r['c']} {via.get(r['lang'], r['lang'] or 'app')}" for r in pages)
+            first = (st.q("SELECT n.id FROM nodes n WHERE n.kind='page' AND EXISTS (SELECT 1 FROM edges e WHERE e.dst=n.id AND "
+                          "e.kind='NAVIGATES_TO') ORDER BY n.file, n.line LIMIT 1")
+                     or st.q("SELECT id FROM nodes WHERE kind='page' ORDER BY file, line LIMIT 1"))[0]["id"]
+            np = sum(r['c'] for r in pages)
+            return (f"`routes` lists server-side HTTP routes, and this graph has none. It has {np} app "
+                    f"screen{'s' if np != 1 else ''} ({kinds}) and {nav} navigation edge{'s' if nav != 1 else ''} to them: `search '' --kind page` "
+                    f"lists the screens, `downstream {first}` follows one, `node {first}` shows what navigates to it.")
         return ("no route nodes in this graph (the indexed project has no HTTP routes, or its framework is not detected; "
                 "`stats` shows the node kinds). Try `reaches` / `impact` from the entry points that do exist.")
     if res["unresolved"]:

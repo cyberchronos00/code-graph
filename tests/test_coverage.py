@@ -40,6 +40,8 @@ def test_missing_php_is_skipped_not_fatal(tmp_path):
     assert php["status"] == "skipped" and php["files"] == 22 and "cg setup php" in php["hint"]
     assert "not fully covered: php 22 skipped" in r.stderr and "not proof of absence" in r.stderr
     out = cg("coverage", "--db", tmp_path / "api.db").stdout
+    assert "  php 22 skipped: php not installed" in out and "; fix: install PHP 8.2+" in out          # the summary (#75)
+    out = cg("coverage", "--db", tmp_path / "api.db", "--details").stdout
     assert "php: 22 files (.php 22) skipped: php not installed" in out and "fix: install PHP 8.2+" in out
 
 

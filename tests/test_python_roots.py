@@ -176,7 +176,7 @@ def test_configured_root_overrides_detection(tmp_path):
     assert "outside the configured source roots (lib/, vendored/)" in py["hint"] and "python.source_roots" in py["hint"]
     out = cg("coverage", "--db", st.path).stdout
     assert "python source roots: lib/ (configured: configured in .cg.yaml, 2 modules); vendored/ (configured" in out
-    assert "unmapped: scripts/release.py" in out
+    assert "unmapped: scripts/release.py" in cg("coverage", "--db", st.path, "--details").stdout
     # the same layout without the config file: detection finds both package roots and keeps scripts/ as scripts.release
     det = build(tmp_path, "det", LAYOUT)
     assert set(modules(det)) == {"tool", "tool.cli", "shared", "shared.text", "scripts.release"}

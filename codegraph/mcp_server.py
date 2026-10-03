@@ -46,7 +46,7 @@ server = MCPServer(
         "with their middleware / guards / auth (filter to routes reaching a write, a table or any target, and to routes "
         "missing a given middleware or any auth), `node` / `search` look things up (search also matches middleware and "
         "guard names). Specs: table.column | table:<t> | connection:<name|glob*> | env:<KEY> | config:<a.b> | "
-        "Class::method | Class | pkg.module.func (Python) | Class.method (Dart/TS) | file#name (TS/JS: src/app.ts#listOrders, "
+        "Class.method or Class::method (either separator in every language) | Class | pkg.module.func (Python) | file#name (TS/JS: src/app.ts#listOrders, "
         "svc.ts#OrderService.create; the file part may be a path suffix). "
         "On a combined graph (backend + frontend) also: page:/route/path | app/pages/x.vue | useComposable.fn | "
         "route:<METHOD> <uri>; `downstream` follows a page/component forward to backend routes and tables, `path` gives "
@@ -434,7 +434,7 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
     out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", *Q.override_lines(r),
                    f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
     if not r["callers"] and not r["entry_points"]:
-        return "\n".join(out + [Q.explain_no_callers(st, method, r["targets"])])
+        return "\n".join(out + [Q.explain_no_callers(st, method, r["targets"], min_confidence)])
     byk = defaultdict(list)
     for e in r["entry_points"]:
         byk[e["entry_kind"]].append(e)

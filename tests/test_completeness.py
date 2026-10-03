@@ -108,6 +108,9 @@ def test_python_repro_reports_file_buckets_and_unsupported_types(tmp_path):
     assert uns == {"qml": 1, "sh": 2}          # .sh by extension + an extensionless bash script by shebang; svg / csv stay out
     out = cg("coverage", "--db", db).stdout
     assert "python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped" in out
+    assert "parse failed: app/bad.py" not in out and "cg coverage --details" in out       # the summary (#75)
+    out = cg("coverage", "--db", db, "--details").stdout
+    assert "python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped" in out
     assert "parse failed: app/bad.py" in out and "unmapped: my-scripts/run.py" in out
     assert "qml 1 unsupported" in out and "sh 2 unsupported" in out
     assert "every source file cg found is indexed" not in out

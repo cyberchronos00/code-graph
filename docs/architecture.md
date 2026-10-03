@@ -187,6 +187,10 @@ similarity of their callee sets.
   `packages/`-style directory) joins one program: their file lists are merged, the first package's compiler options
   are used without `rootDir` / `outDir` / `baseUrl`, each package's `paths` keep absolute targets, and the package
   directories are the source dirs (`stats.config.package_tsconfigs`).
+- **TypeScript in a sub-directory of a non-JS repo.** A root with no `package.json` at all (a Swift / Kotlin / Rust /
+  Dart app with a `web/` directory) is handled the same way, with every `tsconfig.json` one or two levels down,
+  `package.json` next to it or not. A PHP or Python backend root (`composer.json`, `pyproject.toml`, `manage.py`,
+  `requirements.txt`, ...) is left out: index its frontend directory on its own and combine the graphs with `cg link`.
 - **Vue SFCs** are parsed with `@vue/compiler-sfc`. Each `.vue` becomes a virtual `X.vue.ts` in the program: `<script>` /
   `<script setup>` text stays at its original offsets (other bytes blanked, so line numbers are 1:1), and every template
   expression / `v-on` handler is appended as a stub function (v-for / slot scope variables become `any` params) with a line map back
