@@ -13,6 +13,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - A bare free-function name (`cg tests formatPrice`, `cg impact initConnection`) resolves in every language, as
   `cg search` finds it; it matched only TypeScript, Python and Dart names before, so Swift, Kotlin, PHP, Rust and C
   free functions needed the `function:` id.
+- Python indexing finishes on projects whose attributes are re-assigned from expressions over themselves (langgraph:
+  did not finish in 400 s, now 14 s): attribute types are memoised per class and attribute, a cycle back to an
+  attribute being inferred is unknown, and one inference has a work budget. The stats report `inference_limits`.
 
 ## [0.8.0] - 2026-10-03
 
