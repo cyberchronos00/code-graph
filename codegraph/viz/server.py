@@ -178,6 +178,9 @@ def export_html(db: str, out: str, mode: str, specs: list[str], min_conf="heuris
 def _write_html(st: GraphStore, g: dict, out: str, title: str) -> str:
     src = G.Sources(st)
     details = {n["id"]: G.node_detail(st, src, n["id"], limit=12) for n in g["nodes"] if st.node(n["id"])}
+    for d in details.values():          # no local paths in a file meant to be shared
+        if d and d.get("snippet"):
+            d["snippet"].pop("abs", None)
     html = (STATIC / "index.html").read_text()
     for name in ("cytoscape.min.js", "layout-base.js", "cose-base.js", "cytoscape-fcose.js"):
         js = (STATIC / "vendor" / name).read_text().replace("</script", "<\\/script")

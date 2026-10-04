@@ -42,8 +42,32 @@ stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/vi
 - The legend (bottom-left, collapsible) lists only what the view contains: the node kinds with counts, the shapes
   and edge styles present, and what the boxes mean. Click a kind to dim everything else (again, or a click on the
   canvas, to clear).
-- Click a node: docblock, file:line, source snippet (read from the indexed roots), entry kinds (and those still live
-  under the gate), gate evidence, evidence edges in the view, and its first 25 in/out DB edges with attributes.
+- The panel opens on the query target with a view summary (callers per depth, entry points by kind, gated count).
+  Click a node (or right-click for a menu): a sticky header with name, kind, file:line (middle-truncated, full path on
+  hover), copy buttons for id / FQN / the `cg impact` command, *open in editor* (`vscode://file/…`, served view only),
+  and actions *impact of this*, *downstream of this*, *path from here to the target* (each a new query and history
+  entry); docblock, source snippet (scrolls sideways, *wrap* toggle), entry kinds (and those still live under the
+  gate), gate evidence, the evidence edges in the view grouped by callers / callees and confidence (collapsible,
+  sorted by depth and name), and the first 25 in/out DB edges. Drag the panel's left edge (or ← → on it) to resize
+  it, ⟩ collapses it to a rail; both are remembered.
+- Keyboard: `/` search, `Enter` run, `Esc` fold / clear / close, `f` fit, `+` `-` zoom, `0` reset, ← → move to a
+  caller / callee (into an open cluster's members and back), ↑ ↓ within the column, `Enter` / `Space` opens a cluster
+  or shows a node, `Backspace` folds, `l` list view, `?` the shortcut list. The canvas is focusable with a visible
+  ring.
+- Export: **PNG** downloads the whole drawing at 2x on the current theme's background, **JSON** the visible
+  subgraph (nodes, edges of the shown confidences, query and URL); file names come from mode and spec.
+- Theme: **theme** cycles auto (follows `prefers-color-scheme`) / light / dark, kept in localStorage. Node colour
+  is one of eight Okabe–Ito-derived families (code, UI, routes, data, config, jobs, external, findings), and the
+  shape tells kinds apart inside a family (method circle, function small circle with a border, class rounded
+  rectangle, table barrel …). The colour checks in `tests/test_viz.py` cover both themes (edges / borders >= 3:1,
+  node fills >= 3:1, label text >= 4.5:1).
+- Accessibility: the canvas has `role="img"` with a generated summary, the status line is `aria-live`, and **list**
+  (or `l`) shows the same subgraph as a tree by depth that opens the same panel. axe-core reports no serious or
+  critical issue on the landing and graph views in either theme.
+- Performance: `pixelRatio` is capped at 2; fcose runs at `quality: 'default'` and, after an expand or collapse,
+  refines the kept positions instead of starting over. A truncated result shows a banner. `shoot.mjs` records the
+  time to first graph, layout time, the longest main-thread task and the rendered element count per view, and fails
+  above 1.5 s / 1.5 s / 400 elements (`THEME=dark` shoots the dark theme).
 - `codegraph.cli viz-export MODE SPEC… --db … -o file.html [--sinks table,column]`: the same view as one
   self-contained HTML file (data + JS inlined) that opens from disk.
 - Screenshots and layout checks: `codegraph/viz/tools/shoot.mjs` (puppeteer-core with a locally installed Chrome;

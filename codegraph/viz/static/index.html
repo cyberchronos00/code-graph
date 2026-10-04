@@ -11,21 +11,21 @@
 <header>
   <a class="brand" id="home" href="#" title="start page: overview, search and starter queries">code-graph</a>
   <div class="grp query">
-    <select id="mode" title="query">
+    <select id="mode" title="query" aria-label="query mode">
       <option value="impact" title="callers of the spec, up to entry points">impact</option>
       <option value="reaches" title="what depends on the spec (tables, connections, keys), with entry kinds and gates">reaches</option>
       <option value="downstream" title="what the spec depends on, down to sinks">downstream</option>
       <option value="path" title="one evidence path: source, [via…,] target">path</option>
       <option value="plan" title="planned-change overlay (plans/&lt;name&gt;.yaml)">plan</option>
     </select>
-    <div class="specbox"><input id="spec" list="sugg" placeholder="Search a symbol, table, route…" title="spec(s), comma separated: Class::method, table.column, page:/route, connection:x, request_key:timezone; path: source, [via…,] target" autocomplete="off"><datalist id="sugg"></datalist></div>
+    <div class="specbox"><input id="spec" aria-label="query spec" list="sugg" placeholder="Search a symbol, table, route…" title="spec(s), comma separated: Class::method, table.column, page:/route, connection:x, request_key:timezone; path: source, [via…,] target" autocomplete="off"><datalist id="sugg"></datalist></div>
     <button id="go">Show</button>
   </div>
   <div class="grp filters">
-    <select id="minconf" title="minimum edge confidence">
+    <select id="minconf" title="minimum edge confidence" aria-label="minimum edge confidence">
       <option value="heuristic">≥ heuristic</option><option value="resolved">≥ resolved</option><option value="exact">exact only</option>
     </select>
-    <select id="sinks" title="downstream sinks">
+    <select id="sinks" title="downstream sinks" aria-label="downstream sinks">
       <option value="table,column">sinks: tables (via columns)</option>
       <option value="table">sinks: tables (direct only)</option>
       <option value="table,column,route">sinks: tables + routes</option>
@@ -35,25 +35,41 @@
   </div>
   <button id="more" class="more" title="view options" aria-haspopup="true" aria-expanded="false" aria-controls="viewgrp">⋯</button>
   <div class="grp view" id="viewgrp">
-    <select id="layout" title="layout">
+    <select id="layout" title="layout" aria-label="layout">
       <option value="auto">layout: auto</option><option value="layered">layout: layered</option><option value="fcose">layout: clustered</option>
     </select>
     <button id="collapse" title="fold every module / caller cluster">collapse all</button>
     <button id="expand" title="open every module / caller cluster">expand all</button>
     <button id="fit" title="fit the whole view">fit</button>
     <button id="copylink" title="copy a link to this view (query, layout, open clusters, selection)">copy link</button>
+    <button id="exportpng" title="download the whole drawing as a 2x PNG">PNG</button>
+    <button id="exportjson" title="download the visible subgraph as JSON">JSON</button>
+    <button id="listbtn" aria-pressed="false" title="list view of the same subgraph (L)">list</button>
+    <button id="theme" title="colour theme: auto (follows the system), light, dark">theme: auto</button>
   </div>
 </header>
 <main>
   <div id="status" aria-live="polite"></div>
-  <div id="cy"></div>
+  <div id="cy" role="img" aria-label="graph view (empty until a query runs)"></div>
   <div id="landing" hidden></div>
   <button id="fitall" hidden></button>
   <details id="legendbox"><summary>legend</summary><div id="legend"></div></details>
   <div id="tip" hidden></div>
-  <aside id="panel"><div class="hint">Search a node and pick a query, or start from a starter query.<br><br>
+  <div id="listview" role="tree" aria-label="list view of the graph" hidden></div>
+  <div id="truncbanner" role="status" hidden>The result was truncated: narrow the query (a more specific symbol, min confidence, sinks).</div>
+  <div id="help" role="dialog" aria-label="keyboard shortcuts" hidden><button id="helpclose" aria-label="close">×</button><b>Keyboard</b>
+    <table><tr><td><kbd>/</kbd></td><td>search</td></tr><tr><td><kbd>Enter</kbd></td><td>run the search; on a cluster: open it; on a node: details</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>fold the last cluster / clear the highlight / close</td></tr><tr><td><kbd>Backspace</kbd></td><td>fold the last opened cluster</td></tr>
+    <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>move to a caller / callee</td></tr><tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>move within the column</td></tr>
+    <tr><td><kbd>Space</kbd></td><td>open the selected cluster</td></tr>
+    <tr><td><kbd>f</kbd> <kbd>+</kbd> <kbd>-</kbd> <kbd>0</kbd></td><td>fit, zoom in, zoom out, reset</td></tr><tr><td><kbd>l</kbd></td><td>list view</td></tr><tr><td><kbd>?</kbd></td><td>this help</td></tr>
+    <tr><td>Back / Forward</td><td>previous / next query</td></tr></table></div>
+  <aside id="panel" aria-label="details"><div id="phandle" role="separator" aria-orientation="vertical" aria-label="resize the panel" aria-valuemin="260" aria-valuemax="960" aria-valuenow="360" tabindex="0" title="drag to resize (← → keys too)"></div>
+    <button id="pcollapse" type="button" aria-expanded="true" title="collapse / expand the panel">⟩</button>
+    <div id="panelbody"><div class="hint">Search a node and pick a query, or start from a starter query.<br><br>
     Caller clusters and modules fold their members: click a cluster to open it, click again for the next 20, Esc folds.
-    Click a node for its docblock, file:line evidence and source.</div></aside>
+    Click a node for its docblock, file:line evidence and source. Press <kbd>?</kbd> for the keyboard shortcuts.</div></div></aside>
+  <div id="ctxmenu" role="menu" hidden></div>
 </main>
 <script src="vendor/cytoscape.min.js"></script>
 <script src="vendor/layout-base.js"></script>

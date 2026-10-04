@@ -8,6 +8,8 @@
 //   PRESETS  1 = also shoot every query from /api/presets (starter presets of the served graph)
 //   ONLY     substring filter on the file name
 //   NO_ASSERT 1 = report failures but exit 0
+//   THEME    light | dark: emulate prefers-color-scheme (default: the browser's)
+//   BUDGET_FIRST  first-graph budget in ms (default 1500; tReady includes the API call)
 // Shots: "landing" (hash ''), a hash on <base-url>, or an absolute url (e.g. file:///…/export.html from viz-export).
 // actions: [{expandFirstCluster: true}, {tap: '<node id>'}, {key: 'Escape'}, {wait: ms}].
 // Assertions per shot and width: no console error / warning / page error / HTTP >= 400; header.scrollWidth <=
@@ -90,8 +92,13 @@ async function measure (page) {
   }, MIN_PX)
 }
 
+// performance budgets (#82 item 15): first graph <= 1.5 s for <= 300 nodes, layout <= 1.5 s, <= 400 rendered elements
+const BUDGET = { firstGraphMs: Number(process.env.BUDGET_FIRST || 1500), layoutMs: 1500, rendered: 400 }
 function check (m, s) {
   const f = []
+  if (m.perf && m.perf.nodes && m.perf.nodes <= 300 && m.tReady > BUDGET.firstGraphMs) f.push(`first graph ${m.tReady} ms > ${BUDGET.firstGraphMs}`)
+  if (m.perf && m.perf.layoutMs > BUDGET.layoutMs) f.push(`layout ${m.perf.layoutMs} ms > ${BUDGET.layoutMs}`)
+  if (m.perf && m.perf.rendered > BUDGET.rendered) f.push(`rendered elements ${m.perf.rendered} > ${BUDGET.rendered}`)
   if (m.logs.length) f.push(`console: ${m.logs.length} (${m.logs[0]})`)
   if (!['1', 'landing'].includes(m.ready)) f.push(`view reported ${m.ready}`)
   if (m.header.scroll > m.header.client) f.push(`header overflow ${m.header.scroll} > ${m.header.client}`)
@@ -120,6 +127,12 @@ try {
       page.on('pageerror', (e) => logs.push('pageerror: ' + e.message))
       page.on('response', (r) => { if (r.status() >= 400) logs.push(`http ${r.status()}: ${r.url()}`) })
       await page.setViewport({ width: w, height: HEIGHT[w] || Math.round(w * 0.5625), deviceScaleFactor: DPR })
+      if (process.env.THEME) await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: process.env.THEME }])
+      // long tasks (main thread blocked > 50 ms) from the first byte on (#82 item 15)
+      await page.evaluateOnNewDocument(() => {
+        window.__cgLong = []
+        try { new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__cgLong.push(e.duration) }).observe({ type: 'longtask', buffered: true }) } catch (e) { /* unsupported */ }
+      })
       const t0 = Date.now()
       await page.goto(s.url || (base + (s.hash ? '#' + s.hash : '')), { waitUntil: 'networkidle0' })
       await page.waitForFunction(() => ['1', 'error', 'empty', 'landing'].includes(document.body.dataset.ready), { timeout: 60000 })
@@ -133,10 +146,12 @@ try {
       await new Promise((r) => setTimeout(r, 1000))  // last render + panel fetch
       const file = `${out}/${s.file.replace(/\.png$/, '')}_${w}.png`
       await page.screenshot({ path: file })
-      const m = { file, width: w, tReady, ...(await measure(page)), logs }
+      const perf = await page.evaluate(() => ({ layoutMs: Math.round(window.__cgLayoutMs || 0), maxLongTaskMs: Math.round(Math.max(0, ...(window.__cgLong || []))),
+        rendered: window.__cgCy ? window.__cgCy.elements(':visible').length : 0, nodes: window.__cgCy ? window.__cgCy.nodes().length : 0 }))
+      const m = { file, width: w, tReady, perf, ...(await measure(page)), logs }
       m.failures = check(m, s)
       results.push(m)
-      console.log(`${m.failures.length ? 'FAIL' : 'ok  '} ${file}` + (m.labels ? `  zoom ${m.zoom} label>=${m.labels.minPx}px overlap ${m.labels.overlapPct}% top ${m.top} ltr ${m.ltrPct}%` : m.landing ? `  landing stats ${m.landing.stats} cards ${m.landing.cards}` : '') +
+      console.log(`${m.failures.length ? 'FAIL' : 'ok  '} ${file}` + (m.perf && m.perf.nodes ? `  ready ${m.tReady} ms layout ${m.perf.layoutMs} ms longtask ${m.perf.maxLongTaskMs} ms els ${m.perf.rendered}` : '') + (m.labels ? `  zoom ${m.zoom} label>=${m.labels.minPx}px overlap ${m.labels.overlapPct}% top ${m.top} ltr ${m.ltrPct}%` : m.landing ? `  landing stats ${m.landing.stats} cards ${m.landing.cards}` : '') +
         (m.failures.length ? '\n     ' + m.failures.join('\n     ') : ''))
       await page.close()
     }

@@ -185,7 +185,8 @@ class Sources:
             return None
         ln = int(line)
         a, b = max(1, ln - ctx), min(len(lines), ln + ctx)
-        return {"file": file, "line": ln, "start": a, "lines": lines[a - 1:b]}
+        # abs: for the panel's "open in editor" link (served view only; viz-export drops it)
+        return {"file": file, "line": ln, "start": a, "lines": lines[a - 1:b], "abs": str(p.resolve())}
 
 
 def node_detail(st: GraphStore, src: Sources, nid: str, limit=25) -> dict | None:

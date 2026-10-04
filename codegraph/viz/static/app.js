@@ -4,13 +4,44 @@
   const STATIC = window.__STATIC__ || null
   const $ = (id) => document.getElementById(id)
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
-  const KIND_COLOR = {
-    method: '#3d6be0', function: '#62a8ea', script: '#62a8ea', composable: '#1aa39a', store: '#0f8a7e', component: '#7cc36b',
-    module: '#9fbf8a', page: '#2e9d57', layout: '#2e9d57', app: '#2e9d57', http: '#e8a33d', route: '#e06c2b',
-    command: '#8456d6', schedule: '#a06ad9', job: '#a06ad9', listener: '#a06ad9', observer: '#a06ad9', admin: '#cf4fa3',
-    table: '#8b6b4a', column: '#b0906d', connection: '#d64545', config: '#7d8698', env: '#5f6878', setting: '#d4a017',
-    request_key: '#1fa5c7', resolution: '#c2185b', class: '#5a6fa8', type: '#9aa5bd', property: '#7a86b8',
-    client: '#6c4bd1', issue: '#8e6bbf', file: '#9aa0aa'
+  // node colour = family (#82 item 14): Okabe-Ito hues, darkened to >= 3:1 on the light and the dark canvas; inside a
+  // family the shape tells kinds apart (KIND_SHAPE)
+  const FAMILY = { code: '#0072b2', ui: '#00866a', entry: '#d55e00', data: '#a06a00', config: '#6b7280', jobs: '#b5638f',
+    external: '#2b7fb8', findings: '#8a7f00' }
+  const KIND_FAMILY = {
+    method: 'code', function: 'code', script: 'code', class: 'code', type: 'code', property: 'code', field: 'code', file: 'code',
+    composable: 'ui', store: 'ui', component: 'ui', module: 'ui', page: 'ui', layout: 'ui', app: 'ui',
+    route: 'entry', command: 'jobs', schedule: 'jobs', job: 'jobs', listener: 'jobs', observer: 'jobs',
+    table: 'data', column: 'data', config: 'config', env: 'config', setting: 'config', constant: 'config', enum_case: 'config',
+    http: 'external', connection: 'external', client: 'external', request_key: 'external',
+    resolution: 'findings', issue: 'findings', admin: 'jobs'
+  }
+  const KIND_COLOR = Object.fromEntries(Object.entries(KIND_FAMILY).map(([k, f]) => [k, FAMILY[f]]))
+  const KIND_SHAPE = { method: 'ellipse', function: 'ellipse', script: 'ellipse', class: 'round-rectangle', type: 'round-tag', property: 'diamond',
+    field: 'diamond', file: 'rectangle', page: 'round-rectangle', layout: 'round-rectangle', app: 'round-rectangle', component: 'ellipse',
+    composable: 'triangle', store: 'barrel', module: 'rectangle', table: 'barrel', column: 'rectangle', route: 'round-triangle',
+    http: 'round-hexagon', connection: 'round-hexagon', client: 'round-octagon', request_key: 'tag', command: 'round-pentagon',
+    schedule: 'round-pentagon', job: 'round-pentagon', listener: 'vee', observer: 'vee', config: 'round-rectangle', env: 'rectangle',
+    setting: 'tag', constant: 'rectangle', enum_case: 'tag', resolution: 'star', issue: 'round-diamond', admin: 'round-heptagon' }
+  // a function is a small circle with a border, a method a plain circle (same family)
+  const KIND_BORDER = { function: 2, script: 2 }
+
+  // themes (#82 item 13): the style table is written in light colours; the dark theme maps each one (DARK)
+  const DARK = {
+    '#ffffff': '#12161d', '#fff': '#12161d', '#1d2330': '#e6e9ef', '#000': '#ffffff', '#384156': '#c3cad6', '#eef1f6': '#1c222c',
+    '#eaf6ec': '#16261d', '#7d889c': '#8792a6', '#4f9a66': '#5fb07a', '#f5f7fa': '#191e27',
+    '#4a5368': '#d0d6e0', '#767e90': '#a3acbc', '#848c9e': '#7c8597', '#d64545': '#ff6b6b', '#b26b00': '#e09a2c', '#1d4ed8': '#7aa7ff',
+    '#2e9d57': '#3fbf6f', '#1b7a3d': '#3fbf6f', '#c77c00': '#f0a030', '#d6006b': '#ff4f9a', '#b06ab3': '#c98bcc', '#d62828': '#ff5c5c',
+    '#ff2e88': '#ff5ca3', '#8e6bbf': '#a88ad6', '#145c2e': '#7ddc9c', '#8a5300': '#f0b060', '#a3004f': '#ff7ab5', '#b01e1e': '#ff8080'
+  }
+  let themePref = 'auto'; try { themePref = localStorage.getItem('cg.theme') || 'auto' } catch (e) { themePref = 'auto' }
+  const darkMq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null
+  function themeName () { return themePref === 'auto' ? (darkMq && darkMq.matches ? 'dark' : 'light') : themePref }
+  function c (hex) { return themeName() === 'dark' ? (DARK[hex] || hex) : hex }
+  function applyTheme () {
+    document.documentElement.dataset.theme = themeName()
+    const b = document.getElementById('theme'); if (b) b.textContent = 'theme: ' + themePref
+    if (cy) { cy.style(makeStyle()); if (data && data.meta.mode !== 'plan') legend() }
   }
   // plan overlay: role of a node in the planned change (codegraph/plans.py check result)
   const PLAN_MARK = { added: '+ ', modified: '~ ', missing: '! ', forbidden: '✕ ' }
@@ -148,14 +179,14 @@
       const p = lay.pos.get(u.id)
       if (u.type === 'node') {
         const n = u.node
-        els.push({ group: 'nodes', data: { id: n.id, label: leafLabel(n, !u.lane), color: KIND_COLOR[n.kind] || '#888', kind: n.kind },
+        els.push({ group: 'nodes', data: { id: n.id, label: leafLabel(n, !u.lane), color: KIND_COLOR[n.kind] || '#6b7280', kind: n.kind, shape: KIND_SHAPE[n.kind] || 'ellipse', bw: KIND_BORDER[n.kind] || 0 },
           position: { x: p.x, y: p.y }, classes: leafClasses(n) + (u.lane ? ' lane' : '') })
         continue
       }
       const top = Object.entries(u.kinds).sort((a, b) => b[1] - a[1])
       const n = u.count; const label = clusterLabel(u)
       const w = 30 + Math.min(46, Math.sqrt(n) * 7)
-      els.push({ group: 'nodes', data: { id: u.id, cid: u.id, label, color: KIND_COLOR[top[0][0]] || '#888', w, h: Math.max(20, w * 0.5), kinds: u.kinds },
+      els.push({ group: 'nodes', data: { id: u.id, cid: u.id, label, color: KIND_COLOR[top[0][0]] || '#6b7280', w, h: Math.max(20, w * 0.5), kinds: u.kinds },
         position: { x: p.x, y: p.y }, classes: 'cluster' + (u.open ? ' open' : '') + (u.gated === n ? ' allgated' : '') })
     }
     return els.concat(edgeEls((id) => lay.rep.get(id), ' lay'))
@@ -170,19 +201,19 @@
       const top = Object.entries(g.kinds).sort((a, b) => b[1] - a[1])
       if (gn.length === 1 && !collapsed.has(g.id)) {   // no box around a single node: the module is its second label line
         const n = gn[0]; rep[n.id] = n.id
-        els.push({ group: 'nodes', data: { id: n.id, label: leafLabel(n, true), color: KIND_COLOR[n.kind] || '#888', kind: n.kind }, classes: leafClasses(n) })
+        els.push({ group: 'nodes', data: { id: n.id, label: leafLabel(n, true), color: KIND_COLOR[n.kind] || '#6b7280', kind: n.kind, shape: KIND_SHAPE[n.kind] || 'ellipse', bw: KIND_BORDER[n.kind] || 0 }, classes: leafClasses(n) })
         continue
       }
       if (collapsed.has(g.id)) {
         els.push({ group: 'nodes', data: { id: 'G:' + g.id, gid: g.id, label: `${modLabel(g.id)}\n${g.count} node${g.count > 1 ? 's' : ''}` +
-          (ne ? ` · ${ne} entry` : '') + (ng ? ` · ${ng} gated` : ''), color: KIND_COLOR[top[0][0]] || '#888', size: 26 + Math.min(40, Math.sqrt(g.count) * 7),
+          (ne ? ` · ${ne} entry` : '') + (ng ? ` · ${ng} gated` : ''), color: KIND_COLOR[top[0][0]] || '#6b7280', size: 26 + Math.min(40, Math.sqrt(g.count) * 7),
           repo: g.repo, gatedFrac: ng / g.count, kinds: g.kinds }, classes: 'collapsed' + (ng === g.count ? ' allgated' : '') })
         for (const n of gn) rep[n.id] = 'G:' + g.id
       } else {
         els.push({ group: 'nodes', data: { id: 'G:' + g.id, gid: g.id, label: modLabel(g.id) + `  (${g.count})`, repo: g.repo }, classes: 'module ' + (g.side === 'fe' ? 'fe' : 'be') })
         for (const n of gn) {
           rep[n.id] = n.id
-          els.push({ group: 'nodes', data: { id: n.id, parent: 'G:' + g.id, label: leafLabel(n, false), color: KIND_COLOR[n.kind] || '#888', kind: n.kind }, classes: leafClasses(n) })
+          els.push({ group: 'nodes', data: { id: n.id, parent: 'G:' + g.id, label: leafLabel(n, false), color: KIND_COLOR[n.kind] || '#6b7280', kind: n.kind, shape: KIND_SHAPE[n.kind] || 'ellipse', bw: KIND_BORDER[n.kind] || 0 }, classes: leafClasses(n) })
         }
       }
     }
@@ -218,77 +249,83 @@
     return els
   }
 
-  const STYLE = [
+  const makeStyle = () => [
     // labels below 11 rendered px are not drawn (level of detail, #82); the target, entry points, the hovered and the
     // selected node and their neighbours, clusters and modules get a larger font instead (lod())
-    { selector: 'node.n', style: { 'background-color': 'data(color)', label: 'data(label)', 'font-size': LEAF_FS, 'min-zoomed-font-size': MIN_PX, 'text-wrap': 'wrap',
-      'text-max-width': 110, 'text-valign': 'bottom', 'text-margin-y': 3, width: 16, height: 16, color: '#1d2330', 'text-background-color': '#fff',
+    { selector: 'node.n', style: { 'background-color': 'data(color)', shape: 'data(shape)', 'border-width': 'data(bw)', 'border-color': c('#1d2330'), label: 'data(label)', 'font-size': LEAF_FS, 'min-zoomed-font-size': MIN_PX, 'text-wrap': 'wrap',
+      'text-max-width': 110, 'text-valign': 'bottom', 'text-margin-y': 3, width: 16, height: 16, color: c('#1d2330'), 'text-background-color': c('#fff'),
       'text-background-opacity': 0.75, 'text-background-padding': 1 } },
-    { selector: 'node.entry', style: { shape: 'round-diamond', width: 24, height: 24, 'border-width': 2, 'border-color': '#1d2330', 'font-weight': 'bold' } },
-    { selector: 'node.target', style: { shape: 'star', width: 30, height: 30, 'border-width': 3, 'border-color': '#000', 'font-size': 14, 'font-weight': 'bold' } },
-    { selector: 'node.gatedn', style: { 'border-width': 3, 'border-style': 'dashed', 'border-color': '#d64545', 'background-opacity': 0.55 } },
-    { selector: 'node.module', style: { label: 'data(label)', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 13, 'font-weight': 'bold', color: '#384156',
-      'background-color': '#eef1f6', 'background-opacity': 0.6, 'border-width': 1, 'border-color': '#7d889c', shape: 'round-rectangle', padding: 10 } },
-    { selector: 'node.module.fe', style: { 'background-color': '#eaf6ec', 'border-color': '#4f9a66' } },
+    { selector: 'node.entry', style: { shape: 'round-diamond', width: 24, height: 24, 'border-width': 2, 'border-color': c('#1d2330'), 'font-weight': 'bold' } },
+    { selector: 'node.target', style: { shape: 'star', width: 30, height: 30, 'border-width': 3, 'border-color': c('#000'), 'font-size': 14, 'font-weight': 'bold' } },
+    { selector: 'node.gatedn', style: { 'border-width': 3, 'border-style': 'dashed', 'border-color': c('#d64545'), 'background-opacity': 0.55 } },
+    { selector: 'node.module', style: { label: 'data(label)', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 13, 'font-weight': 'bold', color: c('#384156'),
+      'background-color': c('#eef1f6'), 'background-opacity': 0.6, 'border-width': 1, 'border-color': c('#7d889c'), shape: 'round-rectangle', padding: 10 } },
+    { selector: 'node.module.fe', style: { 'background-color': c('#eaf6ec'), 'border-color': c('#4f9a66') } },
     { selector: 'node.collapsed', style: { shape: 'round-rectangle', 'background-color': 'data(color)', 'background-opacity': 0.85, label: 'data(label)', 'text-wrap': 'wrap',
       'text-max-width': 190, 'font-size': 13, 'font-weight': 'bold', 'text-valign': 'bottom', 'text-margin-y': 4, width: 'data(size)', height: 'data(size)',
-      'border-width': 2, 'border-color': '#384156', color: '#1d2330', 'text-background-color': '#fff', 'text-background-opacity': 0.8, 'text-background-padding': 2 } },
-    { selector: 'node.collapsed.allgated', style: { 'border-color': '#d64545', 'border-style': 'dashed', 'border-width': 3 } },
+      'border-width': 2, 'border-color': c('#384156'), color: c('#1d2330'), 'text-background-color': c('#fff'), 'text-background-opacity': 0.8, 'text-background-padding': 2 } },
+    { selector: 'node.collapsed.allgated', style: { 'border-color': c('#d64545'), 'border-style': 'dashed', 'border-width': 3 } },
     { selector: 'node.cluster', style: { shape: 'round-rectangle', 'background-color': 'data(color)', 'background-opacity': 0.35, width: 'data(w)', height: 'data(h)',
-      'border-width': 2, 'border-color': '#384156', label: 'data(label)', 'text-wrap': 'wrap', 'text-max-width': 130, 'font-size': 13, 'font-weight': 'bold',
-      'text-valign': 'bottom', 'text-margin-y': 4, color: '#1d2330', 'text-background-color': '#fff', 'text-background-opacity': 0.85, 'text-background-padding': 2 } },
+      'border-width': 2, 'border-color': c('#384156'), label: 'data(label)', 'text-wrap': 'wrap', 'text-max-width': 130, 'font-size': 13, 'font-weight': 'bold',
+      'text-valign': 'bottom', 'text-margin-y': 4, color: c('#1d2330'), 'text-background-color': c('#fff'), 'text-background-opacity': 0.85, 'text-background-padding': 2 } },
     { selector: 'node.cluster.open', style: { 'border-style': 'dashed', 'background-opacity': 0.12 } },
-    { selector: 'node.cluster.allgated', style: { 'border-color': '#d64545', 'border-style': 'dashed', 'border-width': 3 } },
-    { selector: 'edge', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, width: 'data(w)', 'line-color': '#7d889c', 'target-arrow-color': '#7d889c',
-      label: 'data(label)', 'font-size': 12, 'min-zoomed-font-size': MIN_PX, 'font-weight': 'bold', color: '#384156', 'text-background-color': '#fff',
+    { selector: 'node.cluster.allgated', style: { 'border-color': c('#d64545'), 'border-style': 'dashed', 'border-width': 3 } },
+    { selector: 'edge', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, width: 'data(w)', 'line-color': c('#7d889c'), 'target-arrow-color': c('#7d889c'),
+      label: 'data(label)', 'font-size': 12, 'min-zoomed-font-size': MIN_PX, 'font-weight': 'bold', color: c('#384156'), 'text-background-color': c('#fff'),
       'text-background-opacity': 0.9, 'text-background-padding': 1 } },
     { selector: 'edge.lay', style: { 'curve-style': 'taxi', 'taxi-direction': 'rightward', 'taxi-turn': '60%', 'taxi-turn-min-distance': 12 } },
-    { selector: 'edge.c-exact', style: { 'line-style': 'solid', 'line-color': CONF_EDGE.exact.color, 'target-arrow-color': CONF_EDGE.exact.color } },
-    { selector: 'edge.c-resolved', style: { 'line-style': 'dashed', 'line-dash-pattern': [7, 3], 'line-color': CONF_EDGE.resolved.color,
-      'target-arrow-color': CONF_EDGE.resolved.color } },
-    { selector: 'edge.c-heuristic', style: { 'line-style': 'dotted', 'line-dash-pattern': [1.5, 3], 'line-color': CONF_EDGE.heuristic.color,
-      'target-arrow-color': CONF_EDGE.heuristic.color } },
-    { selector: 'edge.gated', style: { 'line-color': GATED, 'target-arrow-color': GATED, 'line-style': 'dashed', 'line-dash-pattern': [3, 3] } },
-    { selector: 'edge.partgated', style: { 'line-color': PARTGATED, 'target-arrow-color': PARTGATED } },
+    { selector: 'edge.c-exact', style: { 'line-style': 'solid', 'line-color': c(CONF_EDGE.exact.color), 'target-arrow-color': c(CONF_EDGE.exact.color) } },
+    { selector: 'edge.c-resolved', style: { 'line-style': 'dashed', 'line-dash-pattern': [7, 3], 'line-color': c(CONF_EDGE.resolved.color),
+      'target-arrow-color': c(CONF_EDGE.resolved.color) } },
+    { selector: 'edge.c-heuristic', style: { 'line-style': 'dotted', 'line-dash-pattern': [1.5, 3], 'line-color': c(CONF_EDGE.heuristic.color),
+      'target-arrow-color': c(CONF_EDGE.heuristic.color) } },
+    { selector: 'edge.gated', style: { 'line-color': c(GATED), 'target-arrow-color': c(GATED), 'line-style': 'dashed', 'line-dash-pattern': [3, 3] } },
+    { selector: 'edge.partgated', style: { 'line-color': c(PARTGATED), 'target-arrow-color': c(PARTGATED) } },
     { selector: 'edge.confhide', style: { display: 'none' } },
     // ---- plan overlay
-    { selector: 'node.p-added', style: { 'background-color': '#2e9d57', 'border-width': 3, 'border-style': 'dashed', 'border-color': '#1b7a3d', shape: 'round-rectangle',
-      width: 26, height: 18, color: '#145c2e', 'font-weight': 'bold' } },
-    { selector: 'node.p-modified', style: { 'border-width': 5, 'border-color': '#c77c00', 'border-style': 'solid', width: 22, height: 22, 'font-weight': 'bold', color: '#8a5300' } },
+    { selector: 'node.p-added', style: { 'background-color': c('#2e9d57'), 'border-width': 3, 'border-style': 'dashed', 'border-color': c('#1b7a3d'), shape: 'round-rectangle',
+      width: 26, height: 18, color: c('#145c2e'), 'font-weight': 'bold' } },
+    { selector: 'node.p-modified', style: { 'border-width': 5, 'border-color': c('#c77c00'), 'border-style': 'solid', width: 22, height: 22, 'font-weight': 'bold', color: c('#8a5300') } },
     { selector: 'node.p-guard', style: { shape: 'hexagon', width: 28, height: 28 } },
-    { selector: 'node.p-missing', style: { 'underlay-color': '#ff2e88', 'underlay-opacity': 0.32, 'underlay-padding': 9, 'underlay-shape': 'ellipse',
-      'border-width': 3, 'border-color': '#d6006b', color: '#a3004f', 'font-weight': 'bold' } },
-    { selector: 'node.p-review', style: { 'border-width': 2, 'border-style': 'dotted', 'border-color': '#b06ab3', 'background-opacity': 0.7 } },
-    { selector: 'node.p-covered', style: { 'border-width': 2, 'border-color': '#2e9d57' } },
-    { selector: 'node.p-forbidden', style: { 'border-width': 4, 'border-color': '#d62828', 'border-style': 'double', color: '#b01e1e', 'font-weight': 'bold' } },
-    { selector: 'node.p-unlinked', style: { 'border-width': 3, 'border-color': '#d62828' } },
-    { selector: 'edge.pe-added', style: { 'line-color': '#2e9d57', 'target-arrow-color': '#2e9d57', 'line-style': 'dashed', 'line-dash-pattern': [8, 4], width: 3.5,
-      color: '#145c2e' } },
-    { selector: 'edge.pe-forbidden', style: { 'line-color': '#d62828', 'target-arrow-color': '#d62828', 'line-style': 'solid', width: 4, 'mid-target-arrow-shape': 'tee',
-      'mid-target-arrow-color': '#d62828', 'arrow-scale': 1.3, color: '#b01e1e', 'font-size': 12 } },
-    { selector: 'edge.pe-gap', style: { 'line-color': '#ff2e88', 'target-arrow-color': '#ff2e88', 'line-style': 'dotted', width: 2.5, color: '#a3004f', 'font-size': 9.5,
+    { selector: 'node.p-missing', style: { 'underlay-color': c('#ff2e88'), 'underlay-opacity': 0.32, 'underlay-padding': 9, 'underlay-shape': 'ellipse',
+      'border-width': 3, 'border-color': c('#d6006b'), color: c('#a3004f'), 'font-weight': 'bold' } },
+    { selector: 'node.p-review', style: { 'border-width': 2, 'border-style': 'dotted', 'border-color': c('#b06ab3'), 'background-opacity': 0.7 } },
+    { selector: 'node.p-covered', style: { 'border-width': 2, 'border-color': c('#2e9d57') } },
+    { selector: 'node.p-forbidden', style: { 'border-width': 4, 'border-color': c('#d62828'), 'border-style': 'double', color: c('#b01e1e'), 'font-weight': 'bold' } },
+    { selector: 'node.p-unlinked', style: { 'border-width': 3, 'border-color': c('#d62828') } },
+    { selector: 'edge.pe-added', style: { 'line-color': c('#2e9d57'), 'target-arrow-color': c('#2e9d57'), 'line-style': 'dashed', 'line-dash-pattern': [8, 4], width: 3.5,
+      color: c('#145c2e') } },
+    { selector: 'edge.pe-forbidden', style: { 'line-color': c('#d62828'), 'target-arrow-color': c('#d62828'), 'line-style': 'solid', width: 4, 'mid-target-arrow-shape': 'tee',
+      'mid-target-arrow-color': c('#d62828'), 'arrow-scale': 1.3, color: c('#b01e1e'), 'font-size': 12 } },
+    { selector: 'edge.pe-gap', style: { 'line-color': c('#ff2e88'), 'target-arrow-color': c('#ff2e88'), 'line-style': 'dotted', width: 2.5, color: c('#a3004f'), 'font-size': 9.5,
       'font-weight': 'normal' } },
-    { selector: 'edge.pe-touches', style: { 'line-color': '#8e6bbf', 'target-arrow-color': '#8e6bbf', 'line-style': 'dashed', 'line-dash-pattern': [2, 4], width: 1.2, opacity: 0.55 } },
+    { selector: 'edge.pe-touches', style: { 'line-color': c('#8e6bbf'), 'target-arrow-color': c('#8e6bbf'), 'line-style': 'dashed', 'line-dash-pattern': [2, 4], width: 1.2, opacity: 0.55 } },
     { selector: '.dim', style: { opacity: 0.18 } },
-    { selector: 'edge.hl', style: { 'line-color': '#1d4ed8', 'target-arrow-color': '#1d4ed8', width: 4, opacity: 1, 'z-index': 99 } },
-    { selector: 'edge.hl.gated', style: { 'line-color': '#d64545', 'target-arrow-color': '#d64545' } },
-    { selector: 'node.hl', style: { opacity: 1, 'border-width': 3, 'border-color': '#1d4ed8' } },
-    { selector: 'node:selected', style: { 'overlay-color': '#1d4ed8', 'overlay-opacity': 0.15 } }
+    { selector: 'edge.hl', style: { 'line-color': c('#1d4ed8'), 'target-arrow-color': c('#1d4ed8'), width: 4, opacity: 1, 'z-index': 99 } },
+    { selector: 'edge.hl.gated', style: { 'line-color': c('#d64545'), 'target-arrow-color': c('#d64545') } },
+    { selector: 'node.hl', style: { opacity: 1, 'border-width': 3, 'border-color': c('#1d4ed8') } },
+    { selector: 'node:selected', style: { 'overlay-color': c('#1d4ed8'), 'overlay-opacity': 0.15 } }
   ]
 
-  function layoutOpts () {
+  // performance (#82 item 15): fcose 'default' quality; after an expand / collapse the nodes keep their positions and
+  // the layout only refines them (randomize off, fewer iterations), so the picture does not move
+  function layoutOpts (incremental) {
     if (layoutKind() === 'layered') return { name: 'preset', fit: false, animate: false, padding: 30 }
-    return { name: 'fcose', quality: 'proof', animate: false, randomize: true, nodeDimensionsIncludeLabels: true, packComponents: true,
+    return { name: 'fcose', quality: 'default', animate: false, randomize: !incremental, nodeDimensionsIncludeLabels: true, packComponents: true,
       nodeRepulsion: 9000, idealEdgeLength: 90, edgeElasticity: 0.3, nestingFactor: 0.15, gravity: 0.3, gravityCompound: 1.2,
-      gravityRangeCompound: 1.4, numIter: 4000, tile: true, tilingPaddingVertical: 18, tilingPaddingHorizontal: 18, padding: 30 }
+      gravityRangeCompound: 1.4, numIter: incremental ? 800 : 2500, tile: true, tilingPaddingVertical: 18, tilingPaddingHorizontal: 18, padding: 30 }
   }
 
+  let incremental = false
   function render (keepView) {
     if (!data) return
     const els = elements()
     if (!cy) {
-      cy = cytoscape({ container: $('cy'), elements: els, style: STYLE, layout: { name: 'preset' }, minZoom: 0.05, maxZoom: 4 })
+      cy = cytoscape({ container: $('cy'), elements: els, style: makeStyle(), layout: { name: 'preset' }, minZoom: 0.05, maxZoom: 4,
+        pixelRatio: Math.min(2, window.devicePixelRatio || 1) })
       cy.on('tap', 'node', (ev) => onTap(ev.target))
+      cy.on('cxttap', 'node', (ev) => showMenu(ev.target, ev))
+      cy.on('tap', hideMenu)
       cy.on('dbltap', 'node.module', (ev) => { collapsed.add(ev.target.data('gid')); render() })
       cy.on('tap', (ev) => { if (ev.target === cy) { clearHl(); lastCluster = null; if (!STATIC) setHash((h) => h.delete('select')) } })
       let pending = false
@@ -299,10 +336,14 @@
       $('cy').tabIndex = 0
       window.__cgCy = cy  // read by tools/shoot.mjs (label sizes, overlap, item counts)
     } else {
+      const prev = keepView ? new Map(cy.nodes().map((n) => [n.id(), { ...n.position() }])) : null
       cy.elements().remove(); cy.add(els)
+      if (prev && layoutKind() !== 'layered') cy.nodes().forEach((n) => { const p = prev.get(n.id()); if (p) n.position(p) })
+      incremental = !!prev && layoutKind() !== 'layered'
     }
-    const l = cy.layout(layoutOpts())
-    l.one('layoutstop', () => { if (!keepView) initialFit(); lod(); document.body.dataset.ready = '1' })
+    const t0 = performance.now()
+    const l = cy.layout(layoutOpts(incremental)); incremental = false
+    l.one('layoutstop', () => { window.__cgLayoutMs = performance.now() - t0; if (!keepView) initialFit(); lod(); document.body.dataset.ready = '1' })
     document.body.dataset.ready = '0'
     l.run()
     applyConf()
@@ -376,6 +417,10 @@
 
   function status () {
     const m = data.meta; const nodes = data.nodes
+    $('cy').setAttribute('aria-label', `${m.mode || 'graph'} ${(m.specs || []).join(', ')}: ${nodes.length} nodes, ${data.edges.length} evidence edges, ` +
+      `${nodes.filter((n) => n.entry_kind).length} entry points. Press L for a list view, ? for keyboard shortcuts.`)
+    $('truncbanner').hidden = !m.truncated
+    if ($('listview') && !$('listview').hidden) renderList()
     const ent = nodes.filter((n) => n.entry_kind).length; const g = nodes.filter(gated).length
     const byk = {}; for (const n of nodes) if (n.entry_kind) byk[n.entry_kind] = (byk[n.entry_kind] || 0) + 1
     if (m.mode === 'plan') {
@@ -418,21 +463,21 @@
     }
     // only the encodings present in this view, kinds with counts (#82 item 8); a kind chip dims everything else
     const used = {}; for (const n of data.nodes) used[n.kind] = (used[n.kind] || 0) + 1
-    let h = Object.entries(used).sort((a, b) => b[1] - a[1]).map(([k, c]) =>
+    let h = Object.entries(used).sort((a, b) => b[1] - a[1]).map(([k, cnt0]) =>
       `<button type="button" class="chip kchip" data-kind="${esc(k)}" aria-pressed="${kindHl === k}" title="highlight ${esc(k)} nodes">` +
-      `<span class="sw" style="background:${KIND_COLOR[k] || '#888'}"></span>${esc(k)} ${c}</button>`).join('')
+      `<span class="sw" style="background:${KIND_COLOR[k] || '#6b7280'}"></span>${esc(k)} ${cnt0}</button>`).join('')
     const has = (sel) => cy && cy.elements(sel).length > 0
     if (data.nodes.some((n) => n.entry_kind)) h += '<span>◆ entry point</span>'
     if (data.nodes.some((n) => n.is_target)) h += '<span>★ target</span>'
-    if (data.nodes.some(gated)) h += `<span><span class="sw" style="border:2px dashed ${GATED};background:#fff"></span>gated node</span>`
+    if (data.nodes.some(gated)) h += `<span><span class="sw" style="border:2px dashed ${c(GATED)};background:${c('#fff')}"></span>gated node</span>`
     const cnt = {}; for (const e of data.edges) cnt[e.confidence] = (cnt[e.confidence] || 0) + 1
-    h += Object.entries(CONF_EDGE).filter(([c]) => cnt[c]).map(([c, v]) => {
-      const sample = `<span class="ln" style="border-top:${v.width + 0.5}px ${v.style} ${v.color}"></span>${c} ${cnt[c] || 0}`
-      return c === 'exact' ? `<span>${sample}</span>`
-        : `<button type="button" class="chip" data-conf="${c}" aria-pressed="${!hiddenConf.has(c)}" title="show / hide ${c} edges">${sample}</button>`
+    h += Object.entries(CONF_EDGE).filter(([cf]) => cnt[cf]).map(([cf, v]) => {
+      const sample = `<span class="ln" style="border-top:${v.width + 0.5}px ${v.style} ${c(v.color)}"></span>${cf} ${cnt[cf] || 0}`
+      return cf === 'exact' ? `<span>${sample}</span>`
+        : `<button type="button" class="chip" data-conf="${cf}" aria-pressed="${!hiddenConf.has(cf)}" title="show / hide ${cf} edges">${sample}</button>`
     }).join('')
-    if (has('edge.gated')) h += `<span><span class="ln" style="border-top:2px dashed ${GATED}"></span>gated edge</span>`
-    if (has('edge.partgated')) h += `<span><span class="ln" style="border-top:2px solid ${PARTGATED}"></span>partly gated</span>`
+    if (has('edge.gated')) h += `<span><span class="ln" style="border-top:2px dashed ${c(GATED)}"></span>gated edge</span>`
+    if (has('edge.partgated')) h += `<span><span class="ln" style="border-top:2px solid ${c(PARTGATED)}"></span>partly gated</span>`
     const boxes = []
     if (has('node.cluster')) boxes.push('rounded box = caller cluster with its count (click to open, again for 20 more, Esc folds); a node\'s second line is its module')
     if (has('node.module')) boxes.push('framed box = module (double-click to fold)')
@@ -507,6 +552,96 @@
       }
     }
   }
+  // keyboard (#82 item 10): / search, f fit, + - zoom, 0 reset, arrows move the selection along the edges
+  // (← caller, → callee; ↑ ↓ within the column), Enter / Space opens a cluster or shows a node, ? help
+  // list view (#82 item 14): the same subgraph as a tree by depth / layer, for screen readers and keyboard use
+  function renderList () {
+    const lv = $('listview'); if (!data) return
+    const lyr = L.layers(data); const by = new Map()
+    for (const n of data.nodes) { const k = n.depth != null ? n.depth : lyr.get(n.id); if (!by.has(k)) by.set(k, []); by.get(k).push(n) }
+    const word = data.meta.mode === 'impact' ? 'depth' : 'layer'
+    lv.innerHTML = `<b>${esc(data.meta.mode)} ${esc((data.meta.specs || []).join(', '))}</b> · ${data.nodes.length} nodes` +
+      [...by.keys()].sort((a, b) => a - b).map((k) => `<h3>${word} ${k} (${by.get(k).length})</h3><ul role="group">` +
+        by.get(k).sort((a, b) => shortName(a).localeCompare(shortName(b))).map((n) => `<li role="treeitem"><a tabindex="0" data-id="${esc(n.id)}">${esc(shortName(n))}</a>` +
+          `<span class="k">${esc(n.kind)}${n.entry_kind ? ' · ' + esc(ENTRY_LABEL[n.entry_kind] || n.entry_kind) : ''}${n.is_target ? ' · target' : ''} · ${esc(n.file || '')}</span></li>`).join('') + '</ul>').join('')
+    for (const a of lv.querySelectorAll('a[data-id]')) {
+      a.onclick = () => showNode(a.dataset.id)
+      a.onkeydown = (e) => { if (e.key === 'Enter') { showNode(a.dataset.id); e.stopPropagation() } }
+    }
+  }
+  function toggleList () { const lv = $('listview'); lv.hidden = !lv.hidden; $('listbtn').setAttribute('aria-pressed', String(!lv.hidden)); if (!lv.hidden) { renderList(); const a = lv.querySelector('a'); if (a) a.focus() } }
+
+  function keyNav (e) {
+    const k = e.key
+    if ((k === 'Enter' || k === ' ') && /^(BUTTON|A|SUMMARY)$/.test((e.target && e.target.tagName) || '')) return
+    if (k === '/') { const ls = $('lsearch'); const t = ls && ls.offsetParent ? ls : $('spec'); t.focus(); t.select(); e.preventDefault(); return }
+    if (k === '?') { $('help').hidden = !$('help').hidden; e.preventDefault(); return }
+    if (k === 'l' || k === 'L') { if (data) toggleList(); e.preventDefault(); return }
+    if (!cy || !data) return
+    const centre = { x: cy.width() / 2, y: cy.height() / 2 }
+    if (k === 'f') { cy.fit(undefined, 30); $('fitall').hidden = true }
+    else if (k === '+' || k === '=') cy.zoom({ level: Math.min(cy.maxZoom(), cy.zoom() * 1.25), renderedPosition: centre })
+    else if (k === '-' || k === '_') cy.zoom({ level: Math.max(cy.minZoom(), cy.zoom() / 1.25), renderedPosition: centre })
+    else if (k === '0') initialFit()
+    else if (k.startsWith('Arrow')) moveSel(k.slice(5).toLowerCase())
+    else if (k === 'Enter' || k === ' ') {
+      const cur = cy.$('node:selected')[0]; if (!cur) return
+      if (cur.hasClass('cluster') || cur.hasClass('collapsed')) {
+        const cid = cur.id(); onTap(cur); const el = cy.getElementById(cid); if (el.length) el.select()   // keep the place
+      } else { highlightFrom(cur.id()); showNode(cur.id()) }
+    } else return
+    e.preventDefault()
+  }
+  function selectEl (el) {
+    cy.$(':selected').unselect(); el.select()
+    const bb = el.renderedBoundingBox(); const ext = { w: cy.width(), h: cy.height() }
+    if (bb.x1 < 0 || bb.y1 < 0 || bb.x2 > ext.w || bb.y2 > ext.h) cy.center(el)
+    if (el.hasClass('n')) { highlightFrom(el.id()); showNode(el.id()) } else { clearHl(); el.addClass('hl') }
+    $('cy').focus()
+  }
+  function moveSel (dir) {
+    const nodes = cy.nodes().filter((n) => !n.isParent() && n.visible())
+    let cur = cy.$('node:selected')[0]
+    if (!cur) { cur = nodes.filter('.target')[0] || nodes[0]; if (cur) selectEl(cur); return }
+    const p = cur.position(); let cand
+    const lane = lay && cur.hasClass('cluster') && cur.hasClass('open') && dir === 'right'
+      ? nodes.filter((n) => lay.units.some((u) => u.id === n.id() && u.lane === cur.id())) : null
+    if (lane && lane.length) cand = lane.sort((a, b) => a.position('y') - b.position('y'))
+    else if (dir === 'left' && lay && cur.hasClass('lane')) {   // from a member back to its cluster
+      const u = lay.units.find((x) => x.id === cur.id()); cand = u ? cy.getElementById(u.lane) : cy.collection()
+    } else if (dir === 'left' || dir === 'right') {
+      cand = (dir === 'left' ? cur.incomers('node') : cur.outgoers('node')).filter((n) => n.visible())
+      if (!cand.length) cand = nodes.filter((n) => (dir === 'left' ? n.position('x') < p.x - 20 : n.position('x') > p.x + 20))
+      cand = cand.sort((a, b) => Math.abs(a.position('y') - p.y) + Math.abs(a.position('x') - p.x) / 4 - Math.abs(b.position('y') - p.y) - Math.abs(b.position('x') - p.x) / 4)
+    } else {
+      cand = nodes.filter((n) => Math.abs(n.position('x') - p.x) < 20 && (dir === 'up' ? n.position('y') < p.y - 1 : n.position('y') > p.y + 1))
+        .sort((a, b) => Math.abs(a.position('y') - p.y) - Math.abs(b.position('y') - p.y))
+    }
+    if (cand.length) selectEl(cand[0])
+  }
+
+  // export (#82 item 12): the whole drawing at 2x as PNG (on the current canvas colour), or the visible subgraph as JSON
+  function exportName (ext) {
+    const m = (data && data.meta) || {}
+    return ['cg', m.mode || 'view', ...(m.specs || [])].join('-').replace(/[^\w.-]+/g, '_').slice(0, 120) + '.' + ext
+  }
+  function download (blob, name) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 500)
+  }
+  function exportPng () {
+    if (!cy) return
+    download(cy.png({ full: true, scale: 2, bg: getComputedStyle($('cy')).backgroundColor || '#fff', output: 'blob', maxWidth: 16384, maxHeight: 16384 }), exportName('png'))
+  }
+  function exportJson () {
+    if (!cy) return
+    const vis = new Set(cy.nodes(':visible').map((n) => n.id()))
+    const nodes = data.nodes.filter((n) => vis.has(n.id) || (lay && vis.has(lay.rep.get(n.id))))
+    const ids = new Set(nodes.map((n) => n.id))
+    const out = { meta: data.meta, url: location.href, nodes, edges: data.edges.filter((e) => ids.has(e.src) && ids.has(e.dst) && !hiddenConf.has(e.confidence)) }
+    download(new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' }), exportName('json'))
+  }
+
   function toggleCluster (id) {
     const u = lay && lay.units.find((x) => x.id === id); if (!u) return
     if (!u.open) open.set(id, 20); else if (u.shown < u.count) open.set(id, u.shown + 20); else open.delete(id)
@@ -518,7 +653,7 @@
 
   function showCluster (u) {
     const ns = u.members.map((m) => byId[m]).filter(Boolean)
-    $('panel').innerHTML = `<h2>${esc(cy.getElementById(u.id).data('label').split('\n')[0].replace(/^▾ /, '').replace(/\u200b/g, ''))}</h2><div>${u.count} nodes · ${Object.entries(u.kinds).map(([k, v]) => `${k} ${v}`).join(', ')}` +
+    $('panelbody').innerHTML = `<h2>${esc(cy.getElementById(u.id).data('label').split('\n')[0].replace(/^▾ /, '').replace(/\u200b/g, ''))}</h2><div>${u.count} nodes · ${Object.entries(u.kinds).map(([k, v]) => `${k} ${v}`).join(', ')}` +
       `${u.open ? ` · showing ${u.shown}` : ' · folded'}</div><h3>members</h3><table>` + ns.map((n) =>
       `<tr><td class="k">${esc(n.kind)}</td><td><a data-id="${esc(n.id)}">${esc(shortName(n))}</a>${n.entry_kind ? ` <span class="badge">${esc(ENTRY_LABEL[n.entry_kind] || n.entry_kind)}</span>` : ''}` +
       `${gated(n) ? ' <span class="badge gated">gated</span>' : ''}<div class="loc">${esc(n.file || '')}${n.line ? ':' + n.line : ''}</div></td></tr>`).join('') + '</table>'
@@ -534,15 +669,100 @@
 
   function showGroup (gid) {
     const g = data.groups.find((x) => x.id === gid); const ns = data.nodes.filter((n) => n.group === gid)
-    $('panel').innerHTML = `<h2>${esc(g.label)}</h2><div>${g.count} nodes · ${Object.entries(g.kinds).map(([k, v]) => `${k} ${v}`).join(', ')}</div>` +
+    $('panelbody').innerHTML = `<h2>${esc(g.label)}</h2><div>${g.count} nodes · ${Object.entries(g.kinds).map(([k, v]) => `${k} ${v}`).join(', ')}</div>` +
       '<h3>members</h3><table>' + ns.sort((a, b) => (a.depth || 0) - (b.depth || 0)).map((n) =>
       `<tr><td class="k">${esc(n.kind)}</td><td><a data-id="${esc(n.id)}">${esc(shortName(n))}</a>${n.entry_kind ? ` <span class="badge">${esc(ENTRY_LABEL[n.entry_kind] || n.entry_kind)}</span>` : ''}` +
       `${gated(n) ? ' <span class="badge gated">gated</span>' : ''}<div class="loc">${esc(n.file || '')}${n.line ? ':' + n.line : ''}</div></td></tr>`).join('') + '</table>'
     wireLinks()
   }
 
+  const DB_HINT = 'DB'
+  let wrapCode = false
+  function truncMiddle (s, n) { s = String(s || ''); if (s.length <= n) return s; const k = Math.floor((n - 1) / 2); return s.slice(0, k) + '…' + s.slice(s.length - (n - 1 - k)) }
+  function nodeActions (id) {
+    const tgt = data.nodes.filter((n) => n.is_target && n.id !== id).map((n) => n.id)
+    const out = [['impact of this', 'impact', [id]], ['downstream of this', 'downstream', [id]]]
+    if (tgt.length) out.push(['path from here to the target', 'path', [id, tgt[0]]])
+    return out
+  }
+  function runAction (mode, spec) {
+    $('mode').value = mode; $('spec').value = spec
+    $('mode').dispatchEvent(new Event('change')); hideMenu(); go()
+  }
+  function copyText (txt, btn) {
+    const done = (ok) => { if (!btn) return; const t = btn.textContent; btn.textContent = ok ? 'copied' : 'copy failed'; setTimeout(() => { btn.textContent = t }, 1200) }
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(txt).then(() => done(true), () => done(false)); return }
+    const t = document.createElement('textarea'); t.value = txt; document.body.appendChild(t); t.select()
+    let ok = false; try { ok = document.execCommand('copy') } catch (e) { ok = false }
+    t.remove(); done(ok)
+  }
+  function wirePanel () {
+    for (const b of $('panelbody').querySelectorAll('[data-copy]')) b.onclick = () => copyText(b.dataset.copy, b)
+    for (const b of $('panelbody').querySelectorAll('.act')) b.onclick = () => runAction(b.dataset.mode, b.dataset.spec)
+    const w = $('panelbody').querySelector('.wrapbtn')
+    if (w) w.onclick = () => { wrapCode = !wrapCode; w.setAttribute('aria-pressed', String(wrapCode)); $('panelbody').querySelector('pre.code').classList.toggle('wrap', wrapCode) }
+  }
+  // what the view shows: callers per depth, entry points by kind, gated counts (top of the target's panel)
+  function viewSummary () {
+    const m = data.meta || {}; const ns = data.nodes
+    const byD = {}; for (const n of ns) if (n.depth != null && !n.is_target) byD[n.depth] = (byD[n.depth] || 0) + 1
+    const ek = {}; for (const n of ns) if (n.entry_kind) ek[n.entry_kind] = (ek[n.entry_kind] || 0) + 1
+    const g = ns.filter(gated).length
+    let h = `<div class="summary"><h3>view: ${esc(m.mode || '')} · ${ns.length} nodes · ${data.edges.length} evidence edges</h3>`
+    if (Object.keys(byD).length) {
+      const word = m.mode === 'impact' ? 'callers' : 'nodes'
+      h += `<table class="bydepth"><tr><td class="k">depth</td>${Object.keys(byD).sort((a, b) => a - b).map((d) => `<td>${d}</td>`).join('')}</tr>` +
+        `<tr><td class="k">${word}</td>${Object.keys(byD).sort((a, b) => a - b).map((d) => `<td>${byD[d]}</td>`).join('')}</tr></table>`
+    }
+    h += '<div>entry points: ' + (Object.keys(ek).length ? Object.entries(ek).map(([k, v]) => `<span class="badge">${esc(ENTRY_LABEL[k] || k)} × ${v}</span>`).join('') : 'none') + '</div>'
+    if (m.gate || g) h += `<div>gated: ${g}${m.gate ? ` (gate ${esc(m.gate)})` : ''}</div>`
+    return h + '</div>'
+  }
+
+  // right-click menu with the node actions
+  function hideMenu () { $('ctxmenu').hidden = true }
+  function showMenu (el, ev) {
+    if (STATIC || !el.hasClass('n')) return
+    const m = $('ctxmenu'); const p = ev.renderedPosition || { x: 0, y: 0 }; const r = $('cy').getBoundingClientRect()
+    m.innerHTML = nodeActions(el.id()).map(([lab, mode, specs]) => `<button type="button" role="menuitem" data-mode="${mode}" data-spec="${esc(specs.join(', '))}">${lab}</button>`).join('') +
+      `<button type="button" role="menuitem" data-show="1">details</button>`
+    m.style.left = (r.left + p.x) + 'px'; m.style.top = (r.top + p.y) + 'px'; m.hidden = false
+    for (const b of m.querySelectorAll('button')) b.onclick = () => { if (b.dataset.show) { hideMenu(); highlightFrom(el.id()); showNode(el.id()) } else runAction(b.dataset.mode, b.dataset.spec) }
+    m.querySelector('button').focus()
+  }
+
+  // resizable / collapsible panel (#82 item 9): drag the left edge (or ← → on it), collapse to a rail; kept in localStorage
+  function setPanel (w, collapsed) {
+    const max = Math.round(window.innerWidth * 0.5)
+    w = Math.max(260, Math.min(max, w))
+    document.documentElement.style.setProperty('--panel', (collapsed ? 36 : w) + 'px')
+    document.body.classList.toggle('pcollapsed', !!collapsed)
+    $('phandle').setAttribute('aria-valuenow', String(collapsed ? 36 : w))
+    $('pcollapse').textContent = collapsed ? '⟨' : '⟩'; $('pcollapse').setAttribute('aria-expanded', String(!collapsed))
+    try { localStorage.setItem('cg.panel', JSON.stringify({ w, collapsed: !!collapsed })) } catch (e) { /* private mode */ }
+    if (cy) cy.resize()
+  }
+  function panelState () {
+    let st = null; try { st = JSON.parse(localStorage.getItem('cg.panel') || 'null') } catch (e) { st = null }
+    return st || { w: parseInt(getComputedStyle($('panel')).width, 10) || 360, collapsed: false }
+  }
+  function initPanel () {
+    const st0 = panelState(); if (localStorage.getItem('cg.panel')) setPanel(st0.w, st0.collapsed)
+    $('pcollapse').onclick = () => { const st = panelState(); setPanel(st.w, !st.collapsed) }
+    const h = $('phandle')
+    h.onpointerdown = (e) => {
+      h.setPointerCapture(e.pointerId)
+      const move = (ev) => setPanel(window.innerWidth - ev.clientX, false)
+      h.onpointermove = move; h.onpointerup = () => { h.onpointermove = null; h.onpointerup = null }
+    }
+    h.onkeydown = (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      const st = panelState(); setPanel(st.w + (e.key === 'ArrowLeft' ? 30 : -30), false); e.preventDefault(); e.stopPropagation()
+    }
+  }
+
   function wireLinks () {
-    for (const a of $('panel').querySelectorAll('a[data-id]')) a.onclick = () => {
+    for (const a of $('panelbody').querySelectorAll('a[data-id]')) a.onclick = () => {
       const id = a.dataset.id; const n = byId[id]
       if (n && !lay && collapsed.has(n.group)) { collapsed.delete(n.group); render(true) }
       if (n && lay && lay.rep.get(id) !== id) {   // folded in a cluster: open it far enough to show the node
@@ -566,9 +786,25 @@
     const d = await getDetail(id)
     if (selected !== id) return
     const k = (d && d.kind) || n.kind
-    let h = `<h2>${esc(shortName(d || n))}</h2><span class="kind" style="background:${KIND_COLOR[k] || '#888'}">${esc(k)}</span>`
+    const fqn = (d && d.fqn) || n.fqn || id
+    const file = (d && d.file) || n.file; const line = (d && d.line) || n.line
+    const spec = n.kind === 'method' || n.kind === 'function' ? fqn : id
+    const cli = `cg impact '${spec.replace(/'/g, "'\\''")}' --db ${DB_HINT}`
+    // sticky header (#82 item 9): name, kind, file:line, copy buttons, editor link, node actions
+    let h = `<div class="phead"><h2>${esc(shortName(d || n))}</h2><span class="kind" style="background:${KIND_COLOR[k] || '#6b7280'}">${esc(k)}</span>`
     if (d && d.entry_kind) h += `<span class="badge">entry: ${esc(ENTRY_LABEL[d.entry_kind] || d.entry_kind)}</span>`
     if (n.is_target) h += '<span class="badge">query target</span>'
+    if (file) h += `<div class="loc" title="${esc(file)}${line ? ':' + line : ''}">${esc(truncMiddle(file, 52))}${line ? ':' + line : ''}</div>`
+    h += '<div class="pacts">' + [['id', id], ['FQN', fqn], ['CLI', cli]].map(([lab, v]) =>
+      `<button type="button" class="pbtn" data-copy="${esc(v)}" title="copy ${esc(v)}">copy ${lab}</button>`).join('')
+    const abs = d && d.snippet && d.snippet.abs
+    if (abs && !STATIC) h += `<a class="pbtn" href="vscode://file/${encodeURI(abs)}:${d.snippet.line}" title="open ${esc(abs)} in VS Code">open in editor</a>`
+    if (!STATIC) {
+      h += '<br>' + nodeActions(id).map(([lab, mode, specs]) =>
+        `<button type="button" class="pbtn act" data-mode="${mode}" data-spec="${esc(specs.join(', '))}">${lab}</button>`).join('')
+    }
+    h += '</div></div>'
+    if (n.is_target) h += viewSummary()
     if (n.plan_role) {
       h += `<div class="planbox p-${esc(n.plan_role)}"><b>${esc(PLAN_ROLE_LABEL[n.plan_role] || n.plan_role)}</b>${n.plan_check ? ` · check <code>${esc(n.plan_check)}</code>` : ''}` +
         (n.plan_why ? `<div>${esc(n.plan_why)}</div>` : '') + (n.plan_evidence ? `<div class="loc">${n.plan_evidence.map(esc).join('<br>')}</div>` : '') +
@@ -577,8 +813,7 @@
     }
     if (n.gate_status) h += `<span class="badge ${n.gate_status === 'live' ? 'live' : 'gated'}">${esc(n.gate_status)}</span>`
     if (n.live === false) h += '<span class="badge gated">reached only via gated edges</span>'
-    h += `<div class="loc">${esc((d && d.fqn) || n.fqn || id)}</div>`
-    if (d && d.file) h += `<div class="loc">${esc(d.file)}${d.line ? ':' + d.line : ''}</div>`
+    h += `<div class="loc">${esc(fqn)}</div>`
     if (n.depth != null) h += `<div>depth ${n.depth}${n.path_confidence ? ` · path confidence <b>${esc(n.path_confidence)}</b>` : ''}${n.class ? ` · class ${esc(n.class)}` : ''}</div>`
     const ek = (d && d.entry_kinds) || n.entry_kinds
     if (ek && Object.keys(ek).length) {
@@ -593,17 +828,33 @@
     if (d && d.doc) h += `<h3>docblock</h3><pre>${esc(d.doc)}</pre>`
     if (d && d.snippet) {
       const s = d.snippet
-      h += `<h3>source ${esc(s.file)}:${s.line}</h3><pre class="code">` + s.lines.map((l, i) => {
+      h += `<h3 class="src" title="${esc(s.file)}:${s.line}">Source <span class="loc">${esc(truncMiddle(s.file, 40))}:${s.line}</span>` +
+        `<button type="button" class="pbtn wrapbtn" aria-pressed="${wrapCode}">wrap</button></h3><pre class="code${wrapCode ? ' wrap' : ''}" tabindex="0" aria-label="source">` + s.lines.map((l, i) => {
         const no = s.start + i; return `<span class="${no === s.line ? 'hl' : ''}">${String(no).padStart(5)}  ${esc(l)}</span>`
       }).join('\n') + '</pre>'
     }
     const sub = data.edges.filter((e) => e.src === id || e.dst === id)
     if (sub.length) {
-      h += '<h3>evidence edges in this view</h3><table>' + sub.map((e) => {
-        const other = e.src === id ? e.dst : e.src; const on = byId[other] || { id: other, kind: other.split(':')[0], name: other }
-        return `<tr><td class="k">${e.src === id ? '→' : '←'} ${esc(e.kind)}${e.plan ? ` <span class="badge">${esc(e.plan)}</span>` : ''}<br>${esc(e.confidence)}${e.gated ? ` <span class="badge gated">gated: ${esc(e.gated)}</span>` : ''}</td>` +
-          `<td><a data-id="${esc(other)}">${esc(shortName(on))}</a><div class="loc">${esc(e.at || '')}</div>${e.guard ? `<div>guard ${esc(JSON.stringify(e.guard))}</div>` : ''}</td></tr>`
-      }).join('') + '</table>'
+      // grouped by direction, then confidence (strongest first), sorted by depth and name; collapsible
+      h += `<h3>evidence edges in this view: ${sub.length}</h3>`
+      for (const [lab, side] of [['callers / sources', 'in'], ['callees / targets', 'out']]) {
+        const es = sub.filter((e) => (side === 'out' ? e.src === id : e.dst === id))
+        if (!es.length) continue
+        h += `<details class="egrp" open><summary>${side === 'out' ? '→' : '←'} ${lab}: ${es.length}</summary>`
+        for (const conf of ['exact', 'resolved', 'heuristic']) {
+          const ec = es.filter((e) => (e.confidence || 'heuristic') === conf)
+          if (!ec.length) continue
+          const other = (e) => (e.src === id ? e.dst : e.src)
+          ec.sort((a, b) => ((byId[other(a)] || {}).depth ?? 99) - ((byId[other(b)] || {}).depth ?? 99) ||
+            shortName(byId[other(a)] || { id: other(a) }).localeCompare(shortName(byId[other(b)] || { id: other(b) })))
+          h += `<details class="egrp" ${ec.length <= 25 ? 'open' : ''}><summary>${conf}: ${ec.length}</summary><table>` + ec.map((e) => {
+            const o = other(e); const on = byId[o] || { id: o, kind: o.split(':')[0], name: o }
+            return `<tr><td class="k">${esc(e.kind)}${e.plan ? ` <span class="badge">${esc(e.plan)}</span>` : ''}${on.depth != null ? `<br>depth ${on.depth}` : ''}${e.gated ? ` <span class="badge gated">gated: ${esc(e.gated)}</span>` : ''}</td>` +
+              `<td><a data-id="${esc(o)}">${esc(shortName(on))}</a><div class="loc">${esc(e.at || '')}</div>${e.guard ? `<div>guard ${esc(JSON.stringify(e.guard))}</div>` : ''}</td></tr>`
+          }).join('') + '</table></details>'
+        }
+        h += '</details>'
+      }
     }
     if (d) {
       for (const [lab, list, cnt] of [['outgoing (DB)', d.out_edges, d.out_count], ['incoming (DB)', d.in_edges, d.in_count]]) {
@@ -616,8 +867,8 @@
       const keep = Object.fromEntries(Object.entries(a).filter(([k2]) => !['repo', 'parent'].includes(k2)))
       if (Object.keys(keep).length) h += `<h3>attributes</h3><pre>${esc(JSON.stringify(keep, null, 1)).slice(0, 4000)}</pre>`
     }
-    $('panel').innerHTML = h
-    wireLinks()
+    $('panelbody').innerHTML = h
+    wireLinks(); wirePanel()
   }
 
   function setData (g, title) {
@@ -626,7 +877,7 @@
     modPrefix = commonPrefix(data.groups.map((g) => g.label))
     open = new Map(); flat = false; lastCluster = null
     defaultCollapse(); render(); legend()
-    if (data.report) $('panel').innerHTML = '<h2>plan check report</h2><div class="hint">click a node for its role, evidence and source</div><pre class="report">' + esc(data.report) + '</pre>'
+    if (data.report) $('panelbody').innerHTML = '<h2>plan check report</h2><div class="hint">click a node for its role, evidence and source</div><pre class="report">' + esc(data.report) + '</pre>'
   }
 
   function readHash () {
@@ -663,6 +914,11 @@
     if (p.get('focus')) {  // zoom to a node and its direct neighbours (e.g. the uncovered siblings around a table)
       const f = cy.getElementById(p.get('focus'))
       if (f.length) cy.fit(f.closedNeighborhood().union(f.closedNeighborhood().connectedNodes()), Number(p.get('pad') || 40))
+    }
+    const tgt = data.nodes.find((n) => n.is_target)
+    if (!p.get('select') && tgt && data.meta.mode !== 'plan' && !data.report) {   // fill the panel with the target summary
+      if (cy.getElementById(tgt.id).length) cy.getElementById(tgt.id).select()
+      showNode(tgt.id)
     }
     if (p.get('select')) {
       setTimeout(() => {
@@ -762,6 +1018,17 @@
       if (data) { open.clear(); flat = false; render() }
     }
     $('copylink').onclick = copyLink
+    $('listbtn').onclick = toggleList
+    $('theme').onclick = () => {
+      themePref = { auto: 'light', light: 'dark', dark: 'auto' }[themePref] || 'auto'
+      try { localStorage.setItem('cg.theme', themePref) } catch (e) { /* private mode */ }
+      applyTheme()
+    }
+    if (darkMq && darkMq.addEventListener) darkMq.addEventListener('change', () => { if (themePref === 'auto') applyTheme() })
+    applyTheme()
+    initPanel()
+    $('exportpng').onclick = exportPng; $('exportjson').onclick = exportJson
+    $('helpclose').onclick = () => { $('help').hidden = true }
     $('more').onclick = (e) => { const g = $('viewgrp'); const o = g.classList.toggle('open'); $('more').setAttribute('aria-expanded', String(o)); e.stopPropagation() }
     document.addEventListener('click', (e) => { if (!$('viewgrp').contains(e.target)) { $('viewgrp').classList.remove('open'); $('more').setAttribute('aria-expanded', 'false') } })
     document.addEventListener('keydown', (e) => {
@@ -770,7 +1037,10 @@
         $('viewgrp').classList.remove('open')
         if (typing) return
         if (lastCluster) foldCluster(lastCluster); else clearHl()
+        if (!$('help').hidden) $('help').hidden = true
+        hideMenu()
       } else if (e.key === 'Backspace' && !typing && lastCluster) { foldCluster(lastCluster); e.preventDefault() }
+      else if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey) keyNav(e)
     })
     const sinkVis = () => { $('sinks').style.display = $('mode').value === 'downstream' ? '' : 'none' }
     $('mode').addEventListener('change', sinkVis); sinkVis()

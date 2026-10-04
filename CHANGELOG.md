@@ -17,6 +17,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
   dims everything else (#82 item 8).
 - Visual view: the URL hash is written as you select a node, open clusters or change the layout, a **copy link**
   button copies it, and each new query is a history entry so Back returns to the previous one (#82 item 11).
+- Visual view (#82 items 9, 10, 12-15): the panel opens on the target with a view summary, has a sticky header
+  with copy buttons (id, FQN, CLI), *open in editor*, node actions (impact / downstream / path; also a right-click
+  menu), grouped and collapsible evidence edges, a wrap toggle, and can be resized or collapsed. Keyboard shortcuts
+  (`/`, `f`, `+` `-` `0`, arrow keys along the edges, `Enter` / `Space`, `l`, `?`). PNG (2x) and JSON export. Dark
+  theme (follows the system, or the theme button). Node colours are eight colour-blind-safe families with shapes per
+  kind; a list view of the subgraph; `role="img"` summary on the canvas; axe-core clean. fcose refines kept
+  positions after an expand / collapse, `pixelRatio` is capped at 2, a truncated result shows a banner, and
+  `shoot.mjs` records and enforces performance budgets.
 
 - Swift stored properties and construction branches (#88, phase 1): a stored instance property is a
   `field:<Type>.<name>` node (`binding`, property `wrapper`), with `READS_PROP` / `WRITES_PROP` edges from `self.x`,

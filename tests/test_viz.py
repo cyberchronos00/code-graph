@@ -151,28 +151,42 @@ def _contrast(a: str, b: str) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
-def _style_colours() -> tuple[dict, list]:
-    """The constants and every edge / border colour of the Cytoscape style table in app.js."""
+def _style_colours() -> tuple[dict, list, list]:
+    """Constants, edge / border colours and text colours of the Cytoscape style table in app.js (written in light
+    colours as c('#hex'); the dark theme maps each through DARK)."""
     import re
     src = APP_JS.read_text()
     const = dict(re.findall(r"const (CANVAS|MODULE_FILL|GATED|PARTGATED) = '(#[0-9a-fA-F]{3,6})'", src))
     conf = {c: (col, w, st) for c, col, w, st in re.findall(
         r"(exact|resolved|heuristic): \{ color: '(#[0-9a-fA-F]{6})', width: ([\d.]+), style: '(\w+)' \}", src)}
-    style = src[src.index("const STYLE = ["):]
+    dark_src = src[src.index("const DARK = {"):]
+    dark = dict(re.findall(r"'(#[0-9a-fA-F]{3,6})': '(#[0-9a-fA-F]{3,6})'", dark_src[:dark_src.index("}")]))
+    fam_src = src[src.index("const FAMILY = {"):]
+    family = dict(re.findall(r"(\w+): '(#[0-9a-fA-F]{6})'", fam_src[:fam_src.index("}")]))
+    style = src[src.index("const makeStyle = () => ["):]
     style = style[:style.index("\n  ]\n")]
-    cols = re.findall(r"'((?:mid-)?(?:target-arrow|line|border)-color)': '(#[0-9a-fA-F]{3,6})'", style)
-    cols += [("conf " + c, v[0]) for c, v in conf.items()] + [(k, const[k]) for k in ("GATED", "PARTGATED")]
-    return {"const": const, "conf": conf}, cols
+    lines = re.findall(r"'((?:mid-)?(?:target-arrow|line|border)-color)': c\('(#[0-9a-fA-F]{3,6})'\)", style)
+    lines += [("conf " + c, v[0]) for c, v in conf.items()] + [(k, const[k]) for k in ("GATED", "PARTGATED")]
+    texts = re.findall(r"[{ ,]color: c\('(#[0-9a-fA-F]{3,6})'\)", style)
+    return {"const": const, "conf": conf, "dark": dark, "family": family}, lines, texts
 
 
 def test_edge_and_border_contrast():
-    """#82 item 7: every edge and border colour is >= 3:1 (WCAG 1.4.11) on the canvas and on a module box's fill,
-    and the three confidences differ by dash pattern (greyscale-distinguishable), not only by colour."""
-    meta, cols = _style_colours()
-    assert set(meta["conf"]) == {"exact", "resolved", "heuristic"} and len(cols) > 20
-    bad = [(k, c, round(_contrast(c, bg), 2)) for k, c in cols for bg in (meta["const"]["CANVAS"], meta["const"]["MODULE_FILL"])
-           if _contrast(c, bg) < 3]
+    """#82 items 7 / 13 / 14: in the light and the dark theme, every edge and border colour is >= 3:1 (WCAG 1.4.11)
+    on the canvas and on a module box's fill, node fills (kind families) >= 3:1 on the canvas, label text >= 4.5:1
+    (1.4.3) on its text background; the three confidences differ by dash pattern and width, not only by colour."""
+    meta, lines, texts = _style_colours()
+    dark = meta["dark"]
+    assert set(meta["conf"]) == {"exact", "resolved", "heuristic"} and len(lines) > 20 and len(meta["family"]) == 8
+    themes = {"light": (lambda h: h), "dark": (lambda h: dark.get(h, h))}
+    bad = []
+    for name, f in themes.items():
+        canvas, fill = f(meta["const"]["CANVAS"]), f(meta["const"]["MODULE_FILL"])
+        bad += [(name, k, c, round(_contrast(f(c), bg), 2)) for k, c in lines for bg in (canvas, fill) if _contrast(f(c), bg) < 3]
+        bad += [(name, "family " + k, c, round(_contrast(c, canvas), 2)) for k, c in meta["family"].items() if _contrast(c, canvas) < 3]
+        bad += [(name, "text", c, round(_contrast(f(c), f("#fff")), 2)) for c in texts if _contrast(f(c), f("#fff")) < 4.5]
     assert not bad, bad
+    assert all(c in dark for _, c in lines), [c for _, c in lines if c not in dark]   # every colour has a dark mapping
     assert len({v[2] for v in meta["conf"].values()}) == 3                        # solid / dashed / dotted
     assert float(meta["conf"]["exact"][1]) > float(meta["conf"]["heuristic"][1])   # and width
 
