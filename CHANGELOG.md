@@ -15,6 +15,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
   legend chips that hide / show resolved and heuristic edges client-side with the status counts updated (#82 item 7).
   The legend lists only the kinds (with counts), shapes and edge styles present in the view, and a click on a kind
   dims everything else (#82 item 8).
+- Visual view: the URL hash is written as you select a node, open clusters or change the layout, a **copy link**
+  button copies it, and each new query is a history entry so Back returns to the previous one (#82 item 11).
 
 - Swift stored properties and construction branches (#88, phase 1): a stored instance property is a
   `field:<Type>.<name>` node (`binding`, property `wrapper`), with `READS_PROP` / `WRITES_PROP` edges from `self.x`,

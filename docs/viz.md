@@ -12,9 +12,11 @@ stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/vi
   [configuration.md](configuration.md#viz-presets-and-starter-queries)). The brand link returns to it; Back and
   Forward work.
 - Toolbar: query (modes `reaches`, `impact`, `downstream` with sinks, `path` (`source, [waypoints…,] target`) and
-  `plan overlay`), filters (min confidence, sinks) and view (layout, collapse / expand all, fit; behind `⋯` below
-  1440 px). It stays on one line from 1024 px up. State is in the URL hash
-  (`#mode=impact&spec=…&expand=<cluster or group>[~shown]|…&select=<node id>&layout=…`), so views can be bookmarked.
+  `plan overlay`), filters (min confidence, sinks) and view (layout, collapse / expand all, fit, copy link; behind `⋯`
+  below 1440 px). It stays on one line from 1024 px up. State is in the URL hash
+  (`#mode=impact&spec=…&expand=<cluster or group>[~shown]|…&select=<node id>&layout=…`), written as you open
+  clusters, select a node or change the layout; **copy link** copies it, and the link reproduces the same visible
+  elements, selection and panel. Each new query is a history entry, so Back returns to the previous one.
 - The subgraph is the union of the query's evidence paths. `layout: auto` draws impact, downstream and path left to
   right in layers (impact: entry points left, target right, one column per depth; downstream: source left, sinks
   right; path: the specs in order); reaches and plan overviews use the force-directed fcose layout with module boxes.

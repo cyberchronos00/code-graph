@@ -290,7 +290,7 @@
       cy = cytoscape({ container: $('cy'), elements: els, style: STYLE, layout: { name: 'preset' }, minZoom: 0.05, maxZoom: 4 })
       cy.on('tap', 'node', (ev) => onTap(ev.target))
       cy.on('dbltap', 'node.module', (ev) => { collapsed.add(ev.target.data('gid')); render() })
-      cy.on('tap', (ev) => { if (ev.target === cy) { clearHl(); lastCluster = null } })
+      cy.on('tap', (ev) => { if (ev.target === cy) { clearHl(); lastCluster = null; if (!STATIC) setHash((h) => h.delete('select')) } })
       let pending = false
       cy.on('zoom', () => { if (!pending) { pending = true; requestAnimationFrame(() => { pending = false; lod() }) } })
       cy.on('mouseover', 'node', (ev) => { hover = ev.target.id(); showTip(ev); lod() })
@@ -472,6 +472,25 @@
     seen.addClass('hl')
   }
 
+  // shareable URLs (#82 item 11): the hash carries the query plus select / expand / layout, written on interaction;
+  // a new query is a history entry (Back returns to the previous one), view changes replace the current entry
+  function setHash (mut, push) {
+    const h = new URLSearchParams(location.hash.slice(1)); mut(h)
+    const s = '#' + h.toString(); if (s === location.hash) return
+    if (push) history.pushState(null, '', s); else history.replaceState(null, '', s)
+  }
+  function sameQuery (a, b) {
+    return ['mode', 'sinks', 'min_conf'].every((k) => a.get(k) === b.get(k)) && a.getAll('spec').join('\n') === b.getAll('spec').join('\n')
+  }
+  function copyLink () {
+    const url = location.href; const btn = $('copylink')
+    const done = (ok) => { btn.textContent = ok ? 'copied' : 'copy failed'; setTimeout(() => { btn.textContent = 'copy link' }, 1500) }
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(url).then(() => done(true), () => done(false)); return }
+    const t = document.createElement('textarea'); t.value = url; document.body.appendChild(t); t.select()
+    let ok = false; try { ok = document.execCommand('copy') } catch (e) { ok = false }
+    t.remove(); done(ok)
+  }
+
   function saveExpand () {
     const h = new URLSearchParams(location.hash.slice(1))
     const v = lay ? [...open].map(([id, n]) => (n === 20 ? id : id + '~' + n)) : []
@@ -542,6 +561,7 @@
 
   async function showNode (id) {
     selected = id
+    if (!STATIC) setHash((h) => h.set('select', id))
     const n = byId[id] || { id }
     const d = await getDetail(id)
     if (selected !== id) return
@@ -626,7 +646,12 @@
     if ($('mode').value === 'downstream') q.set('sinks', $('sinks').value)
     const hp = new URLSearchParams(location.hash.slice(1)); if ($('mode').value === 'plan' && hp.get('verify') === '1') q.set('verify', '1')
     q.set('min_conf', $('minconf').value)
-    if (pushHash !== false) { const h = new URLSearchParams(q); if ($('layout').value !== 'auto') h.set('layout', $('layout').value); history.replaceState(null, '', '#' + h.toString()) }
+    if (pushHash !== false) {
+      const h = new URLSearchParams(q); if ($('layout').value !== 'auto') h.set('layout', $('layout').value)
+      const old = new URLSearchParams(location.hash.slice(1))
+      if (old.getAll('spec').length && !sameQuery(old, h)) history.pushState(null, '', '#' + h.toString())
+      else history.replaceState(null, '', '#' + h.toString())
+    }
     hideLanding()
     $('status').textContent = 'loading…'
     const r = await fetch('/api/graph?' + q.toString()); const g = await r.json()
@@ -732,7 +757,11 @@
     $('expand').onclick = () => { if (layoutKind() === 'layered') { open.clear(); flat = true } else collapsed.clear(); render() }
     $('fit').onclick = () => { if (cy) { cy.fit(undefined, 30); $('fitall').hidden = true } }
     $('fitall').onclick = () => { if (cy) { cy.fit(undefined, 30); $('fitall').hidden = true } }
-    $('layout').onchange = () => { if (data) { open.clear(); flat = false; render() } }
+    $('layout').onchange = () => {
+      if (!STATIC) setHash((h) => { if ($('layout').value === 'auto') h.delete('layout'); else h.set('layout', $('layout').value); h.delete('expand') })
+      if (data) { open.clear(); flat = false; render() }
+    }
+    $('copylink').onclick = copyLink
     $('more').onclick = (e) => { const g = $('viewgrp'); const o = g.classList.toggle('open'); $('more').setAttribute('aria-expanded', String(o)); e.stopPropagation() }
     document.addEventListener('click', (e) => { if (!$('viewgrp').contains(e.target)) { $('viewgrp').classList.remove('open'); $('more').setAttribute('aria-expanded', 'false') } })
     document.addEventListener('keydown', (e) => {
