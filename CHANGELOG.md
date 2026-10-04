@@ -15,6 +15,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `--max-lines N` (default 200) caps the body with a truncation note, and an ambiguous name lists the
   candidates and exits nonzero. Added `AGENTS.md` describing how to read this codebase with cg (single
   source in `codegraph/agent_rules.py`).
+- Nuxt and Vue navigation edges (#117): `<NuxtLink>` / `<RouterLink>` `to`, `router.push` / `replace`,
+  `navigateTo` and an internal `<a href>` become `NAVIGATES_TO` from the enclosing component, page or function
+  to the page (`attrs.via` is `link`, `push`, `replace`, `navigateTo`, `href` or `helper`). Literal paths and
+  `{ name }` match the Nuxt page table (dynamic and optional segments) and `definePageMeta({ name })`. A helper
+  that returns a path, a route object or `useRouter().resolve(...)` is followed one call. A plain Vue 3 app's
+  `createRouter({ routes })` table (nested `children`, `() => import()` views, `path` constants, a literal
+  `redirect` followed one hop) becomes `page` nodes. Only absolute paths count: a computed segment prefers a
+  `[param]` page over a literal one, and a static `to` on another component (a UI-kit button) is a link while
+  `<Teleport to>`, relative paths and static files (`/favicon.ico`) are not. A target that matches nothing or more
+  than one page stays unresolved and is counted by `cg coverage` (`vue_unresolved_navigation`).
 - Kotlin callable references (`recv::fn`, `::fn`, `Type::fn`, `::Foo`) are `REFERENCES_FN` edges (`how: callback`) (#125), so `impact` lists Compose callbacks and ViewModel wiring. The receiver type comes from a parameter, property, constructor, local, `hiltViewModel<T>()` or a `viewModel()` / `viewModels()` delegate; extensions on that type count. Overloads use the arity of a function-typed parameter when the reference is passed as an argument. scip-java maps the same occurrences when an index is present.
 - Nuxt auto-imports from `imports.dirs` / `imports.imports` without a `.nuxt/` directory (#116): on a clean
   checkout the stand-in reads `nuxt.config` (and each layer's) and scans the configured directories the way

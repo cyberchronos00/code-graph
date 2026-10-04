@@ -33,6 +33,8 @@ KINDS = {
     "python_registry_assignment": ("handler", "python", "function stored in a registry (registry[key] = fn)"),
     "nuxt_unevaluable_import_dirs": ("handler", "typescript",
                                      "Nuxt imports.dirs entry that is not a literal path or glob"),
+    "vue_unresolved_navigation": ("route", "typescript",
+                                  "Nuxt / Vue navigation target that matches no page or several pages"),
 }
 
 
@@ -396,6 +398,14 @@ def python_registry_assignments(prog, builder) -> dict | None:
 
 # ------------------------------------------------------------------------------------------- Nuxt
 
+def vue_unresolved_navigation(builder) -> dict | None:
+    """Navigation sites the Vue / Nuxt pass could not attach to one page (computed target, no match, or several)."""
+    if builder is None:
+        return None
+    hits = getattr(builder, "nav_unresolved", None) or []
+    return _finding("vue_unresolved_navigation", [(h[0], h[1]) for h in hits])
+
+
 def nuxt_unevaluable_import_dirs(root: Path) -> dict | None:
     """`imports.dirs` entries whose path is computed (a call, an identifier, a template with substitutions).
     Literal paths, globs and single files are scanned when `.nuxt/` is absent; a prepared checkout keeps Nuxt's
@@ -431,6 +441,7 @@ def detect(root: str | Path, files_by_ext: dict[str, list[str]], builder=None, p
     run(nest_wrapped_route_decorators, root, js)
     run(express_loop_routes, root, js)
     run(nuxt_unevaluable_import_dirs, root)
+    run(vue_unresolved_navigation, builder)
     run(laravel_loop_routes, root, php)
     py = programs.get("python")
     if py is not None:

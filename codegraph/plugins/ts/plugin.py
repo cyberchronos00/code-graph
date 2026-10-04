@@ -622,7 +622,17 @@ class TypeScriptPlugin(LanguagePlugin):
         if ctx.synthesized_js:
             # no tsconfig / jsconfig: the file set comes from these directories (#136)
             st["program"] = {"synthesized": True, "reason": "no tsconfig.json / jsconfig.json", "src_dirs": ctx.synthesized_js}
+        from .nav import apply_nav
+        st["navigation"] = apply_nav(builder, facts)
         return st
+
+    def after_frameworks(self, builder, st: dict) -> None:
+        """Nuxt (and other framework plugins) set page routes after index(); match navigation sites again."""
+        facts = getattr(self.program, "facts", None) if getattr(self, "program", None) else None
+        if not facts:
+            return
+        from .nav import apply_nav
+        st["navigation"] = apply_nav(builder, facts)
 
 
 # not hashed into the facts cache key: build output, tool caches, test reports (codegraph/presets/typescript.yaml)

@@ -107,6 +107,8 @@ store state (`hook: pinia`) and Vue Options API `data()` (`hook: data`); Kotlin 
 inferred-root key paths (`binding: name`); PHP: → the `property:Class::$x` node of a declared or promoted property
 (attrs `property: stored`, `promoted`), `via` = compound / item / unset), INSTANTIATES `attrs.branch` / `branch_line` (the enclosing switch case / if / else / guard / ternary).
 Dart/Flutter: EMITS_STATE (bloc → state), HANDLES_STATE (UI → state check), NAVIGATES_TO (UI → page), PARSES_JSON (→ model).
+Vue / Nuxt: NAVIGATES_TO (component, page or function → page; `attrs.via` is link, push, replace, navigateTo, href
+or helper, `attrs.target` the path or route name, `attrs.site` the call when `via` is helper).
 Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (event → channel; attrs `name`, `visibility`,
 `site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs
 `visibility_mismatch`), LISTENS_FOR (channel_sub → event).

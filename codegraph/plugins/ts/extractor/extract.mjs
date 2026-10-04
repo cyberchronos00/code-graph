@@ -336,6 +336,14 @@ const sfcInfo = new Map()
 const sfcI18n = {}             // rel vue path -> keys defined in <i18n> blocks       // vue abs path -> {templateTags:[...], pageMeta}
 const stats = { vue_files: vueFiles.length, ts_files: 0, template_stubs: 0, template_component_tags: 0,
   sfc_errors: 0, components_global: 0, components_imported: 0, components_external: 0, components_unknown: 0, unknown_tags: {} }
+const sfcNav = []               // static <NuxtLink to> / <RouterLink to> / <a href>
+function internalHref(v) {
+  if (!v || typeof v !== 'string') return false
+  const s = v.trim()
+  if (!s || s.startsWith('#') || s.startsWith('//')) return false
+  if (/^(mailto|tel|javascript):/i.test(s) || /^[a-z][a-z0-9+.-]*:/i.test(s)) return false
+  return true
+}
 
 function blank(src, keep) {
   // keep: [[start,end]] offsets to preserve; everything else -> spaces (newlines kept)
@@ -380,7 +388,23 @@ function buildVirtualVue(file) {
     if (node.type === 1) {
       const isComp = node.tagType === 1 || (/[A-Z]/.test(node.tag) || node.tag.includes('-'))
       if (isComp && node.tagType !== 2 && node.tagType !== 3) tags.push({ tag: node.tag, line: node.loc.start.line })
+      const asLink = (node.props || []).some(p => p.type === 6 && p.name === 'as' && p.value && /^(router-link|nuxt-link|RouterLink|NuxtLink)$/.test(p.value.content))
+      const linkTag = /^(NuxtLink|RouterLink|router-link|nuxt-link)$/.test(node.tag) || asLink
+      const anchor = node.tag === 'a'
       for (const p of node.props) {
+        const arg = p.type === 7 && p.arg && p.arg.type === 4 ? p.arg.content : (p.type === 6 ? p.name : '')
+        // a static `to` on another component (Nuxt UI / Vuetify buttons render a link) counts only as an absolute
+        // path; <Teleport to="body"> and other non-link `to` props are not navigation
+        const teleport = /^(Teleport|teleport)$/.test(node.tag)
+        const navAttr = (arg === 'to' && !teleport && (linkTag || p.type === 6)) || (anchor && arg === 'href')
+        const pathOnly = anchor || !linkTag
+        if (navAttr && p.type === 6 && p.value && internalHref(p.value.content) && (!pathOnly || p.value.content.trim().startsWith('/'))) {
+          sfcNav.push({ file: rel(file), line: p.loc.start.line, via: anchor ? 'href' : 'link', raw: p.value.content })
+        } else if (navAttr && p.type === 7 && p.exp && p.exp.content) {
+          const line = (p.exp.loc && p.exp.loc.start.line) || p.loc.start.line
+          const via = anchor ? 'href' : 'link'
+          pushStub(`function __tplnav_${n++}(${params()}) { return __cgNav(${JSON.stringify(via)}, (${p.exp.content})) }`, line)
+        }
         if (p.type !== 7) continue
         const line = (p.exp && p.exp.loc && p.exp.loc.start.line) || p.loc.start.line
         if (p.name === 'for') {
@@ -1911,6 +1935,8 @@ const callSites = []
 const deferredParamCalls = []   // api calls whose URL depends on an enclosing-function parameter
 const subscriptions = []        // realtime channel subscriptions (laravel-echo, pusher-js, useEcho hooks)
 const visits = []               // browser tests opening a page: page.goto('/x'), cy.visit('/x')
+const navSites = []             // {src, file, line, via, locs:[{kind, value, conf, helper}]}
+const vueRoutes = []            // vue-router createRouter route table
 
 // ---------- realtime: laravel-echo / pusher-js ----------
 const ECHO_SUB = { private: 'private', channel: 'public', join: 'presence', encryptedPrivate: 'private-encrypted' }
@@ -2561,6 +2587,105 @@ function isDeclName(n) {
     || ts.isPropertySignature(p) || ts.isEnumDeclaration(p) || ts.isPropertyAccessExpression(p) || ts.isEnumMember(p))
 }
 
+function varInit(id) {
+  try {
+    const sym = checker.getSymbolAtLocation(id)
+    const d = sym && (sym.declarations || [])[0]
+    if (d && ts.isVariableDeclaration(d) && d.initializer) return unwrap(d.initializer)
+  } catch { }
+  return null
+}
+function isRouterRecv(expr, depth = 0) {
+  expr = unwrap(expr)
+  if (!expr || depth > 4) return false
+  if (ts.isPropertyAccessExpression(expr) && expr.name.text === '$router') return true
+  if (ts.isCallExpression(expr)) {
+    const c = unwrap(expr.expression)
+    if (ts.isIdentifier(c) && c.text === 'useRouter') return true
+    if (ts.isPropertyAccessExpression(c) && c.name.text === 'useRouter') return true
+  }
+  if (ts.isIdentifier(expr)) {
+    if (expr.text === '$router') return true
+    const init = varInit(expr)
+    if (init && isRouterRecv(init, depth + 1)) return true
+    if (expr.text === 'router') return true
+  }
+  return false
+}
+function routerBinding(id) {
+  try {
+    const sym = checker.getSymbolAtLocation(id)
+    const d = sym && (sym.declarations || [])[0]
+    if (!d || !ts.isBindingElement(d) || !ts.isObjectBindingPattern(d.parent)) return false
+    const decl = d.parent.parent
+    return !!(decl && ts.isVariableDeclaration(decl) && decl.initializer && isRouterRecv(decl.initializer))
+  } catch { return false }
+}
+function navCall(node, callee) {
+  if (!ts.isCallExpression(node) || !node.arguments.length) return null
+  if (ts.isIdentifier(callee) && callee.text === 'navigateTo') return { via: 'navigateTo', arg: node.arguments[0] }
+  const verb = ts.isIdentifier(callee) ? callee.text : (ts.isPropertyAccessExpression(callee) ? callee.name.text : '')
+  if (verb !== 'push' && verb !== 'replace') return null
+  const via = verb === 'replace' ? 'replace' : 'push'
+  if (ts.isIdentifier(callee) && routerBinding(callee)) return { via, arg: node.arguments[0] }
+  if (ts.isPropertyAccessExpression(callee) && isRouterRecv(callee.expression)) return { via, arg: node.arguments[0] }
+  return null
+}
+function stripRoute(s) {
+  if (s == null) return null
+  let v = String(s).trim().split('?')[0].split('#')[0].trim()
+  if (!v || v === '{?}' || v.includes('{?}')) return null
+  return v
+}
+function routeLocs(e, depth) {
+  e = unwrap(e)
+  if (!e || depth > 4) return []
+  if (ts.isStringLiteralLike(e)) {
+    const v = stripRoute(e.text)
+    return v ? [{ kind: 'path', value: v, conf: 'exact' }] : []
+  }
+  if (ts.isTemplateExpression(e) || (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
+    const ev = evalStr(e)
+    return shapeDedupe(ev.vals).map(render).map(stripRoute).filter(Boolean).map(v => (
+      { kind: 'path', value: v, conf: /\{[^{}]+\}/.test(v) ? 'resolved' : 'exact' }))
+  }
+  if (ts.isObjectLiteralExpression(e)) {
+    const path = objProp(e, 'path')
+    if (path) {
+      const ps = routeLocs(path, depth + 1)
+      if (ps.length) return ps
+    }
+    const name = objProp(e, 'name')
+    const n = name && unwrap(name)
+    if (n && ts.isStringLiteralLike(n)) return [{ kind: 'name', value: n.text, conf: 'exact' }]
+    if (n && ts.isIdentifier(n)) {
+      const init = varInit(n)
+      if (init && ts.isStringLiteralLike(unwrap(init))) return [{ kind: 'name', value: unwrap(init).text, conf: 'resolved' }]
+    }
+    return []
+  }
+  if (ts.isIdentifier(e)) {
+    const init = varInit(e)
+    if (!init) return []
+    return routeLocs(init, depth + 1).map(x => ({ ...x, conf: 'resolved' }))
+  }
+  if (ts.isConditionalExpression(e)) {
+    return [...routeLocs(e.whenTrue, depth + 1), ...routeLocs(e.whenFalse, depth + 1)].map(x => ({ ...x, conf: 'resolved' }))
+  }
+  if (ts.isCallExpression(e)) {
+    const c = unwrap(e.expression)
+    if (ts.isPropertyAccessExpression(c) && c.name.text === 'resolve' && e.arguments[0])
+      return routeLocs(e.arguments[0], depth + 1).map(x => ({ ...x, conf: 'resolved', helper: depth > 0 || x.helper }))
+    if (depth > 0) return []
+    const fn = fnDeclOf(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(c) ? c.name : c))
+    if (!fn || !projectDecl(fn)) return []
+    const rs = returnExprs(fn).slice(0, 4)
+    const out = []
+    for (const r0 of rs) out.push(...routeLocs(r0, depth + 1).map(x => ({ ...x, conf: 'resolved', helper: true })))
+    return out
+  }
+  return []
+}
 function handleCall(node, cur, sf, r, encFn) {
   const callee = unwrap(node.expression)
   const line = lineOf(node, sf)
@@ -2570,9 +2695,16 @@ function handleCall(node, cur, sf, r, encFn) {
   if (I18N_FNS.has(cname) && node.arguments && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) {
     i18nUses.push({ src: cur, key: node.arguments[0].text, file: r, line })
   }
+  if (cname === '__cgNav' && node.arguments[1]) {
+    const via = node.arguments[0] && ts.isStringLiteralLike(node.arguments[0]) ? node.arguments[0].text : 'link'
+    navSites.push({ src: cur, file: r, line, via, locs: routeLocs(node.arguments[1], 0) })
+  }
+  const nav = navCall(node, callee)
+  if (nav) navSites.push({ src: cur, file: r, line, via: nav.via, locs: routeLocs(nav.arg, 0) })
   if (cname === 'definePageMeta' && node.arguments[0]) {
     const o = unwrap(node.arguments[0]); const m = {}
     const lay = objProp(o, 'layout'); if (lay && ts.isStringLiteralLike(unwrap(lay))) m.layout = unwrap(lay).text
+    const pn = objProp(o, 'name'); if (pn && ts.isStringLiteralLike(unwrap(pn))) m.name = unwrap(pn).text
     const mw = objProp(o, 'middleware')
     if (mw) { const u = unwrap(mw); m.middleware = ts.isArrayLiteralExpression(u) ? u.elements.filter(ts.isStringLiteralLike).map(x => x.text) : (ts.isStringLiteralLike(u) ? [u.text] : []) }
     pageMeta[r] = m
@@ -2805,6 +2937,132 @@ for (const [file, info] of sfcInfo) {
   }
 }
 
+function vueRel(spec, fromReal) {
+  if (!spec || !fromReal) return null
+  if (!spec.startsWith('.')) {
+    // `@/views/X.vue`: tsconfig paths
+    const p = resolveVuePath(spec.endsWith('.vue') ? spec : spec + '.vue', fromReal)
+    return p ? rel(p) : null
+  }
+  let abs = path.resolve(path.dirname(fromReal), spec)
+  if (!abs.endsWith('.vue')) abs += '.vue'
+  if (vueSet.has(abs) || fs.existsSync(abs)) return rel(abs)
+  return null
+}
+function componentVue(e, fromReal) {
+  e = unwrap(e)
+  if (!e) return null
+  if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
+    if (ts.isCallExpression(e.body)) return componentVue(e.body, fromReal)
+    const call = returnExprs(e).map(unwrap).find(x => ts.isCallExpression(x))
+    return call ? componentVue(call, fromReal) : null
+  }
+  if (ts.isCallExpression(e) && e.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    const a = e.arguments[0]
+    return a && ts.isStringLiteralLike(a) ? vueRel(a.text, fromReal) : null
+  }
+  if (ts.isIdentifier(e)) {
+    let sym = null
+    try { sym = checker.getSymbolAtLocation(e) } catch { return null }
+    const local = sym && (sym.declarations || [])[0]
+    if (sym && (sym.flags & ts.SymbolFlags.Alias)) {
+      try {
+        const a = checker.getAliasedSymbol(sym)
+        if (a && (a.declarations || []).length) sym = a
+      } catch { }
+    }
+    const d = (sym && (sym.declarations || [])[0]) || local
+    if (!d) return null
+    if (ts.isSourceFile(d)) {
+      const real = realFile(d)
+      if (real.endsWith('.vue')) return rel(real)
+    }
+    if (ts.isImportClause(d) || ts.isImportSpecifier(d)) {
+      const imp = ts.isImportClause(d) ? d.parent : d.parent.parent
+      const spec = imp && imp.moduleSpecifier
+      if (spec && ts.isStringLiteralLike(spec)) return vueRel(spec.text, realFile(imp.getSourceFile()))
+    }
+    if (ts.isVariableDeclaration(d) && d.initializer) return componentVue(d.initializer, realFile(d.getSourceFile()))
+  }
+  return null
+}
+function joinRoute(prefix, child) {
+  if (child == null || child === '') return prefix || '/'
+  if (child.startsWith('/')) return child
+  if (!prefix || prefix === '/') return '/' + child
+  return prefix.replace(/\/$/, '') + '/' + child
+}
+function collectRouteArray(expr, prefix, fromReal, depth) {
+  expr = unwrap(expr)
+  if (!expr || depth > 6) return
+  if (ts.isIdentifier(expr)) {
+    let init = varInit(expr)
+    if (!init && expr.parent && ts.isShorthandPropertyAssignment(expr.parent)) {
+      try {
+        const sym = checker.getShorthandAssignmentValueSymbol(expr.parent)
+        const d = sym && (sym.declarations || [])[0]
+        if (d && ts.isVariableDeclaration(d) && d.initializer) init = unwrap(d.initializer)
+      } catch { }
+    }
+    if (init) collectRouteArray(init, prefix, fromReal, depth + 1)
+    return
+  }
+  if (ts.isConditionalExpression(expr)) {
+    // `routes: flat ? flatten(routes) : routes`
+    collectRouteArray(expr.whenTrue, prefix, fromReal, depth + 1)
+    collectRouteArray(expr.whenFalse, prefix, fromReal, depth + 1)
+    return
+  }
+  if (!ts.isArrayLiteralExpression(expr)) return
+  for (const el of expr.elements) {
+    if (ts.isSpreadElement(el)) { collectRouteArray(el.expression, prefix, fromReal, depth + 1); continue }
+    const o = unwrap(el)
+    if (!ts.isObjectLiteralExpression(o)) continue
+    const pp = objProp(o, 'path')
+    let pathLit = ''
+    if (pp && ts.isStringLiteralLike(unwrap(pp))) pathLit = unwrap(pp).text
+    else if (pp) {
+      // `path: REDIRECT_PATH`: a constant; a path that cannot be evaluated is no page (nor are its children)
+      const v = strVals(pp)
+      if (v.length !== 1 || /[\u0001{]/.test(v[0])) continue
+      pathLit = v[0]
+    }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(pathLit)) continue   // a menu entry holding an external URL
+    const full = joinRoute(prefix, pathLit)
+    const nm = objProp(o, 'name')
+    const name = nm && ts.isStringLiteralLike(unwrap(nm)) ? unwrap(nm).text : null
+    const comp = objProp(o, 'component')
+    const component = comp ? componentVue(comp, fromReal) : null
+    const rd = objProp(o, 'redirect')
+    const rv = rd ? strVals(rd) : []
+    const redirect = rv.length === 1 && !/[\u0001{]/.test(rv[0]) ? joinRoute(prefix, rv[0]) : null
+    const sf = o.getSourceFile()
+    vueRoutes.push({ path: full, name, component, redirect, file: rel(realFile(sf)), line: lineOf(o, sf) })
+    const ch = objProp(o, 'children')
+    if (ch) collectRouteArray(unwrap(ch), full, fromReal, depth + 1)
+  }
+}
+for (const sf of sourceFiles) {
+  const fromReal = realFile(sf)
+  const v = n => {
+    if (ts.isCallExpression(n)) {
+      const c = unwrap(n.expression)
+      const name = ts.isIdentifier(c) ? c.text : (ts.isPropertyAccessExpression(c) ? c.name.text : '')
+      if (name === 'createRouter') {
+        const arg0 = n.arguments[0] && unwrap(n.arguments[0])
+        if (arg0 && ts.isObjectLiteralExpression(arg0)) {
+          const routes = objProp(arg0, 'routes')
+          if (routes) collectRouteArray(routes, '', fromReal, 0)
+        }
+      }
+    }
+    ts.forEachChild(n, v)
+  }
+  v(sf)
+}
+for (const s of sfcNav) navSites.push({ src: null, file: s.file, line: s.line, via: s.via, locs: [{ kind: 'path', value: s.raw, conf: 'exact' }] })
+stats.nav_sites = navSites.length
+stats.vue_routes = vueRoutes.length
 stats.nodes = nodes.length
 stats.edges = edges.length
 stats.api_calls = apiCalls.length
@@ -2822,7 +3080,7 @@ stats.seconds_fw_facts = tFw / 1000
 stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
 stats.config = { tsconfig: noConfig ? null : (parsed.packageConfigs ? null : rel(tsconfigPath)), root_files: rootNames.length,
   ...(parsed.packageConfigs ? { package_tsconfigs: parsed.packageConfigs } : {}) }
-fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts,
+fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, nav_sites: navSites, vue_routes: vueRoutes, fw: fwFacts,
   subscriptions, bridges, bridge_receivers: bridgeReceivers.filter(b => !(b.protocol === 'react-native-event' && jsEmitted.has(b.module))), bridge_dynamic: bridgeDynamic, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
   skipped_links: [...new Set(skippedLinks)].sort(),
   // for `cg coverage` (#106): the files analysed, and the roots they come from (source dirs, source files, test trees);
