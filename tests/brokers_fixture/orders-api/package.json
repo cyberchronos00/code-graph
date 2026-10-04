@@ -1,0 +1,1 @@
+{"name": "orders-api", "version": "1.0.0", "dependencies": {"kafkajs": "^2.2.4", "amqplib": "^0.10.4", "ioredis": "^5.4.1", "mqtt": "^5.10.0", "nats": "^2.28.0"}}

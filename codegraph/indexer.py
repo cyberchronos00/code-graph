@@ -258,6 +258,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (jb := apply_jobs(project, builder)):
         jb["seconds"] = round(time.time() - t_jb, 2)
         stats["jobs"] = jb
+    # message brokers and pub/sub (#35): endpoint:kafka / amqp / redis-pubsub / redis-stream / mqtt / nats
+    from .brokers import apply as apply_brokers
+    t_bk = time.time()
+    if (bk := apply_brokers(project, builder)):
+        bk["seconds"] = round(time.time() - t_bk, 2)
+        stats["brokers"] = bk
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

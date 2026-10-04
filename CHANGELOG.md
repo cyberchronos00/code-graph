@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Message brokers and pub/sub as protocol endpoints (#35, part 1): `endpoint:kafka:<topic>`,
+  `endpoint:amqp:<exchange>/<routing key>` and `endpoint:amqp:queue:<name>`, `endpoint:redis-pubsub:<channel>`, the
+  new protocol `redis-stream`, `endpoint:mqtt:<topic>` and `endpoint:nats:<subject>`, from kafkajs / node-rdkafka /
+  confluent-kafka / kafka-python / aiokafka / faust, amqplib / pika / aio-pika / php-amqplib, ioredis / node-redis /
+  redis-py / Laravel `Redis::`, MQTT.js / paho-mqtt / aiomqtt / php-mqtt and nats.js / nats-py. AMQP consumers
+  receive through their queue bindings (topic, direct and fanout exchanges, server-named queues), with the new
+  `amqp` matcher (same exchange, topic-exchange key rules). Consumer groups and NATS queue groups are recorded as
+  `group`. Calls on a repository's own wrapper class are skipped.
 - Job queues as protocol endpoints (#36, part 1, Python): `endpoint:job:<celery|rq|dramatiq>:<name>`, RECEIVED_BY
   the task function and SENDS_TO from enqueue sites (Celery `.delay` / `.apply_async` / `send_task("name")`, RQ
   `enqueue(func | "dotted.path" | f-string)` and `@job`, Dramatiq `.send` / `.send_with_options` / `actor=`), plus

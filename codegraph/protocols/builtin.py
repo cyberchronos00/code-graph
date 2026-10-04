@@ -64,12 +64,15 @@ register(Protocol("mqtt", "tcp", "MQTT topic (publish -> subscribe, `+` / `#` wi
                   ports=(1883, 8883), schemes=("mqtt", "mqtts")))
 register(Protocol("nats", "tcp", "NATS subject (publish / request -> subscribe, `*` / `>` wildcards)", matcher=M.nats,
                   fanout=True, ports=(4222,), schemes=("nats", "tls")))
-register(Protocol("amqp", "tcp", "AMQP 0-9-1 routing key on a topic exchange (`*` / `#`)", matcher=M.amqp_topic,
+register(Protocol("amqp", "tcp", "AMQP 0-9-1 `<exchange>/<routing key>` -> bound queues (topic `*` / `#`; fanout "
+                  "`<exchange>/#`) and `queue:<name>` (default exchange)", matcher=M.amqp,
                   fanout=True, ports=(5672, 5671), schemes=("amqp", "amqps")))
 register(Protocol("kafka", "tcp", "Kafka topic (produce -> consumer group subscription; regex subscriptions as globs)",
                   matcher=M.glob, fanout=True, ports=(9092,), schemes=("kafka",)))
 register(Protocol("redis-pubsub", "tcp", "Redis PUBLISH -> SUBSCRIBE / PSUBSCRIBE (glob patterns)", matcher=M.glob,
                   fanout=True, ports=(6379,), schemes=("redis", "rediss")))
+register(Protocol("redis-stream", "tcp", "Redis stream key: XADD -> XREAD / XREADGROUP (consumer group)", fanout=True,
+                  ports=(6379,), schemes=("redis", "rediss")))
 register(Protocol("socketio", "tcp", "Socket.IO event (<namespace>#<event>; emit -> on, both directions; python-socketio "
                   "server and client)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True,
                   directional=True))

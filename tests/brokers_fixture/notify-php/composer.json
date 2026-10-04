@@ -1,0 +1,1 @@
+{"name": "acme/notify", "require": {"laravel/framework": "^11.0", "php-amqplib/php-amqplib": "^3.7"}}

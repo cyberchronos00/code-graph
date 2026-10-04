@@ -64,11 +64,11 @@ Shared matchers (`codegraph/protocols/matchers.py`):
 | `path` | URL segments, `{param}` / `{rest*}` / embedded params, one literal segment in common (the `cg link` route matcher) | http, ws |
 | `mqtt` | `/` levels, `+` one level, `#` the rest (last only, also the parent level) | mqtt |
 | `nats` | `.` tokens, `*` one token, `>` one or more (last only) | nats |
-| `amqp_topic` | `.` words, `*` one word, `#` zero or more (anywhere) | amqp |
+| `amqp` | `<exchange>/<routing key>`: the same exchange, then the key by topic-exchange rules (`.` words, `*` one word, `#` zero or more, anywhere); `queue:<name>` exact | amqp |
 | `glob` | shell-style `*` / `?` / `[...]` over the whole name | kafka (regex subscriptions written as globs), redis-pubsub (PSUBSCRIBE) |
 | `template` | whole-name `{param}` templates | socketio |
 | `dotted` | `.` segments with `{param}` | pusher |
-| `exact` | same name | bridges, nest-*, jobs, events, llm_tool |
+| `exact` | same name | bridges, nest-*, jobs, events, llm_tool, redis-stream |
 | `mcp` | `<server>/<name>`: `*` for a client that does not name the server, `{param}` URI templates | mcp_tool, mcp_resource, mcp_prompt ([ai-tools.md](ai-tools.md)) |
 
 ## Existing kinds in the same view
@@ -456,10 +456,44 @@ outline's task classes run by name from the `tasks` queue); actors held in attri
 (`self.sync_task.send_with_options`); Nest producers whose processor is in another repo (the plugin records
 DISPATCHES only to processors it sees); Messenger `#[AsMessage]` routing and Messenger stamps.
 
+## Message brokers
+
+`codegraph/brokers.py` (#35 part 1) links producers and consumers that talk through a broker. They usually live
+in different services, so `cg link` matches them across repositories:
+
+| endpoint | sent by | received by |
+|---|---|---|
+| `kafka:<topic>` | kafkajs `producer.send({topic, messages})` / `sendBatch({topicMessages})`, node-rdkafka and confluent-kafka `produce(topic)`, kafka-python / aiokafka `producer.send(topic)` / `send_and_wait`, faust `topic.send()` | kafkajs `consumer.subscribe({topic | topics})` (the handler is the `run({eachMessage})` callback, `attrs.group` from `kafka.consumer({groupId})`), `consumer.subscribe([..])`, `KafkaConsumer(topic, group_id=)`; `/regex/` subscriptions become globs when they are simple |
+| `amqp:<exchange>/<key>` | amqplib / amqp-connection-manager `channel.publish(ex, key)`, pika `basic_publish(exchange=, routing_key=)`, aio-pika `exchange.publish(msg, routing_key=)`, php-amqplib `basic_publish($msg, ex, key)` | the consumer of a queue bound to the exchange (`bindQueue` / `queue_bind` / `queue.bind`): `consume(q, fn)`, `basic_consume(queue=, on_message_callback=)`, `queue.consume(cb)`, php-amqplib `basic_consume(q, .., $callback)`. Server-named queues (`assertQueue('')`, `queue_declare(queue="")`, `list($q,,) = queue_declare("")`) are followed through their variable. Fanout and headers exchanges receive `<exchange>/#`; a binding key from argv or a loop variable is `#` (heuristic) |
+| `amqp:queue:<name>` | `sendToQueue(q)`, `publish("", q)` (the default exchange) | `consume(q)` of a named queue |
+| `redis-pubsub:<channel>` | ioredis / node-redis / redis-py `publish(ch, msg)`, Laravel `Redis::publish`, Predis / phpredis | `subscribe(a, b)` (ioredis handler: `.on('message', h)`), node-redis `subscribe(ch, listener)`, redis-py `pubsub().subscribe(**{ch: handler})`, `psubscribe` globs, Laravel `Redis::subscribe([..], fn)` |
+| `redis-stream:<key>` | `xadd(key, ..)` | `xreadgroup` / `xread` (`'STREAMS', key`, `{key: id}`, node-redis `{key, id}`), `attrs.group` |
+| `mqtt:<topic>` | MQTT.js / paho-mqtt / aiomqtt / php-mqtt `publish(topic, payload)` | `subscribe(topic | [..] | {topic: qos})` with the `on('message', h)` / `on_message = h` handler, paho `message_callback_add(topic, h)` |
+| `nats:<subject>` | nats.js / nats-py `publish(subject)`, `request(subject)` (role `request`) | `subscribe(subject, {callback, queue})` / `subscribe(subject, cb=, queue=)` (`attrs.group`) |
+
+The protocol of a `publish(` / `subscribe(` call is decided in this order:
+1. the variable holding the client (`const client = mqtt.connect(..)`, `new Redis()`, `nc = await nats.connect()`,
+   `r.pubsub()`);
+2. the one messaging library the file imports;
+3. the object name (`this.redis`, `mqttClient`, `nc`) among the libraries the project uses.
+
+A call on the repository's own wrapper class (zigbee2mqtt's `this.mqtt.publish(..)` on `class Mqtt`) or on
+`this` is skipped and counted as `wrapper_calls_skipped`, because the wrapper rewrites the topic. Names come from
+literals, constants (same file, imported upper-case constants, TS enums), locals and fields assigned one, and
+templates (`orders.{id}`, heuristic). `process.env.X ?? "d"` and `os.getenv("X", "d")` give the default
+(heuristic), and an env key without a default gives `env:X`. Receivers whose name is unknown, or starts with an
+unknown part (`{base_topic}/#` would take every topic), are counted, not recorded. Receivers in test files are
+skipped.
+
+Not covered yet (part 2): Kotlin / Java (kafka-clients, Spring `@KafkaListener` / `@RabbitListener` /
+`@SqsListener`, Paho, jnats), Rust (rdkafka, lapin, async-nats, rumqttc, redis-rs), Dart / Swift / C++ clients,
+SQS / SNS / EventBridge / Google Pub/Sub / Azure, STOMP, ZeroMQ, JetStream streams and consumers, Kafka and AMQP
+names from config files, queue bindings declared in infrastructure as code (serverless, Terraform, KEDA), broker
+nodes (#40) on the endpoints, and wrapper classes (their callers' topics).
+
 ## Not covered yet
 
-- Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
-  children (#32, #35, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
+- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (#32, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
   endpoints (#32).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.

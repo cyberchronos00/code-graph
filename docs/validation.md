@@ -946,3 +946,33 @@ now unchanged. `tests/test_jobs.py` covers the cross-repo cases on `tests/jobs_f
   template;
 - Laravel `$queue` / `->onQueue()` sends and Horizon consumers;
 - Symfony Messenger handlers, `messenger.yaml` routing and `messenger:consume` workers.
+
+## Message brokers: Kafka, AMQP, Redis, MQTT, NATS (#35 part 1)
+
+| Project | Endpoints | Edges | Notes |
+|---|---|---|---|
+| rabbitmq-tutorials 6771f3e, `python` / `php` / `javascript-nodejs` | 9 / 9 / 10 | 6 SENDS_TO, 6 RECEIVED_BY, 3 MATCHES_ENDPOINT each (js: 7 RECEIVED_BY) | The six tutorial topologies in three languages. Hello / work queues (`queue:hello`, `queue:task_queue`) and RPC (`queue:rpc_queue`) pair by queue name. Fanout `logs`, direct `direct_logs` and topic `topic_logs` exchanges reach the consumers through the bindings of their server-named queues (pika `result.method.queue`, amqplib `q.queue`, php-amqplib `list($queue_name, ,)`). Binding keys come from argv, so the bindings are `<exchange>/#` (heuristic). The RPC reply (`props.reply_to`) and the callback queue held in `self.callback_queue` are counted as unresolved. The JS directory has no jsconfig, so it was indexed with one added (plain JS without a config is not indexed) |
+| nats-by-example 232213c, Python and Node examples | 9 + 8 | 17 + 10 SENDS_TO, 4 + 1 RECEIVED_BY, 4 + 4 MATCHES_ENDPOINT | `greet.*` subscriptions match `greet.joe` / `greet.bob` publishes and requests. Nested `cb=greet_handler` functions have no node of their own, so the receiver is the enclosing `main`. JetStream publishes have no core subscriber (`no_receiver`; stream consumers are part 2) |
+| kafkajs 55b0b41 `examples/` | 1 | 1 SENDS_TO, 1 RECEIVED_BY | `producer.send({topic, messages})` and `consumer.subscribe({topic})` with the shorthand `{ topic }` (the examples' `require('../index')` was pointed at `kafkajs`) |
+| outline 478e812 | 4 | 2 SENDS_TO, 2 RECEIVED_BY, 2 MATCHES_ENDPOINT, 1 TEST_CALLS | ioredis `publish(\`${CHANNEL_PREFIX}:${documentId}\`)` matches `psubscribe(\`${CHANNEL_PREFIX}:*\`)`. 14 `.publish(` calls on outline's own classes with a `publish` method (`document.publish(ctx, ..)`) are skipped as wrapper calls |
+| librenms 56761508 (php-amqplib) | 1 | 1 SENDS_TO | The Canopsis alert transport publishes to the topic exchange `canopsis.events` with the key `'.' . $msg_body['resource']` -> `canopsis.events/.{resource}` (heuristic); the consumer is outside the repo. A commented-out assignment of the key is ignored |
+| nest 35142c3 | 1 | 1 TEST_CALLS | An e2e spec's raw ioredis `pub.publish(\`${channel}.reply\`)`. The microservices package's own Redis / RMQ / MQTT / NATS / Kafka transports take channel and queue names at run time (counted as unresolved). graphql-subscriptions `pubSub.publish('catCreated')` in the samples is in-process and is not taken for Redis |
+| zigbee2mqtt 344b6e0 | 0 | none | Every publish goes through the app's own `class Mqtt` (`this.mqtt.publish("bridge/event")`), which prefixes the base topic, so 87 wrapper calls are skipped instead of recorded under the wrong topic. The wrapper's own client calls use the run-time topic only (unresolved). Wrappers are part 2 |
+
+The other #39 corpora are unchanged: immich, opentelemetry-demo, aiocoap, alacritty, ansible, authentik, django,
+electron-fiddle, element-x-ios, eslint, flask, httpie, koel, ktor-samples, laravel.io, mcp-servers, microblog,
+netbox, opentelemetry-python, pixelfed, python-sdk, python-zeroconf, redis, saleor and tauri, and so is invoiceninja. opentelemetry-demo's Kafka
+producer is Go and its consumer Kotlin (part 2). A random 20 of the 95 new edges of the tutorial, example and outline rows were checked
+by hand against the source. In the first sample, 2 were wrong: a nested `def callback` in `receive_logs.py` and
+`receive_logs_direct.py` resolved to the same-named function of `worker.py`. A handler in another file is now taken
+only when it is imported. In a second sample, after the fix, all 20 were correct. `tests/test_brokers.py` covers
+`tests/brokers_fixture`:
+- a TS orders API producing to Kafka (enum topic, `sendBatch`, env default), a topic exchange, the default exchange,
+  Redis, MQTT and NATS request;
+- a Python fulfilment worker consuming them (confluent-kafka with group and imported constants, a pika server-named
+  queue bound with `order.eu.*`, redis-py `subscribe(**{ch: handler})` and `psubscribe`, paho `on_message`, nats-py
+  queue group);
+- a Laravel notifier (`Redis::publish(self::CHANNEL)`, `Redis::subscribe`, php-amqplib);
+- the `cg link` of the API and the worker (`order.{region}.created` -> `order.eu.*` heuristic, `stock.check.{sku}`
+  -> `stock.check.*`, `orders.cancelled` `no_receiver`).
+

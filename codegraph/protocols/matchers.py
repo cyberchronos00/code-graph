@@ -127,10 +127,25 @@ def mcp(send: str, recv: str) -> dict | None:
 mqtt = topic("/", "+", "#")
 nats = topic(".", "*", ">", many_min=1)
 amqp_topic = topic(".", "*", "#", many_last=False)
-dotted = topic(".", None, None)          # `{param}` templates only (Laravel channel names, Socket.IO rooms)
+dotted = topic(".", None, None)
+
+
+def amqp(send: str, recv: str) -> dict | None:
+    """AMQP 0-9-1 `<exchange>/<routing key>` (exchange equal, key by topic-exchange rules: `*` one word, `#` zero or
+    more) and `queue:<name>` (the default exchange: exact)."""
+    if send.startswith("queue:") or recv.startswith("queue:"):
+        return exact(send, recv)
+    se, sl, sk = send.partition("/")
+    re_, rl, rk = recv.partition("/")
+    if not (sl and rl) or se != re_:
+        return None
+    i = amqp_topic(sk, rk)
+    if i is not None:
+        i["lit"] += 1
+    return i          # `{param}` templates only (Laravel channel names, Socket.IO rooms)
 
 MATCHERS = {"exact": exact, "glob": glob, "path": path, "template": template, "mqtt": mqtt, "nats": nats, "amqp_topic": amqp_topic,
-            "dotted": dotted, "mcp": mcp}
+            "dotted": dotted, "mcp": mcp, "amqp": amqp}
 
 
 def rank(info: dict) -> tuple:
