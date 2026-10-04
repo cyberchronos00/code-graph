@@ -20,6 +20,17 @@ commands, output and the graph schema; such changes are listed under **Changed**
   name in two packages are told apart by the qualifier. Plain Node programs using `@grpc/grpc-js` / Connect, up to
   three directories deep, are now indexed. grpc's, grpc-node's, tonic's, grpc-kotlin's, grpc-dart's, grpc-swift's and
   connect-es's examples and the OpenTelemetry demo pair clients with servers; 20 sampled edges correct.
+- Thrift, tRPC and JSON-RPC (#33): `.thrift` services become `endpoint:thrift:<file>.<Service>/<method>` (inherited
+  methods stay on the declaring service; `oneway`, `throws`), with Python `Processor(handler)` / `Iface`, Node
+  `createServer` handler maps, C++ `SvcIf`, Rust `SyncHandler`, PHP and Dart servers and their generated clients.
+  tRPC router trees (nested routers, imported mounts and procedure variables, `mergeRouters`) become
+  `endpoint:trpc:<path>`, RECEIVED_BY the resolver and SENDS_TO from React Query hooks, vanilla client calls and
+  server callers on a declared path; the TS extractor gives inline resolvers their own function node
+  (`postRouter.create`). JSON-RPC 2.0 methods become `endpoint:jsonrpc:<method>`: jayson, `addMethod`, Python
+  `@method`, jsonrpsee `#[rpc]` traits (namespaces) and `register_method` servers; `.request("x")`, jsonrpcclient and
+  `{"jsonrpc": "2.0", "method": "x"}` payload clients. Top-level script code calling any RPC client is sent from the
+  file's module node. Node files that mention `thrift` count as network code. The Thrift tutorial, create-t3-turbo,
+  cal.com (174 procedures, 226 client calls), jayson and the jsonrpsee examples pair; 20 sampled edges correct.
 - Raw TCP / UDP sockets (#39) as `endpoint:tcp:<port>` / `endpoint:udp:<port>`: listeners (RECEIVED_BY the handler or
   the listening function, with `bind_address`, `exposure` all / loopback / specific, multicast group and port env
   keys) and connects / sends (SENDS_TO) in Python, JS / TS, Rust, Kotlin, C (BSD sockets and libuv), Swift, Dart and

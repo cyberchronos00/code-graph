@@ -839,14 +839,14 @@ shown; "paired" endpoints have both a server and a client in the graph):
 
 | Project | Services / methods | Paired | Edges | Notes |
 |---|---|---|---|---|
-| grpc `examples/` 724b3cc | 11 / 32 | 16 | 77 RECEIVED_BY, 92 SENDS_TO | C++ and Python; 17 C++ servers whose class the C/C++ parser loses after an `ABSL_FLAG(..)` line without a semicolon are counted as `server_class_without_methods`; the PHP, Node and other trees are not indexed from this root. The released code stopped on this tree with an IndexError in the socket scan (fixed) |
+| grpc `examples/` 724b3cc | 11 / 32 | 16 | 77 RECEIVED_BY, 92 SENDS_TO | C++ and Python; 17 C++ servers whose class the C/C++ parser loses after a file-level `ABSL_FLAG(..);` line (#131) are counted as `server_class_without_methods`; the PHP, Node and other trees are not indexed from this root. The released code stopped on this tree with an IndexError in the socket scan (fixed) |
 | grpc `examples/php` with `examples/protos` | 6 / 18 | 5 | 5 RECEIVED_BY, 5 SENDS_TO | `Greeter` / `RouteGuideService extends ..Stub`, clients `new ..Client(..)`; `echo/client.php` calls at file level, outside any function |
 | grpc-node `examples/` e742b11 | 6 / 13 | 10 | 30 RECEIVED_BY, 34 SENDS_TO | plain-JS programs (not indexed before): `addService` handler maps, proto-loader `new pkg.Svc(..)` and static-codegen clients |
 | tonic `examples/` 2681a7e | 7 / 15 | 7 | 34 RECEIVED_BY, 36 SENDS_TO | trait impls and `XClient::connect`; reflection / health services have no client in the tree |
 | grpc-kotlin `examples/` fffe032 | 5 / 8 | 8 | 8 RECEIVED_BY, 6 SENDS_TO, 5 TEST_CALLS | `CoroutineImplBase` servers, `CoroutineStub` clients and server tests |
 | grpc-dart `example/route_guide`, `helloworld` bdbcf3b | 1 / 4, 1 / 1 | 4, 1 | 6 RECEIVED_BY, 7 SENDS_TO | `ServiceBase` servers, `RouteGuideClient` fields |
 | grpc-swift `Examples/v1` + `Protos` 65d0084 | 15 / 42 | 9 | 13 RECEIVED_BY, 10 SENDS_TO | providers, `Echo_EchoAsyncClient` parameters and `Routeguide_RouteGuideAsyncClient` members (`makeRecordRouteCall`) |
-| connect-es examples 1be3b33 | 2 / 5 | 2 | 12 RECEIVED_BY, 32 SENDS_TO, 8 TEST_CALLS | `router.service(ElizaService, ..)` and `createClient(ElizaService, ..)` across the framework examples |
+| connect-es examples 1be3b33 | 2 / 5 | 2 | 12 RECEIVED_BY, 38 SENDS_TO, 10 TEST_CALLS | `router.service(ElizaService, ..)` and `createClient(ElizaService, ..)` across the framework examples |
 | opentelemetry-demo 7ea09b8 | 11 / 21 | 1 | 2 RECEIVED_BY, 12 SENDS_TO | the TypeScript frontend's gateways and the Python recommendation service; the C++ currency, plain-JS payment and Rust shipping services sit in sub-projects that are not indexed from the repo root, and Go / C# / Java / Ruby / Elixir have no plugin |
 
 No edge or node changed on the 20 corpora checked for #39 (electron-fiddle, immich, saleor, django, flask, httpie,
@@ -854,3 +854,22 @@ outline, eslint, mcp-servers, netbox, opentelemetry-python, python-sdk, python-z
 aiocoap, ansible, ktor-samples, element-x-ios). A random 20 of the gRPC edges above were checked by hand against the
 source: 20 correct. `tests/test_rpc.py` covers Python, Node / TypeScript, Connect, tonic and Kotlin on
 `tests/rpc_fixture` (including two packages with a `RouteGuide` service each) and grpc++ on `tests/rpc_cpp_fixture`.
+
+### Thrift, tRPC and JSON-RPC (#33 part 2)
+
+| Project | Endpoints (paired) | Edges | Notes |
+|---|---|---|---|
+| thrift `tutorial/` 50bbda1 | 5 (4) | 15 RECEIVED_BY, 18 SENDS_TO | C++ `CalculatorIf` / `CalculatorClient`, Python `Processor(handler)` / `Client`, Dart; `getStruct` stays on `shared.SharedService` |
+| the same tutorial's nodejs, rs, php trees with the `.thrift` files | 5 (4), 5 (5), 5 (0) | 10 / 10, 5 / 7, 5 / 0 | Node `createServer` maps and top-level clients (module level); Rust `SyncHandler` impls and factory functions; PHP clients are top-level scripts without a module node. Java has no plugin |
+| create-t3-turbo 8f945b7 | 6 (4) | 6 RECEIVED_BY, 12 SENDS_TO | `satisfies TRPCRouterRecord` routers mounted in `appRouter`, `trpc.post.all.queryOptions()` clients |
+| cal.com 54343aa | 174 (122) | 174 RECEIVED_BY, 226 SENDS_TO | 33 routers, imported mounts (`eventTypesRouter as heavyEventTypesRouter`) and procedure variables; 221 of 224 `trpc.viewer..` chains in the app name a declared path |
+| jayson 4c368aa | 28 (8) | 39 RECEIVED_BY, 73 SENDS_TO, 79 TEST_CALLS | method maps and `new jayson.Server(..)`; 14 handlers wrapped in `jayson.Method(..)` unresolved; tests name methods the server lacks (`add_4`), which stay send-only |
+| jsonrpsee `examples/` e6d59a0 | 20 (4) | 33 RECEIVED_BY, 32 SENDS_TO | `#[rpc(namespace = "state")]` traits (`state_getKeys`, exact), `register_method` closures (heuristic, the registering function) |
+
+On the 20 #39 corpora the only change is in tauri: the CLI's jsonrpsee `options` method (`register_method`,
+heuristic) and the three `client.request("options", ..)` calls that reach it, all correct; the JSON-RPC scan skips
+MCP files, so mcp-servers and python-sdk are unchanged. On the gRPC corpora above only the connect-es top-level
+clients changed (6 SENDS_TO, 1 TEST_CALLS from module nodes). A random 20 of the new Thrift / tRPC
+/ JSON-RPC edges were checked by hand: 20 correct. `tests/test_rpc.py` covers Thrift (Python, Node, C++), tRPC
+(inline, nested, imported, procedure-variable mounts and clients) and JSON-RPC (jayson, jsonrpcserver, payloads,
+jsonrpsee) on the same fixtures.

@@ -157,13 +157,13 @@ def cordova_www_dirs(root: Path) -> list[str]:
     return out[:50]
 
 
-NODE_NET = re.compile(r"""(?:require\(\s*|from\s+)['"](?:node:)?(?:net|dgram|tls|@grpc/grpc-js|grpc|@grpc/proto-loader|"""
+NODE_NET = re.compile(r"""(?:require\(\s*|from\s+)['"](?:node:)?(?:net|dgram|tls|@grpc/grpc-js|grpc|@grpc/proto-loader|thrift|"""
                       r"""@connectrpc/connect(?:-node)?)['"]""")
 
 
 def node_socket_dirs(root: Path, limit: int = 400) -> list[str]:
     """Top-level directories (or `.`) of the plain-JS files of a Node program that uses net / dgram / tls (#39) or
-    gRPC / Connect (#33), looked up three directory levels deep."""
+    gRPC / Connect / Thrift (#33), looked up three directory levels deep."""
     out, seen = [], 0
     skip = set(SKIP_DIRS) | {"test", "tests", "examples", "docs", "build", "vendor"}   # preset skip dirs + non-program dirs
 

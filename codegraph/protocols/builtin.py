@@ -24,6 +24,13 @@ register(Protocol("nest-ws", "tcp", "NestJS WebSocket gateway message (@Subscrib
 register(Protocol("grpc", "tcp", "gRPC method <package>.<Service>/<Method> from .proto files (codegraph/rpc.py): stub "
                   "call -> generated base class implementation; NestJS @GrpcMethod messages are read as grpc too",
                   kinds=("endpoint", "message"), guards=True, schemes=("grpc", "grpcs")))
+register(Protocol("thrift", "tcp", "Apache Thrift method <module>.<Service>/<method> from .thrift files (codegraph/rpc.py): "
+                  "client call -> handler implementing the generated Iface / If", guards=True))
+register(Protocol("trpc", "tcp", "tRPC procedure <path> (codegraph/rpc.py): api.<path>.useQuery / .query / .mutate / "
+                  "queryOptions and server-side callers -> the router's procedure resolver", guards=True))
+register(Protocol("jsonrpc", "tcp", "JSON-RPC 2.0 method by name (codegraph/rpc.py): client.request('x') / payloads "
+                  "{jsonrpc: '2.0', method: 'x'} -> jayson / json-rpc-2.0 / vscode-jsonrpc / jsonrpcserver / jsonrpsee handlers",
+                  guards=True))
 register(Protocol("bull", "tcp", "Bull / BullMQ job queue (Queue.add -> @Processor / @Process, WorkerHost.process)",
                   source=A, kinds=("job",)))
 register(Protocol("laravel-queue", "tcp", "Laravel queued job (dispatch / Bus / schedule -> Job::handle)", source=A,

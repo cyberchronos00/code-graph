@@ -244,6 +244,58 @@ samples of `server_class_without_methods`, `stub_without_variable`, `handler_unr
 `client_call_outside_function`. NestJS `@GrpcMethod` / `ClientGrpc` handlers stay `message:grpc` nodes (protocol
 `grpc` in the same view).
 
+A top-level client call in a script (no enclosing function) is sent from the file's module node, with
+`how: ... (module level)`; this holds for all four RPC protocols.
+
+## Thrift (IDL contracts)
+
+`endpoint:thrift:<file stem>.<Service>/<method>` (codegraph/rpc.py), one per function of a `service` in the
+project's `.thrift` files (`#`, `//` and `/* */` comments masked). A service that `extends` another keeps the
+inherited methods on the declaring service (`shared.SharedService/getStruct`), and a server or client of the child
+links to them. The node records `request` (the argument list), `response`, `streaming: oneway` for `oneway`
+functions (else `unary`), `throws` (exception types) and `declared_in`.
+
+| language | server (RECEIVED_BY) | client (SENDS_TO) |
+|---|---|---|
+| Python | `Svc.Processor(handler)` (the handler's class, resolved), `class X(Svc.Iface)` (exact) | `client = Svc.Client(protocol)`, then `client.method(..)` |
+| JS / TS (thrift) | `thrift.createServer(Svc, { method: fn })`, `new Svc.Processor(handler)` | `thrift.createClient(Svc, conn)`, `new Svc.Client(..)` |
+| C++ | `class X : public SvcIf` / `SvcCobSvIf` (exact) | `SvcClient client(protocol)`, `make_shared<SvcClient>(..)` |
+| Rust | `impl SvcSyncHandler for X` (`handle_method`) | `SvcSyncClient::new(..)`, factory functions returning one |
+| PHP | `implements ..SvcIf` | `new ..SvcClient(..)` |
+| Dart | `implements Svc` | `SvcClient(..)` |
+
+Java (`implements Svc.Iface`, `Svc.Client client`) is scanned but Java has no plugin yet, so it adds no edges. Node
+files that mention `thrift` count as network code for the TS plugin's unreachable checks.
+
+## tRPC (router trees)
+
+`endpoint:trpc:<path>`, one per procedure of a router tree, with `path` the dotted key chain from the root router
+(`post.create`). Routers are `const x = createTRPCRouter({..})` / `router({..})` / `t.router({..})`, plain objects of
+procedures (`{..} satisfies TRPCRouterRecord`) and `mergeRouters(..)`. An entry is a procedure chain ending in
+`.query` / `.mutation` / `.subscription`, a nested router, or a mount: an identifier resolved through its import
+(relative, `~/` / `@/` aliases, index files, `import { a as b }`), which may also be a procedure variable
+(`export const get = authedProcedure.query(..)` mounted as `get,`). Roots are routers that nothing mounts. The TS
+extractor gives each inline resolver its own function node `<routerVar>.<path>` (`inline_handler`), so the resolver
+body's calls are attributed to it and the endpoint is RECEIVED_BY it; a named handler (`.query(getPosts)`) is used
+as is. The node records `procedure`, `router`, `root` and `declared_in`.
+
+Clients are `x.<path>.useQuery` / `useSuspenseQuery` / `useInfiniteQuery` / `useMutation` / `useSubscription` /
+`query` / `mutate` / `fetch` / `prefetch` / `ensureData` / `queryOptions` / `mutationOptions` / ..(..) on a known
+path, and direct calls `caller.<path>(..)` when the root variable is a server caller (`createCaller(..)`,
+`createTRPC*`). Only paths that a router declares link; others get nothing. On cal.com, 174 procedures in 33
+routers, 226 client calls; 221 of 224 client chains in the app code name a known path.
+
+## JSON-RPC 2.0 (method names)
+
+`endpoint:jsonrpc:<method>`, in files that name a JSON-RPC library or a `jsonrpc` payload (MCP files, which use
+their own SDK, are skipped). Servers: jayson `jayson.server({..})` / `new jayson.Server(methods)` (an object or a
+variable holding it), `addMethod("x", fn)`, `onRequest` / `onNotification`, Python `@method`, `@method(name="x")`,
+`@dispatcher.add_method`, Rust jsonrpsee `#[rpc(server, namespace = "ns")] trait` with `#[method(name = "x")]` /
+`#[subscription]` (endpoint `ns_x`, exact on `impl TraitServer for T`) and `register_method("x", closure)`
+(heuristic, RECEIVED_BY the registering function). Clients: `.request` / `.call` / `.notify` / `.sendRequest` /
+`.sendNotification("x", ..)`, jsonrpcclient `request("x")`, and request payloads `{"jsonrpc": "2.0", "method":
+"x"}` in any language, which also covers calls to an external JSON-RPC API.
+
 ## Not covered yet
 
 - Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
@@ -252,8 +304,10 @@ samples of `server_class_without_methods`, `stub_without_variable`, `handler_unr
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.
 - Broker / host nodes (#30 / #40) are not attached to endpoints yet.
-- gRPC (#33): Go servers and clients (no plugin); `.proto` files only outside the indexed root (`buf` remote modules,
-  a sibling repository: index both and `cg link`); Nest `@GrpcMethod` handlers are not merged with the contract
-  endpoints; DEFINES / USES_SCHEMA edges to message types; Thrift, tRPC, JSON-RPC and Java RMI.
+- RPC contracts (#33, rest in #132): Go gRPC servers and clients (no plugin); `.proto` files only outside the
+  indexed root (`buf` remote modules, a sibling repository: index both and `cg link`); Nest `@GrpcMethod` handlers
+  are not merged with the contract endpoints; DEFINES / USES_SCHEMA edges to message types. Thrift, tRPC and
+  JSON-RPC: Java RMI and Java Thrift (no Java plugin), tRPC `lazy()` routers, jayson methods wrapped in
+  `jayson.Method(..)`, LSP well-known methods, PHP top-level clients (no module node).
 - Sockets (#39): QUIC / ALPN, WebRTC data channels, message-type framing on a port, Go (no plugin), servers whose port
   comes only from a config file, and `env:` endpoints across repositories in `cg link` (follow-up issue).

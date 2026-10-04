@@ -543,6 +543,33 @@ function routeCallInfo(node) {
 // MCP registrations with an inline handler (files importing @modelcontextprotocol/sdk): label `server.registerTool('echo')`
 const MCP_REG_METHODS = new Set(['registerTool', 'tool', 'registerPrompt', 'prompt', 'registerResource', 'resource'])
 const mcpFiles = new Map()
+// tRPC procedures (#33): `name: publicProcedure.input(..).query(({ ctx }) => ..)` (also `.mutation` / `.subscription`,
+// `t.procedure`): the inline resolver becomes a function node `<router var>.<path>.name`
+const TRPC_TERMINAL = new Set(['query', 'mutation', 'subscription'])
+function trpcResolver(e) {
+  e = unwrap(e)
+  if (!e || !ts.isCallExpression(e)) return null
+  const c = unwrap(e.expression)
+  if (!ts.isPropertyAccessExpression(c) || !TRPC_TERMINAL.has(c.name.text) || !e.arguments.length) return null
+  const f = unwrap(e.arguments[e.arguments.length - 1])
+  if (!isFn(f)) return null
+  let b = unwrap(c.expression)
+  for (let i = 0; i < 40 && b; i++) {
+    if (ts.isCallExpression(b)) b = unwrap(b.expression)
+    else if (ts.isPropertyAccessExpression(b)) { if (b.name.text === 'procedure') return { fn: f, kind: c.name.text }; b = unwrap(b.expression) }
+    else break
+  }
+  return b && ts.isIdentifier(b) && /procedure$/i.test(b.text) ? { fn: f, kind: c.name.text } : null
+}
+function trpcLabel(prop) {
+  const parts = []
+  for (let n = prop; n; n = n.parent) {
+    if (ts.isPropertyAssignment(n) && n.name && (ts.isIdentifier(n.name) || ts.isStringLiteral(n.name))) parts.unshift(n.name.text)
+    else if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) { parts.unshift(n.name.text); break }
+    else if (ts.isSourceFile(n) || ts.isFunctionLike(n) || ts.isClassLike(n)) break
+  }
+  return parts.join('.')
+}
 function mcpRegInfo(node, sf) {
   if (!ts.isCallExpression(node) || node.arguments.length < 2) return null
   const c = unwrap(node.expression)
@@ -982,6 +1009,19 @@ for (const sf of sourceFiles) {
         && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)
         && ts.isVariableStatement(node.parent.parent) && node.parent.parent.parent === sf && constInit(node.initializer))
       addValue('constant', `${r}#${node.name.text}`, node.name.text, node, sf, r, fid)     // `export const MAX = 3` (#84)
+    const tp = ((ts.isPropertyAssignment(node) && node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)))
+      || (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer)) && trpcResolver(node.initializer)
+    if (tp) {                       // a tRPC procedure's inline resolver: its own node, the rest of the chain stays outside
+      const q = ts.isVariableDeclaration(node) ? (qual ? `${qual}.${node.name.text}` : node.name.text) : trpcLabel(node)
+      const id = mkId('function', `${r}#${q}`)
+      const f = tp.fn
+      nodes.push({ id, kind: 'function', name: q, file: r, line: lineOf(f, sf), end_line: sf.getLineAndCharacterOfPosition(f.end).line + 1,
+        doc: null, parent: parentId, attrs: { inline_handler: true, trpc: tp.kind } })
+      declId.set(f, id)
+      ts.forEachChild(f, c => visit(c, q, id))
+      ts.forEachChild(unwrap(node.initializer), c => { if (c !== f && unwrap(c) !== f) visit(c, qual, parentId) })
+      return
+    }
     if (ts.isFunctionDeclaration(node) && node.name) { name = node.name.text; kind = 'function'; body = node }
     else if (ts.isFunctionDeclaration(node) && !node.name && !qual && (ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Default)) { name = 'default'; kind = 'function'; body = node }
     else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {

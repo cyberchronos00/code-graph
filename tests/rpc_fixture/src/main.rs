@@ -1,4 +1,6 @@
 // tonic server and client (the generated `routeguide` module comes from `tonic::include_proto!`).
+mod jr;
+
 pub mod routeguide {
     tonic::include_proto!("routeguide");
 }
