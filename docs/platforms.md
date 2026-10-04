@@ -160,7 +160,15 @@ of the same name in separate programs (files with their own `main()`, libuv `doc
 not one per-platform symbol; and a reference to code built for no declared target (a `sunos.c` / `aix.c` fallback) is
 counted (`missing_callee_skipped_no_target`) but not listed, since the targets use a system or another definition.
 
-`--target ios` keeps the findings that affect one target, `--kind variants|api_surface|missing_callee` one kind,
+Test code whose platforms are only the project default (#91) is listed apart, under FROM TEST CODE WHOSE PLATFORMS
+ARE THE PROJECT DEFAULT (`missing_callee_tests`, with `platform_source: project default (test target)`). This covers
+a test file with no `#if` and no Xcode target membership that narrows it. If such a file calls code excluded on a
+platform without guarding the call, that test target can't compile there, so it is probably not built for that
+platform. Kingfisher's tests are built for watchOS (`build` only, never `test`), which gives 35 such findings.
+Test code narrowed by `#if` or by a test target's own `SUPPORTED_PLATFORMS` stays under REFERENCED WHERE THE
+CALLEE IS NOT BUILT.
+
+`--target ios` keeps the findings that affect one target, `--kind variants|api_surface|missing_callee|missing_callee_tests` one kind,
 `--json` gives the structured findings. MCP: `platforms` and `platform_divergence(target, kind)`.
 
 ## Configuration

@@ -104,7 +104,8 @@ def main(argv=None):
                                          "(variants missing a target, API differences, references to code missing on a target)")
     p.add_argument("action", nargs="?", default="summary", choices=["summary", "divergence"])
     p.add_argument("--db", required=True); p.add_argument("--target", help="divergence: only findings that affect this target")
-    p.add_argument("--kind", choices=["variants", "api_surface", "missing_callee"], help="divergence: one finding kind")
+    p.add_argument("--kind", choices=["variants", "api_surface", "missing_callee", "missing_callee_tests"],
+                   help="divergence: one finding kind (missing_callee_tests: from test code on the project-default platforms)")
     p.add_argument("--max-items", type=int, default=40); p.add_argument("--json", action="store_true")
     p = sub.add_parser("resolutions", help="every place a concept (e.g. timezone) is resolved, with fallback chains and divergence")
     p.add_argument("concept"); p.add_argument("--db", required=True); p.add_argument("--within", help="substring filter on the owning function fqn (e.g. Report)")

@@ -984,7 +984,7 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
     """
     tset = [p for p in KNOWN if p in targets]
     shown = tset or list(KNOWN)          # platforms listed per member: the project's targets (#74)
-    out = {"variants": [], "api_surface": [], "missing_callee": []}
+    out = {"variants": [], "api_surface": [], "missing_callee": [], "missing_callee_tests": []}
     explicit = getattr(builder, "explicit_variant_imports", None) or set()
     importers = defaultdict(set)
     ext_refs = defaultdict(set)          # node -> files referring to it
@@ -1134,18 +1134,39 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
             continue
         if miss:
             dst = es[0].attrs.get("platform_variant_of") or es[0].dst
-            out["missing_callee"].append({"from": src, "to": dst, "kind": kind, "at": f"{f}:{line}", "missing_on": miss,
-                                          "callee_platforms": [p for p in shown if p in have],
-                                          "callee_condition": " | ".join(dict.fromkeys(
-                                              (builder.nodes[e.dst].attrs or {}).get("platform_expr") or "" for e in es
-                                              if e.dst in builder.nodes)) or None})
+            item = {"from": src, "to": dst, "kind": kind, "at": f"{f}:{line}", "missing_on": miss,
+                    "callee_platforms": [p for p in shown if p in have],
+                    "callee_condition": " | ".join(dict.fromkeys(
+                        (builder.nodes[e.dst].attrs or {}).get("platform_expr") or "" for e in es
+                        if e.dst in builder.nodes)) or None}
+            # test code whose platforms are only the project-wide default (no #if, no target membership narrowing
+            # them): an unguarded call into code excluded on a platform means that test target is not built there,
+            # so it is listed apart (#91)
+            if _test_code(builder.nodes.get(src), f) and not any(v is False for v in (sv or {}).values()):
+                item["platform_source"] = "project default (test target)"
+                out["missing_callee_tests"].append(item)
+            else:
+                out["missing_callee"].append(item)
     out["variants"] = [v for v in out["variants"]]
     out["counts"] = {k: len(v) for k, v in out.items()}
     if skipped_no_target:
         out["counts"]["missing_callee_skipped_no_target"] = skipped_no_target
-    for k in ("variants", "api_surface", "missing_callee"):
-        out[k] = out[k][:limit]
+    if not out["missing_callee_tests"]:
+        del out["missing_callee_tests"], out["counts"]["missing_callee_tests"]
+    for k in ("variants", "api_surface", "missing_callee", "missing_callee_tests"):
+        if k in out:
+            out[k] = out[k][:limit]
     return out
+
+
+TEST_FILE_RE = re.compile(r"(?:^|/)(?:Tests?|tests?|__tests__|spec|androidTest|\w*Test|\w*Tests)/|"
+                          r"(?:Tests?|_test|\.test|\.spec|Spec)\.\w+$")
+
+
+def _test_code(n, f: str) -> bool:
+    if n is not None and (n.kind == "test" or (n.attrs or {}).get("test")):
+        return True
+    return bool(f and TEST_FILE_RE.search(f))
 
 
 # ------------------------------------------------------------------ queries
@@ -1272,6 +1293,8 @@ def divergence(st, kind: str | None = None, target: str | None = None) -> dict:
         d["variants"] = [v for v in d.get("variants", []) if target in v.get("missing", [])]
         d["api_surface"] = [v for v in d.get("api_surface", []) if target in v.get("missing_on", [])]
         d["missing_callee"] = [v for v in d.get("missing_callee", []) if target in v.get("missing_on", [])]
+        if "missing_callee_tests" in d:
+            d["missing_callee_tests"] = [v for v in d["missing_callee_tests"] if target in v.get("missing_on", [])]
     if kind:
         d = {k: (v if k == kind else []) for k, v in d.items() if k != "counts"} | {"counts": d.get("counts")}
     return {"targets": s.get("targets") or [], "target_sources": s.get("target_sources") or {}, **d}
@@ -1303,6 +1326,14 @@ def render_divergence(res: dict, limit: int = 40) -> str:
     if mc:
         out.append(f"\n== REFERENCED WHERE THE CALLEE IS NOT BUILT: {len(mc)}")
         for m in mc[:limit]:
+            out.append(f"  {m['from']} -{m['kind']}-> {m['to']}  @ {m['at']}  missing on: {', '.join(m['missing_on'])}"
+                       f"  (callee: {', '.join(m['callee_platforms']) or 'no known target'}"
+                       + (f", {m['callee_condition']}" if m.get("callee_condition") else "") + ")")
+    mt = res.get("missing_callee_tests") or []
+    if mt:
+        out.append(f"\n== FROM TEST CODE WHOSE PLATFORMS ARE THE PROJECT DEFAULT: {len(mt)} (the test target is "
+                   f"probably not built there; `--kind missing_callee_tests`)")
+        for m in mt[:limit]:
             out.append(f"  {m['from']} -{m['kind']}-> {m['to']}  @ {m['at']}  missing on: {', '.join(m['missing_on'])}"
                        f"  (callee: {', '.join(m['callee_platforms']) or 'no known target'}"
                        + (f", {m['callee_condition']}" if m.get("callee_condition") else "") + ")")

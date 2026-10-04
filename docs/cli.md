@@ -894,7 +894,7 @@ options:
 
 ```
 usage: python -m codegraph.cli platforms [-h] --db DB [--target TARGET]
-                           [--kind {variants,api_surface,missing_callee}]
+                           [--kind {variants,api_surface,missing_callee,missing_callee_tests}]
                            [--max-items MAX_ITEMS] [--json]
                            [{summary,divergence}]
 
@@ -905,8 +905,9 @@ options:
   -h, --help            show this help message and exit
   --db DB
   --target TARGET       divergence: only findings that affect this target
-  --kind {variants,api_surface,missing_callee}
-                        divergence: one finding kind
+  --kind {variants,api_surface,missing_callee,missing_callee_tests}
+                        divergence: one finding kind (missing_callee_tests:
+                        from test code on the project-default platforms)
   --max-items MAX_ITEMS
   --json
 ```

@@ -8,6 +8,17 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Changed
+
+- `cg platforms divergence` (#91): references from test code whose platforms are only the project default are
+  listed apart, as `missing_callee_tests` (FROM TEST CODE WHOSE PLATFORMS ARE THE PROJECT DEFAULT, with
+  `platform_source`). The test code must have no `#if` and no test-target membership narrowing it. An unguarded
+  call into code excluded on a platform means the test target isn't built there. `--kind missing_callee_tests` and
+  the MCP `platform_divergence(kind=...)` select them.
+  - Kingfisher: missing_callee 36 → 1, plus 35 test findings listed apart. libuv: 32 → 29, plus 3 (`test/`).
+  - Non-test findings are unchanged. A test target with its own `SUPPORTED_PLATFORMS` was already narrowed by
+    Xcode target membership (#74).
+
 ### Fixed
 
 - C / C++ heuristic mode (#92): a call binds to a `static` (usually `static inline`) function or static variable

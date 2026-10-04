@@ -161,3 +161,28 @@ def test_xcode_project_next_to_an_android_module_keeps_android(tmp_path):
              {"file": "ios/App/Plugin.swift", "line": 1, "cond": PF.Cond("tree", ("atom", "platform", "linux"), "os(Linux)")}]
     targets, src = PF.declared_targets(tmp_path, {}, marks, {"java", "swift"})
     assert targets == ["macos", "ios", "android"], src
+
+
+def test_test_code_on_project_default_platforms_is_listed_apart(tmp_path):
+    """#91: a test file that calls code excluded on watchOS without any `#if` can't build for watchOS, so its test target
+    isn't built there. Findings from such test code (whose platforms are only the project default) go to
+    `missing_callee_tests`, not `missing_callee`, and the same call from app code is still reported."""
+    root = write(tmp_path / "spm", {
+        "Package.swift": 'let package = Package(name: "Lib", platforms: [.iOS(.v17), .watchOS(.v10)], targets: [])\n',
+        "Sources/Lib/Cache.swift": "#if !os(watchOS)\nfunc diskCache() {}\n#endif\n",
+        "Sources/Lib/Use.swift": "func load() { diskCache() }\n",
+        "Tests/LibTests/CacheTests.swift": "import XCTest\nfinal class CacheTests: XCTestCase {\n"
+                                           "  func testDisk() { diskCache() }\n}\n"})
+    st, db = build(root, "spm")
+    d = st["platforms"]["divergence"]
+    assert [m["at"] for m in d["missing_callee"]] == ["Sources/Lib/Use.swift:1"]
+    t = d["missing_callee_tests"]
+    assert [(m["at"], m["missing_on"], m["platform_source"]) for m in t] == [
+        ("Tests/LibTests/CacheTests.swift:3", ["watchos"], "project default (test target)")]
+    assert d["counts"]["missing_callee"] == 1 and d["counts"]["missing_callee_tests"] == 1
+    from codegraph.core.store import GraphStore
+    g = GraphStore(db.execute("PRAGMA database_list").fetchone()[2])
+    txt = PF.render_divergence(PF.divergence(g))
+    assert "FROM TEST CODE WHOSE PLATFORMS ARE THE PROJECT DEFAULT: 1" in txt
+    only = PF.divergence(g, kind="missing_callee")
+    assert only["missing_callee_tests"] == [] and len(only["missing_callee"]) == 1

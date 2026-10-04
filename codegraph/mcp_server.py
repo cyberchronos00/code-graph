@@ -1023,8 +1023,8 @@ def platform_divergence(target: str | None = None, kind: str | None = None, max_
             t = resolve_platform(target)
         except ValueError as e:
             raise PlatformError(str(e)) from None
-    if kind and kind not in ("variants", "api_surface", "missing_callee"):
-        return f"unknown kind {kind!r}: use variants, api_surface or missing_callee"
+    if kind and kind not in ("variants", "api_surface", "missing_callee", "missing_callee_tests"):
+        return f"unknown kind {kind!r}: use variants, api_surface, missing_callee or missing_callee_tests"
     return render_divergence(divergence(st, kind=kind, target=t), limit=max_items)
 
 
