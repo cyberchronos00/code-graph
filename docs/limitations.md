@@ -143,9 +143,9 @@ Issues and pull requests that extend it are welcome.
     computed at run time are not followed; worker processes are read from Procfile / compose / systemd / supervisor
     / scripts only (a worker started by a custom CLI, such as authentik's `ak worker`, is not seen);
   - Kafka / AMQP / Redis pub/sub and streams / MQTT / NATS producers and consumers pair by topic, routing key,
-    channel or subject in JS / TS, Python and PHP ([protocols.md](protocols.md#message-brokers)); Kotlin / Java /
-    Rust clients, cloud queues (SQS / SNS / Pub/Sub), STOMP, ZeroMQ, JetStream consumers, names from config files and
-    calls through a project's own wrapper class are not followed;
+    channel or subject in JS / TS, Python, PHP, Kotlin and Rust ([protocols.md](protocols.md#message-brokers));
+    Dart / Swift / C++ / Go clients, cloud queues (SQS / SNS / Pub/Sub), STOMP, ZeroMQ, JetStream consumers, names
+    from config files and calls through a project's own wrapper class are not followed;
   - ORM reads/writes are detected on `Model.objects...`, related managers and instance `.save()/.delete()` when the receiver
     type is known; raw SQL and `QuerySet` values passed through untyped helpers are not;
   - response shapes are derived from returned dict literals, helper functions and declared `response=` schemas; values

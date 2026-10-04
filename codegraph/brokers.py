@@ -54,6 +54,17 @@ PHP_LIBS = {
     "redis": r"Illuminate\\Support\\Facades\\Redis|Predis\\|new\s+\\?Redis\s*\(",
     "mqtt": r"PhpMqtt\\Client",
 }
+KT_LIBS = {
+    "kafka": r"org\.apache\.kafka|org\.springframework\.kafka",
+    "amqp": r"com\.rabbitmq\.client|org\.springframework\.amqp|dev\.kourier\.amqp",
+    "mqtt": r"org\.eclipse\.paho|com\.hivemq\.client",
+    "nats": r"io\.nats",
+    "redis": r"redis\.clients\.jedis|io\.lettuce|org\.springframework\.data\.redis",
+}
+RS_LIBS = {
+    "kafka": r"rdkafka", "amqp": r"lapin|amqprs", "nats": r"async_nats|nats", "mqtt": r"rumqttc|paho_mqtt",
+    "redis": r"redis",
+}
 # object names that tell the protocol of a `.publish(` / `.subscribe(` without an import in the file
 HINTS = {"kafka": r"kafka|producer|consumer", "amqp": r"amqp|rabbit|channel|\bch\b|chan\b",
          "redis": r"redis|publisher|subscriber", "mqtt": r"mqtt", "nats": r"nats|\bnc\b|jetstream|\bjs\b"}
@@ -202,13 +213,32 @@ class Scan:
         e = re.sub(r"^(?:await\s+)", "", e)
         e = re.sub(r"\s+as\s+(?:string|const|any)\s*$", "", e)
         e = re.sub(r"!$", "", e).strip()
+        if file.endswith(".rs"):
+            e = _rs_str(e)
         if not e or depth > 4:
             return None, None
         while e.startswith("(") and e.endswith(")") and e.count("(") == e.count(")") and _bal(e[1:-1]):
             e = e[1:-1].strip()
+        if file.endswith((".kt", ".kts")) and re.fullmatch(r'"[^"\n]*\$[^"\n]*"', e):
+            return self._tpl(file, pos, e[1:-1], r"\$\{([^{}]*)\}|\$([A-Za-z_]\w*)", depth)
         lit = _strlit(e)
         if lit is not None:
             return lit, RESOLVED
+        m = re.fullmatch(r'format!\s*\(\s*"([^"\n]*)"\s*((?:,[\s\S]*)?)\)', e)      # Rust format!("a.{}", x)
+        if m:
+            from .sockets import split_args
+            args = split_args(m.group(2).lstrip(","))
+            it = iter(args)
+            body = re.sub(r"\{\}", lambda _m: "{" + next(it, "x").strip() + "}", m.group(1))
+            return self._tpl(file, pos, body, r"\{([^{}:]*)(?::[^{}]*)?\}", depth)
+        m = re.fullmatch(r'(?:System\.getenv|(?:std::)?env::var)\(\s*"(\w+)"\s*\)\s*(?:\?:\s*(.+)|\.unwrap_or(?:_else)?\(\s*(?:\|[^|]*\|\s*)?(.+)\))?', e, re.S)
+        if m:
+            d = m.group(2) or m.group(3)
+            if d:
+                v, _c = self.value(file, pos, d, depth + 1)
+                if v is not None:
+                    return v, HEURISTIC
+            return f"env:{m.group(1)}", HEURISTIC
         # env with a default / without
         m = re.fullmatch(r"process\.env(?:\.(\w+)|\[\s*['\"](\w+)['\"]\s*\])\s*(?:\?\?|\|\|)\s*(.+)", e, re.S)
         if m:
@@ -227,6 +257,12 @@ class Scan:
         m = re.fullmatch(r"os\.environ\[\s*['\"](\w+)['\"]\s*\]", e)
         if m:
             return f"env:{m.group(1)}", HEURISTIC
+        if file.endswith((".kt", ".kts")) and "?:" in e:
+            parts2 = _top_split(e, ("?:",))
+            if len(parts2) == 2:
+                v, _c = self.value(file, pos, parts2[1], depth + 1)
+                if v is not None:
+                    return v, HEURISTIC
         # conditional: one known branch
         parts = None
         m = re.fullmatch(r"(.+?)\s+if\s+.+?\s+else\s+(.+)", e, re.S) if file.endswith(".py") else None
@@ -266,6 +302,12 @@ class Scan:
             v = self.enum(m.group(1), m.group(2))
             if v is not None:
                 return v, RESOLVED
+            if re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", m.group(2)):       # Kotlin companion / Java static constant
+                crx = re.compile(rf"\b(?:class|object|interface|enum|struct|impl)\s+{re.escape(m.group(1))}\b")
+                own = [(f, v) for f, v in self.s.const_index().get(m.group(2), ()) if crx.search(self.s.text(f))]
+                if len({v for _f, v in own}) == 1:
+                    return self.value(own[0][0], 0, own[0][1].rstrip(",;").strip(), depth + 1)
+                return self.ident(file, pos, m.group(2), field=False, depth=depth, globals_only=True)
         # PHP class constant self::X / Foo::X
         m = re.fullmatch(r"(?:self|static|[A-Z]\w*)::([A-Z][A-Z0-9_]*)", e)
         if m:
@@ -286,7 +328,8 @@ class Scan:
         out, conf, last = [], RESOLVED, 0
         for m in re.finditer(rx, body):
             out.append(body[last:m.start()])
-            inner = re.sub(r"[!:][^{}]*$", "", m.group(1)) if rx.startswith(r"\{") else m.group(1)
+            g = m.group(1) if m.group(1) is not None else m.group(2)
+            inner = re.sub(r"[!:][^{}]*$", "", g) if rx.startswith(r"\{") else g
             v, c = self.value(file, pos, inner, depth + 1)
             if v is None or _whole_ph(v):
                 v, c = "{" + _ident(inner) + "}", HEURISTIC
@@ -387,6 +430,10 @@ class Scan:
             table, imp = PY_LIBS, r"^\s*(?:from\s+(?:{p})(?:\.[\w.]+)?\s+import|import\s+(?:{p})\b)"
         elif file.endswith(".php"):
             table, imp = PHP_LIBS, r"(?:{p})"
+        elif file.endswith((".kt", ".kts")):
+            table, imp = KT_LIBS, r"^\s*import\s+(?:{p})\b"
+        elif file.endswith(".rs"):
+            table, imp = RS_LIBS, r"^\s*(?:pub\s+)?use\s+(?:{p})\b|\b(?:{p})::"
         else:
             return set()
         return {k for k, p in table.items() if re.search(imp.replace("{p}", p), src, re.M)}
@@ -436,7 +483,7 @@ class Scan:
         return None
 
     def run(self) -> dict:
-        files = [f for f in sorted(self.s.files) if f.endswith(JS_EXT + (".py", ".php")) and not f.endswith(".d.ts")]
+        files = [f for f in sorted(self.s.files) if f.endswith(JS_EXT + (".py", ".php", ".kt", ".rs")) and not f.endswith(".d.ts")]
         libs = {}
         for f in files:
             src = self.s.text(f)
@@ -450,6 +497,10 @@ class Scan:
                 self.js_file(f, src, libs[f])
             elif f.endswith(".py"):
                 self.py_file(f, src, libs[f])
+            elif f.endswith(".kt"):
+                self.kt_file(f, src, libs[f])
+            elif f.endswith(".rs"):
+                self.rs_file(f, src, libs[f])
             else:
                 self.php_file(f, src, libs[f])
         self.finish_amqp()
@@ -540,7 +591,9 @@ class Scan:
     def _lib(self, p, lang):
         return {"js": {"redis": "ioredis / node-redis", "mqtt": "mqtt", "nats": "nats", "kafka": "kafkajs", "amqp": "amqplib"},
                 "py": {"redis": "redis-py", "mqtt": "paho-mqtt / aiomqtt", "nats": "nats-py", "kafka": "kafka", "amqp": "pika"},
-                "php": {"redis": "Laravel Redis / Predis", "mqtt": "php-mqtt", "amqp": "php-amqplib"}}[lang].get(p, p)
+                "php": {"redis": "Laravel Redis / Predis", "mqtt": "php-mqtt", "amqp": "php-amqplib"},
+                "kt": {"redis": "jedis / lettuce", "mqtt": "paho", "nats": "jnats"},
+                "rs": {"redis": "redis-rs", "mqtt": "rumqttc", "nats": "async-nats"}}[lang].get(p, p)
 
     def js_kafka_sub(self, f, src, pos, obj, opt):
         topics = []
@@ -866,6 +919,203 @@ class Scan:
                     v, c = self.value(f, pos, n)
                     self.recv("redis-pubsub" if p == "redis" else "mqtt", v, c, f, pos, h, self._lib(p, "php"), f"{meth}()")
 
+    # ---------------------------------------------------------------- Kotlin (JVM clients, Spring)
+    def kt_file(self, f, src, fl):
+        if not fl:
+            return
+        # Spring listeners: @KafkaListener(topics = ["a", "b"], groupId = "g"), @RabbitListener(queues = ["q"]),
+        # @RabbitListener(bindings = [QueueBinding(value = Queue("q"), exchange = Exchange("ex"), key = ["k"])])
+        for m in re.finditer(r"@(KafkaListener|RabbitListener|JmsListener|SqsListener)\s*\(", src):
+            if self.s.masked(f, m.start()):
+                continue
+            a = _args(src, m.end() - 1)
+            h = self.annotated_fn(f, src, m.end())
+            if h is None:
+                continue
+            if m.group(1) == "KafkaListener" and "kafka" in fl:
+                ts = _kw(a, "topics") or _kw(a, "topicPattern") or (a[0] if a and "=" not in a[0] else None)
+                g = _kw(a, "groupId")
+                for t in _list(_kt_arr(ts)):
+                    v, c = self.value(f, m.start(), t)
+                    if _kw(a, "topicPattern") and v:
+                        v, c = _regex_glob(v), HEURISTIC
+                    self.recv("kafka", v, c, f, m.start(), h, "spring-kafka", "@KafkaListener",
+                              group=self.value(f, m.start(), g)[0] if g else None)
+            elif m.group(1) == "RabbitListener" and "amqp" in fl:
+                qs = _kw(a, "queues") or _kw(a, "queuesToDeclare")
+                for q in _list(_kt_arr(qs)):
+                    q = re.sub(r"^Queue\s*\(\s*(?:value\s*=\s*|name\s*=\s*)?([^,)]*)[\s\S]*\)$", r"\1", q.strip())
+                    qid = self.queue_id(f, m.start(), q)
+                    if qid:
+                        self.consumes.append((qid, h, f, m.start(), "spring-amqp", "@RabbitListener"))
+                for qb in re.finditer(r"QueueBinding\s*\(", _kw(a, "bindings") or ""):
+                    body = _kw(a, "bindings")
+                    ba = _args(body, qb.end() - 1)
+                    qv = re.search(r"Queue\s*\(\s*(?:value\s*=\s*|name\s*=\s*)?([^,)]*)", _kw(ba, "value") or "")
+                    ex = re.search(r"Exchange\s*\(\s*(?:value\s*=\s*|name\s*=\s*)?([^,)]*)(?:[^)]*type\s*=\s*(?:ExchangeTypes\.)?(\w+|\"\w+\"))?",
+                                   _kw(ba, "exchange") or "")
+                    keys = _list(_kt_arr(_kw(ba, "key"))) if _kw(ba, "key") else ['""']
+                    qname = qv.group(1).strip() if qv and qv.group(1).strip() else None
+                    qid = self.queue_id(f, m.start(), qname) if qname else f"anon:{f}:{self.s.line_of(f, m.start())}"
+                    if not ex or not qid:
+                        continue
+                    exv, _c = self.value(f, m.start(), ex.group(1))
+                    if exv is not None and ex.group(2):
+                        self.exch_type.setdefault(exv, ex.group(2).strip('"').lower())
+                    for k in keys:
+                        self.amqp_bind_id(f, m.start(), qid, exv, k)
+                    self.consumes.append((qid, h, f, m.start(), "spring-amqp", "@RabbitListener"))
+        # `x.subscribe(..)`, or a bare `subscribe(..)` inside `KafkaConsumer(props).apply { .. }` / `with(channel) { .. }`
+        rx = re.compile(r"(?:((?:this\.)?[\w.]*?)\s*(?:\?|!!)?\.\s*|(?<![\w.$]))(send|subscribe|basicPublish|basicConsume|"
+                        r"queueBind|exchangeDeclare|convertAndSend|publish|request|xadd)\s*(?:<[^()]*?>)?\s*\(")
+        cl = self.kt_clients(f, src)
+        for m in rx.finditer(src):
+            obj, meth = m.group(1), m.group(2)
+            if self.s.masked(f, m.start()):
+                continue
+            if obj is None:
+                if re.search(r"\bfun\s+(?:<[^>]*>\s*)?(?:\w+\.)?$", src[max(0, m.start() - 40):m.start()]):
+                    continue                      # a declaration, not a call
+                obj = ""
+            a = _args(src, m.end() - 1)
+            pos = m.start(2)
+            last = obj.split(".")[-1] if obj else ""
+            kind = cl.get(last)
+            if meth == "send" and "kafka" in fl and (kind == "kafka_producer" or re.search(r"produc|kafkaTemplate|template", obj, re.I)):
+                if not a:
+                    continue
+                r = re.match(r"\s*ProducerRecord\s*(?:<[^()]*?>)?\s*\(", a[0])
+                t = _args(a[0], a[0].index("(", r.end() - 1))[0] if r else a[0]
+                v, c = self.value(f, pos, t)
+                self.send("kafka", v, c, f, pos, "kafka-clients" if r else "spring-kafka", f"{last}.send()", role="produce")
+            elif meth == "subscribe" and "kafka" in fl and (kind == "kafka_consumer" or (not obj and "KafkaConsumer" in src)):
+                if a:
+                    for t in _list(_kt_arr(a[0])):
+                        v, c = self.value(f, pos, t)
+                        self.recv("kafka", v, c, f, pos, self.fn_at(f, pos), "kafka-clients", "consumer.subscribe()",
+                                  group=self.kt_group(f, src))
+            elif meth == "basicPublish" and "amqp" in fl and len(a) >= 2:
+                named = _kw(a, "exchange") is not None or _kw(a, "routingKey") is not None
+                e1, c1 = self.value(f, pos, _kw(a, "exchange") if named else a[0]) if not named or _kw(a, "exchange") is not None else ("", RESOLVED)
+                k1, c2 = self.value(f, pos, _kw(a, "routingKey") if named else a[1])
+                self.amqp_send(f, pos, e1, k1, HEURISTIC if HEURISTIC in (c1, c2) else RESOLVED, "amqp-client", "basicPublish()")
+            elif meth == "convertAndSend" and "amqp" in fl and len(a) >= 2:
+                if len(a) >= 3:
+                    e1, c1 = self.value(f, pos, a[0])
+                    k1, c2 = self.value(f, pos, a[1])
+                else:
+                    e1, c1 = "", RESOLVED
+                    k1, c2 = self.value(f, pos, a[0])
+                self.amqp_send(f, pos, e1, k1, HEURISTIC if HEURISTIC in (c1, c2) else RESOLVED, "spring-amqp", "convertAndSend()")
+            elif meth == "basicConsume" and "amqp" in fl and a:
+                qid = self.queue_id(f, pos, _kw(a, "queue") or a[0])
+                if qid:
+                    cb = next((x for x in a[1:] if re.fullmatch(r"\w+", x.strip()) and x.strip() not in ("true", "false")), None)
+                    self.consumes.append((qid, self.handler(f, pos, cb), f, pos, "amqp-client", "basicConsume()"))
+            elif meth == "queueBind" and "amqp" in fl and len(a) >= 2:
+                pa = [x for x in a if not re.match(r"\s*\w+\s*=(?!=)", x)]
+                self.amqp_bind(f, pos, _kw(a, "queue") or pa[0], _kw(a, "exchange") or pa[1],
+                               _kw(a, "routingKey") or (pa[2] if len(pa) > 2 else '""'))
+            elif meth == "exchangeDeclare" and "amqp" in fl and len(a) >= 2:
+                ex, _c = self.value(f, pos, _kw(a, "name") or _kw(a, "exchange") or a[0])
+                t = _strlit(a[1]) or (re.search(r"BuiltinExchangeType\.(\w+)", a[1]).group(1).lower()
+                                      if re.search(r"BuiltinExchangeType\.(\w+)", a[1]) else None)
+                if ex is not None and t:
+                    self.exch_type.setdefault(ex, t)
+            elif meth in ("publish", "request", "subscribe") and kind in ("mqtt", "nats", "redis"):
+                if not a:
+                    continue
+                v, c = self.value(f, pos, a[0])
+                proto = "redis-pubsub" if kind == "redis" else kind
+                if meth == "subscribe":
+                    self.recv(proto, v, c, f, pos, self.fn_at(f, pos), self._lib(kind, "kt"), f"{last}.subscribe()")
+                else:
+                    self.send(proto, v, c, f, pos, self._lib(kind, "kt"), f"{last}.{meth}()",
+                              role="request" if meth == "request" else "publish")
+
+    def annotated_fn(self, f, src, at):
+        """The function declared after an annotation ending near `at`."""
+        m = re.compile(r"[\s\S]{0,400}?\bfun\s+(?:<[^>]*>\s*)?(\w+)").match(src, at)
+        if not m:
+            return None
+        line = self.s.line_of(f, m.start(1))
+        e = self.s.enclosing(f, line)
+        return e[1] if e and self.b.nodes[e[1]].line == line else (e[1] if e else None)
+
+    def kt_clients(self, f, src):
+        out = {}
+        rules = [(r"KafkaProducer\b", "kafka_producer"), (r"KafkaConsumer\b", "kafka_consumer"),
+                 (r"(?:MqttClient|MqttAsyncClient)\s*\(|Mqtt[35]?Client\.builder", "mqtt"),
+                 (r"Nats\.connect\s*\(|\.createDispatcher\s*\(", "nats"),
+                 (r"Jedis(?:Pool)?\s*\(|RedisClient\.create\s*\(", "redis")]
+        for m in re.finditer(r"\b(?:val|var)\s+(\w+)\s*(?::\s*([\w<>?, .]+?))?\s*=\s*([^\n]+)", src):
+            text = (m.group(2) or "") + " " + m.group(3)
+            for pat, kind in rules:
+                if re.search(pat, text):
+                    out.setdefault(m.group(1), kind)
+                    break
+        for m in re.finditer(r"\b(?:val|var)\s+(\w+)\s*:\s*(KafkaTemplate|RabbitTemplate|StringRedisTemplate|RedisTemplate)\b", src):
+            out.setdefault(m.group(1), {"KafkaTemplate": "kafka_producer"}.get(m.group(2), "template"))
+        return out
+
+    def kt_group(self, f, src):
+        g = re.findall(r"(?:GROUP_ID_CONFIG\]?\s*[=,]\s*|\"group\.id\"\s*(?:\]\s*=|,|to)\s*)([^\n,)]+)", src)
+        vals = {self.value(f, 0, x.strip())[0] for x in g}
+        vals.discard(None)
+        return next(iter(vals)) if len(vals) == 1 else None
+
+    # ---------------------------------------------------------------- Rust
+    def rs_file(self, f, src, fl):
+        if not fl:
+            return
+        rx = re.compile(r"\.\s*(basic_publish|basic_consume|queue_bind|exchange_declare|subscribe|queue_subscribe|publish|"
+                        r"request|psubscribe|xadd|send)\s*(?:::<[^()]*?>)?\s*\(")
+        for m in rx.finditer(src):
+            meth = m.group(1)
+            if self.s.masked(f, m.start()):
+                continue
+            a = _args(src, m.end() - 1)
+            pos = m.start(1)
+            if meth == "basic_publish" and "amqp" in fl and len(a) >= 2:
+                e1, c1 = self.value(f, pos, _rs_str(a[0]))
+                k1, c2 = self.value(f, pos, _rs_str(a[1]))
+                self.amqp_send(f, pos, e1, k1, HEURISTIC if HEURISTIC in (c1, c2) else RESOLVED, "lapin", "basic_publish()")
+            elif meth == "basic_consume" and "amqp" in fl and a:
+                qid = self.queue_id(f, pos, _rs_str(a[0]))
+                if qid:
+                    self.consumes.append((qid, self.fn_at(f, pos), f, pos, "lapin", "basic_consume()"))
+            elif meth == "queue_bind" and "amqp" in fl and len(a) >= 2:
+                self.amqp_bind(f, pos, _rs_str(a[0]), _rs_str(a[1]), _rs_str(a[2]) if len(a) > 2 else '""')
+            elif meth == "exchange_declare" and "amqp" in fl and len(a) >= 2:
+                ex, _c = self.value(f, pos, _rs_str(a[0]))
+                t = re.search(r"ExchangeKind::(\w+)", a[1])
+                if ex is not None and t:
+                    self.exch_type.setdefault(ex, t.group(1).lower())
+            elif meth == "send" and "kafka" in fl and a and re.match(r"\s*(?:&\s*)?(?:Future|Base)Record::", a[0]):
+                t = re.search(r"Record::(?:<[^()]*>)?\s*(?:::)?to\s*\(\s*([^)]*)\)", a[0])
+                if t:
+                    v, c = self.value(f, pos, _rs_str(t.group(1)))
+                    self.send("kafka", v, c, f, pos, "rdkafka", "producer.send()", role="produce")
+            elif meth == "subscribe" and "kafka" in fl and a and a[0].strip().startswith(("&[", "[")):
+                for t in _list(a[0].strip().lstrip("&")):
+                    v, c = self.value(f, pos, _rs_str(t))
+                    self.recv("kafka", v, c, f, pos, self.fn_at(f, pos), "rdkafka", "consumer.subscribe()")
+            elif meth in ("publish", "request", "subscribe", "queue_subscribe", "psubscribe"):
+                p = [x for x in ("nats", "mqtt", "redis") if x in fl]
+                if len(p) != 1 or not a:
+                    continue
+                p = p[0]
+                v, c = self.value(f, pos, _rs_str(a[0]))
+                proto = "redis-pubsub" if p == "redis" else p
+                if meth in ("subscribe", "queue_subscribe", "psubscribe"):
+                    g = self.value(f, pos, _rs_str(a[1]))[0] if meth == "queue_subscribe" and len(a) > 1 else None
+                    self.recv(proto, v, c, f, pos, self.fn_at(f, pos), self._lib(p, "rs"), f"{meth}()", group=g)
+                else:
+                    self.send(proto, v, c, f, pos, self._lib(p, "rs"), f"{meth}()", role="request" if meth == "request" else "publish")
+            elif meth == "xadd" and "redis" in fl and a:
+                v, c = self.value(f, pos, _rs_str(a[0]))
+                self.send("redis-stream", v, c, f, pos, "redis-rs", "XADD")
+
     # ---------------------------------------------------------------- Redis streams
     def redis_stream_read(self, f, pos, a, meth):
         keys, group = [], None
@@ -920,7 +1170,8 @@ class Scan:
         e = (expr or "").strip()
         if not e:
             return None
-        base = re.sub(r"(?:\.method)?\.queue$|\.name$", "", e).lstrip("$")
+        e = re.sub(r"^&|\.as_str\(\)$", "", e)
+        base = re.sub(r"(?:\.method)?\.queue$|\.name(?:\(\))?$|\.queueName$", "", e).lstrip("$")
         if base != e.lstrip("$") or re.fullmatch(r"\$?\w+", e):
             d = self.queue_decl(f, pos, base)
             if d is not None:
@@ -928,7 +1179,7 @@ class Scan:
         if re.fullmatch(r"\$?\w+", e) and depth < 2:          # queue_name = result.method.queue
             src = self.s.text(f)
             _fn, lo, _hi = self.s.fn_bounds(f, pos)
-            al = [m for m in re.finditer(rf"(?<![\w.$]){re.escape(e)}\s*=\s*([\w$]+(?:\.method)?\.queue)\s*$", src[:pos], re.M)
+            al = [m for m in re.finditer(rf"(?<![\w.$]){re.escape(e)}\s*=\s*([\w$]+(?:\.method)?\.(?:queue|queueName))\s*$", src[:pos], re.M)
                   if m.start() >= lo]
             if al:
                 return self.queue_id(f, pos, al[-1].group(1), depth + 1)
@@ -941,9 +1192,9 @@ class Scan:
     def queue_decl(self, f, pos, var):
         src = self.s.text(f)
         fn, lo, hi = self.s.fn_bounds(f, pos)
-        rx = re.compile(r"(?:(?:const|let|var)\s+(?:\{\s*queue\s*\}|" + re.escape(var) + r")|\$?" + re.escape(var) +
-                        r"|(?:list\s*\(|\[)\s*\$" + re.escape(var) + r"\b[^=\n]*)\s*=\s*(?:await\s+)?[\w$>.-]*?"
-                        r"(?:assertQueue|queue_declare|declare_queue)\s*\(")
+        rx = re.compile(r"(?:(?:const|let|var|val)\s+(?:mut\s+)?(?:\{\s*queue\s*\}|" + re.escape(var) + r")|\$?" + re.escape(var) +
+                        r"|(?:list\s*\(|\[)\s*\$" + re.escape(var) + r"\b[^=\n]*)\s*(?::\s*[\w<>?]+\s*)?=\s*(?:await\s+)?"
+                        r"[\w$>.\s-]*?(?:assertQueue|queue_declare|declare_queue|queueDeclare)\s*\(")
         found = [m for m in rx.finditer(src, lo, max(pos, lo)) if m] or [m for m in rx.finditer(src)]
         if var == "queue":
             found += [m for m in re.finditer(r"\{\s*queue\s*\}\s*=\s*(?:await\s+)?[\w$.]*assertQueue\s*\(", src)]
@@ -967,6 +1218,11 @@ class Scan:
         self.bindings[qid].add((exv, kv if kv is not None else "#", f, pos, HEURISTIC if kv is None else c2))
         self.st["amqp_bindings"] += 1
 
+    def amqp_bind_id(self, f, pos, qid, exv, key):
+        kv, c2 = self.value(f, pos, key)
+        self.bindings[qid].add((exv, kv if kv is not None else "#", f, pos, HEURISTIC if kv is None else c2))
+        self.st["amqp_bindings"] += 1
+
     def finish_amqp(self):
         for qid, h, f, pos, lib, how in self.consumes:
             got = False
@@ -980,6 +1236,25 @@ class Scan:
                 self.recv("amqp", f"queue:{qid[2:]}", RESOLVED, f, pos, h, lib, how, queue=qid[2:])
             elif not got:
                 self.miss("amqp_anonymous_queue_unbound", f"{f}:{self.s.line_of(f, pos)}")
+
+
+def _kt_arr(e):
+    """Kotlin / Java array or list argument text -> `[..]` (`["a", "b"]`, `arrayOf(..)`, `listOf(..)`, `{..}`)."""
+    e = (e or "").strip()
+    m = re.fullmatch(r"(?:arrayOf|listOf|setOf|mutableListOf)\s*\(([\s\S]*)\)|\{([\s\S]*)\}", e)
+    if m:
+        return "[" + (m.group(1) if m.group(1) is not None else m.group(2)) + "]"
+    return e
+
+
+def _rs_str(e):
+    """A Rust argument without borrows and string conversions (`&key`, `"x".to_string()`, `String::from("x")`)."""
+    e = (e or "").strip()
+    e = re.sub(r"^&(?:mut\s+)?", "", e)
+    m = re.fullmatch(r"(?:String::from|str::to_string)\s*\(([\s\S]*)\)", e)
+    if m:
+        e = m.group(1).strip()
+    return re.sub(r"\.(?:to_string|to_owned|into|as_str|as_ref|clone)\(\)$", "", e)
 
 
 def _bal(s):

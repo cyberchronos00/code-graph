@@ -1,0 +1,7 @@
+[package]
+name = "ledger"
+version = "0.1.0"
+edition = "2021"
+
+# lapin and rdkafka are not declared, so indexing does not fetch and build them; brokers.py reads the `use` lines
+[dependencies]

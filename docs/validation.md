@@ -976,3 +976,26 @@ only when it is imported. In a second sample, after the fix, all 20 were correct
 - the `cg link` of the API and the worker (`order.{region}.created` -> `order.eu.*` heuristic, `stock.check.{sku}`
   -> `stock.check.*`, `orders.cancelled` `no_receiver`).
 
+## Message brokers: Kotlin and Rust clients, Spring listeners (#35 part 2)
+
+| Project | Endpoints | Edges | Notes |
+|---|---|---|---|
+| rabbitmq-tutorials 6771f3e, `kotlin-java-client` | 11 | 7 SENDS_TO, 7 RECEIVED_BY, 4 MATCHES_ENDPOINT | The RabbitMQ Java client from Kotlin: `queueDeclare().queue` server-named queues, `DefaultConsumer` objects passed to `basicConsume`, and exchange names in companion constants (`EmitLog.EXCHANGE_NAME`, taken from the file that declares the class, because every tutorial declares its own `EXCHANGE_NAME`). The tutorials' top-level `fun main` functions share one node id in the default package, so most edges are on the file node. The RPC reply to `replyTo` is unresolved |
+| rabbitmq-tutorials `kotlin` (kourier) | 9 | 6 SENDS_TO, 6 RECEIVED_BY, 3 MATCHES_ENDPOINT | Named arguments (`exchange = "logs", routingKey = ""`), `queueDeclared.queueName`, keys from a loop (`<exchange>/#`, heuristic) |
+| rabbitmq-tutorials `rust-lapin` | 9 | 6 SENDS_TO, 6 RECEIVED_BY, 3 MATCHES_ENDPOINT | The same six topologies with lapin: `queue.name().as_str()` bindings, `ExchangeKind::Fanout` / `Direct` / `Topic`. `rust-amqprs` (argument builders such as `BasicPublishArguments::new(..)`) gives 5 unresolved sends and no edges |
+| nats-by-example 232213c, Rust examples | 26 | 40 SENDS_TO, 7 RECEIVED_BY, 7 MATCHES_ENDPOINT | async-nats `publish` / `request` / `subscribe`; `format!("cars.{}", i)` publishes match `cars.>`. A loop over a subject array is unresolved (2) |
+| opentelemetry-demo, `src/fraud-detection` (Kotlin) | 1 | 1 RECEIVED_BY | `KafkaConsumer(props).apply { subscribe(listOf(topic)) }` with `val topic = System.getenv("KAFKA_TOPIC") ?: "orders"` (heuristic) and `attrs.group` `fraud-detection` from `GROUP_ID_CONFIG`. The producer is Go, which has no plugin |
+
+The Rust examples of nats-by-example were copied into one crate (`src/bin/<example>.rs`) for indexing. The other
+Kotlin and Rust corpora have no broker clients and get no broker edges: KaMPKit, nowinandroid, spring-petclinic-kotlin,
+element-x-android, bitwarden-android, grpc-kotlin, ktor-samples, tokio, tonic, mini-redis (its own client crate is
+not taken for redis-rs), jsonrpsee, ripgrep, clash-verge-rev, alacritty and tauri. The part 1 corpora (JS / TS,
+Python, PHP) are unchanged as well. A random 20 of the 103 new edges of the tutorial, nats-by-example and
+fraud-detection rows were checked by hand against the source; all 20 were correct. `tests/test_brokers.py` adds:
+- a Kotlin / Spring billing service: `@KafkaListener` with `groupId`, `@RabbitListener` with a `QueueBinding` on a
+  topic exchange and with `queues`, `KafkaTemplate.send(Topics.INVOICES)`, `basicPublish` to a `getenv ?: "d"`
+  exchange, a jnats publish with a `${x}` template;
+- a Rust ledger: lapin `basic_publish` with `format!`, a `queue.name()` binding, rdkafka `subscribe(&[topic.as_str()])`
+  with `env::var(..).unwrap_or_else(..)`;
+- the `cg link` of the two (`billing.invoices` linked).
+

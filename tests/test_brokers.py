@@ -1,7 +1,7 @@
 """Message brokers and pub/sub as protocol endpoints (#35): codegraph/brokers.py over tests/brokers_fixture (a TS
 orders API producing to Kafka, a RabbitMQ topic exchange, Redis, MQTT and NATS; a Python fulfilment worker consuming
 them with confluent-kafka, pika, redis-py, paho-mqtt and nats-py; a Laravel notifier with Redis pub/sub and
-php-amqplib), linked by cg link."""
+php-amqplib; part 2: a Kotlin / Spring billing service and a Rust ledger with lapin and rdkafka), linked by cg link."""
 import json
 import sqlite3
 import sys
@@ -25,12 +25,15 @@ E = "endpoint:"
 def dbs(tmp_path_factory):
     d = tmp_path_factory.mktemp("brokers")
     out = {}
-    for r in ("orders-api", "fulfil-worker", "notify-php"):
+    for r in ("orders-api", "fulfil-worker", "notify-php", "billing-kt", "ledger-rs"):
         out[r + "-stats"] = index_project(FX / r, d / f"{r}.db", r)
         out[r] = d / f"{r}.db"
     out["link"] = d / "link.db"
     out["link-res"] = link(str(out["fulfil-worker"]), str(out["orders-api"]), str(out["link"]),
                            backend_name="fulfil-worker", frontend_name="orders-api")
+    out["link2"] = d / "link2.db"
+    link(str(out["ledger-rs"]), str(out["billing-kt"]), str(out["link2"]), backend_name="ledger-rs",
+         frontend_name="billing-kt")
     return out
 
 
@@ -105,3 +108,32 @@ def test_cross_repo_link(dbs):
     assert k["orders.cancelled"]["checks"] == ["no_receiver"]
     q = _view(dbs["link"], "amqp")
     assert q["queue:invoices"]["linked"]
+
+
+def test_kotlin_spring_and_clients(dbs):
+    db = dbs["billing-kt"]
+    rb = _edges(db, "RECEIVED_BY")
+    m = "method:billing.Listeners."
+    assert rb[(E + "kafka:orders.created", m + "onOrderCreated")][1]["group"] == "billing"     # @KafkaListener
+    assert (E + "amqp:shop.events/order.eu.*", m + "onRegionOrder") in rb                    # @RabbitListener bindings
+    assert (E + "amqp:queue:invoices", m + "onInvoice") in rb                                # @RabbitListener queues
+    st = _edges(db, "SENDS_TO")
+    assert st[(m + "onOrderCreated", E + "kafka:billing.invoices")][0] == "resolved"         # object constant
+    assert st[("function:billing.publishAudit", E + "amqp:audit/order.{region}.audited")][0] == "heuristic"  # getenv ?: "d"
+    assert ("function:billing.publishAudit", E + "nats:stock.check.{region}") in st          # "${x}" template
+
+
+def test_rust_lapin_and_rdkafka(dbs):
+    db = dbs["ledger-rs"]
+    st = _edges(db, "SENDS_TO")
+    assert st[("function:ledger::post_entry", E + "amqp:ledger/entry.{account}")][1]["library"] == "lapin"  # format!()
+    rb = _edges(db, "RECEIVED_BY")
+    assert (E + "amqp:ledger/entry.*", "function:ledger::bind_entries") in rb                # queue.name() binding
+    assert rb[(E + "kafka:billing.invoices", "function:ledger::consume_invoices")][0] == "heuristic"  # env::var().unwrap_or_else
+    me = _edges(db, "MATCHES_ENDPOINT")
+    assert (E + "amqp:ledger/entry.{account}", E + "amqp:ledger/entry.*") in me
+
+
+def test_kotlin_rust_link(dbs):
+    k = _view(dbs["link2"], "kafka")
+    assert k["billing.invoices"]["linked"]

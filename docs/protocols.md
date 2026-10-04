@@ -458,7 +458,7 @@ DISPATCHES only to processors it sees); Messenger `#[AsMessage]` routing and Mes
 
 ## Message brokers
 
-`codegraph/brokers.py` (#35 part 1) links producers and consumers that talk through a broker. They usually live
+`codegraph/brokers.py` (#35) links producers and consumers that talk through a broker. They usually live
 in different services, so `cg link` matches them across repositories:
 
 | endpoint | sent by | received by |
@@ -485,11 +485,29 @@ templates (`orders.{id}`, heuristic). `process.env.X ?? "d"` and `os.getenv("X",
 unknown part (`{base_topic}/#` would take every topic), are counted, not recorded. Receivers in test files are
 skipped.
 
-Not covered yet (part 2): Kotlin / Java (kafka-clients, Spring `@KafkaListener` / `@RabbitListener` /
-`@SqsListener`, Paho, jnats), Rust (rdkafka, lapin, async-nats, rumqttc, redis-rs), Dart / Swift / C++ clients,
-SQS / SNS / EventBridge / Google Pub/Sub / Azure, STOMP, ZeroMQ, JetStream streams and consumers, Kafka and AMQP
-names from config files, queue bindings declared in infrastructure as code (serverless, Terraform, KEDA), broker
-nodes (#40) on the endpoints, and wrapper classes (their callers' topics).
+Kotlin and Rust (part 2) use the same endpoints:
+
+- **Kotlin:** Spring `@KafkaListener(topics = [..], groupId = ..)` / `topicPattern`, `@RabbitListener(queues = [..])`
+  and `@RabbitListener(bindings = [QueueBinding(value = Queue(..), exchange = Exchange(.., type = ..), key = [..])])`;
+  kafka-clients `KafkaProducer.send(ProducerRecord(topic, ..))`, `KafkaTemplate.send(topic, ..)` and
+  `KafkaConsumer.subscribe(listOf(..))` (also bare inside `KafkaConsumer(props).apply { .. }`, `attrs.group` from
+  `GROUP_ID_CONFIG`); the RabbitMQ Java client (`basicPublish`, `queueDeclare().queue`, `queueBind`, `basicConsume`,
+  `exchangeDeclare(.., BuiltinExchangeType.X)`), kourier (named arguments, `queueDeclared.queueName`) and
+  `RabbitTemplate.convertAndSend`; Paho / HiveMQ, jnats and Jedis / Lettuce clients held in a variable.
+- **Rust:** lapin (`basic_publish`, `queue_declare` / `queue.name()`, `queue_bind`, `basic_consume`,
+  `exchange_declare(.., ExchangeKind::X)`), rdkafka (`send(FutureRecord::to(topic))`, `subscribe(&[..])`), and
+  async-nats / nats, rumqttc / paho-mqtt and redis-rs `publish` / `request` / `subscribe` / `queue_subscribe` /
+  `psubscribe` / `xadd` when the file imports exactly one of them.
+- Names: Kotlin `"a.$x"` / `"${x}"` templates, `System.getenv("X") ?: "d"` and other `?:` defaults, companion /
+  `object` constants (`Topics.INVOICES`, looked up in the file that declares the class), Rust `format!("a.{}", x)`,
+  `std::env::var("X").unwrap_or(..)` / `unwrap_or_else(|_| ..)`, `&x` / `.as_str()` / `.to_string()`.
+
+Not covered yet (follow-up #FOLLOWUP): SQS / SNS / EventBridge / Google Pub/Sub / Azure Service Bus, STOMP and
+Spring `@MessageMapping`, ZeroMQ, JetStream streams and consumers, Kafka and AMQP names from config files, queue
+bindings declared in infrastructure as code (serverless, SAM / CDK, Terraform event source mappings, KEDA),
+broker nodes (#40) on the endpoints, the repository's own wrapper classes (their callers' topics), Rust amqprs
+(argument builders, counted as unresolved), Java (Java sources are not indexed), Dart / Swift / C++ clients, and Go
+(no Go plugin).
 
 ## Not covered yet
 

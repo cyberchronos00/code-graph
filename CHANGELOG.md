@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Message brokers, part 2 (#35): Kotlin (Spring `@KafkaListener` / `@RabbitListener` with queues and
+  `QueueBinding`s, kafka-clients, `KafkaTemplate`, the RabbitMQ Java client, kourier, `RabbitTemplate`, Paho /
+  HiveMQ, jnats, Jedis / Lettuce) and Rust (lapin, rdkafka, async-nats, rumqttc, redis-rs) producers and consumers.
+  Names follow Kotlin string templates, `System.getenv("X") ?: "d"`, `Class.CONSTANT` of the declaring class, Rust
+  `format!` and `env::var(..).unwrap_or(..)`.
 - Message brokers and pub/sub as protocol endpoints (#35, part 1): `endpoint:kafka:<topic>`,
   `endpoint:amqp:<exchange>/<routing key>` and `endpoint:amqp:queue:<name>`, `endpoint:redis-pubsub:<channel>`, the
   new protocol `redis-stream`, `endpoint:mqtt:<topic>` and `endpoint:nats:<subject>`, from kafkajs / node-rdkafka /
