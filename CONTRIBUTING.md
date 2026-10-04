@@ -82,14 +82,24 @@ Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, pl
 
 Versions follow [Semantic Versioning](https://semver.org/); the history is in [CHANGELOG.md](CHANGELOG.md).
 
+Every release ships three things together, all with the same version `X.Y.Z`: the tag `vX.Y.Z`, the GitHub release
+`vX.Y.Z` and the PyPI upload of `cg-code-graph` `X.Y.Z` (through `.github/workflows/publish.yml`). Do not leave one
+out. A tag without a GitHub release, or a GitHub release without the PyPI upload, means the release is not finished.
+
 1. Every change adds its line under `## [Unreleased]` in the same commit.
 2. To release `X.Y.Z`: bump `__version__` in `codegraph/__init__.py` (the only place: `pyproject.toml` reads it, and
    `cg doctor` / `cg --version` report it), rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD` (UTC date), add a fresh empty `## [Unreleased]` above it, and update the compare links at
    the bottom of the changelog.
 3. Commit, then create an annotated tag and push it: `git tag -a vX.Y.Z -m "vX.Y.Z"` and `git push origin vX.Y.Z`.
-4. Create the GitHub release from the tag, titled `vX.Y.Z`, with that version's changelog section as the notes:
-   `gh release create vX.Y.Z --title vX.Y.Z --notes-file <section.md>`.
-5. Check the install path from the tag in a clean environment: `sh install.sh --version vX.Y.Z` (or
-   `uv tool install git+https://github.com/cyberchronos00/code-graph@vX.Y.Z`), then `cg doctor`. Users update with
-   `uv tool upgrade cg-code-graph`, `pipx upgrade cg-code-graph` or `install.sh --update`.
+4. Create the GitHub release from the tag, titled `vX.Y.Z`, marked latest. The notes are that version's changelog
+   section, plus a first line saying it is on PyPI as `cg-code-graph` (`pipx install cg-code-graph`):
+   `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --latest --notes-file <section.md>`.
+5. Publishing the release starts `publish.yml`, which builds the tag and uploads it to PyPI via trusted publishing
+   (environment `pypi`). Check that the run succeeded and that https://pypi.org/project/cg-code-graph/X.Y.Z/ exists.
+   If the upload failed, rerun it with `gh workflow run publish.yml -f tag=vX.Y.Z`. PyPI never accepts the same
+   version twice, so a run against a version that is already uploaded fails at the upload step and changes nothing.
+6. Check the install from PyPI in a clean environment: `pipx install cg-code-graph==X.Y.Z` (or
+   `uv tool install cg-code-graph==X.Y.Z`), then `cg --version` and `cg doctor`. Also check the tag path:
+   `sh install.sh --version vX.Y.Z`. Users update with `uv tool upgrade cg-code-graph`, `pipx upgrade cg-code-graph`
+   or `install.sh --update`.
