@@ -48,7 +48,9 @@ git-ignored. Calls inside the definition files are not senders.
   `sendEvent("evt", ...)`) to a JS `addListener('evt', cb)` on `new NativeEventEmitter(Module)`,
   `DeviceEventEmitter` / `NativeAppEventEmitter`, `new EventEmitter(ExpoModule)` or an Expo module handle; and
   `endpoint:capacitor-event:<Plugin>#<event>` from `notifyListeners("evt", data)` in a Capacitor plugin class to
-  `Plugin.addListener('evt', cb)`. Event names may be constants (`const val EVT = "..."`) or string-valued enum cases (Swift `Event.keyPressed.rawValue` with `enum Event: String`, Kotlin `Events.SAVED.event` with `enum class Events(val event: String)`). React Native's own events
+  `Plugin.addListener('evt', cb)`. Event names may be constants (`const val EVT = "..."`) or string-valued enum cases (Swift `Event.keyPressed.rawValue` with `enum Event: String`, Kotlin `Events.SAVED.event` with `enum class Events(val event: String)`), a local declared before the call
+  (`let event = self?.visibilityChanged`), or a Swift computed `var listenerEvent: String { switch self { ... } }`
+  whose every return is a string literal (`event.listenerEvent` sends each of them). React Native's own events
   (`keyboardDidShow`, `hardwareBackPress`, ...) and events the JS side emits itself (`DeviceEventEmitter.emit('x')`,
   an in-app event bus) are not endpoints.
 
@@ -194,7 +196,8 @@ capacitor:Echo#vibrate  received on: android  ! MISSING ON ios
 
 - `BasicMessageChannel`; Pigeon `@EventChannelApi`; native UI components (`requireNativeComponent`, view managers,
   Expo views); React Native new-architecture codegen events (`emitOnX` from a spec's `EventEmitter<T>` member); Swift /
-  Objective-C wrappers that pass their parameter on as the event name; Cordova `exec` calls whose service
+  Objective-C functions that pass their parameter on as the event name (delegate `sendEvent(name: "evt")` calls are
+  covered); an event name handed to a Java callback (`(eventName, info) -> notifyListeners(eventName, ..)`); Cordova `exec` calls whose service
   / action come from a variable, and Cordova's `PluginResult` keep-alive callbacks as events.
 - A native `invokeMethod` on a channel passed in from elsewhere (a constructor parameter, a channel created in another
   file) is skipped unless the file creates exactly one channel.

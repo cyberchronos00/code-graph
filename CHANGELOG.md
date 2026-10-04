@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Native event names from locals and computed properties (#95): `let event = self?.visibilityChanged` before
+  `notifyListeners(event, ..)`, and `notifyListeners(event.listenerEvent, ..)` with a Swift computed
+  `var listenerEvent: String { switch self { ... return "x" } }` (each returned literal). capacitor-plugins: 5 of
+  6 unresolved notifyListeners calls now named (Browser `browserFinished` / `browserPageLoaded`, StatusBar
+  `statusBarVisibilityChanged` / `statusBarOverlayChanged`).
 - React Native native events through a Kotlin / Java helper (#95): `reactContext.emitDeviceEvent("evt", ..)` is a
   send, and a function that passes its own parameter on as the event name (`fun sendJSEvent(eventName: String, ..)`)
   makes each call of it (`RNUtilsModuleImpl.sendJSEvent(Events.SPLIT_VIEW_CHANGED.event, map)`, in any Kotlin / Java

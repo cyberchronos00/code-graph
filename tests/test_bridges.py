@@ -468,3 +468,23 @@ def test_kotlin_event_helper_forwarding_its_parameter(tmp_path):
     ep = endpoints(st)["react-native-event:SplitViewChanged"]
     assert senders(ep) == {"method:com.x.SplitView.changed"} and ep["receivers"] and not ep["checks"]
     assert not B.bridges(st)["unresolved"]
+
+
+def test_event_names_from_locals_and_computed_properties():
+    # #95: `notifyListeners(event.listenerEvent, ..)` with a Swift computed `var listenerEvent: String { switch ... }`
+    # (each returned literal), and `let event = self?.visibilityChanged` before `notifyListeners(event, ..)`
+    from codegraph.bridges import NativeFile, _event_values, _str_props
+    sw = ('public class P: CAPPlugin {\n    private let visibilityChanged = "statusBarVisibilityChanged"\n'
+          '    @objc func hide(_ call: CAPPluginCall) {\n        guard let event = self?.visibilityChanged else { return }\n'
+          '        self?.notifyListeners(event, data: [:])\n    }\n'
+          '    func other() { self.notifyListeners(e.listenerEvent, data: nil) }\n}\n'
+          'enum BrowserEvent {\n    case loaded, finished\n    var listenerEvent: String {\n        switch self {\n'
+          '        case .loaded:\n            return "browserPageLoaded"\n        case .finished:\n'
+          '            return "browserFinished"\n        }\n    }\n'
+          '    var label: String { if x { return "a" }; return name }\n}\n')
+    nf = NativeFile("ios/P.swift", sw)
+    props = _str_props(nf)
+    assert props == {"listenerEvent": ["browserFinished", "browserPageLoaded"]}      # `label` returns a non-literal
+    assert _event_values(nf, sw.index("notifyListeners(event"), "event", props) == ["statusBarVisibilityChanged"]
+    assert _event_values(nf, sw.index("notifyListeners(e."), "e.listenerEvent", props) == ["browserFinished", "browserPageLoaded"]
+    assert _event_values(nf, sw.index("notifyListeners(e."), "unknownLocal", props) == []

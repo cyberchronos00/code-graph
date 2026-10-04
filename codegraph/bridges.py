@@ -671,6 +671,54 @@ def _first_value(nf: NativeFile, text: str, after: int, args: bool) -> tuple[str
     return _str_value(nf, m.group(1), _GLOBAL_CONSTS), m.group(1)
 
 
+SWIFT_STR_PROP = re.compile(r"\bvar\s+(\w+)\s*:\s*String\s*\{")
+
+
+def _str_props(nf: NativeFile) -> dict:
+    """Swift computed `var name: String { switch self { case .a: return "x" ... } }` whose every return is a string
+    literal -> name -> [values] (`event.listenerEvent` is one of them)."""
+    if nf.lang != "swift" or "String" not in nf.t.code:
+        return {}
+    out, t = {}, nf.t
+    for m in SWIFT_STR_PROP.finditer(t.code):
+        ob = m.end() - 1
+        body = t.src[ob:t.match(ob) + 1]
+        lits = re.findall(r'\breturn\s+"([^"\\\n]*)"', body) + re.findall(r'\bcase\s+[^:\n]+:\s*"([^"\\\n]*)"', body)
+        if lits and len(re.findall(r"\breturn\b", t.code[ob:t.match(ob) + 1])) == len(re.findall(r'\breturn\s+"', body)):
+            out[m.group(1)] = sorted(set(lits))
+    return out
+
+
+def _event_values(nf: NativeFile, pos: int, raw: str, props: dict) -> list[str]:
+    """Event names a non-literal argument stands for: `self?.name` (a constant), a local `let event = self?.name` /
+    `val event = NAME` declared before the call, or `event.listenerEvent` (a Swift computed string property)."""
+    e = re.sub(r"[?!](?=\.)", "", (raw or "").strip())
+    if e.startswith("name:"):
+        e = e[5:].strip()
+    if not e:
+        return []
+    v = _str_value(nf, e, _GLOBAL_CONSTS)
+    if v:
+        return [v]
+    if re.fullmatch(r"[a-z]\w*", e):
+        src = nf.t.src[max(0, pos - 3000):pos]
+        last = None
+        for m in re.finditer(r"\b(?:let|var|val|final\s+String|String)\s+" + re.escape(e) +
+                             r"\s*(?::\s*String\??)?\s*=\s*([^\n,;{]+)", src):
+            last = m
+        if last:
+            x = re.sub(r"[?!](?=\.)", "", re.split(r"\s+else\b", last.group(1))[0].strip())
+            v = _str_value(nf, x, _GLOBAL_CONSTS)
+            if v:
+                return [v]
+            if "." in x and x.split(".")[-1] in props:
+                return props[x.split(".")[-1]]
+        return []
+    if re.fullmatch(r"[\w.]+", e) and "." in e and e.split(".")[-1] in props:
+        return props[e.split(".")[-1]]
+    return []
+
+
 def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list, jvm_other: list = ()) -> dict:
     """Native code emitting an event to JS -> SENDS_TO endpoint (direction to_app) from the enclosing method:
     React Native `RCTDeviceEventEmitter.emit("evt", ...)`, `sendEvent(ctx, "evt", ...)`, ObjC `sendEventWithName:`,
@@ -686,6 +734,7 @@ def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list, j
     for nf in nfs:
         t = nf.t
         found = found_by.setdefault(nf.rel, [])      # (protocol, namespace, method, pos, via)
+        props = _str_props(nf)
         if "notifyListeners" in t.code:
             ns = cap_ns.get(nf.rel)
             rx = OBJC_CAP_NOTIFY if nf.lang == "objc" else CAP_NOTIFY
@@ -693,11 +742,13 @@ def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list, j
                 v, raw = _first_value(nf, t.code, m.end(), nf.lang != "objc")
                 if not ns or len(ns) != 1:
                     continue
-                if v is None:
+                vals = [v] if v is not None else _event_values(nf, m.start(), raw, props)
+                if not vals:
                     dynamic.append({"file": nf.rel, "line": t.line(m.start()), "protocol": "capacitor-event",
                                     "what": f"notifyListeners({raw[:40]})"})
                     continue
-                found.append(("capacitor-event", next(iter(ns)), v, m.start(), "notifyListeners"))
+                for v in vals:
+                    found.append(("capacitor-event", next(iter(ns)), v, m.start(), "notifyListeners"))
         swift_named = nf.lang == "swift" and re.search(r"\bsendEvent\s*\(\s*(?:withName|name)\s*:", t.code)
         if RN_EMITTER_HINT.search(t.code) or swift_named:
             sites = []
@@ -717,6 +768,10 @@ def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list, j
                         re.search(r"\b(?:fun|void|func)\s+sendEvent\s*\($", t.code[max(0, m.start() - 20):m.end()]):
                     continue
                 v, raw = _first_value(nf, t.code, m.end(), is_args)
+                if v is None and (vals := _event_values(nf, m.start(), raw, props)):
+                    for v in vals:
+                        found.append(("react-native-event", v, None, m.start(), via))
+                    continue
                 if v is None:
                     h = _jvm_helper(nf, m.start(), raw) if nf.lang in ("kotlin", "java") else None
                     if h:                                           # `fun sendJSEvent(eventName: String, ..)`
