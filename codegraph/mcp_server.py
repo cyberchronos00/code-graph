@@ -604,14 +604,17 @@ def roundtrip(prop: str, include_tests: bool = False) -> str:
 
 
 @tool
-def lint_async_state(include_tests: bool = False, limit: int = 80) -> str:
-    """Heuristic (#88 phase 3). stale-async-result: a write of stored / UI state inside Task / launch / useEffect /
-    async function / async def code after an await, using the awaited result of an input-dependent request, with no
-    cancellation check and no comparison against a token / ID / generation captured before the await. two-writers:
-    state written with real values by lifecycle code (init, onAppear, useEffect, LaunchedEffect) and by async code
-    after an await or a completion callback. file:line evidence; not proof."""
+def lint_async_state(include_tests: bool = False, limit: int = 80, rules: str = "") -> str:
+    """Heuristic (#88 phase 3); `rules` is a comma-separated subset (default all). stale-async-result: a write of
+    stored / UI state inside Task / launch / useEffect / async function / async def code after an await, using the
+    awaited result of an input-dependent request, with no cancellation check and no comparison against a token / ID /
+    generation captured before the await. two-writers: state written with real (computed) values by lifecycle code
+    (init, onAppear, useEffect, LaunchedEffect) and by async code after an await or a completion callback.
+    incomplete-cache-key: a cache / memo store whose key leaves out a parameter or instance field the cached value
+    uses. echo-suppression: state that is written with a guard flag set (`isApplyingRemote`, `lastSent…`) so its
+    observer returns early, but is also written from async code without the guard. file:line evidence; not proof."""
     from . import lint_async as LA
-    res = LA.lint(_st(), include_tests=include_tests)
+    res = LA.lint(_st(), include_tests=include_tests, rules=[r.strip() for r in rules.split(",") if r.strip()] or None)
     lines = LA.render(res).split("\n")
     return "\n".join(lines[:1 + 3 * limit]) + (f"\n… +{len(res['findings']) - limit} more" if len(res["findings"]) > limit else "")
 

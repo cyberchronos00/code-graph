@@ -74,9 +74,10 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `roundtrip Type.prop [--json] [--tests]`: heuristic. It reports each write of the property that passes through a
   lossy transform and each read that seeds UI state, and pairs them with any wider range drawn next to the read
   (see [`roundtrip`](#roundtrip)).
-- `lint async-state [--json] [--tests]`: heuristic, rules `stale-async-result` (an awaited result written to state
-  with no cancellation or token check) and `two-writers` (state written by lifecycle code and by an async
-  callback). See [`lint`](#lint).
+- `lint async-state [--rules R,...] [--json] [--tests]`: heuristic, rules `stale-async-result` (an awaited result
+  written to state with no cancellation or token check), `two-writers` (state written by lifecycle code and by an
+  async callback), `incomplete-cache-key` (a cache key that leaves out an input of the cached value) and
+  `echo-suppression` (state written without the guard its observer checks). See [`lint`](#lint).
   `node` prints the node (location, fqn, platforms, attrs) and its outgoing / incoming edges, the same edge from one
   site once with a count; `stats` prints the project, its languages, the coverage summary line and the node / edge
   counts. With `--json` each prints one JSON document (`node`: a list of `{node, out, in}`; `stats`: `{project, root,
@@ -500,7 +501,9 @@ For each read site, it reports whether the read seeds UI state. Seeds are:
 - a view constructed on the same line.
 
 A finding is a lossy write plus a seeding read, as a path: write → lossy call → property → read → seed, each with
-`file:line`. A read inside the write statement itself is not paired with it. When the lossy bounds are known
+`file:line`. A read inside the write statement itself is not paired with it, and neither is a read by the writer
+within 40 lines of the write (a view built and added in one `init`), a read of a callback-valued property, or a read
+that only uses the property as an index (`bands[p.band]`). When the lossy bounds are known
 (`clamp(v, 0, 10)`, or the numbers in a project `fitToGamut` body), wider ranges in the reader's file are listed as
 "un-narrowed range", for example `Slider(in: 0...100)`, `valueRange = 0f..100f` or `min={0} max={100}`.
 
@@ -522,7 +525,8 @@ options:
 
 ### `lint`
 
-`lint async-state` is #88 phase 3. Two rules are implemented: `stale-async-result` and `two-writers`.
+`lint async-state` is #88 phase 3. It has four rules: `stale-async-result`, `two-writers`, `incomplete-cache-key`
+and `echo-suppression`. All run by default; `--rules` takes a comma-separated subset.
 
 It flags a write of stored or UI state (a WRITES_PROP edge) that meets all of these:
 - it is inside an async block: Swift `Task { }` or an `async` func, Kotlin `launch { }` / `async { }`, a React
@@ -546,13 +550,28 @@ they are in test paths (unless `--tests` is given).
   `completion: {`).
 
 Defaults and flag resets (`= []`, `setLoading(true)`, `setError(null)`) and in-place mutations are not competing
-values, so they are skipped.
+values, so they are skipped. So are constructor injection (`self.x = x`, `State(initialValue: x)`), an async write
+with the same expression as the lifecycle write, and an async write derived from the state itself
+(`presets = presets.filter(...)`).
 
-Findings are labelled `heuristic` and nothing is added to the graph. The MCP tool is `lint_async_state`. The rules
-incomplete cache key and echo suppression are not implemented yet.
+`incomplete-cache-key` flags a store into a cache (a receiver named like `cache`, `memo` or `lru`: `.set(k, v)`,
+`.put(k, v)`, `setObject(v, forKey: k)`, `c[k] = v`) where the cached value uses a parameter or instance field
+(`this.x`, `self.x`, `$this->x`) that the key does not. Locals are followed back through their assignments, and
+string interpolation in the key counts (`` `${a}-${b}` ``, `"\(a)"`, `"$a"`, f-strings). A setter that only passes a
+value through (`put(key, value)`, a function named `set…` / `store…` / `cache…`) and payload parameters (`data`,
+`response`, `value`) are skipped, as is `xs[i]` keyed by `i`. Swift's implicit `self` is not seen.
+
+`echo-suppression` looks for a guard field named like `isApplying…`, `isProgrammatic…`, `isSyncing…`,
+`isUpdatingFrom…`, `lastSent…` / `lastSaved…` / `lastWritten…`, `suppress…`, `skipNext…` or `ignoreNext…`
+that is read in an `if` / `guard` with an early return (the observer) and set, not just reset to `false` / `nil`,
+within four lines of a write of some state of the same type. It flags writes of that state from async code after an
+await, or from a callback, in functions that neither set the guard nor are the observer: the observer does not
+see the guard and echoes the value back.
+
+Findings are labelled `heuristic` and nothing is added to the graph. The MCP tool is `lint_async_state`.
 
 ```
-usage: cg lint [-h] --db DB [--json] [--tests] {async-state}
+usage: cg lint [-h] --db DB [--rules RULES] [--json] [--tests] {async-state}
 
 positional arguments:
   {async-state}
@@ -560,6 +579,8 @@ positional arguments:
 options:
   -h, --help     show this help message and exit
   --db DB
+  --rules RULES  comma-separated subset: stale-async-result,two-
+                 writers,incomplete-cache-key,echo-suppression (default: all)
   --json
   --tests        include test code
 ```

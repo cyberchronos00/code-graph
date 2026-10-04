@@ -46,7 +46,15 @@ commands, output and the graph schema; such changes are listed under **Changed**
     graph.
   - Fixtures cover Swift, Kotlin, React and Python. On outline, Element X, Bitwarden, social-app, isowords,
     Alamofire, IceCubesApp and elk it finds 14 lossy writes and 1 round trip.
-- `cg lint async-state` (#88 phase 3), rule `stale-async-result` only. It flags an awaited result written to stored
+  - The hop through a caller only looks at the argument passed for the parameter, so `rooms[Int(i)] = Room(r)` no
+    longer marks `Room`'s fields lossy.
+  - A read is not a read-back when the writer uses what it just built a few lines later, when the property holds a
+    callback, or when the property is only used as an index. With that, mattermost-mobile, koel, solidtime,
+    Bitwarden iOS, elk and nowinandroid have 40 lossy writes and 0 round trips (5 false positives removed). Element X
+    iOS has 6 lossy writes and 2 round trips. One is plausible: a permission level that is `max` of two power levels
+    seeds an editable setting. The other is an `Int(...)` count conversion. The Element X
+    round trip above (a harmless `PdfPage.renderHeight`) is gone too.
+- `cg lint async-state` (#88 phase 3), four rules (`--rules` selects a subset). Rule `stale-async-result` flags an awaited result written to stored
   or UI state with no cancellation check and no token / ID / generation comparison between the await and the write.
   - The async blocks covered are Swift `Task` and async funcs, Kotlin `launch` / `async`, React `useEffect`, JS / TS
     `async` functions and `.then`, and Python `async def`.
@@ -60,6 +68,19 @@ commands, output and the graph schema; such changes are listed under **Changed**
     are skipped. Hand check: IceCubesApp 3 findings (1 clear true positive, plus 2 like / bookmark flags re-seeded
     on appear); social-app 2 (1 true positive); outline 1 (1 true positive). That is 3 of 7 strictly, 5 of 7
     counting the flags.
+    - Tightened after a wider sample: constructor injection (`self.x = x`, `State(initialValue:)`) is not a
+      lifecycle writer, and an async write with the same expression as the lifecycle one, or derived from the state
+      itself, is skipped, as are `&x` / `.store(in:)`. On 14 corpora (the ones above plus nowinandroid, Element X iOS,
+      mattermost-mobile, koel, Bitwarden iOS and solidtime) it has 8 findings: 4 true positives, 3 borderline and
+      1 false positive (50% strictly, 88% counting borderline). Before tightening it was 4 of 20 strictly.
+  - Rule `incomplete-cache-key`: a store into a cache / memo / LRU (`set`, `put`, `setObject(_:forKey:)`, `c[k] = v`)
+    whose key leaves out a parameter or instance field that the cached value is computed from, following locals and
+    string interpolation. Pass-through setters (`put(key, value)`) and payload parameters are skipped. It has 0
+    findings on the 14 corpora, after 14 false positives were fixed during development.
+  - Rule `echo-suppression`: a guard field (`isApplyingRemote`, `lastSent…`, `skipNext…`, `suppress…`) checked with
+    an early return in an observer and set around writes of some state. It reports writes of that state from async
+    code or a callback that do not set the guard. On the 14 corpora it found 1 guard pattern (a presence
+    de-duplication) and 0 findings.
   - Incomplete cache key and echo suppression are not implemented yet.
 - Kotlin stored-property refs no longer treat `{ x = …` (an assignment opening a body) or `f(x)` (an argument) as a
   local `x`. Element X gains 1,149 field refs and Bitwarden 418; all other edges are unchanged.

@@ -168,12 +168,37 @@ def _write_site(st, src, r, prop, globs) -> dict:
             for c in st.q("SELECT src, file, line FROM edges WHERE dst=? AND kind IN ('CALLS','TEST_CALLS') ORDER BY file, line LIMIT 40",
                           (r["src"],)):
                 ct = src.stmt(c["file"], c["line"])
-                h = _lossy_calls(ct, globs)
+                h = _lossy_calls(_call_args(st, ct, r["src"], v), globs)
                 if h:
                     site["lossy"] = {"calls": h, "how": f"parameter `{v}`, from caller {c['src']}", "at": f"{c['file']}:{c['line']}",
                                      "code": ct.strip()[:120], "bounds": _bounds(ct) or _fn_bounds(st, src, h[0])}
                     return site
     return site
+
+
+def _call_args(st, stmt: str, callee: str, param: str) -> str:
+    """The argument text a caller statement passes for `param` of `callee` (the labelled argument when there is one),
+    so a lossy call elsewhere in the statement (`rooms[Int(i)] = Room(r)`) is not blamed on it. Falls back to the
+    whole statement when the call is not found."""
+    node = st.node(callee)
+    nm = re.split(r"[.#:]", (node["fqn"] or node["name"] or "") if node is not None else callee.split(":", 1)[-1])
+    short = nm[-1] if nm[-1] not in ("init", "__init__", "constructor", "<init>") else (nm[-2] if len(nm) > 1 else "")
+    m = re.search(rf"(?<![\w$]){re.escape(short)}\s*\(", stmt) if short else None
+    if not m:
+        return stmt
+    depth, i = 1, m.end()
+    while i < len(stmt) and depth:
+        depth += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(stmt[i], 0)
+        i += 1
+    args = stmt[m.end():i - 1]
+    lab = re.search(rf"(?<![\w$]){re.escape(param)}\s*[:=](?![:=])\s*", args)
+    if lab:
+        rest, depth, j = args[lab.end():], 0, 0
+        while j < len(rest) and not (rest[j] == "," and depth == 0):
+            depth += {"(": 1, "[": 1, "{": 1, ")": -1, "]": -1, "}": -1}.get(rest[j], 0)
+            j += 1
+        return rest[:j]
+    return args
 
 
 def _read_site(st, src, r) -> dict:
@@ -256,6 +281,8 @@ def roundtrip(st: GraphStore, spec: str, include_tests: bool = False) -> dict:
             sp, rs = w["_span"], x["_src"]
             if rs[0] == sp[0] and sp[1] <= rs[1] <= sp[2]:
                 continue                                # read inside the write statement itself: not a read-back
+            if not _read_back(src, w, x, prop):
+                continue
             f = {"kind": "lossy round trip", "confidence": "heuristic", "write": w["at"], "lossy": w["lossy"],
                  "read": x["at"], "seeds": x["seeds"], "wider_ranges": []}
             if b:
@@ -266,6 +293,24 @@ def roundtrip(st: GraphStore, spec: str, include_tests: bool = False) -> dict:
     for x in res["reads"]:
         x.pop("_src", None)
     return res
+
+
+def _read_back(src, w, x, prop) -> bool:
+    """Is this read a read-back of the stored value rather than the same setup using what it just built? Not when
+    the writer reads it a few lines later (`scrollBar = ScrollBarView(...)` then `addView(scrollBar)` in one init),
+    when the property is a callback (`this.onWheel = (e) => ...`), or when it is only used as an index
+    (`bands[p.band]`)."""
+    wf, wl = w["at"].rsplit(":", 1)
+    xf, xl = x["at"].rsplit(":", 1)
+    if w.get("writer") and w.get("writer") == x.get("reader") and wf == xf and 0 <= int(xl) - int(wl) <= 40:
+        return False
+    wt = src.lines(wf)[int(wl) - 1] if 0 < int(wl) <= len(src.lines(wf)) else ""
+    if re.search(r"=\s*(?:async\s*)?(?:\([^()]*\)|\w+)\s*=>|=\s*(?:async\s+)?function\b|=\s*\{\s*(?:\[[^\]]*\]\s*)?[\w, ]*\bin\b", wt):
+        return False
+    xt = src.lines(xf)[int(xl) - 1] if 0 < int(xl) <= len(src.lines(xf)) else ""
+    if re.search(rf"\[[^\[\]]*\b{re.escape(prop)}\s*\]", xt) and not re.search(rf"(?<![\[\w.]){re.escape(prop)}\b(?!\s*\])", xt):
+        return False
+    return True
 
 
 def render(res: dict) -> str:

@@ -187,6 +187,13 @@ LITERAL_ARG_RE = re.compile(r"\(\s*(?:nil|null|None|undefined|true|false|True|Fa
 INIT_NAMES = {"init", "__init__", "constructor", "<init>", "viewDidLoad", "onCreate", "initState", "mounted", "created", "setup"}
 
 
+def _rhs(t: str) -> str | None:
+    """Right-hand side of an assignment (comments dropped), or the argument of a `setX(...)` call."""
+    t = re.sub(r"\s(?://|#).*$", "", t).strip().rstrip(";")
+    m = re.search(r"(?<![=!<>])=(?!=)\s*(.+)$", t) or re.search(r"\bset[A-Z]\w*\s*\((.*)\)\s*$", t)
+    return m.group(1).strip() if m else None
+
+
 def _lifecycle(st, ls, r, node) -> str | None:
     """Is this write lifecycle code: an initializer with a real (non-default) value, or code directly inside
     onAppear / .task (before any await) / onMounted / LaunchedEffect / useEffect / viewDidLoad?"""
@@ -195,6 +202,12 @@ def _lifecycle(st, ls, r, node) -> str | None:
         return None
     nm = ((node["name"] if node is not None else "") or "").split(".")[-1]
     if nm in INIT_NAMES or (node is not None and node["kind"] == "class"):
+        # constructor injection (`self.x = x`, `_x = State(initialValue: x)`, `this.y = AppState.currentState`)
+        # seeds the state; only a computed / loaded value competes with a later async one
+        rhs = _rhs(t)
+        if rhs is None or not re.search(r"\w\s*\(", rhs) or re.match(r"(?:State|Published|StateObject|ObservedObject|"
+                                                                        r"Binding)\s*\(\s*(?:initialValue|wrappedValue)\s*:", rhs):
+            return None
         return f"initializer ({nm or 'class'})"
     lo = max(1, r["line"] - 6)
     for i in range(r["line"], lo - 1, -1):
@@ -235,8 +248,9 @@ def two_writers(st: GraphStore, include_tests: bool = False) -> list[dict]:
             continue
         # a default / flag reset (`= []`, `setLoading(true)`, `setError(null)`) or an in-place mutation is not a
         # competing value: only real values written from both sides can make the UI jump
-        t = ls[r["line"] - 1]
-        if LITERAL_RHS_RE.search(t) or LITERAL_ARG_RE.search(t) or json.loads(r["attrs"] or "{}").get("via") in ("mutating", "item"):
+        t = re.sub(r"\s//.*$", "", ls[r["line"] - 1])
+        if (LITERAL_RHS_RE.search(t) or LITERAL_ARG_RE.search(t) or re.search(r"&\s*[\w.]+|\.store\s*\(\s*in\s*:", t)
+                or json.loads(r["attrs"] or "{}").get("via") in ("mutating", "item")):
             continue
         node = st.node(r["src"])
         d = by.setdefault(r["dst"], {"life": [], "async": []})
@@ -249,23 +263,253 @@ def two_writers(st: GraphStore, include_tests: bool = False) -> list[dict]:
             d["async"].append({"at": f"{r['file']}:{r['line']}", "how": ac, "code": ls[r["line"] - 1].strip()[:110]})
     out = []
     for fid, d in by.items():
+        # the same expression from both sides (`selectedID = ids.first` on appear and on change) is a refresh, not a race
+        life_rhs = {_rhs(w["code"]) for w in d["life"]}
+        short = fid.rsplit(".", 1)[-1].rsplit("#", 1)[-1]
+        # ... and an update derived from the state itself (`presets = presets.filter(...)`) does not compete either
+        d["async"] = [w for w in d["async"] if _rhs(w["code"]) not in life_rhs
+                      and not re.search(rf"(?<![\w$]){re.escape(short)}\b", _rhs(w["code"]) or "")]
         if d["life"] and d["async"]:
             out.append({"rule": "two-writers", "confidence": "heuristic", "state": fid,
                         "lifecycle_writes": d["life"][:5], "async_writes": d["async"][:5]})
     return out
 
 
-def lint(st: GraphStore, include_tests: bool = False) -> dict:
-    f = stale_async(st, include_tests) + two_writers(st, include_tests)
-    return {"lint": "async-state", "confidence": "heuristic", "rules": ["stale-async-result", "two-writers"],
-            "not_implemented": ["incomplete-cache-key", "echo-suppression"], "findings": f}
+# ---- rule incomplete-cache-key
+CACHE_NAME = r"[\w$.]*(?:[cC]ache|[mM]emo\w*|lru\w*|LRU\w*)[\w$]*"
+STORE_RES = (
+    re.compile(rf"(?P<c>{CACHE_NAME})\s*\.\s*(?:set|put|store|setItem|setObject|setValue)\s*\((?P<args>.*)\)"),
+    re.compile(rf"(?P<c>{CACHE_NAME})\s*\[(?P<key>[^\]]+)\]\s*=(?!=)\s*(?P<val>.+)"),
+)
+WORD_RE = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)")
+SKIP_IDS = KEYWORDS | {"let", "var", "val", "const", "if", "else", "for", "while", "guard", "return", "self", "this",
+                       "String", "Int", "Double", "Float", "Bool", "JSON", "Math", "Object", "Array", "str", "int", "len",
+                       "f", "fun", "func", "def", "await", "try", "async"}
+
+
+PAYLOAD_RE = re.compile(r"(?:data|response|resp|res|result|value|payload|body|json|item|entry|element|model|obj|object)")
+
+
+def _split_args(s: str) -> list[str]:
+    out, depth, cur = [], 0, ""
+    for ch in s:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur); cur = ""
+            continue
+        cur += ch
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+INTERP_RE = re.compile(r"\$\{([^}]*)\}|\\\(([^)]*)\)|\$([A-Za-z_]\w*)")
+
+
+def _strip_strings(expr: str) -> str:
+    """Drop string literals but keep what they interpolate (`${id}`, `\\(id)`, `$id`, f-string `{id}`)."""
+    def keep(m):
+        body = m.group(0)
+        inner = [g for x in INTERP_RE.finditer(body) for g in x.groups()[:3] if g]
+        if body[:1] == "f":
+            inner = re.findall(r"\{([^{}]*)\}", body)
+        return " (" + ", ".join(inner) + ") " if inner else "''"
+    return re.sub(r"""f?(['"`])(?:\\.|(?!\1).)*\1""", keep, expr)
+
+
+def _idents(expr: str) -> set[str]:
+    e = _strip_strings(expr)
+    e = re.sub(r"(?<![:\w])([A-Za-z_$][\w$]*)\s*:(?!:)", " ", e)            # labels / keys
+    e = re.sub(r"(?:\$this\s*->|\b(?:this|self)\s*\.)\s*([A-Za-z_$][\w$]*)", r" self_\1 ", e)  # instance state: `self_x`
+    e = e.replace(".$", ". $")
+    e = re.sub(r"(?<![\w$])[A-Za-z_$][\w$]*\s*(?:<[^<>]*>)?\s*\(", " (", e)    # call names
+    e = re.sub(r"(?:\.|->|::)\s*[A-Za-z_][\w$]*", " ", e)                     # other member names (`.$x` is PHP concat)
+    return {w for w in WORD_RE.findall(e) if w not in SKIP_IDS and not w[0].isupper()}
+
+
+def _expand(ids: set[str], assigns: dict, depth: int = 0) -> set[str]:
+    """Identifiers a value depends on, through locals assigned earlier in the function."""
+    out = set()
+    for i in ids:
+        if i in assigns and depth < 3:
+            out |= _expand(assigns[i], assigns, depth + 1) or {i}
+        else:
+            out.add(i)
+    return out
+
+
+def incomplete_cache_key(st: GraphStore, include_tests: bool = False) -> list[dict]:
+    """A cache store whose key leaves out a parameter or instance field that the cached value's computation uses
+    (within one function): `cache[userId] = render(userId, theme)` serves one theme's render for another."""
+    root = st.meta().get("root")
+    cache: dict = {}
+    out = []
+    fns = st.q("""SELECT id, fqn, file, line, end_line FROM nodes WHERE kind IN ('function','method')
+                  AND file IS NOT NULL AND end_line > line ORDER BY file, line""")
+    for fn in fns:
+        if not root or (not include_tests and TEST_PATH_RE.search(f"{fn['file']}:")):
+            continue
+        ls = _lines(root, fn["file"], cache)
+        body = ls[fn["line"] - 1:fn["end_line"]]
+        if not any(re.search(CACHE_NAME, x) for x in body):
+            continue
+        sig = "\n".join(body[:3])
+        sig = sig[sig.find("("):] if "(" in sig else ""
+        params = _idents(_split_args(sig[1:]) and ",".join(re.sub(r"[:=].*", "", a, flags=re.S) for a in _split_args(sig[1:])) or "")
+        assigns: dict = {}
+        for off, t in enumerate(body):
+            m = re.search(r"\b(?:let|var|val|const)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=(?!=)(.*)|^\s*([a-z_$][\w$]*)\s*=(?!=)(.*)", t)
+            if m:
+                assigns[m.group(1) or m.group(3)] = _idents(m.group(2) or m.group(4) or "")
+            for rx in STORE_RES:
+                s = rx.search(t)
+                if not s or not re.fullmatch(CACHE_NAME, s.group("c").split(".")[-1] or ""):
+                    continue
+                if "args" in s.groupdict() and s.group("args") is not None:
+                    a = _split_args(s.group("args"))
+                    if len(a) < 2:
+                        continue
+                    if re.search(r"forKey\s*:", s.group("args")):          # setObject(v, forKey: k)
+                        key = next(x for x in a if "forKey" in x)
+                        val = next(x for x in a if "forKey" not in x)
+                    else:
+                        key, val = a[0], a[1]
+                else:
+                    key, val = s.group("key"), s.group("val")
+                vb = val.strip().rstrip(";")
+                if re.fullmatch(r"[A-Za-z_$][\w$]*", vb) and vb not in assigns:
+                    continue                    # `put(key, value)` passes a value through; nothing is computed here
+                kids = _expand(_idents(key), assigns)
+                vids = _expand(_idents(val), assigns) - {vb}
+                setter = re.match(r"(?:set|put|insert|store|save|cache|add|update|write|remember|record)(?![a-z])",
+                                  (fn["fqn"] or "").split(".")[-1].split("(")[0])
+                inputs = {i for i in vids if (i in params and not setter and not PAYLOAD_RE.fullmatch(i.lstrip("$")))
+                          or i.startswith("self_")}
+                missing = sorted(i for i in inputs - kids if i.replace("self_", "") not in {k.replace("self_", "") for k in kids})
+                src = "\n".join(body[:off + 1])
+                missing = [m for m in missing if not any(re.search(          # `xs[i]` / `xs.getOrNull(i)` keyed by i
+                    rf"{re.escape(m)}\s*(?:\[\s*{re.escape(k)}\s*\]|\??\.\s*(?:get\w*|elementAt\w*|at|item)\s*\(\s*{re.escape(k)}\b)",
+                    src) for k in kids)]
+                kin = {i for i in kids if i in params or i.startswith("self_")}
+                if missing and (kin or kids):
+                    ln = fn["line"] + off
+                    out.append({"rule": "incomplete-cache-key", "confidence": "heuristic", "function": fn["fqn"] or fn["id"],
+                                "at": f"{fn['file']}:{ln}", "cache": s.group("c")[-40:], "key": key.strip()[:80],
+                                "key_uses": sorted(kids)[:8], "value_uses": sorted(inputs)[:8],
+                                "missing": [m.replace("self_", "self.") for m in missing], "code": t.strip()[:120]})
+    return out
+
+
+# ---- rule echo-suppression
+GUARD_FIELD_RE = re.compile(r"(?:last(?:Written|Sent|Saved|Synced|Applied|Pushed|Emitted|Published|Local)\w*|"
+                            r"isUpdating(?:From|Programmatic|Internal|Selection|Text|Value)\w*|is(?:Applying|Programmatic|Syncing|Internal|Setting|Restoring)\w*|"
+                            r"(?:suppress|ignoreNext|skipNext|muteNext|ignoring|suppressing)\w*)", re.I)
+EARLY_RE = re.compile(r"\b(?:return|continue|break)\b|\bguard\b.*\belse\b")
+
+
+def _owner(fid: str) -> str:
+    return fid.rsplit(".", 1)[0]
+
+
+def echo_suppression(st: GraphStore, include_tests: bool = False, patterns: list | None = None) -> list[dict]:
+    """Echo suppression: a guard field (`isApplyingRemote`, `lastSentText`, `suppressNextChange`) is set around
+    programmatic writes of some state so the change observer, which checks the guard and returns early, does not
+    echo them back. Reports state of that pattern that is also written from an async path / callback *without*
+    setting the guard: that write reaches the observer and is sent back (a loop or a clobbered edit)."""
+    root = st.meta().get("root")
+    cache: dict = {}
+    guards = [r["id"] for r in st.q("SELECT id, name FROM nodes WHERE kind = 'field'") if GUARD_FIELD_RE.fullmatch((r["name"] or "").rsplit(".", 1)[-1].replace("_", ""))]
+    out = []
+
+    def keep(r):
+        return r["file"] and root and (include_tests or not TEST_PATH_RE.search(f"{r['file']}:"))
+
+    for g in guards:
+        name = g.rsplit(".", 1)[-1]
+        sites = []
+        for r in st.q("SELECT src, file, line FROM edges WHERE kind = 'READS_PROP' AND dst = ?", (g,)):
+            if not keep(r):
+                continue
+            ls = _lines(root, r["file"], cache)
+            if not ls or r["line"] > len(ls):
+                continue
+            t = ls[r["line"] - 1]
+            if re.search(r"\b(?:if|guard|unless|when)\b", t) and EARLY_RE.search("\n".join(ls[r["line"] - 1:r["line"] + 2])):
+                sites.append({"at": f"{r['file']}:{r['line']}", "fn": r["src"], "code": t.strip()[:110]})
+        if not sites:
+            if patterns is not None:
+                patterns.append((g, None, 0, 0, 0))
+            continue
+        gw = []
+        for r in st.q("SELECT src, file, line FROM edges WHERE kind = 'WRITES_PROP' AND dst = ?", (g,)):
+            ls = _lines(root, r["file"], cache) if keep(r) else None
+            # the guard's default / reset (`= false`, `= None`) does not suppress anything; setting it (or recording
+            # the value about to be sent) does
+            if ls and r["line"] <= len(ls) and not re.search(r"=\s*(?:false|False|nil|None|null|undefined|0)\s*;?\s*$",
+                                                                  ls[r["line"] - 1]):
+                gw.append(r)
+        setters = {r["src"] for r in gw}
+        observers = {s["fn"] for s in sites}
+        targets: dict = {}
+        for r in gw:
+            for w in st.q("""SELECT dst, line FROM edges WHERE kind = 'WRITES_PROP' AND src = ? AND file = ?
+                             AND line BETWEEN ? AND ?""", (r["src"], r["file"], r["line"] - 4, r["line"] + 4)):
+                if w["dst"] != g and _owner(w["dst"]) == _owner(g) and not GUARD_FIELD_RE.fullmatch(w["dst"].rsplit(".", 1)[-1].replace("_", "")):
+                    targets.setdefault(w["dst"], []).append(f"{r['file']}:{w['line']}")
+        for t, sup in targets.items():
+            bad = []
+            for r in st.q("SELECT e.src, e.file, e.line, n.line AS fl FROM edges e JOIN nodes n ON n.id = e.src "
+                          "WHERE e.kind = 'WRITES_PROP' AND e.dst = ?", (t,)):
+                if not keep(r) or r["src"] in setters or r["src"] in observers:
+                    continue
+                ls = _lines(root, r["file"], cache)
+                if not ls or r["line"] > len(ls):
+                    continue
+                how = _async_callback(ls, r, r["fl"] or 1)
+                if how:
+                    bad.append({"at": f"{r['file']}:{r['line']}", "how": how, "code": ls[r["line"] - 1].strip()[:110]})
+            if patterns is not None:
+                patterns.append((g, t, len(sites), len(sup), len(bad)))
+            if bad:
+                out.append({"rule": "echo-suppression", "confidence": "heuristic", "guard": g, "state": t,
+                            "guard_sites": sites[:3], "suppressed_writes": sorted(set(sup))[:5], "unsuppressed_writes": bad[:5]})
+    return out
+
+
+RULES = {"stale-async-result": stale_async, "two-writers": two_writers, "incomplete-cache-key": incomplete_cache_key,
+         "echo-suppression": echo_suppression}
+
+
+def lint(st: GraphStore, include_tests: bool = False, rules: list[str] | None = None) -> dict:
+    run = [r for r in RULES if rules is None or r in rules]
+    unknown = sorted(set(rules or []) - set(RULES))
+    if unknown:
+        raise ValueError(f"unknown rule(s) {', '.join(unknown)}; known: {', '.join(RULES)}")
+    f = [x for r in run for x in RULES[r](st, include_tests)]
+    return {"lint": "async-state", "confidence": "heuristic", "rules": run, "not_implemented": [], "findings": f}
 
 
 def render(res: dict) -> str:
     fs = res["findings"]
-    out = [f"lint async-state — heuristic; rules: {', '.join(res['rules'])} "
-           f"(not yet: {', '.join(res['not_implemented'])}); {len(fs)} findings"]
+    nyi = f" (not yet: {', '.join(res['not_implemented'])})" if res.get("not_implemented") else ""
+    out = [f"lint async-state — heuristic; rules: {', '.join(res['rules'])}{nyi}; {len(fs)} findings"]
     for f in fs:
+        if f["rule"] == "echo-suppression":
+            out.append(f"  [echo-suppression] {f['state']}: written with guard {f['guard'].rsplit('.', 1)[-1]} set at "
+                       f"{', '.join(f['suppressed_writes'][:2])} (checked at {f['guard_sites'][0]['at']}), but not at:")
+            for w in f["unsuppressed_writes"]:
+                out.append(f"      {w['at']} ({w['how']}): {w['code']}")
+            continue
+        if f["rule"] == "incomplete-cache-key":
+            out.append(f"  [incomplete-cache-key] {f['function']} @{f['at']}: {f['cache']} key `{f['key']}` leaves out "
+                       f"{', '.join(f['missing'])} (the value uses {', '.join(f['value_uses'])})")
+            out.append(f"      {f['code']}")
+            continue
         if f["rule"] == "two-writers":
             out.append(f"  [two-writers] {f['state']}: written by lifecycle code and by an async callback")
             for w in f["lifecycle_writes"]:

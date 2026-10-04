@@ -29,9 +29,9 @@ def db(lang):
 
 
 def found(lang):
-    """stale-async-result findings in the Search files (Detail files carry the two-writers cases)."""
+    """stale-async-result findings in the Search files (Detail, Cache and Echo carry the other rules' cases)."""
     return [(f["write_at"], f["async"], f["confidence"]) for f in LA.lint(GraphStore(db(lang)))["findings"]
-            if f["rule"] == "stale-async-result" and "Detail" not in f["write_at"] and "detail" not in f["write_at"]]
+            if f["rule"] == "stale-async-result" and "earch" in f["write_at"]]
 
 
 def two(lang):
@@ -60,7 +60,7 @@ def test_python_and_cli_json():
                          capture_output=True, text=True, check=True, cwd=ROOT).stdout
     j = json.loads(out)
     assert j["confidence"] == "heuristic" and j["findings"][0]["rule"] == "stale-async-result"
-    assert "incomplete-cache-key" in j["not_implemented"] and "two-writers" in j["rules"]
+    assert j["not_implemented"] == [] and j["rules"] == ["stale-async-result", "two-writers", "incomplete-cache-key", "echo-suppression"]
 
 
 @pytest.mark.parametrize("lang,state,life,late", [
@@ -84,3 +84,61 @@ def test_mcp_tool(monkeypatch):
     monkeypatch.setattr(M, "_st", lambda: GraphStore(db("kotlin")))
     out = getattr(M.lint_async_state, "fn", M.lint_async_state)()
     assert "heuristic" in out and "Search.kt:10" in out
+
+
+@pytest.mark.parametrize("lang,at,missing", [
+    ("swift", "Sources/App/Cache.swift:9", ["size"]),
+    ("kotlin", "src/main/kotlin/app/Cache.kt:8", ["size"]),
+    ("react", "src/Cache.tsx:5", ["size"]),
+    ("python", "app/cache.py:8", ["self.theme"]),
+])
+def test_incomplete_cache_key(lang, at, missing):
+    """`thumbnail` keys its cache by url but the cached value also depends on size (or self.theme); `badge` puts every
+    input in the key (through a local, a template or an f-string) and `store`/`put`/`remember` only pass a value
+    through, so neither is flagged."""
+    if lang == "swift":
+        pytest.importorskip("tree_sitter_swift")
+    if lang == "react" and not shutil.which("node"):
+        pytest.skip("node not installed")
+    got = [(f["at"], f["missing"], f["confidence"]) for f in LA.lint(GraphStore(db(lang)))["findings"]
+           if f["rule"] == "incomplete-cache-key"]
+    assert got == [(at, missing, "heuristic")]
+
+
+def test_cache_key_idents():
+    assert LA._idents("`${server}:${userId}:account:${id}`") == {"server", "userId", "id"}
+    assert LA._idents('"\\(serverUrl)-\\(userId)" as NSString') == {"serverUrl", "userId"}
+    assert LA._idents("f'{a}-{b}' + 'x'") == {"a", "b"}
+    assert LA._idents("$user->getKey().'|'.$organization->getKey()") == {"$user", "$organization"}
+    assert LA._idents("this.theme + render(x)") == {"self_theme", "x"}
+
+
+@pytest.mark.parametrize("lang,guard_at,ok,bad", [
+    ("swift", "Sources/App/Echo.swift:8", "Sources/App/Echo.swift:14", "Sources/App/Echo.swift:21"),
+    ("kotlin", "src/main/kotlin/app/Echo.kt:13", "src/main/kotlin/app/Echo.kt:19", "src/main/kotlin/app/Echo.kt:26"),
+    ("react", "src/Echo.ts:6", "src/Echo.ts:12", "src/Echo.ts:18"),
+    ("python", "app/echo.py:7", "app/echo.py:13", "app/echo.py:18"),
+])
+def test_echo_suppression(lang, guard_at, ok, bad):
+    """The change observer returns early while isApplyingRemote is set; applyRemote sets it around its write of text,
+    refresh writes text after an await without it, so that write is echoed back. The guard's `= false` default and
+    reset are not suppressing writes."""
+    if lang == "swift":
+        pytest.importorskip("tree_sitter_swift")
+    if lang == "react" and not shutil.which("node"):
+        pytest.skip("node not installed")
+    got = [f for f in LA.lint(GraphStore(db(lang)))["findings"] if f["rule"] == "echo-suppression"]
+    assert len(got) == 1 and got[0]["state"].endswith("Editor.text") and got[0]["confidence"] == "heuristic"
+    assert [s["at"] for s in got[0]["guard_sites"]] == [guard_at] and got[0]["suppressed_writes"] == [ok]
+    assert [w["at"] for w in got[0]["unsuppressed_writes"]] == [bad]
+    assert "[echo-suppression]" in LA.render(LA.lint(GraphStore(db(lang))))
+
+
+def test_rules_subset():
+    res = LA.lint(GraphStore(db("python")), rules=["echo-suppression"])
+    assert res["rules"] == ["echo-suppression"] and {f["rule"] for f in res["findings"]} == {"echo-suppression"}
+    with pytest.raises(ValueError):
+        LA.lint(GraphStore(db("python")), rules=["nope"])
+    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "lint", "async-state", "--db", str(db("python")),
+                          "--rules", "incomplete-cache-key"], capture_output=True, text=True, check=True, cwd=ROOT).stdout
+    assert "[incomplete-cache-key]" in out and "[echo-suppression]" not in out

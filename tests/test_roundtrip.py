@@ -96,3 +96,33 @@ def test_mcp_tool(monkeypatch):
     fn = getattr(M.roundtrip, "fn", M.roundtrip)
     out = fn("LevelStore.level")
     assert "findings (1, heuristic)" in out and "un-narrowed range 0…100" in out
+
+
+def test_read_back_exclusions():
+    """Not a read-back: the writer using what it just built, a callback-valued property, an index use."""
+    from codegraph.roundtrip import _read_back
+
+    class Src:
+        L = {"a.kt": ["bar = Bar(color.toInt())", "addView(bar)"],
+             "b.ts": ["this.onWheel = (e) => { this.z = Math.min(e.z, 9) }", "x = this.onWheel"],
+             "c.ts": ["this.band = Math.floor(n)", "e = bands[p.band] / 2", "v = p.band"]}
+
+        def lines(self, f):
+            return self.L[f]
+    s = Src()
+    assert not _read_back(s, {"at": "a.kt:1", "writer": "V.init"}, {"at": "a.kt:2", "reader": "V.init"}, "bar")
+    assert not _read_back(s, {"at": "b.ts:1", "writer": "S.init"}, {"at": "b.ts:2", "reader": "T.f"}, "onWheel")
+    assert not _read_back(s, {"at": "c.ts:1", "writer": "P.init"}, {"at": "c.ts:2", "reader": "Q.f"}, "band")
+    assert _read_back(s, {"at": "c.ts:1", "writer": "P.init"}, {"at": "c.ts:3", "reader": "Q.f"}, "band")
+
+
+def test_call_args_scopes_caller_hop():
+    """One hop through a caller only blames the argument passed for the parameter, not a lossy call elsewhere."""
+    from codegraph.roundtrip import _call_args
+
+    class St:
+        def node(self, i):
+            return {"fqn": "Room.init", "name": "init"}
+    stmt = "rooms.insert(Room(spaceRoom: spaceRoom), at: Int(index))"
+    assert _call_args(St(), stmt, "method:Room.init", "spaceRoom").strip() == "spaceRoom"
+    assert _call_args(St(), "x = Room(spaceRoom: Int(v), other: 1)", "method:Room.init", "spaceRoom") == "Int(v)"
