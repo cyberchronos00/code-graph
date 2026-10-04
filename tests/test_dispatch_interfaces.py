@@ -540,3 +540,116 @@ def test_ts_mixin_members_implement_the_merged_interface(tmp_path):
     assert (f"function:{A}load", f"method:{A}UsersMix.getMe") in calls
     imp = Q.impact(st, "Users.getMe")
     assert [c["id"] for c in imp["callers"]] == [f"function:{A}load"]
+
+
+PY_FLOW = {
+    "pkg/__init__.py": "",
+    "pkg/core.py": '''
+        class Base:
+            def run(self):
+                return 0
+
+
+        class A(Base):
+            pass
+
+
+        class B(Base):
+            pass
+
+
+        class C(Base):
+            def run(self):
+                return 2
+
+
+        class Holder:
+            def __init__(self):
+                self.x = B()
+
+            def go(self):
+                return self.x.run()
+
+
+        def make(flag):
+            if flag:
+                return None
+            return B()
+
+
+        def make_either(flag):
+            return A() if flag else B()
+
+
+        def gen():
+            yield B()
+
+
+        def use_factory():
+            v = make(True)
+            return v.run()
+
+
+        def use_either():
+            return make_either(1).run()
+
+
+        def use_a():
+            return A().run()
+
+
+        def use_base(x: Base):
+            return x.run()
+    ''',
+}
+
+
+def test_python_receivers_through_dataflow_and_override_narrowing(tmp_path):
+    st, db = build(tmp_path, PY_FLOW, "flow")
+    P = "pkg.core."
+    calls = edges(st, "CALLS")
+    # `self.x = B()` read in another method; an unannotated factory whose returns are all B (None aside)
+    assert calls[(f"method:{P}Holder.go", f"method:{P}Base.run")][1]["recv"] == [f"class:{P}B"]
+    assert calls[(f"function:{P}use_factory", f"method:{P}Base.run")][1]["recv"] == [f"class:{P}B"]
+    # returns of two classes (`A() if flag else B()`): no type, so no receiver either
+    assert (f"function:{P}use_either", f"method:{P}Base.run") not in calls
+    imp = Q.impact(st, "A.run")
+    assert {c["id"] for c in imp["callers"]} == {f"function:{P}use_a", f"function:{P}use_base"}
+    # an override: the calls into the base method on receivers that cannot be a C are left out too
+    imp = Q.impact(st, "C.run")
+    assert {c["id"] for c in imp["callers"]} == {f"function:{P}use_base"}
+    assert imp["override_narrowed"][0]["narrowed"] == {"calls": 4, "receiver_typed": 3, "dropped": 3}
+    out = cli("impact", "C.run", "--db", str(db))
+    assert "C.run overrides Base.run (its callers narrowed to C: 3 of 4 calls on other classes left out)" in out
+    assert Q.reaches(st, ["C.run"])["override_narrowed"][0]["narrowed"]["dropped"] == 3
+
+
+TS_PROPS = {
+    "tsconfig.json": '{"compilerOptions": {"strict": true, "target": "es2020", "jsx": "react-jsx"}, "include": ["src"]}',
+    "package.json": '{"name": "ui", "devDependencies": {"typescript": "5"}}',
+    "src/ui.tsx": '''
+        export interface ButtonProps {
+          label: string
+          onPress: () => void
+        }
+        export function Button({label, onPress}: ButtonProps) {
+          return <button onClick={() => onPress()}>{label}</button>
+        }
+        export function save() { return 1 }
+        export function Screen() {
+          return <Button label="Save" onPress={save} />
+        }
+    ''',
+}
+
+
+@needs_ts
+def test_ts_jsx_callback_props_stay_untargeted(tmp_path):
+    # #96 item 3: a callback passed as a JSX attribute does not implement the props interface's property, so the
+    # property is no member node and `onPress()` has no target (left out on purpose: see docs/limitations.md)
+    st, _ = build(tmp_path, TS_PROPS, "props")
+    assert not st.q("SELECT id FROM nodes WHERE id LIKE '%ButtonProps.onPress%'")
+    assert not edges(st, "IMPLEMENTED_BY")
+    calls = edges(st, "CALLS")
+    assert [k for k in calls if k[1].endswith("#save")] == [("function:src/ui.tsx#Screen", "function:src/ui.tsx#save")]
+    assert calls[("function:src/ui.tsx#Screen", "function:src/ui.tsx#save")][1] == {"ref": True}

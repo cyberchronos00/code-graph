@@ -185,6 +185,42 @@ def narrow_inherited(st: GraphStore, inh: list[dict]) -> set[int]:
     return skip
 
 
+def override_bases(st: GraphStore, specs) -> list[dict]:
+    """For a spec naming an override (`Sub.peek` defined in Sub, overriding / implementing `Base.peek`): one entry per
+    base / interface method above it, shaped like inherited_targets' ({spec, class, method, defined_in, override}),
+    so the calls into the base method whose receiver type is known and cannot be a Sub are narrowed the same way
+    (`sib.peek()` with Sib inheriting Base.peek never runs Sub.peek)."""
+    out: list[dict] = []
+    dq = ",".join("?" * len(DISPATCH_KINDS))
+    for spec in ([specs] if isinstance(specs, str) else list(specs or [])):
+        for t in dict.fromkeys(x for x in _resolve_direct(st, spec) if x.startswith("method:")):
+            own = st.q("SELECT src FROM edges WHERE dst=? AND kind='CONTAINS'", (t,))
+            cls = own[0]["src"] if own and own[0]["src"].split(":", 1)[0] in CLASS_KINDS + ("type",) else None
+            if not cls:
+                continue
+            seen, frontier = {t}, [t]
+            while frontier:
+                nxt = []
+                for m in frontier:
+                    for r in st.q(f"SELECT src FROM edges WHERE dst=? AND kind IN ({dq})", (m, *DISPATCH_KINDS)):
+                        if r["src"] not in seen and r["src"].startswith("method:"):
+                            seen.add(r["src"])
+                            nxt.append(r["src"])
+                frontier = nxt
+            for b in sorted(seen - {t}):
+                bo = st.q("SELECT src FROM edges WHERE dst=? AND kind='CONTAINS'", (b,))
+                if not bo:
+                    continue
+                fq = _fqn_of(st, [cls, b])
+                out.append({"spec": spec, "class": cls, "class_fqn": fq.get(cls, cls), "method": b,
+                            "method_fqn": fq.get(b, b), "defined_in": bo[0]["src"], "override": True})
+    return out
+
+
+def _narrowed_bases(ob: list[dict]) -> list[dict]:
+    return [o for o in ob if (o.get("narrowed") or {}).get("dropped")]
+
+
 class narrowed:
     """`with narrowed(st, inh):` the traversals of one query leave out the calls `narrow_inherited` drops."""
 
@@ -210,6 +246,10 @@ def inherited_lines(res: dict) -> list[str]:
     """'B.run -> inherited from Base.run' notes for a result whose spec resolved through a class's ancestors, with how
     the calls into the inherited definition were narrowed to receivers that can be a B (short names; JSON has fqns)."""
     out = []
+    for i in res.get("override_narrowed") or []:
+        cls, nw = _short(i["class_fqn"]).split(".")[-1], i["narrowed"]
+        out.append(f"{i['spec']} overrides {_short(i['method_fqn'])} (its callers narrowed to {cls}: {nw['dropped']} of "
+                   f"{nw['calls']} calls on other classes left out)")
     for i in res.get("inherited") or []:
         cls = _short(i["class_fqn"]).split(".")[-1]
         line = f"{i['spec']} -> inherited from {_short(i['method_fqn'])}"
@@ -723,8 +763,12 @@ def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30
             platform: str | None = None) -> dict:
     """Reverse transitive dependents of the targets (see _reaches). An inherited `Sub.method` spec leaves out the
     calls into the inherited definition whose receiver cannot be a Sub (narrow_inherited)."""
-    with narrowed(st, [i for s in specs for i in inherited_targets(st, s)]):
-        return _reaches(st, specs, min_conf, max_depth, gate, platform)
+    ob = override_bases(st, specs)
+    with narrowed(st, [i for s in specs for i in inherited_targets(st, s)] + ob):
+        res = _reaches(st, specs, min_conf, max_depth, gate, platform)
+    if _narrowed_bases(ob):
+        res["override_narrowed"] = _narrowed_bases(ob)
+    return res
 
 
 def _reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30, gate: str | None = "auto",
@@ -1073,8 +1117,11 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
     method include the callers of its overrides (`via_override`): calls through a collection or a base-typed value
     land on the concrete overrides."""
     inh = inherited_targets(st, spec)
-    with narrowed(st, inh):
+    ob = override_bases(st, spec)
+    with narrowed(st, inh + ob):
         out = _impact(st, spec, min_conf, platform)
+    if _narrowed_bases(ob):
+        out["override_narrowed"] = _narrowed_bases(ob)
     if inh:
         out["inherited"] = inh
         keep = set(override_seeds(st, spec, out["targets"], min_conf))   # a sibling class's override is not a Sub's method
@@ -1858,9 +1905,13 @@ def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30
     Transitive results are kept near the target (#87): at most `near_depth` hops (None: any), not through an app
     root (`@main`, `App.body`, `MainActivity`, `exclude_roots`; `through_roots` keeps those), and UI / snapshot tests
     in their own `ui` list (`unit_only` drops it). What is left out is counted in `omitted`."""
-    with narrowed(st, inherited_targets(st, spec)):
+    ob = override_bases(st, spec)
+    with narrowed(st, inherited_targets(st, spec) + ob):
         res = _tests_covering(st, spec, min_conf, max_depth)
-    return _split_tests(st, res, near_depth, unit_only, exclude_roots, through_roots)
+    out = _split_tests(st, res, near_depth, unit_only, exclude_roots, through_roots)
+    if _narrowed_bases(ob):
+        out["override_narrowed"] = _narrowed_bases(ob)
+    return out
 
 
 # hops that are wiring, not application code between the test and the target: the test's own calls and requests,

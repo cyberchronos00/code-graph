@@ -910,6 +910,8 @@ class PyProgram:
                 if ft[0] == "bound" and isinstance(f.node, ast.FunctionDef) and any(
                         dotted(d) == "classmethod" for d in f.decorators):
                     return ("inst", ft[2][1]) if f.name in ("create", "build", "from_dict", "new") else None
+                if ann is None:
+                    return self.returned_instance(f)
                 return None
             return None
         if isinstance(e, ast.Await):
@@ -1182,6 +1184,53 @@ class PyProgram:
                         return self.elements(k.attrs[e.attr][0], Ctx(k.module, None, k), mode, depth + 1)
             return []
         return []
+
+    def returned_instance(self, f: "FuncInfo"):
+        """("inst", C) when every `return` of the unannotated project function f returns an instance of the same
+        project class C (`def make(): return B()`; `return None` aside), so `v = make(); v.run()` has a receiver type
+        (#96). Not for generators; memoised; a function whose return type is being inferred further up is unknown."""
+        key = ("ret", id(f))
+        if key in self._attr_memo:
+            return self._attr_memo[key]
+        if key in self._attr_busy:
+            return None
+        self._attr_busy.add(key)
+        try:
+            got, fctx, stack = None, Ctx(f.module, f, f.cls), list(f.node.body)
+            while stack:
+                n = stack.pop()
+                if isinstance(n, (ast.Yield, ast.YieldFrom)):
+                    got = False
+                    break
+                if isinstance(n, ast.Return):
+                    v = n.value
+                    if v is None or (isinstance(v, ast.Constant) and v.value is None):
+                        continue
+                    leaves, todo = [], [v]           # both arms of `A() if x else B()` / `a or B()`
+                    while todo:
+                        x = todo.pop()
+                        if isinstance(x, ast.IfExp):
+                            todo += [x.body, x.orelse]
+                        elif isinstance(x, ast.BoolOp):
+                            todo += x.values
+                        elif not (isinstance(x, ast.Constant) and x.value is None):
+                            leaves.append(x)
+                    for x in leaves:
+                        t = self.infer(x, fctx)
+                        if not t or t[0] != "inst" or not isinstance(t[1], ClassInfo) or (got and got[1] is not t[1]):
+                            got = False
+                            break
+                        got = t
+                    if got is False:
+                        break
+                elif not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                    stack.extend(ast.iter_child_nodes(n))
+            r = ("inst", got[1]) if got else None
+        finally:
+            self._attr_busy.discard(key)
+        if self._work <= INFER_BUDGET:
+            self._attr_memo[key] = r
+        return r
 
     def returned(self, call, ctx: "Ctx") -> list:
         """(expr, callee ctx) for each `return <expr>` of the project function `call` calls (not a class), so a

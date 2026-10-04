@@ -143,7 +143,11 @@ the filter and how many conditions could not be evaluated ([platforms.md](platfo
   `Sub` (a sibling, neither `Sub`, a subclass nor an ancestor) is left out, and the note counts them
   (`callers narrowed to B: 2 of 6 calls on other classes left out`). Calls with an unknown receiver, and receivers
   whose ancestry the graph does not know (a mixin `extends mix(Base)`), are kept. `reaches` and `tests` narrow the
-  same way. Of its overrides only those in `Sub` and its subclasses are followed.
+  same way. Of its overrides only those in `Sub` and its subclasses are followed. A `Sub.method` that `Sub`
+  overrides is narrowed by the same rule: the callers of the base / interface method it overrides (listed `via
+  base`) leave out the calls whose receiver cannot be a `Sub` (`sib.run()` with `Sib` inheriting `Base.run`), noted
+  as `Sub.run overrides Base.run (its callers narrowed to Sub: 3 of 4 calls on other classes left out)` (JSON
+  `override_narrowed`).
 - `page:/reports/:id`: a Nuxt page by its route path. `app/pages/x.vue`, `app/composables/useX.ts`: a TS module or Vue
   SFC by file (repo-relative, suffix match). `useX`, `useX.fn`, `fn`: a TS composable, store or function.
 - `src/app.ts#listOrders`, `app.ts#listOrders`, `src/svc.ts#OrderService.create`: a TypeScript / JavaScript / Vue

@@ -244,10 +244,18 @@ Issues and pull requests that extend it are welcome.
   up as referenced, not as called.
 - **Dispatch over-approximates:** a `dyn Trait`, generic or virtual call reaches every impl or override in the graph,
   not only the ones that can actually flow there. The same holds for a call on a TypeScript interface-typed value:
-  it reaches every class implementing the interface. Implementations count when a class `implements` the interface
-  or `new X()` is used where the interface is expected; object literals typed as the interface, mixin class
-  expressions (`(base) => class extends base { ... }`) and classes only passed around as values are not linked. An
-  inherited `Sub.method` spec is narrowed only where the receiver type is known.
+  it reaches every class implementing the interface. Implementations count when a class `implements` the interface,
+  `new X()` or a class value is used where the interface (or its constructor) is expected, an object literal is
+  typed as the interface, or a mixin class expression is applied to a class merged with the interface. An
+  inherited `Sub.method` spec, and an override `Sub.method` (the calls into the base method it overrides), are
+  narrowed only where the receiver type is known: TypeScript checker types, Python inferred instances (an
+  annotation, `x = B()`, `self.x = B()`, an unannotated factory whose returns are all one class). Generic
+  substitution (`Repo[B]().get()` returning `T`) is not inferred.
+- **Callbacks passed as props:** a function-typed interface property (`onPress: () => void` in a React `Props`)
+  is a member node only when a project class or object literal implements the interface. A callback passed as a JSX
+  attribute (`<Button onPress={save} />`) is not an implementation: `onPress()` inside `Button` has no target, and
+  `save` is reached from the JSX site (`CALLS` with `ref: true`), not from `Button`. Linking each JSX site's callback to the property
+  would make every prop of a shared component a hub over all its call sites, so this is left out on purpose (#96).
 - **References outside items** (`use` declarations, file-level code outside any function or type, attribute
   arguments other than serde/clap) are not attributed to a function and are dropped. For ripgrep that is about 5k
   occurrences, mostly `use` lines.

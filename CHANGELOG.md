@@ -10,6 +10,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Dispatch narrowing (#96): `impact` / `tests` / `reaches` on an override `Sub.method` leave out the calls into
+  the base method it overrides whose receiver type is known and cannot be a `Sub`, as for an inherited spec (note
+  `Sub.run overrides Base.run (its callers narrowed to Sub: ...)`, JSON `override_narrowed`). Python receivers
+  through an unannotated factory whose returns are all one project class (`def make(): return B()`; `return
+  None` aside, both arms of `A() if x else B()` considered) now have a type. flask / httpie unchanged; pip +3 and
+  beets +4 edges through factories (checked correct); openai-agents-python +92 (test helpers such as
+  `_agents_client()` returning the Vercel sandbox client) and -2 name-only `heuristic` test calls on a receiver that
+  now has a type.
+- Callbacks passed as JSX props stay untargeted (#96, decided): a function-typed `Props` property is a member node
+  only when a class or object literal implements the interface; `docs/limitations.md` explains why.
 - TypeScript mixins (#96): in `class Client extends mix(Base).with(Users, Posts)` (or `Users(Posts(Base))`) merged
   with `interface Client extends UsersMix, PostsMix`, the members of the mixin class expressions
   (`const Users = (b) => class extends b {..}`) implement the merged interface's members (`IMPLEMENTED_BY`,
