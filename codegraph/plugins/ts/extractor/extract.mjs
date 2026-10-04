@@ -205,12 +205,51 @@ let srcDirs = (cfg.src_dirs || ['app']).map(d => path.resolve(ROOT, d)).filter(f
     process.stderr.write(`codegraph: source dirs from tsconfig: ${dirs.join(', ')}\n`)
   }
 }
+// package.json entry points: with no conventional source dir and no config files to take them from (a plain JS
+// package: lib/ + bin/, no tsconfig), main / module / bin / exports and the `files` entries name the source (an entry
+// in a sub directory makes that top directory a source dir, one at the root is a source file of its own); next to
+// source dirs, a `bin` script outside them (bin/cli.js beside src/) is a source file, so tests that run it have a
+// node to link to (#94)
+const srcFiles = new Set()
+let pkgSrc = false
+{
+  let pkg = null
+  try { pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) } catch { pkg = null }
+  if (!pkg || typeof pkg !== 'object') pkg = {}
+  const strings = v => typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === 'object' ? Object.values(v).flatMap(strings) : []
+  const usable = e => {
+    const r = rel(path.resolve(ROOT, e.split(/[*?{[]/)[0])).replace(/\/$/, '')
+    return r && !r.startsWith('..') && !path.isAbsolute(r) && !sourceSkipped(r) && !excludedRel(r) && fs.existsSync(path.resolve(ROOT, r)) ? r : null
+  }
+  const isSrc = r => SRC_EXT.test(r) && !r.endsWith('.d.ts') && fs.statSync(path.resolve(ROOT, r)).isFile()
+  if (!srcDirs.length) {
+    const dirs = new Set()
+    for (const e of strings([pkg.main, pkg.module, pkg.bin, pkg.exports, pkg.files])) {
+      const r = usable(e)
+      if (!r) continue
+      const segs = r.split('/'), top = path.resolve(ROOT, segs[0])
+      if (segs.length > 1 || fs.statSync(top).isDirectory()) {
+        if (fs.statSync(top).isDirectory() && !skipDir(segs[0], segs[0], SKIP_NAMES, false)) dirs.add(top)
+      } else if (isSrc(r)) srcFiles.add(path.resolve(ROOT, r))
+    }
+    srcDirs = [...dirs].sort()
+    pkgSrc = srcDirs.length > 0
+  } else {
+    for (const e of strings(pkg.bin)) {
+      const r = usable(e), p = r && path.resolve(ROOT, r)
+      if (r && isSrc(r) && !srcDirs.some(d => p.startsWith(d + path.sep)) && !belowSkipped(r)) srcFiles.add(p)
+    }
+  }
+  if (pkgSrc || srcFiles.size) {
+    process.stderr.write(`codegraph: source from package.json: ${[...srcDirs, ...srcFiles].map(rel).join(', ')}\n`)
+  }
+}
 // .cg.yaml include directories are source dirs too (generated sources a project wants in the graph)
 for (const i of INCLUDE) {
   const p = path.resolve(ROOT, i)
   if (fs.existsSync(p) && fs.statSync(p).isDirectory() && !srcDirs.some(d => p === d || p.startsWith(d + path.sep))) srcDirs.push(p)
 }
-const allFiles = srcDirs.flatMap(d => walkDir(d, []))
+const allFiles = [...srcDirs.flatMap(d => walkDir(d, [])), ...srcFiles]
 // test files: spec/test files anywhere in the source dirs, plus top-level test trees (e2e/, tests/, ...)
 const testFiles = new Set()
 function walkTests(d, all, forced = false) {
@@ -372,7 +411,8 @@ host.resolveModuleNameLiterals = (lits, containing, redirected, opts) => lits.ma
 const SKIP_ROOT = /(\.test|\.spec)\.(ts|tsx|js|jsx|mts)$/
 let configFiles = parsed.fileNames
 // files outside the config's include list but inside the source dirs (JS projects, partial includes)
-if (noConfig || cfg.walk_src) configFiles = [...new Set([...configFiles, ...allFiles.filter(f => SRC_EXT.test(f) && !f.endsWith('.d.ts'))])]
+if (noConfig || cfg.walk_src || pkgSrc) configFiles = [...new Set([...configFiles, ...allFiles.filter(f => SRC_EXT.test(f) && !f.endsWith('.d.ts'))])]
+if (srcFiles.size) configFiles = [...new Set([...configFiles, ...srcFiles])]
 // .cg.yaml include directories and kept hidden directories (skip_dirs.keep: [.storybook]): their files are roots
 // even when the tsconfig leaves them out (node_modules, build/, and dot-directories its wildcards never match)
 const keptHidden = r => r.split('/').slice(0, -1).some(x => x.startsWith('.') && KEEP_NAMES.has(x))
@@ -393,7 +433,7 @@ const projectSf = sf => {
   let v = projectSfMemo.get(fn)
   if (v !== undefined) return v
   const real = fn.endsWith('.vue.ts') ? fn.slice(0, -3) : fn
-  v = testFiles.has(real) || (!sourceSkipped(rel(real)) && srcDirs.some(d => real.startsWith(d + path.sep)) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))) && !excludedRel(rel(real)))
+  v = testFiles.has(real) || (!sourceSkipped(rel(real)) && (srcFiles.has(real) || srcDirs.some(d => real.startsWith(d + path.sep))) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))) && !excludedRel(rel(real)))
   projectSfMemo.set(fn, v)
   return v
 }

@@ -257,3 +257,79 @@ def test_dart_script_from_a_local_variable(tmp_path):
     st = build(tmp_path, "dart2", files)
     got = via_sub(st)
     assert got.get("function:test/snap_test.dart#compile") == {("function:bin/tool.dart#main", "dart script")}, got
+
+
+PLAIN_JS = {
+    # no tsconfig / jsconfig and no src/ or app/: package.json main / bin / files name the source dirs (#94)
+    "package.json": '''
+        {"name": "lintish", "version": "1.0.0", "main": "./lib/api.js", "bin": {"lintish": "./bin/lintish.js"},
+         "files": ["bin", "lib", "index.js"], "devDependencies": {"typescript": "5", "mocha": "10"}}
+        ''',
+    "index.js": '''
+        module.exports = require("./lib/api");
+        ''',
+    "lib/api.js": '''
+        const { execute } = require("./cli");
+        module.exports = { execute };
+        ''',
+    "lib/cli.js": '''
+        function execute(args) { return args.length; }
+        module.exports = { execute };
+        ''',
+    "bin/lintish.js": '''
+        #!/usr/bin/env node
+        "use strict";
+        const cli = require("../lib/cli");
+        (async function main() {
+          process.exitCode = cli.execute(process.argv.slice(2));
+        })();
+        ''',
+    "tests/bin/lintish.js": '''
+        const childProcess = require("child_process");
+        const path = require("path");
+        const EXECUTABLE_PATH = path.resolve(path.join(__dirname, "../../bin/lintish.js"));
+        function runLintish(args) {
+          return childProcess.spawn(process.execPath, [EXECUTABLE_PATH, ...args]);
+        }
+        describe("bin/lintish.js", () => {
+          it("exits", () => { runLintish(["--version"]); });
+        });
+        ''',
+}
+
+BIN_BESIDE_SRC = {
+    "tsconfig.json": '{"compilerOptions": {"allowJs": true, "checkJs": false}, "include": ["src"]}',
+    "package.json": '{"name": "tool", "version": "1.0.0", "bin": {"tool": "bin/tool.js"}, "devDependencies": {"jest": "29"}}',
+    "src/run.js": '''
+        function run(args) { return args.length; }
+        module.exports = { run };
+        ''',
+    "bin/tool.js": '''
+        #!/usr/bin/env node
+        require("../src/run").run(process.argv.slice(2));
+        ''',
+    "test/tool.test.js": '''
+        const { execFileSync } = require("child_process");
+        test("tool", () => { execFileSync("node", ["bin/tool.js", "x"]); });
+        ''',
+}
+
+
+def test_plain_js_package_without_config_indexes_its_package_dirs(tmp_path):
+    st = build(tmp_path, "plainjs", PLAIN_JS)
+    mods = {r["id"] for r in st.q("SELECT id FROM nodes WHERE kind='module'")}
+    assert {"module:lib/api.js", "module:lib/cli.js", "module:bin/lintish.js", "module:index.js"} <= mods, mods
+    got = via_sub(st)
+    assert got.get("function:tests/bin/lintish.js#runLintish") == {("module:bin/lintish.js", "node script")}, got
+    assert "script_without_node" not in st.stats["process_runs"], st.stats["process_runs"]
+    # the bin script's top-level code reaches the library: `cg tests` counts the test for lib/cli.js#execute
+    calls = {d for _s, d, _a in edges(st, "CALLS", src="module:bin/lintish.js")}
+    assert "function:lib/cli.js#execute" in calls, calls
+
+
+def test_bin_script_outside_the_source_dirs_is_a_source_file(tmp_path):
+    st = build(tmp_path, "binsrc", BIN_BESIDE_SRC)
+    got = via_sub(st)
+    assert got == {"test:test/tool.test.js#tool": {("module:bin/tool.js", "node script")}}, got
+    calls = {d for _s, d, _a in edges(st, "CALLS", src="module:bin/tool.js")}
+    assert "function:src/run.js#run" in calls, calls

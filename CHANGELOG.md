@@ -34,6 +34,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `property: read | write` on the method-call receiver rules. `impact` and `cg tests` follow a function reached only
   through a property.
 
+- Plain JavaScript packages without `src/` / `app/` or a config file list (#94): the `package.json` `main` /
+  `module` / `bin` / `exports` / `files` entries name the source dirs, and a `bin` script outside the source dirs is
+  a source file, so tests that run the CLI in a subprocess link to it. eslint: `lib/` and `bin/` were not indexed
+  at all (nodes 4,929 → 8,995, no existing node or edge lost); 60 tests now reach `lib/cli.js` `execute` through
+  `bin/eslint.js` (`script_without_node` 1 → 0). node-express-boilerplate: its `bin/createNodejsApp.js` beside `src/` gains a node (+5 nodes, nothing
+  lost); capacitor unchanged. A root `jsconfig.json` alone enables the TypeScript plugin.
+
 ### Fixed
 
 - Kotlin (#81): a suspend lambda used as an expression (`val b = suspend { 1 }`, `X to suspend { ... }`) no longer

@@ -164,7 +164,7 @@ class TypeScriptPlugin(LanguagePlugin):
         self.program: TsContext | None = None
 
     def detect(self, project: Project) -> bool:
-        if project.exists("tsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
+        if project.exists("tsconfig.json") or project.exists("jsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
             return True
         if project.exists("package.json") and cordova_www_dirs(project.root):
             return True     # a Cordova plugin / app: plain JS under www/ calling cordova.exec (#61)

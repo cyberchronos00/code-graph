@@ -187,6 +187,12 @@ similarity of their callee sets.
   `packages/`-style directory) joins one program: their file lists are merged, the first package's compiler options
   are used without `rootDir` / `outDir` / `baseUrl`, each package's `paths` keep absolute targets, and the package
   directories are the source dirs (`stats.config.package_tsconfigs`).
+- **Plain JavaScript packages.** With no `src/` or `app/`, no package tsconfigs and no config file list to take source
+  dirs from (eslint: `lib/` + `bin/`, no `tsconfig.json`), the `package.json` entry points name them: `main`,
+  `module`, `bin`, `exports` and `files` entries in a sub-directory make that top directory a source dir, one at the
+  root (`index.js`) is a source file; `dist/`-style build output stays skipped. Beside source dirs, a `bin` script
+  outside them (`bin/cli.js` next to `src/`) is a source file, so a test that runs it in a subprocess has a module
+  node to link to (#94). A root `jsconfig.json` alone also enables the TypeScript plugin.
 - **TypeScript in a sub-directory of a non-JS repo.** A root with no `package.json` at all (a Swift / Kotlin / Rust /
   Dart app with a `web/` directory) is handled the same way, with every `tsconfig.json` one or two levels down,
   `package.json` next to it or not. A PHP or Python backend root (`composer.json`, `pyproject.toml`, `manage.py`,
