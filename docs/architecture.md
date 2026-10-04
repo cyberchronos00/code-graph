@@ -39,6 +39,7 @@ codegraph/
      plugin.py               facts -> nodes/edges, client URL normalisation, http endpoint nodes, facts cache
   plugins/nuxt/      Nuxt framework plugin (sits on TS): .nuxt tsconfig/auto-imports/components, page routes,
                      layouts, entry kinds, i18n keys
+  plugins/ts/nav.py  Nuxt / Vue NAVIGATES_TO (NuxtLink, RouterLink, router.push, navigateTo, vue-router pages)
   plugins/native/    shared by Rust and C/C++: SCIP reader (scipread.py), tree-sitter helpers (ts.py), cached
                      indexer runner (runner.py), cfg/feature/#if gate evaluation (gates.py)
   plugins/rust/      Rust language plugin: cargo.py (workspace/packages/targets/features), syntax.py (tree-sitter

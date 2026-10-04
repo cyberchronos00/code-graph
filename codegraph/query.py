@@ -15,7 +15,7 @@ from .core.store import GraphStore
 CALL_LIKE = ["CALLS", "IMPLEMENTED_BY", "OVERRIDDEN_BY", "BOUND_TO", "ROUTES_TO", "HANDLED_BY", "SCHEDULES",
              "DISPATCHES", "LISTENED_BY", "USES_MIDDLEWARE",
              # TypeScript / Vue / Nuxt + cross-repo link
-             "USES_COMPOSABLE", "USES_STORE", "RENDERS", "HTTP_CALLS", "MATCHES_ROUTE",
+             "USES_COMPOSABLE", "USES_STORE", "RENDERS", "HTTP_CALLS", "MATCHES_ROUTE", "NAVIGATES_TO",
              # native code: function pointers / callbacks / dispatch tables
              "REFERENCES_FN",
              # realtime: broadcasting auth route -> channel callbacks; client subscriptions -> backend channels

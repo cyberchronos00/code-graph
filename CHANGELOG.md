@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Nuxt and Vue navigation edges (#117): `<NuxtLink>` / `<RouterLink>` `to`, `router.push` / `replace`,
+  `navigateTo` and an internal `<a href>` become `NAVIGATES_TO` from the enclosing component, page or function
+  to the page (`attrs.via` is `link`, `push`, `replace`, `navigateTo`, `href` or `helper`). Literal paths and
+  `{ name }` match the Nuxt page table (dynamic and optional segments) and `definePageMeta({ name })`. A helper
+  that returns a path, a route object or `useRouter().resolve(...)` is followed one call. A plain Vue 3 app's
+  `createRouter({ routes })` table (nested `children`, `() => import()` views) becomes `page` nodes. A target
+  that matches nothing or more than one page stays unresolved and is counted by `cg coverage`.
 - Kotlin callable references (`recv::fn`, `::fn`, `Type::fn`, `::Foo`) are `REFERENCES_FN` edges (`how: callback`) (#125), so `impact` lists Compose callbacks and ViewModel wiring. The receiver type comes from a parameter, property, constructor, local, `hiltViewModel<T>()` or a `viewModel()` / `viewModels()` delegate; extensions on that type count. Overloads use the arity of a function-typed parameter when the reference is passed as an argument. scip-java maps the same occurrences when an index is present.
 - Nuxt auto-imports from `imports.dirs` / `imports.imports` without a `.nuxt/` directory (#116): on a clean
   checkout the stand-in reads `nuxt.config` (and each layer's) and scans the configured directories the way
