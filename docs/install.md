@@ -7,11 +7,11 @@ user-level tool in its own environment; no checkout and no sudo are needed.
 
 | | command |
 |---|---|
+| PyPI (recommended) | `pipx install cg-code-graph` or `uv tool install cg-code-graph` (or `pip install cg-code-graph` in a virtual environment; the package is `cg-code-graph`, the commands are `cg` and `cg-mcp`) |
 | macOS / Linux script | `curl -fsSL https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.sh \| sh` |
 | Windows script (PowerShell) | `irm https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.ps1 \| iex` |
-| uv | `uv tool install git+https://github.com/cyberchronos00/code-graph` |
-| pipx | `pipx install git+https://github.com/cyberchronos00/code-graph` |
-| PyPI | `uv tool install cg-code-graph`, `pipx install cg-code-graph` or `pip install cg-code-graph` (the package is `cg-code-graph`; the commands stay `cg` and `cg-mcp`) |
+| uv, latest commit | `uv tool install git+https://github.com/cyberchronos00/code-graph` |
+| pipx, latest commit | `pipx install git+https://github.com/cyberchronos00/code-graph` |
 | a release | `uv tool install git+https://github.com/cyberchronos00/code-graph@vX.Y.Z` (or `install.sh --version vX.Y.Z`) |
 
 Then run `cg doctor`: it lists the tools found, whether the extractor dependencies are installed, and per language

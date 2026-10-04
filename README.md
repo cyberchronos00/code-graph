@@ -69,10 +69,11 @@ other tools; see [Prerequisites per language](#prerequisites-per-language).
 options and updates):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.sh | sh
-#   or: uv tool install git+https://github.com/cyberchronos00/code-graph
-#   or: pipx install git+https://github.com/cyberchronos00/code-graph
-#   or from PyPI: pip install cg-code-graph   (uv tool install cg-code-graph / pipx install cg-code-graph)
+pipx install cg-code-graph    # or: uv tool install cg-code-graph   (PyPI; the commands are cg and cg-mcp)
+#   or the script (also installs exact-mode tools with --with c,rust,...):
+#     curl -fsSL https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.sh | sh
+#   or the latest commit: uv tool install git+https://github.com/cyberchronos00/code-graph
+#                     or: pipx install git+https://github.com/cyberchronos00/code-graph
 cg doctor                     # what indexes exact / heuristic on this machine, and what to install for the rest
 git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph    # the sample apps used below
 ```
