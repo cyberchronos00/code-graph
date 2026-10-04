@@ -106,7 +106,9 @@ the process role (`main`, `preload`, `renderer` for Electron; `webview`, `core` 
   registration (`ipcMain.handle('settings:read')`), so `impact` on the code they call reaches the renderer.
 - Tauri commands are listed in `generate_handler![...]`; a command missing from it gets the check `unregistered`.
   Commands registered by a plugin crate in the repo (`tauri::plugin::Builder::new("x")`) are
-  `endpoint:tauri:plugin:x|<command>`; a `plugin:x|cmd` call to a plugin that is not in the repo is `external`
+  `endpoint:tauri:plugin:x|<command>`. A command name registered more than once (the app's own `get` and a
+  plugin's `get`, `set_icon` in two plugins) takes the `generate_handler!` registration closest to the command's file
+  (longest common directory). A `plugin:x|cmd` call to a plugin that is not in the repo is `external`
   (package `tauri-plugin-x`). A Tauri app without a root `Cargo.toml` has its Rust core indexed from
   `<app>/src-tauri/Cargo.toml`.
 - `no_receiver` here means the other side is in the repo (some channel / command is received) but not this one.

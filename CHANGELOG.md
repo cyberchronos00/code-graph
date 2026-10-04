@@ -10,6 +10,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Tauri commands with the same name in several plugins (#97): each command takes the `generate_handler!`
+  registration closest to its file instead of the first one seen. tauri examples: `get` (examples/state, invoked as
+  `invoke('get')`) was `plugin:menu|get` and is now `get`; `popup` is `plugin:app-menu|popup` (was `plugin:menu|`),
+  the sample plugin's `ping` is `plugin:sample|ping` (was an app command). 3 of 61 commands changed, all 3 correct.
 - The Python package is now `cg-code-graph` (for PyPI; `codegraph` is taken there). The `cg` / `cg-mcp` commands
 - Native event names from locals and computed properties (#95): `let event = self?.visibilityChanged` before
   `notifyListeners(event, ..)`, and `notifyListeners(event.listenerEvent, ..)` with a Swift computed

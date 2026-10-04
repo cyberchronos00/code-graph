@@ -1105,6 +1105,16 @@ TAURI_HANDLER = re.compile(r"generate_handler!\s*\[((?:[^\[\]]|\[[^\]]*\])*)\]")
 TAURI_PLUGIN = re.compile(r"\bBuilder\s*(?:::\s*<[^>]*>\s*)?::\s*new\s*\(\s*\"([\w-]+)\"")
 
 
+def _common_dirs(a: str, b: str) -> int:
+    pa, pb = a.split("/")[:-1], b.split("/")[:-1]
+    n = 0
+    for x, y in zip(pa, pb):
+        if x != y:
+            break
+        n += 1
+    return n
+
+
 def tauri_receivers(project, builder) -> dict:
     """Tauri commands: `#[tauri::command] fn cmd` in the Rust core -> RECEIVED_BY from endpoint:tauri:<cmd> (a command
     registered by a plugin crate, `tauri::plugin::Builder::new("x")...generate_handler![cmd]`, is
@@ -1133,13 +1143,16 @@ def tauri_receivers(project, builder) -> dict:
             for item in re.sub(r"#!?\[[^\]]*\]", " ", h.group(1)).split(","):
                 name = item.strip().rsplit("::", 1)[-1].strip()
                 if re.fullmatch(r"[A-Za-z_]\w*", name):
-                    registered.setdefault(name, plugin.group(1) if plugin else None)
+                    registered.setdefault(name, []).append((rel, plugin.group(1) if plugin else None))
     n = 0
     for rel, name, line in cmds:
         nid = by_file[rel].get(name)
         if not nid:
             continue
-        plugin = registered.get(name)
+        # the same command name registered by several plugins (Tauri's own `window` / `webview` / `menu` plugins all
+        # have `new`, `set_icon`, ...): the registration closest to the command's file (longest common directory)
+        regs = registered.get(name) or []
+        plugin = max(regs, key=lambda r: (_common_dirs(r[0], rel), r[0] == rel))[1] if regs else None
         ns = f"plugin:{plugin}|{name}" if plugin else name
         ep = protocol_receive(builder, "tauri", ns, None, nid, rel, line, "exact", via="#[tauri::command]",
                               process="core", registered=name in registered)

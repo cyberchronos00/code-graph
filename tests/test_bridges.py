@@ -488,3 +488,30 @@ def test_event_names_from_locals_and_computed_properties():
     assert _event_values(nf, sw.index("notifyListeners(event"), "event", props) == ["statusBarVisibilityChanged"]
     assert _event_values(nf, sw.index("notifyListeners(e."), "e.listenerEvent", props) == ["browserFinished", "browserPageLoaded"]
     assert _event_values(nf, sw.index("notifyListeners(e."), "unknownLocal", props) == []
+
+
+def test_tauri_same_command_name_in_two_plugins(tmp_path):
+    # #97: `get` is the app's own command (generate_handler! in main.rs) and also a command of a `menu` plugin in
+    # another folder; `set_icon` is in two plugins. Each command takes the registration closest to its file.
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\ntauri = "2"\n')
+    src = tmp_path / "src"
+    (src / "menu").mkdir(parents=True)
+    (src / "tray").mkdir()
+    (src / "main.rs").write_text(
+        "mod menu;\nmod tray;\n\n#[tauri::command]\nfn get() -> i32 { 1 }\n\n"
+        "fn main() {\n    tauri::Builder::default().invoke_handler(tauri::generate_handler![get]).run();\n}\n")
+    for name in ("menu", "tray"):
+        extra = "\n#[tauri::command]\nfn get() -> i32 { 2 }\n" if name == "menu" else ""
+        handlers = "get, set_icon" if name == "menu" else "set_icon"
+        (src / name / "mod.rs").write_text(
+            f"use tauri::plugin::{{Builder, TauriPlugin}};\n\n#[tauri::command]\nfn set_icon() {{}}\n{extra}\n"
+            f"pub fn init<R: tauri::Runtime>() -> TauriPlugin<R> {{\n"
+            f"    Builder::new(\"{name}\").invoke_handler(tauri::generate_handler![{handlers}]).build()\n}}\n")
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "app")
+    st = GraphStore(str(db))
+    got = {k: [r["handler"] for r in e["receivers"]] for k, e in endpoints(st).items() if k.startswith("tauri:")}
+    assert got == {"tauri:get": ["function:app::get"],
+                   "tauri:plugin:menu|get": ["function:app::menu::get"],
+                   "tauri:plugin:menu|set_icon": ["function:app::menu::set_icon"],
+                   "tauri:plugin:tray|set_icon": ["function:app::tray::set_icon"]}
