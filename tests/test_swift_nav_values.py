@@ -34,3 +34,32 @@ def test_urlcomponents_endpoints(tmp_path):
     calls = set(c.execute("SELECT src, dst FROM edges WHERE kind='HTTP_CALLS'"))
     assert calls == {("method:UsersAPI.user", "http:GET https://api.example.com/v1/users/{id}"),
                      ("method:UsersAPI.search", "http:POST https://search.example.com/search")}
+
+
+def test_previews_run_as_tests(tmp_path):
+    """#100: snapshot / generated preview tests reach a view through its preview provider: `X_Previews._allPreviews`
+    and, in a test file, a string naming the provider (`performAccessibilityAudit(named: "X_Previews")`)."""
+    import json
+    from codegraph import query as Q
+    from codegraph.core.store import GraphStore
+    root = tmp_path / "app"
+    (root / "App").mkdir(parents=True)
+    (root / "PreviewTests").mkdir()
+    (root / "App" / "LockScreen.swift").write_text(
+        "import SwiftUI\n\nstruct LockScreen: View {\n    var body: some View { Text(\"locked\") }\n}\n\n"
+        "struct LockScreen_Previews: PreviewProvider {\n    static var previews: some View {\n        LockScreen()\n    }\n}\n")
+    (root / "PreviewTests" / "GeneratedPreviewTests.swift").write_text(
+        "// Generated using Sourcery 2.3.0 — https://github.com/krzysztofzablocki/Sourcery\n// DO NOT EDIT\n\n"
+        "import XCTest\n\nfinal class PreviewTests: XCTestCase {\n    func testLockScreen() throws {\n"
+        "        for preview in LockScreen_Previews._allPreviews {\n            assertSnapshot(preview)\n        }\n    }\n\n"
+        "    func testLockScreenAudit() throws {\n        performAccessibilityAudit(named: \"LockScreen_Previews\")\n    }\n"
+        "\n    func assertSnapshot(_ p: Any) {}\n    func performAccessibilityAudit(named: String) {}\n}\n")
+    stats = index_project(root, tmp_path / "g.db", "prev")
+    st = GraphStore(tmp_path / "g.db")
+    tc = Q.tests_covering(st, "LockScreen")
+    names = {t.get("name") for t in tc["direct"]}
+    assert {"testLockScreen", "testLockScreenAudit"} <= names, tc["direct"]
+    assert stats["plugins"]["swift"]["preview_refs"] == 2
+    gen = [json.loads(r["attrs"])["generated"] for r in st.q(
+        "SELECT attrs FROM nodes WHERE file = 'PreviewTests/GeneratedPreviewTests.swift' AND attrs LIKE '%generated%'")]
+    assert gen and all(g["test"] is True and g["reason"] == "Sourcery banner" for g in gen)

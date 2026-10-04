@@ -1069,6 +1069,8 @@ class SwiftPlugin(LanguagePlugin):
             ty = c.type
             if self.values and ty in VALUE_SITES:
                 self._value_refs(c, sf, owner, decl)
+            if ty == "navigation_expression" or (sf.test and ty == "line_string_literal"):
+                self._preview_ref(c, sf, owner)
             if ty in ("function_declaration", "init_declaration"):
                 d = self._decl_at(sf, c, ("function", "method"), "init" if ty == "init_declaration" else None)
                 if d is not None:
@@ -1204,6 +1206,30 @@ class SwiftPlugin(LanguagePlugin):
         if len(own) == 1 and own[0][0] != owner:
             self.b.add_edge(owner, own[0][0], "USES_VALUE", sf.rel, line, EXACT, how="file constant")
             self.st["value_refs"] += 1
+
+    def _preview_ref(self, c, sf: SFile, owner: str):
+        """A SwiftUI preview run as a test (#100): `X_Previews._allPreviews` / `X_Previews.previews` (snapshot tests,
+        Sourcery's generated preview tests) calls `X_Previews.previews`, and in a test file a string naming a preview
+        provider (`performAccessibilityAudit(named: "X_Previews")`) does too, so `cg tests` reaches the views the
+        previews build."""
+        if c.type == "navigation_expression":
+            target = c.child_by_field_name("target")
+            sfx = c.child_by_field_name("suffix")
+            nmn = sfx.child_by_field_name("suffix") if sfx is not None else None
+            if target is None or nmn is None or target.type != "simple_identifier" \
+                    or self.t(nmn) not in ("_allPreviews", "previews"):
+                return
+            name, how = self.t(target), "preview"
+        else:
+            name, how = self.t(c).strip('"'), "preview name"
+            if not name.endswith("_Previews") or not re.fullmatch(r"[A-Za-z_][\w.]*", name):
+                return
+        t = self._type(name)
+        pid = f"method:{t.fqn}.previews" if t is not None else None
+        if pid is None or pid not in self.decls or pid == owner:
+            return
+        self.b.add_edge(owner, pid, "CALLS", sf.rel, c.start_point[0] + 1, HEURISTIC, via=how)
+        self.st["preview_refs"] += 1
 
     def _value_edge(self, owner: str, tn: str, nm: str, sf: SFile, line: int, how: str):
         vid = self.values.get(tn, {}).get(nm)

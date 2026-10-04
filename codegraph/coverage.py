@@ -169,7 +169,7 @@ def scan_tree(root: str | Path, rules=None, classifier=None) -> Scan:
                 if (ext in _SUPPORTED_EXTS or ext in UNSUPPORTED) and not is_real_file(p):
                     continue
                 if classifier is not None and (ext in _SUPPORTED_EXTS or ext in UNSUPPORTED) \
-                        and classifier.scan(rel_dir + fn, p) is not None and not classifier.include:
+                        and classifier.drops(classifier.scan(rel_dir + fn, p)):
                     continue
                 sc.counts[ext] += 1
                 if ext in _SUPPORTED_EXTS:

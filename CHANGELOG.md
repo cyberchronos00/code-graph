@@ -11,9 +11,18 @@ commands, output and the graph schema; such changes are listed under **Changed**
 ### Changed
 
 - Generated Swift (#100): files with a Sourcery, SwiftGen, swift-openapi-generator or Mockolo banner, and R.swift's
-  `R.generated.swift`, are classified as generated. Like other generated files, they stay out of the graph unless
-  `--include-generated` (or `.cg.yaml` `generated.keep`) is used. element-x-ios: 9 files (6 Sourcery mocks / preview
-  and accessibility test lists, 3 SwiftGen asset / string files). The other Swift repos surveyed have none.
+  `R.generated.swift`, are classified as generated. element-x-ios: 9 files (6 Sourcery, 3 SwiftGen); the other
+  Swift repos surveyed have none.
+- Generated test code (#100), any language: a generated file under a test folder or test-target directory (`test/`,
+  `tests/`, `__tests__/`, `spec/`, `androidTest/`, `*Tests/` ...) runs, so by default it stays in the graph as test
+  code with `attrs.generated` (`test: true`). Only generated non-test sources leave the graph. `cg coverage` lists
+  the kept files apart (`N generated test files indexed as tests`); a `.cg.yaml` `generated.paths` glob still
+  excludes anything. element-x-ios: the Sourcery preview and accessibility test lists (3 files, 479 test cases) are
+  back; the Sourcery mocks and SwiftGen files in the app target stay out.
+- Swift previews run as tests (#100): `X_Previews._allPreviews` / `X_Previews.previews`, and in a test file a string
+  naming a preview provider (`performAccessibilityAudit(named: "X_Previews")`), call `X_Previews.previews`, so
+  `cg tests` reaches the views the previews build. element-x-ios: 480 edges to 249 preview providers;
+  `cg tests AppLockScreen` 0 → 2 direct tests.
 
 - `cg platforms divergence` (#91): references from test code whose platforms are only the project default are
   listed apart, as `missing_callee_tests` (FROM TEST CODE WHOSE PLATFORMS ARE THE PROJECT DEFAULT, with

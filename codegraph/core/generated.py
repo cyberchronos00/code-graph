@@ -206,7 +206,20 @@ def _bundler_output(dir_: Path, name: str) -> str | None:
 
 
 class Hit(dict):
-    """{"kind": generated | copied | vendored, "reason": ..., optionally "copy_of": source path}."""
+    """{"kind": generated | copied | vendored, "reason": ..., optionally "copy_of": source path, "test": True}."""
+
+
+# test folders and test-target directories (#100): a generated file there runs as a test or test support (Sourcery's
+# preview / accessibility test lists, generated test stubs), so by default it stays in the graph as test code, with
+# attrs.generated; only generated non-test sources leave it. `.cg.yaml` generated.paths still excludes anything.
+TEST_DIR = re.compile(r"(?:^|/)(?:tests?|Tests?|__tests__|specs?|androidTest|testFixtures|integrationTest|unitTest|"
+                      r"[^/]*(?:Tests|UITests))/")
+
+
+def _testy(rel: str, h: "Hit | None") -> "Hit | None":
+    if h is not None and h.get("kind") == GENERATED and not h["reason"].startswith(".cg.yaml") and TEST_DIR.search(rel):
+        h = Hit(h, test=True)
+    return h
 
 
 class Classifier:
@@ -363,13 +376,15 @@ class Classifier:
         if a is False:
             return None
         if a:
-            return a
+            return _testy(rel, a)
         h = self._copy(rel)
         if h:
             return h
         if rel in self.listed:
-            return Hit(kind=GENERATED, reason=self.listed[rel])
-        return self._path_rule(rel)
+            return _testy(rel, Hit(kind=GENERATED, reason=self.listed[rel]))
+        h = self._path_rule(rel)
+        # build output directories (.nuxt/, .next/ ...) are never test code
+        return h if h is None or h["reason"] in self.build_dirs.values() else _testy(rel, h)
 
     def scan(self, rel: str, abs_path: str) -> Hit | None:
         """Classify one file the coverage scan walks: the path rules, then the header of a source file."""
@@ -379,7 +394,7 @@ class Classifier:
             if ext in _source_exts():
                 r = header_marker(abs_path)
                 if r:
-                    h = Hit(kind=GENERATED, reason=r)
+                    h = _testy(rel, Hit(kind=GENERATED, reason=r))
         if h is not None:
             self.files[rel] = h
         return h
@@ -393,8 +408,12 @@ class Classifier:
             self._cache[rel] = self.rules_hit(rel)
         return self._cache[rel]
 
+    def drops(self, h: Hit | None) -> bool:
+        """A classified file the default mode leaves out of the graph (a generated test file stays in)."""
+        return h is not None and not self.include and not h.get("test")
+
     def excludes(self, rel: str) -> bool:
-        return not self.include and self.lookup(rel) is not None
+        return self.drops(self.lookup(rel))
 
     def dir_excluded(self, rel_dir: str) -> bool:
         """A directory every file of which is classified (a copy target, a build output directory, a user glob)."""
@@ -420,10 +439,17 @@ class Classifier:
     # -------------------------------------------------- reporting
     def summary(self) -> dict:
         """The coverage entry: counts by reason and kind, sample paths per reason, copy targets, build directories."""
-        by_reason, by_kind = Counter(), Counter()
+        by_reason, by_kind, kept = Counter(), Counter(), Counter()
         paths: dict[str, list[str]] = {}
+        kept_paths: dict[str, list[str]] = {}
         for rel in sorted(self.files):
             h = self.files[rel]
+            if h.get("test") and not self.include:
+                kept[h["reason"]] += 1
+                kp = kept_paths.setdefault(h["reason"], [])
+                if len(kp) < MAX_PATHS:
+                    kp.append(rel)
+                continue
             by_reason[h["reason"]] += 1
             by_kind[h["kind"]] += 1
             ps = paths.setdefault(h["reason"], [])
@@ -438,6 +464,8 @@ class Classifier:
                "by_reason": dict(by_reason.most_common()), "by_kind": dict(by_kind.most_common()), "paths": paths}
         if copies:
             out["copies"] = copies
+        if kept:
+            out["tests_kept"] = {"files": sum(kept.values()), "by_reason": dict(kept.most_common()), "paths": kept_paths}
         if self.pruned:
             out["build_dirs"] = dict(sorted(self.pruned.items())[:MAX_PATHS])
         return out
@@ -449,10 +477,13 @@ def for_project(project) -> Classifier | None:
 
 def summary_text(g: dict | None) -> str:
     """'generated: 412 files excluded (copy of dist/ (Capacitor webDir) 380, linguist-generated 21, @generated header 11)'."""
-    if not g or not (g.get("files") or g.get("build_dirs")):
+    if not g or not (g.get("files") or g.get("build_dirs") or g.get("tests_kept")):
         return ""
     parts = ", ".join(f"{r} {n}" for r, n in (g.get("by_reason") or {}).items())
     s = f"generated: {g['files']} file{'s' if g['files'] != 1 else ''} {g.get('mode', 'excluded')}" + (f" ({parts})" if parts else "")
+    tk = g.get("tests_kept") or {}
+    if tk.get("files"):
+        s += f"; {tk['files']} generated test file{'s' if tk['files'] != 1 else ''} indexed as tests"
     if g.get("build_dirs"):
         s += f"; build output not scanned: {', '.join(d + '/' for d in list(g['build_dirs'])[:4])}" + (
             f" … +{len(g['build_dirs']) - 4}" if len(g["build_dirs"]) > 4 else "")
@@ -460,7 +491,7 @@ def summary_text(g: dict | None) -> str:
 
 
 def detail_lines(g: dict | None, all_files: bool = False, indent: str = "  ") -> list[str]:
-    if not g or not (g.get("files") or g.get("build_dirs")):
+    if not g or not (g.get("files") or g.get("build_dirs") or g.get("tests_kept")):
         return []
     out = [indent + summary_text(g)]
     for c in g.get("copies") or []:
@@ -471,6 +502,13 @@ def detail_lines(g: dict | None, all_files: bool = False, indent: str = "  ") ->
         show = ps if all_files else ps[:SHOW_PATHS]
         more = n - len(show)
         out.append(f"{indent}  {reason}: " + ", ".join(show) + (f" … +{more} more (--all-files)" if more > 0 else ""))
+    tk = g.get("tests_kept") or {}
+    for reason, ps in (tk.get("paths") or {}).items():
+        n = (tk.get("by_reason") or {}).get(reason, len(ps))
+        show = ps if all_files else ps[:SHOW_PATHS]
+        more = n - len(show)
+        out.append(f"{indent}  {reason}, indexed as test code: " + ", ".join(show)
+                   + (f" … +{more} more (--all-files)" if more > 0 else ""))
     return out
 
 
@@ -492,7 +530,7 @@ def apply(builder, clf: Classifier) -> dict:
                 h = by_file[f] = clf.lookup(f)
             if h is None:
                 continue
-            if clf.include:
+            if clf.include or h.get("test"):
                 n.attrs = {**(n.attrs or {}), "generated": dict(h)}
                 tagged += 1
                 if h.get("copy_of") and n.kind == "module":

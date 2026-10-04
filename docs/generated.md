@@ -30,6 +30,13 @@ Banners count only in the comment lines before the first line of code, so a docs
 
 ## Default: out of the graph, listed by coverage
 
+**Generated test code stays in.** A generated file under a test folder or test-target directory (a path
+component `test`, `tests`, `Test`, `Tests`, `__tests__`, `spec`, `specs`, `androidTest`, `testFixtures`,
+`integrationTest`, `unitTest`, or a name ending in `Tests` / `UITests`) runs as a test or test support, so it is
+indexed by default, with `attrs.generated` carrying `test: true`, and `cg tests` lists it. Coverage counts it apart
+(`N generated test files indexed as tests`). Framework build directories and `.cg.yaml` `generated.paths` globs are
+never kept this way. Everything else below applies to generated non-test files.
+
 Generated files are not parsed, and a final pass drops any node whose file is classified, together with its edges.
 The coverage scan does not count them as source of their language. `cg coverage` and the MCP `coverage` tool list
 them by reason:
