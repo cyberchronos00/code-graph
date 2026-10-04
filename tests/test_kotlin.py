@@ -235,3 +235,52 @@ def test_route_call_after_property_and_dynamic_named_call_parse(tmp_path):
     ks = stats["plugins"]["kotlin"]
     assert ks["accessor_like_calls_rewritten"] == 1 and ks["keyword_named_calls_rewritten"] == 2
     assert ks.get("files_with_syntax_errors", 0) == 0
+
+
+def test_member_reparse_keeps_the_members_around_a_parse_error(tmp_path):
+    """#104: a construct the grammar lacks (here a `$$"..."` multi-dollar string) used to turn the rest of the class
+    into an ERROR. Each member is now parsed on its own inside the file's skeleton; the one that still errors is
+    blanked and reported as an error span, and the members around it keep their nodes, lines and calls."""
+    from codegraph.plugins.kotlin.reparse import reparse_members
+    import tree_sitter_kotlin as tsk
+    from tree_sitter import Language, Parser
+    d = tmp_path / "src" / "main" / "kotlin"
+    d.mkdir(parents=True)
+    src = ("package demo\n\nimport kotlin.math.max\n\nclass Sender(\n    private val name: String,\n) : Base() {\n"
+           "    fun first(): Int = helper()\n\n    /** Docs. */\n    @Deprecated(\"x\")\n    fun broken(): String {\n"
+           "        val t = \"text\".let { s ->\n            s.indexOf($$\"%1$s\")\n        }\n        return t.toString()\n"
+           "    }\n\n    fun after(): Int {\n        return helper() + max(1, 2)\n    }\n\n"
+           "    private fun helper(): Int = 1\n\n    companion object {\n        fun make() = Sender(\"a\")\n    }\n}\n\n"
+           "open class Base\n\nfun topLevel() = Sender(\"b\").after()\n")
+    (d / "Sender.kt").write_text(src)
+    p = Parser(Language(tsk.language()))
+    b = src.encode()
+    t = p.parse(b)
+    assert t.root_node.has_error
+    nt, dropped, n = reparse_members(p, b, t)
+    assert nt is not None and not nt.root_node.has_error and dropped == [(10, 17)]
+    dbp = tmp_path / "g.db"
+    stats = index_project(tmp_path, dbp, "rep")
+    c = sqlite3.connect(dbp)
+    rows = {r[0]: r[1] for r in c.execute("SELECT id, line FROM nodes WHERE kind IN ('class', 'method', 'function')")}
+    for nid, line in (("class:demo.Sender", 5), ("method:demo.Sender.first", 8), ("method:demo.Sender.after", 19),
+                      ("method:demo.Sender.helper", 23), ("class:demo.Base", 30), ("function:demo.topLevel", 32)):
+        assert rows.get(nid) == line, nid
+    assert "method:demo.Sender.broken" not in rows
+    calls = set(c.execute("SELECT src, dst FROM edges WHERE kind = 'CALLS'"))
+    assert ("method:demo.Sender.after", "method:demo.Sender.helper") in calls
+    assert ("function:demo.topLevel", "method:demo.Sender.after") in calls
+    ks = stats["plugins"]["kotlin"]
+    assert ks["files_reparsed_by_member"] == 1 and ks["members_dropped_by_reparse"] == 1
+    se = next(e for e in stats["coverage"]["languages"] if e["language"] == "kotlin")["syntax_errors"]
+    assert se[0]["spans"] == [[10, 17]] and se[0]["lost"] == ["broken:12"]
+
+
+def test_statement_suspend_lambda_parses():
+    """#104: `suspend { ... }.runCatching(x)` starting a statement; `;` keeps it off the previous line's call."""
+    from codegraph.plugins.kotlin.plugin import _suspend_lambdas
+    src = (b"fun f() {\n    val a = g()\n    suspend {\n        h()\n    }.runCatching(a)\n    val b =\n"
+           b"        suspend { 1 }\n    suspend fun k() {}\n}\n")
+    out, n = _suspend_lambdas(src)
+    assert n == 2 and len(out) == len(src)
+    assert b"    ;       {\n        h()" in out and b"suspend fun k" in out

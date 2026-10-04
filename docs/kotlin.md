@@ -13,6 +13,17 @@ Two more same-length rewrites (#104): a line starting with `get("...")`, `get { 
 right after a complete `val` / `var` line (Ktor routing) would parse as that property's accessor, so the whitespace
 in front of it becomes `;` (`accessor_like_calls_rewritten`); a call or function named `dynamic` (the Kotlin/JS type
 keyword) is parsed as `dynamiC` (`keyword_named_calls_rewritten`). Names always come from the original source.
+A suspend lambda that starts a statement (`suspend { ... }.runCatching(state)`) gets `;` and six spaces instead, so
+it does not become the trailing lambda of the line before.
+
+A file that still has errors is re-parsed member by member (#104): a small lexer splits it into top-level
+declarations and the members of class / object / interface bodies, each member is parsed alone inside the file's
+skeleton (package, imports, class headers, braces), and a member that still errors is blanked (spaces, newlines
+kept). The other members keep their nodes, lines and calls, instead of an ERROR swallowing the rest of the class.
+The dropped members are the file's error spans, so `cg coverage --details` lists them as declarations lost; the
+index stats count `files_reparsed_by_member` and `members_dropped_by_reparse`. When the skeleton itself does not
+parse (an error in a class header or constructor), or dropping would lose more than the error did, the file keeps
+its original tree.
 Other parse errors are listed by `cg coverage --details` with the declarations they cost.
 
 ## What is in the graph

@@ -40,7 +40,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ...core.syntax_errors import tree_spans
+from ...core.syntax_errors import merge, tree_spans
+from .reparse import reparse_members
 from ...core.fsutil import keep_file
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ...core.paths import rules as path_rules
@@ -180,10 +181,28 @@ def _module_root(rel: str) -> str:
 _SUSPEND_LAMBDA = re.compile(rb"(=|\(|,|\[|\bto|\breturn|->|&&|\|\||\?:)(\s*)suspend(\s*\{)")
 
 
+# A suspend lambda that starts a statement (`suspend { ... }.runCatchingUpdatingState(state)`) errors the same way;
+# blanked, the lambda would become the trailing lambda of the previous line's call, so `suspend` becomes `;` and six
+# spaces (#104). Not after a line that continues into it (an operator, `=`, `(`, `,`, `.`).
+_SUSPEND_STMT = re.compile(rb"(?m)^([ \t]*)suspend([ \t]*\{)")
+_CONTINUES = (b"=", b"(", b",", b"[", b".", b"->", b"&&", b"||", b"?:", b"+", b"-", b"*", b"/", b"to", b"return")
+
+
 def _suspend_lambdas(src: bytes) -> tuple[bytes, int]:
     if b"suspend" not in src:
         return src, 0
     out, n = _SUSPEND_LAMBDA.subn(lambda m: m.group(1) + m.group(2) + b" " * 7 + m.group(3), src)
+
+    def stmt(m):
+        nonlocal n
+        before = out[:m.start()].rstrip()
+        prev = before[before.rfind(b"\n") + 1:].split(b"//")[0].rstrip()
+        if prev.endswith(_CONTINUES):
+            return m.group(0)
+        n += 1
+        return m.group(1) + b";" + b" " * 6 + m.group(2)
+    if b"suspend" in out:
+        out = _SUSPEND_STMT.sub(stmt, out)
     return out, n
 
 
@@ -312,10 +331,18 @@ class KotlinPlugin(LanguagePlugin):
             if n_kw:
                 self.st["keyword_named_calls_rewritten"] += n_kw
             tree = p.parse(psrc)
-            kf = KFile(rel, src, tree)            # names and text from the original bytes; offsets are unchanged
+            dropped: list = []
             if tree.root_node.has_error:
+                # #104: parse member by member; a member that still errors is blanked, the rest keep their nodes
+                nt, dropped, _ = reparse_members(p, psrc, tree)
+                if nt is not None:
+                    tree = nt
+                    self.st["files_reparsed_by_member"] += 1
+                    self.st["members_dropped_by_reparse"] += len(dropped)
+            kf = KFile(rel, src, tree)            # names and text from the original bytes; offsets are unchanged
+            if tree.root_node.has_error or dropped:
                 self.st["files_with_syntax_errors"] += 1
-                errs[rel] = tree_spans(tree.root_node)
+                errs[rel] = merge(tree_spans(tree.root_node) + [list(x) for x in dropped])
             kfiles.append(kf)
         for kf in kfiles:            # pass 1: declarations
             self.cur = kf

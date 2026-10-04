@@ -21,6 +21,17 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Kotlin (#104): a file that tree-sitter-kotlin cannot parse is re-parsed member by member. Each top-level
+  declaration and class / object / interface member is parsed alone inside the file's skeleton, and only a member
+  that still errors is dropped (and reported as lost in `cg coverage --details`). Before, one unsupported construct
+  (a parenthesized function type with a receiver, a `$$"..."` string, a context parameter) often swallowed the rest
+  of the class or file. A suspend lambda that starts a statement (`suspend { ... }.runCatching(state)`) now parses
+  too.
+  - element-x-android: declarations lost to parse errors 193 → 67; 36 files re-parsed, 48 members dropped; nodes
+    36,998 → 37,172, edges 125,864 → 126,774. Methods misread as top-level functions (`function:….present`) and
+    locals misread as constants are now the class's methods or gone.
+  - bitwarden-android and tauri (errors in class headers) and the clean Kotlin repos are unchanged.
+
 - Kotlin properties (#105): `count++`, `--cart.count` and `cart.count += 1` count as a read and a write. A property
   node with a setter or delegate gets one `CALLS` edge with `property: read_write` (before: `read` for `++` / `--`,
   `write` for `+=`; `--c.n` was missed, since it parses as `(--c).n`); a stored property gets both `READS_PROP` and
