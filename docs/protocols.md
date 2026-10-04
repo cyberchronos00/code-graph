@@ -221,6 +221,40 @@ WebSocket routes and clients outside JS / TS:
 Rust routes now carry `uri` / `method` like the other plugins (`:id` / `<id>` → `{id}`, `*rest` / `{*rest}` /
 `<rest..>` → `{rest*}`), so `cg link` matches Rust servers with clients in other repos.
 
+## Webhook receivers (#37 part 1)
+
+A webhook receiver is a route a third party calls; its only protection is usually a signature check.
+`codegraph/webhooks.py` scans each route's handler, the functions it calls or dispatches to (two levels) and its
+middleware functions:
+
+| result | when |
+|---|---|
+| verified | Stripe `constructEvent` / `construct_event`; svix / standardwebhooks `new Webhook(secret).verify(..)`; @octokit/webhooks `verify` / `verifyAndReceive`; Twilio `validateRequest` / `RequestValidator(..).validate`; Shopify `webhooks.validate`; an HMAC (`createHmac`, `hmac.new`, `hash_hmac`, Rust `Hmac::new_from_slice`, Java `Mac.getInstance("Hmac..")`) with a constant-time comparison (`timingSafeEqual`, `compare_digest`, `hash_equals`, ...) or a provider signature header (then `constant_time: false` without the comparison); a provider token header (`X-Gitlab-Token`) compared in constant time; a route middleware named like `VerifyWebhookSignature` |
+| unverified | the handler reads a provider header (`Stripe-Signature`, `X-Hub-Signature-256`, `X-GitHub-Event`, `X-Gitlab-Event`, `X-Twilio-Signature`, `svix-signature`, ...) and nothing above verifies it |
+
+The route gets `attrs.webhook = {provider, verified, how, check (file:line), replay_protection, events}`. The provider
+comes from the library or the header (an event header wins), else from the route path or handler name
+(`/mailgun_webhook`), else `hmac`. `cg routes` lists a verified check as a guard (`webhook signature (..)`, counted
+as SECRET-CHECKED) and flags an unverified receiver `WEBHOOK UNVERIFIED (<provider>)`, which `--unguarded` keeps.
+Headers read by shared helpers (called from more than six functions, such as audit loggers) do not count.
+
+Events: comparisons of the event type with a literal become `endpoint:webhook:<provider>:<event>` (protocol `webhook`,
+`cg protocols --protocol webhook`), RECEIVED_BY the function holding the comparison:
+
+- `switch (event.type) { case 'x': }`, `if (event.type === 'x')`, Python `event["type"] == "x"` and `match`, PHP
+  `$event->type`, `data_get($event, 'type')` and `match ($event) { 'x', 'y' => .. }`;
+- the event variable is the result of the verification call (exact) or a payload named `event`, `payload`, `body`,
+  `data`, ... (heuristic); keys `type`, `event`, `event_type`, `eventType`, GitLab `object_kind`; aliases
+  (`$type = data_get($this->event, 'type')`) and event headers (`name = req.headers['x-github-event']`) are followed;
+- a branch that calls only one or two project functions (shared helpers, predicates such as `is*` / `get*` and
+  logging left out), not called in the other branches, makes them receivers too: they run only for that event
+  (`how: event branch`, `via` = the dispatching function), so `impact` on `markInvoicePaid` lists `stripe:invoice.paid`;
+- @octokit/webhooks `webhooks.on('push', fn)` receives `github:push` directly.
+
+Provider events are sent from outside, so they are never `no_sender`. Not yet: senders (svix `message.create`,
+spatie/laravel-webhook-server, hand-written signed POSTs) and pairing them with receivers, Laravel Cashier and
+spatie/laravel-webhook-client conventions, and Kotlin `when` / Rust `match` dispatch.
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function
@@ -584,8 +618,8 @@ broker nodes (#40) on the endpoints, the repository's own wrapper classes (their
 
 ## Not covered yet
 
-- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (#32, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
-  WebSocket clients (#32).
+- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (webhook senders in #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
+  WebSocket clients (#147).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.
 - Broker / host nodes (#30 / #40) are not attached to endpoints yet.

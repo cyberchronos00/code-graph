@@ -45,6 +45,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   → `{playlist_folder}`), and honour `parameters` / `parameter`, `shallow`, `only` / `except`, `names` / `name`
   and `scoped` (binding fields stored on the route). A slash in the name is a URI prefix; the route count and
   handler lookup are unchanged.
+- Webhook receivers (#37, part 1): routes whose handler (or a function it calls, or its middleware) verifies a
+  provider signature (Stripe `constructEvent`, svix / standardwebhooks `verify`, @octokit/webhooks, Twilio, Shopify,
+  HMAC with a constant-time comparison, GitLab tokens) get `attrs.webhook` with the provider and the check location;
+  routes that read provider headers without a check are `verified: false` and flagged `WEBHOOK UNVERIFIED` by `cg
+  routes` (verified ones count as SECRET-CHECKED). Event types compared in the receiver (`switch (event.type)`,
+  `X-GitHub-Event`, PHP `match`) become `endpoint:webhook:<provider>:<event>`, received by the dispatching function
+  and by the handlers of thin branches; new protocol `webhook`.
 - Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32, part 3): `endpoint:socketio:` receivers and sends
   from socketioxide servers (`io.ns` namespaces, rooms) and rust_socketio, Dart socket_io_client,
   socket.io-client-java and socket.io-client-swift clients (string templates and constants as event names, acks as

@@ -81,6 +81,9 @@ register(Protocol("redis-stream", "tcp", "Redis stream key: XADD -> XREAD / XREA
 register(Protocol("socketio", "tcp", "Socket.IO event (<namespace>#<event>; emit -> on, both directions; python-socketio "
                   "and JS / TS socket.io servers, socket.io-client and Nest gateways)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True,
                   directional=True))
+register(Protocol("webhook", "tcp", "Webhook event <provider>:<event> (codegraph/webhooks.py): a provider (Stripe, GitHub, "
+                  "svix, Twilio, ...) posts it to a receiver route; receivers record their signature check as a guard",
+                  fanout=True, guards=True, ports=(443,), schemes=("https",), framework_senders=("*",)))
 
 # ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)
 register(Protocol("tcp", "tcp", "Raw TCP socket: connect -> listener on the same port (listen / bind vs connect; "

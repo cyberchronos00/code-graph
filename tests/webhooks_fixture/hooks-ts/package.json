@@ -1,0 +1,1 @@
+{"name": "hooks-ts", "version": "1.0.0", "dependencies": {"express": "^4.19.0", "stripe": "^16.0.0", "svix": "^1.24.0", "@octokit/webhooks": "^13.0.0"}}

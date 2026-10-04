@@ -142,7 +142,7 @@ def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
     """Every guard-like fact recorded on a route, deduplicated by name, each with kind, source and an auth flag."""
     out, seen = [], set()
 
-    def add(name, kind, source, display=None, auth=None, checks=None):
+    def add(name, kind, source, display=None, auth=None, checks=None, secret=None):
         k = (name or "").lower()
         if not name or k in seen:
             return
@@ -159,12 +159,17 @@ def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
                 how += f" in {checks['checked_in'][0]}"       # a helper the dependency / middleware calls (#59)
             why = f"dependency check ({how})"
         g = {"name": display or name, "kind": kind, "source": source, "auth": why is not None,
-             "secret": is_auth.secret(name) if hasattr(is_auth, "secret") else bool(SECRET_RE.search(tokens(name)))}
+             "secret": secret if secret is not None else
+             is_auth.secret(name) if hasattr(is_auth, "secret") else bool(SECRET_RE.search(tokens(name)))}
         if why:
             g["auth_by"] = why
         if checks:
             g["checks"] = checks
         out.append(g)
+    wh = attrs.get("webhook") or {}
+    if wh.get("verified"):
+        # a webhook receiver whose handler verifies the provider's signature (#37, codegraph/webhooks.py)
+        add(f"webhook signature ({wh.get('how')})", "webhook", wh.get("check") or "attrs.webhook", auth=False, secret=True)
     if attrs.get("broadcast_auth"):
         add("channel callbacks", "broadcast-auth", "Laravel BroadcastController: authenticated user + Broadcast::channel callback",
             auth=True)
@@ -287,6 +292,7 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
         g = route_guards(a, mw.get(rid, []), is_auth)
         it = {"route": rid, "name": n["name"], "at": _route_loc(n, a), "framework": a.get("framework"), "guards": g,
               "has_auth": any(x["auth"] for x in g), "secret_checked": any(x.get("secret") for x in g),
+              **({"webhook": a["webhook"]} if a.get("webhook") else {}),
               "reaches": sorted(reached.get(rid, []), key=lambda x: x["what"]),
               "clients": _clients(st, rid)}
         items.append(it)
@@ -409,9 +415,17 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
     for i in items[:max_items]:
         gs = ", ".join(f"{g['name']}{' [auth]' if g['auth'] else (' [secret]' if g.get('secret') else '')}" for g in i["guards"]) or "(none)"
         flag = "" if i["has_auth"] else ("  SECRET-CHECKED" if i.get("secret_checked") else "  NO AUTH")
+        if i.get("webhook") and not i["webhook"].get("verified"):
+            flag += f"  WEBHOOK UNVERIFIED ({i['webhook'].get('provider')})"
         out.append("")
         out.append(f"{i['name']}  @{i['at']}{flag}")
         out.append(f"    guards: {gs}")
+        if i.get("webhook"):
+            w = i["webhook"]
+            ev = w.get("events") or []
+            out.append(f"    webhook: {w.get('provider')}, " + (f"verified at {w.get('check')}" if w.get("verified") else
+                       "no signature check (reads " + ", ".join(w.get("headers") or []) + ")")
+                       + (f"; events: {', '.join(ev[:8])}{' …' if len(ev) > 8 else ''}" if ev else ""))
         for r in i["reaches"][:6 if not compact else 3]:
             g = " [gated-only]" if r["gated_only"] else ""
             line = f"    {r['what']}{' via ' + r['via'] if r.get('via') else ''}{g} conf={r['path_confidence']}"

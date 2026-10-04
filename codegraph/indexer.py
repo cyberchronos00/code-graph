@@ -282,6 +282,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (nsst := apply_native_sio(project, builder)):
         nsst["seconds"] = round(time.time() - t_ns, 2)
         stats["realtime_native"] = nsst
+    # webhook receivers: signature checks on routes and the provider events they handle (#37)
+    from .webhooks import apply as apply_webhooks
+    t_wh = time.time()
+    if (whst := apply_webhooks(project, builder)):
+        whst["seconds"] = round(time.time() - t_wh, 2)
+        stats["webhooks"] = whst
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

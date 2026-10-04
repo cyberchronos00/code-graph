@@ -1071,6 +1071,26 @@ upgrade prefix check, express-ws on a mounted router, @fastify/websocket and Hon
 SSE routes (and two that only look like it), python `websockets.serve`, and a browser client using `WebSocket`,
 `ReconnectingWebSocket`, `EventSource` and `fetchEventSource`, linked with `cg link`.
 
+## Webhook receivers (#37 part 1)
+
+| Project | Receivers | Events | Notes |
+|---|---|---|---|
+| coolify 0ed423a | 7 verified | 24 endpoints, 42 RECEIVED_BY | Stripe `Webhook::constructEvent` (its 8 event types are handled in `StripeProcessJob`, reached through the dispatched job: heuristic, the job reads `data_get($this->event, 'type')`); GitHub (app and manual), Gitea and Bitbucket `hash_hmac` + `hash_equals`; GitLab token headers compared with `hash_equals` (the app hook in `GitlabApp`). Events from `X-GitHub-Event` / `X-Gitea-Event` / `x-event-key.0` header variables and GitLab `object_kind`; 13 of the edges go to functions a thin branch calls (the dispatched jobs, `handleWorkflowJob`, and helpers that run only for that event, such as `webhookPushMatchesWatchPaths` on `push`) |
+| invoiceninja f1ffa5f | 2 verified | none | The Mailgun hooks (`hash_hmac` + `hash_equals` in `isAuthorizedByMailgunHash`; provider from the path). The payment-gateway webhooks go through a driver resolved at run time, so the Stripe `constructEvent` in `StripePaymentDriver` is not reached from a route |
+
+No receiver in vito (its routes are spatie/laravel-route-attributes `#[Post]` attributes, which give no routes yet),
+outline (the GitHub hook is a plugin `router.post("github.webhooks", ..)` RPC route, not indexed as a route), cal.com
+(no Stripe receiver in this checkout; its webhooks are outbound), firefly-iii, pixelfed, koel, open-webui, saleor
+(payment-plugin hooks are dispatched by plugin id at run time), authentik, nest, librenms, akaunting, UNIT3D, panel,
+netbox, monica, laravel.io, solidtime or express; their graphs are unchanged. Coolify's Sentinel route reads
+`X-GitHub-Event` only through `auditLogWebhookFailure`, a logger called from many functions, so it is not a receiver.
+No edges were removed anywhere. A random 20 of the 51 new edges and route markers in coolify and invoiceninja were
+checked by hand against the source, and all 20 were correct; one is a branch helper (`webhookPushMatchesWatchPaths`
+for `github:push`), which runs only for that event but is not its handler. `tests/test_webhooks.py` covers
+`tests/webhooks_fixture`: Express, FastAPI and Laravel receivers for Stripe, svix / standardwebhooks, GitHub (HMAC
+and @octokit/webhooks), Twilio, GitLab and a generic HMAC hook, verified and unverified, with `switch` / `if` / PHP
+`match` event dispatch and the `cg routes` markers.
+
 ## Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32 part 3)
 
 | Project | New | Notes |
