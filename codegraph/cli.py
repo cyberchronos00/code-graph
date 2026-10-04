@@ -211,6 +211,15 @@ def main(argv=None):
     p.add_argument("--context", type=int, default=0, help="extra lines of context around the symbol (default 0)")
     p.add_argument("--max-lines", type=int, default=200, help="cap the printed body (default 200); extra lines are noted")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("agents", help="opt-in: add cg usage guidance (and the cg MCP entry) to AGENTS.md / CLAUDE.md / Cursor rules; previews and asks first")
+    p.add_argument("action", choices=["install", "update", "remove", "show"])
+    p.add_argument("--dir", default=".", help="project root (default: current directory)")
+    p.add_argument("--target", action="append", choices=["agents", "claude", "cursor"], help="which file(s); repeatable (default: the ones that exist)")
+    p.add_argument("--all", action="store_true", help="all three guidance files")
+    p.add_argument("--mcp", action="store_true", help="also add / remove the cg MCP server entry")
+    p.add_argument("--mcp-file", help="MCP config path (default: <dir>/.cursor/mcp.json)")
+    p.add_argument("--dry-run", action="store_true", help="print the exact changes and write nothing")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
              "siblings": "code related to a symbol: class hierarchy, the same method in sibling classes, shared resources, co-callers",
              "writers": "code that writes a table (or column), or a stored property `Type.prop`",
@@ -349,6 +358,10 @@ def main(argv=None):
         res = Q.snippet(GraphStore(a.db), a.spec, context=a.context, max_lines=a.max_lines)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_snippet(res))
         return 0 if res.get("status") == "ok" else 1
+    if a.cmd == "agents":
+        from . import agents as AG
+        return AG.run(a.action, root=a.dir, targets=a.target, all_targets=a.all, mcp=a.mcp,
+                      mcp_file=a.mcp_file, dry_run=a.dry_run, assume_yes=a.yes)
     if getattr(a, "plans_dir", None) is None and a.cmd in ("plan", "serve", "viz-plan", "impact") and getattr(a, "db", None):
         from .plans import resolve_plans_dir
         a.plans_dir = resolve_plans_dir(None, a.db)     # plans.dir of the indexed project's .cg.yaml

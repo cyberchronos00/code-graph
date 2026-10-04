@@ -167,6 +167,8 @@ The Cursor CLI (`agent`) reads the same `mcpServers` entry from `.cursor/mcp.jso
 Put the [suggested agent instructions](#suggested-agent-instructions) in `.cursor/rules/code-graph.mdc` (with
 `alwaysApply: true`) or `AGENTS.md`. `scripts/demo/agent-setup.sh` builds a complete example workspace this way.
 
+`cg agents install` can write a short cg reading-rules block into `AGENTS.md`, `CLAUDE.md` or `.cursor/rules/cg.mdc` for you (and, with `--mcp`, add the `cg` MCP server entry); it previews the exact change and asks before writing, and `cg agents remove` takes it back out. See [`cg agents`](cli.md#agents).
+
 ## See it in action
 
 The [agent demo (MP4, about 195 s)](media/cg-agent-demo.mp4) is a live Cursor CLI session (GPT-5.4 Mini at medium

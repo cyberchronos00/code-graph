@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- `cg agents install|update|remove|show` (#144) opts a project in to cg's reading-rules guidance: it writes a
+  single marked block into `AGENTS.md`, `CLAUDE.md` or `.cursor/rules/cg.mdc` (and, with `--mcp`, a `cg` entry
+  in an MCP config), previewing the exact diff and asking before writing (`--dry-run` / `show` only preview,
+  `--yes` skips the prompt). Content outside the block is preserved byte-for-byte, re-runs replace the block in
+  place, and `remove` restores the original. The block text is the same as `AGENTS.md`, kept in
+  `codegraph/agent_rules.py` so both stay in sync.
 - `cg snippet <symbol>` (CLI and the `snippet` MCP tool) prints one symbol's source from the index's line
   range: a `path:start-end` header then the body with line numbers. `--context N` adds surrounding lines,
   `--max-lines N` (default 200) caps the body with a truncation note, and an ambiguous name lists the

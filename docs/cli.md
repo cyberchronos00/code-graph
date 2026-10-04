@@ -26,6 +26,7 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   installed cg) instead of on the first index; default: every language whose toolchain is installed.
   `setup --prune [--dry-run]` removes the extractor installs this cg does not use (left behind by an update that
   changed a lock file) and prints them with their sizes; an install in progress (its lock held) is kept.
+- `agents install|update|remove|show [--target agents|claude|cursor]... [--all] [--mcp] [--mcp-file F] [--dir D] [--dry-run] [--yes]`: opt-in. Write cg's "how to read this codebase" guidance as one marked block into `AGENTS.md` / `CLAUDE.md` / `.cursor/rules/cg.mdc` (and, with `--mcp`, the `cg` server entry into an MCP config). It always previews the exact change and asks before writing ([`agents`](#agents)).
 - `clean [ROOT] [--all [--extractors]] [--stale] [--db DB] [--dry-run] [--json]`: remove cache entries: those of one
   project (and of every project indexed below ROOT), the stale ones, or all of them except the extractors; `--db`
   also deletes a graph DB with its `-wal` / `-shm` files. `doctor` shows the cache size per kind ([clean](#clean)).
@@ -1015,6 +1016,47 @@ options:
                         (default: viz.presets in .cg.yaml, then the sample
                         presets that resolve, then the starter queries)
 ```
+
+### `agents`
+
+```
+usage: python -m codegraph.cli agents [-h] [--dir DIR] [--target {agents,claude,cursor}]
+                [--all] [--mcp] [--mcp-file MCP_FILE] [--dry-run] [--yes]
+                {install,update,remove,show}
+
+positional arguments:
+  {install,update,remove,show}
+
+options:
+  -h, --help            show this help message and exit
+  --dir DIR             project root (default: current directory)
+  --target {agents,claude,cursor}
+                        which file(s); repeatable (default: the ones that exist)
+  --all                 all three guidance files
+  --mcp                 also add / remove the cg MCP server entry
+  --mcp-file MCP_FILE   MCP config path (default: <dir>/.cursor/mcp.json)
+  --dry-run             print the exact changes and write nothing
+  --yes                 skip the confirmation prompt
+```
+
+Opt-in. `cg agents` adds the short "how to read this codebase with cg" rules (the same text as this repo's
+`AGENTS.md`, kept in `codegraph/agent_rules.py` so both stay in sync) to a project's agent-guidance files, and
+optionally registers the `cg` MCP server. It is deliberate and reversible:
+
+- It writes **only** a block delimited by `<!-- BEGIN cg agent rules … -->` / `<!-- END cg agent rules -->`.
+  Everything outside the block is preserved byte-for-byte, so your own instructions above or below it are untouched.
+- Every run first prints the exact unified diff of each change and then asks `apply N change(s)? [y/N]`. Nothing is
+  written on `show`, on `--dry-run`, or if you answer no. `--yes` skips the prompt for non-interactive use.
+- `install` adds the block (or, if the markers are already present, replaces it in place); `update` is the same
+  in-place replace; `remove` deletes the block and restores the surrounding bytes; `show` previews without writing.
+  Re-running is idempotent — a file never ends up with two blocks.
+
+Targets: `--target agents` → `AGENTS.md`, `claude` → `CLAUDE.md`, `cursor` → `.cursor/rules/cg.mdc` (its parent
+directory is created). `--target` repeats; `--all` selects all three. With no `--target` and no `--all`, it acts on
+whichever of the three already exist (and errors if none do and `--mcp` was not given). `--mcp` adds (or on `remove`,
+deletes) a single `cg` entry — `{"command": "cg-mcp", "args": ["--db", "out/graph.db"]}` — under `mcpServers` in the
+MCP config (default `<dir>/.cursor/mcp.json`, or `--mcp-file`), leaving every other server and key in that file
+unchanged; a config that is not valid JSON is left untouched and reported.
 
 ### `clean`
 
