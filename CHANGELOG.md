@@ -21,6 +21,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Kotlin (#104): Ktor routing such as `val x = ...` followed by `get("/path") { }` no longer parses as that
+  property's getter, and a call or function named `dynamic` no longer hits the Kotlin/JS type keyword. Both errors
+  swallowed the enclosing function. The parsed copy is rewritten at the same length, so lines, offsets and names stay
+  as written; the index stats count `accessor_like_calls_rewritten` and `keyword_named_calls_rewritten`.
+  - ktor-samples: files with syntax errors 3 → 0, nodes 1,481 → 1,504 (7 more routes; `FileInfo`, `listSuspend`,
+    the openapi sample's `User` and `configureRouting`). Other Kotlin corpora surveyed are unchanged.
+
 - C / C++ heuristic mode (#92): a call binds to a `static` (usually `static inline`) function or static variable
   defined in a header the calling file includes, directly or through other headers. Before, only the calling file's
   own statics were candidates. libuv: `uv__queue_insert_tail` 0 → 35 incoming CALLS; CALLS 26,016 → 26,378.

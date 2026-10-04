@@ -187,6 +187,44 @@ def _suspend_lambdas(src: bytes) -> tuple[bytes, int]:
     return out, n
 
 
+# A statement line starting with `get` / `set` right after a `val` / `var` (Ktor routing: `val x = ...` then
+# `get("/path") { }`) parses as that property's accessor and the error swallows the whole function (#104). A getter
+# or setter takes `()` / `(value)`, never a string, a lambda or type arguments, so for `get("...")`, `get { }` and
+# `get<T>` the whitespace character in front of `get` / `set` becomes `;`. That ends the declaration and keeps every
+# byte offset.
+_ROUTE_ACCESSOR = re.compile(rb"([ \t]*)[ \t]((?:get|set)\s*(?:\(\s*(?:\"|\"\"\")|\{|<))")
+_DECL_LINE = re.compile(rb"^\s*(?:(?:private|internal|public|protected|const|lateinit|override|open)\s+)*(?:val|var)\s")
+
+
+def _route_calls(src: bytes) -> tuple[bytes, int]:
+    if b"get" not in src and b"set" not in src:
+        return src, 0
+    lines = src.split(b"\n")
+    n, prev = 0, b""
+    for i, ln in enumerate(lines):
+        m = _ROUTE_ACCESSOR.match(ln)
+        # only after a complete declaration line: `val h = X().apply {` + `set("k", v)` is a call inside the lambda
+        if m and _DECL_LINE.match(prev) and not prev.rstrip().endswith((b"{", b"(", b"[", b",", b"=", b"->", b".")):
+            lines[i] = m.group(1) + b";" + ln[m.end(1) + 1:]
+            n += 1
+        t = ln.strip()
+        if t and not t.startswith((b"//", b"/*", b"*", b"@")):
+            prev = ln
+    return (b"\n".join(lines), n) if n else (src, 0)
+
+
+# `dynamic` is the Kotlin/JS type keyword in the grammar, so a call or declaration named `dynamic` (`fun
+# Route.dynamic()`, `dynamic()` in a Ktor module) is a parse error. Its last letter is upper-cased in the parsed copy
+# only; names come from the original bytes (#104).
+_DYNAMIC_CALL = re.compile(rb"(?<![\w$])(dynami)c(?=\s*\()")
+
+
+def _keyword_calls(src: bytes) -> tuple[bytes, int]:
+    if b"dynamic" not in src:
+        return src, 0
+    return _DYNAMIC_CALL.subn(rb"\1C", src)
+
+
 class KFile:
     def __init__(self, rel: str, src: bytes, tree):
         self.rel, self.src, self.tree = rel, src, tree
@@ -267,6 +305,12 @@ class KotlinPlugin(LanguagePlugin):
             if n_susp:
                 self.st["suspend_lambdas_rewritten"] += n_susp
                 self.st["files_with_suspend_lambdas"] += 1
+            psrc, n_route = _route_calls(psrc)
+            if n_route:
+                self.st["accessor_like_calls_rewritten"] += n_route
+            psrc, n_kw = _keyword_calls(psrc)
+            if n_kw:
+                self.st["keyword_named_calls_rewritten"] += n_kw
             tree = p.parse(psrc)
             kf = KFile(rel, src, tree)            # names and text from the original bytes; offsets are unchanged
             if tree.root_node.has_error:

@@ -9,6 +9,10 @@ tree-sitter-kotlin 1.1.0 cannot parse a suspend lambda used as an expression (`v
 `HttpMethod.Post to suspend { ... }`); the error used to swallow the enclosing class. Before parsing, `suspend` in
 front of such a `{` (after `=`, `(`, `,`, `[`, `to`, `return`, `->`, `&&`, `||`, `?:`) is replaced by spaces of the
 same length, so lines, byte offsets and names stay as written; the index stats count `suspend_lambdas_rewritten`.
+Two more same-length rewrites (#104): a line starting with `get("...")`, `get { }`, `get<T>` or the same with `set`
+right after a complete `val` / `var` line (Ktor routing) would parse as that property's accessor, so the whitespace
+in front of it becomes `;` (`accessor_like_calls_rewritten`); a call or function named `dynamic` (the Kotlin/JS type
+keyword) is parsed as `dynamiC` (`keyword_named_calls_rewritten`). Names always come from the original source.
 Other parse errors are listed by `cg coverage --details` with the declarations they cost.
 
 ## What is in the graph

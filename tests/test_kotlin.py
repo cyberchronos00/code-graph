@@ -201,3 +201,37 @@ def test_suspend_lambda_expression_parses(tmp_path):
     assert rows["method:demo.SuspendTest.plain"] == (14, "test")
     assert "method:demo.SuspendTest.keep" in rows
     assert stats["plugins"]["kotlin"]["suspend_lambdas_rewritten"] == 3
+
+
+def test_route_call_after_property_and_dynamic_named_call_parse(tmp_path):
+    """#104: `get("/x") { }` on the line after a `val` was read as that property's getter, and a call or function
+    named `dynamic` hit the Kotlin/JS type keyword; both swallowed the enclosing function. The parsed copy is
+    rewritten byte for byte; names, lines and routes come from the original source."""
+    from codegraph.plugins.kotlin.plugin import _keyword_calls, _route_calls
+    d = tmp_path / "src" / "main" / "kotlin"
+    d.mkdir(parents=True)
+    src = ("package demo\n\nimport io.ktor.server.application.*\nimport io.ktor.server.response.*\n"
+           "import io.ktor.server.routing.*\n\nfun Application.module() {\n    routing {\n"
+           "        val greeting = \"hi\"\n        // the listing\n        get(\"/listing\") {\n"
+           "            call.respondText(greeting)\n        }\n        val count: Int = 2\n"
+           "        post(\"/items\") {\n            call.respondText(\"ok\")\n        }\n        dynamic()\n    }\n}\n\n"
+           "fun Route.dynamic() {\n    get(\"/dyn\") {\n        call.respondText(\"d\")\n    }\n}\n\n"
+           "class Holder {\n    val name: String\n        get() = \"x\"\n    var size = 0\n        set(value) { field = value }\n"
+           "    val handle = mutableMapOf<String, Int>().apply {\n        set(\"k\", 1)\n    }\n}\n")
+    (d / "App.kt").write_text(src)
+    b = src.encode()
+    out, n = _route_calls(b)
+    assert n == 1 and len(out) == len(b) and b";get(\"/listing\")" in out
+    assert b"get() = " in out and b"    set(value)" in out and b"        set(\"k\", 1)" in out
+    out2, k = _keyword_calls(out)
+    assert k == 2 and len(out2) == len(b) and b"Route.dynamiC()" in out2
+    dbp = tmp_path / "g.db"
+    stats = index_project(tmp_path, dbp, "acc")
+    c = sqlite3.connect(dbp)
+    ids = {r[0] for r in c.execute("SELECT id FROM nodes")}
+    assert {"function:demo.module", "function:demo.dynamic", "class:demo.Holder"} <= ids
+    assert {"route:GET /listing", "route:POST /items", "route:GET /dyn"} <= ids
+    assert ("function:demo.module", "function:demo.dynamic") in set(c.execute("SELECT src, dst FROM edges WHERE kind = 'CALLS'"))
+    ks = stats["plugins"]["kotlin"]
+    assert ks["accessor_like_calls_rewritten"] == 1 and ks["keyword_named_calls_rewritten"] == 2
+    assert ks.get("files_with_syntax_errors", 0) == 0
