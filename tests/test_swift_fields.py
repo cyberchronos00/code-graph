@@ -5,7 +5,9 @@ for a property wrapper). `self.x` / a bare `x` inside the type and `v.x` with a 
 local built by an initializer) are READS_PROP / WRITES_PROP edges (`receiver`, `accessor`, `storage: wrapper` for
 `_x = Wrapper(...)`); an unknown receiver binds nothing. Test code's accesses are TEST_USES (orig READS_PROP /
 WRITES_PROP). An INSTANTIATES edge inside a switch case / if / else / guard / ternary carries `branch` and
-`branch_line`, in the heuristic and the exact layer. `cg readers` / `cg writers Type.prop` list them. Call edges are
+`branch_line`, in the heuristic and the exact layer. Mutating calls (`items.append(x)`, a project `mutating func`), `&x`
+and `$x` (a Binding handed out) are writes with `via`; a key path `\\Type.x` is a read with `via: keypath`;
+`@AppStorage("k")` / `@SceneStorage` fields carry `key`. `cg readers` / `cg writers Type.prop` list them. Call edges are
 unchanged."""
 import json
 import shutil
@@ -60,7 +62,7 @@ def test_reads_and_writes():
     e = edges(db(), ("READS_PROP", "WRITES_PROP", "TEST_USES"))
     assert e[("method:Store.save", "field:Store.level", "WRITES_PROP", 22)] == {"receiver": "self"}
     assert ("method:Store.save", "field:Store.level", "READS_PROP", 23) in e
-    assert ("method:Store.save", "field:Store.history", "READS_PROP", 23) in e
+    assert e[("method:Store.save", "field:Store.history", "WRITES_PROP", 23)]["via"] == "mutating"   # `.append`
     assert e[("method:Store.init", "field:Store.level", "WRITES_PROP", 18)]["storage"] == "wrapper"
     assert e[("method:Clamped.wrappedValue", "field:Clamped.v", "WRITES_PROP", 7)]["accessor"] == "set"
     assert e[("method:Picker.init", "field:Store.level", "READS_PROP", 33)]["receiver"] == "store"    # a parameter
@@ -69,6 +71,24 @@ def test_reads_and_writes():
     t = e[("method:StoreTests.testSave", "field:Store.level", "TEST_USES", 8)]
     assert t["orig"] == "READS_PROP"
     assert not any(k[0] == "method:StoreTests.testSave" and k[2] != "TEST_USES" for k in e)
+
+
+def test_mutations_bindings_keypaths():
+    e = edges(db(), ("READS_PROP", "WRITES_PROP"))
+    w = lambda ln, f: e[("method:Basket.add", f, "WRITES_PROP", ln)]["via"]  # noqa: E731
+    assert w(9, "field:Basket.items") == "mutating" and w(10, "field:Basket.tags") == "mutating"
+    assert w(11, "field:Basket.open") == "mutating" and w(12, "field:Basket.items") == "inout"
+    assert "via" not in e[("method:Basket.add", "field:Basket.items", "READS_PROP", 13)]     # `items.count`
+    b = "method:BasketView.body"
+    assert e[(b, "field:BasketView.compact", "WRITES_PROP", 26)]["via"] == "binding"           # `$compact`
+    assert e[(b, "field:BasketView.shown", "WRITES_PROP", 27)]["via"] == "binding"
+    assert (b, "field:BasketView.compact", "READS_PROP", 28) in e
+    assert e[(b, "field:BasketView.basket", "WRITES_PROP", 29)]["via"] == "mutating"           # a project mutating func
+    assert e[(b, "field:Basket.items", "READS_PROP", 31)] == {"receiver": "\\Basket", "via": "keypath"}
+    assert not any(k[3] == 30 and k[2] == "WRITES_PROP" for k in e)                            # `\\.self`, a read
+    f = dict(sqlite3.connect(db()).execute("select id, attrs from nodes where id = 'field:BasketView.compact'"))
+    assert json.loads(f["field:BasketView.compact"]) == {"property": "stored", "binding": "var", "wrapper": "AppStorage",
+                                                         "key": "compact"}
 
 
 def test_construction_branches():

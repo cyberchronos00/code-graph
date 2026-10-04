@@ -142,6 +142,12 @@ NOT_A_READ = {"navigation_suffix", "pattern", "lambda_parameter", "parameter", "
               "macro_invocation", "external_macro_definition", "macro_declaration", "precedence_group_declaration"}
 # an unknown receiver whose selector fits more project methods than this gets no candidate edges (#83 item 6)
 MAX_CANDIDATES = 5
+# standard-library mutating methods on a stored collection / Bool / Optional: `items.append(x)` writes `items` (#88)
+MUTATING_METHODS = frozenset({
+    "append", "appendContents", "insert", "remove", "removeAll", "removeFirst", "removeLast", "removeSubrange",
+    "removeValue", "popFirst", "popLast", "replaceSubrange", "sort", "reverse", "shuffle", "swapAt", "toggle",
+    "updateValue", "merge", "formUnion", "formIntersection", "formSymmetricDifference", "subtract", "negate",
+    "move", "partition", "reserveCapacity"})
 STATIC_MODS = {"static", "class"}
 # a receiver whose SDK type is certain (`let r = UIGraphicsPDFRenderer(...)`, `var inside = false`,
 # `Path { p in }`) does not reach a project extension of one of these other concrete SDK types: value types and
@@ -438,6 +444,7 @@ class SwiftPlugin(LanguagePlugin):
         self.stored_in: dict[str, set[str]] = defaultdict(set)    # type fqn -> its stored property names
         self.fields: dict[str, dict[str, str]] = defaultdict(dict)  # type fqn -> stored instance property -> field id
         self.field_names: set[str] = set()
+        self.mutating_names: set[str] = set()
         self.branch_of: dict[tuple, dict] = {}     # (owner, line, type name) -> enclosing branch of a construction
         self.branch_at: dict[tuple, dict] = {}     # (file, line, type name) -> the same, for the exact layer
         self.values: dict[str, dict[str, str]] = defaultdict(dict)  # type fqn ("" file level) -> case/constant -> id
@@ -877,6 +884,10 @@ class SwiftPlugin(LanguagePlugin):
         wrappers = [x for x in attrs if x not in ("MainActor", "objc", "IBOutlet", "IBInspectable", "available", "nonobjc")]
         if wrappers:
             a["wrapper"] = wrappers[0]
+            if wrappers[0] in ("AppStorage", "SceneStorage"):     # the UserDefaults / scene key it persists under
+                m = re.search(r'@(?:AppStorage|SceneStorage)\s*\(\s*"([^"]+)"', self.t(c))
+                if m:
+                    a["key"] = m.group(1)
         if sf.test:
             a["test"] = True
         fid = self.b.add_node("field", f"{cls.fqn}.{nm}", name=nm, fqn=f"{cls.fqn}.{nm}", file=sf.rel,
@@ -945,6 +956,8 @@ class SwiftPlugin(LanguagePlugin):
         for a in ("static", "override", "async", "mutating", "private"):
             if a in d.modifiers:
                 attrs[a] = True
+        if "mutating" in d.modifiers and d.kind == "method":
+            self.mutating_names.add(d.name)            # `basket.add(x)` on a stored struct value writes it (#88)
         if d.attributes:
             attrs["attributes"] = d.attributes[:12]
         mod = d.cls or None
@@ -1200,27 +1213,51 @@ class SwiftPlugin(LanguagePlugin):
         p = n.parent
         return p is not None and p.type == "call_expression" and p.children and p.children[0] == n
 
-    @staticmethod
-    def _is_write(n) -> bool:
+    def _is_write(self, n):
+        """True for an assignment target; "mutating" for the receiver of a mutating standard-library method
+        (`items.append(x)`, `flag.toggle()`) or of a `mutating func` declared in the project (`basket.add(x)`),
+        "inout" for `&x`; False for a read."""
         p = n.parent
-        return p is not None and p.type == "directly_assignable_expression"
+        if p is None:
+            return False
+        if p.type == "directly_assignable_expression":
+            return True
+        if p.type == "prefix_expression" and self.t(p).lstrip().startswith("&"):
+            return "inout"
+        if p.type == "navigation_expression" and p.child_by_field_name("target") == n and self._is_callee(p):
+            sfx = p.child_by_field_name("suffix")
+            m = sfx.child_by_field_name("suffix") if sfx is not None else None
+            if m is not None and (self.t(m) in MUTATING_METHODS or self.t(m) in self.mutating_names):
+                return "mutating"
+        return False
 
     def _prop_nav(self, c, sf: SFile, owner: str, decl: Decl | None):
         """`cart.label`, `self.summary`, `Cart.shared`: a read (or write) of a property node, resolved later."""
         sfx = c.child_by_field_name("suffix")
         nmn = sfx.child_by_field_name("suffix") if sfx is not None else None
         nm = self.t(nmn) if nmn is not None else None
+        proj = bool(nm) and nm.startswith("$") and len(nm) > 1          # `vm.$query`: a Binding / Publisher
+        if proj:
+            nm = nm[1:]
         if not nm or (nm not in self.prop_names and nm not in self.field_names) or self._is_callee(c):
             return
         target = c.child_by_field_name("target")
-        if target is None or target.type == "key_path_expression":
+        if target is None:
+            return
+        if target.type == "key_path_expression":
+            root = self.t(target).lstrip("\\").strip()               # `\Basket.items`; `\.items` has no named root
+            if root and nm in self.field_names and re.fullmatch(r"[A-Z]\w*(\.\w+)*", root):
+                self.prop_refs.append((owner, nm, "\\" + root, c.start_point[0] + 1, sf, decl, "keypath"))
             return
         recv = re.sub(r"^\s*[!\-~&]+", "", self.t(target))
-        self.prop_refs.append((owner, nm, recv, c.start_point[0] + 1, sf, decl, self._is_write(c)))
+        self.prop_refs.append((owner, nm, recv, c.start_point[0] + 1, sf, decl, "binding" if proj else self._is_write(c)))
 
     def _prop_bare(self, c, sf: SFile, owner: str, decl: Decl | None):
         """`summary` inside a member of the type that declares it (an implicit `self.summary`)."""
         nm = self.t(c)
+        proj = nm.startswith("$") and len(nm) > 1 and not nm[1:].isdigit()    # `$query`: the wrapper's projection
+        if proj:
+            nm = nm[1:]
         p = c.parent
         if (nm not in self.prop_names and nm not in self.field_names) or p is None or p.type in NOT_A_READ or self._is_callee(c):
             return
@@ -1235,7 +1272,7 @@ class SwiftPlugin(LanguagePlugin):
         line = c.start_point[0] + 1
         if decl is None or decl.kind == "class" or self._bound(c, nm) or self._shadowed(decl, nm, sf, line):
             return
-        self.prop_refs.append((owner, nm, None, line, sf, decl, self._is_write(c)))
+        self.prop_refs.append((owner, nm, None, line, sf, decl, "binding" if proj else self._is_write(c)))
 
     def _bound(self, c, nm: str) -> bool:
         """A parameter of an enclosing function, initializer, subscript or closure is named `nm`."""
@@ -2028,7 +2065,7 @@ class SwiftPlugin(LanguagePlugin):
         """CALLS edges for reads of computed / lazy properties and writes of computed / observed ones (`property`:
         `read` | `write`); a read of a stored property with observers runs no code of it."""
         for owner, name, recv, line, sf, decl, write in self.prop_refs:
-            if name not in self.prop_names:
+            if name not in self.prop_names or write == "keypath":
                 self._field_ref(owner, name, recv, line, sf, decl, write)
                 continue
             self._how = None
@@ -2038,8 +2075,10 @@ class SwiftPlugin(LanguagePlugin):
             if self._how == "candidate":
                 how["candidates"] = len(targets)
             done = False
+            # an in-place mutation (`items.append(x)`, `&x`, `$x`) fires an observer's didSet and, on a lazy var,
+            # still runs its initializer first; only a plain assignment skips the lazy initializer
             for t in targets[:MAX_CANDIDATES]:
-                if t.id == owner or ("observed" in t.modifiers and not write) or ("lazy" in t.modifiers and write):
+                if t.id == owner or ("observed" in t.modifiers and not write) or ("lazy" in t.modifiers and write is True):
                     continue
                 self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, property="write" if write else "read",
                                 **how, **self._accessor_attr(decl, line))
@@ -2068,7 +2107,9 @@ class SwiftPlugin(LanguagePlugin):
         where the type of `v` is known. An unknown receiver binds nothing (stored names are far too common)."""
         cls = self._encl_type(decl)
         fid = None
-        if recv is None or recv in ("self", "super"):
+        if write == "keypath":
+            fid = self._field_member(self._type(recv[1:].split(".")[-1]), name)
+        elif recv is None or recv in ("self", "super"):
             fid = self._field_member(cls, name)
         elif recv not in ("Self",):
             self._at = (sf, line)
@@ -2078,8 +2119,11 @@ class SwiftPlugin(LanguagePlugin):
         if fid is None or fid == owner:
             self.st["stored_property_refs_unresolved"] += 1
             return
+        via = write if isinstance(write, str) else None
+        write = bool(write) and via != "keypath"     # a key path names the property; whether it writes is unknown
         self.b.add_edge(owner, fid, "WRITES_PROP" if write else "READS_PROP", sf.rel, line, RESOLVED,
                         **({"receiver": "self"} if recv in (None, "self", "super") else {"receiver": recv[:40]}),
+                        **({"via": via} if via else {}),
                         **({"storage": "wrapper"} if name.startswith("_") else {}),
                         **self._accessor_attr(decl, line))
         self.st["stored_property_writes" if write else "stored_property_reads"] += 1

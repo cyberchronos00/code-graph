@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Swift stored properties: in-place mutations are now writes (#88). These are WRITES_PROP edges with `via`:
+  - `mutating`: `items.append(x)`, `flag.toggle()`, or a project `mutating func` called on the field.
+  - `inout`: `&x`.
+  - `binding`: `$x`.
+  A key path `\Type.x` is a READS_PROP with `via: keypath`. `@AppStorage("k")` and `@SceneStorage` fields carry `key`.
+  An in-place mutation of an observed property also calls its `didSet`, and on a lazy var it still calls the initializer.
+  IceCubesApp: 136 mutating, 239 binding and 2 inout writes, 14 key paths, 54 storage keys.
 - Visual view: edge confidence by dash pattern and width as well as colour (exact solid 2 px, resolved dashed,
   heuristic dotted), with every edge and border colour at least 3:1 on the canvas (checked by a unit test), and
   legend chips that hide / show resolved and heuristic edges client-side with the status counts updated (#82 item 7).
