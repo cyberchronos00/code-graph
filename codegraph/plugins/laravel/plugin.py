@@ -734,10 +734,15 @@ class LaravelPlugin(FrameworkPlugin):
                     mws = [m for m in rt.get("middleware") or [] if isinstance(m, str)]
                     if len(mws) != len(rt.get("middleware") or []):
                         self.stats["route_middleware_unresolved"] = self.stats.get("route_middleware_unresolved", 0) + 1
+                    attrs = {"name": rt.get("name") or None, "middleware": mws if rt.get("middleware") is not None else None,
+                             "uri": rt["full_uri"], "method": verb.upper()}
+                    if rt.get("scoped"):
+                        attrs["scoped"] = True
+                    fields = rt.get("binding_fields")
+                    if isinstance(fields, dict) and fields:
+                        attrs["binding_fields"] = fields
                     rid = b.add_node("route", key, name=key, file=f, line=rt["line"], module=module_of(f), lang="php",
-                                     entry_kind="http_route",
-                                     attrs={"name": rt.get("name") or None, "middleware": mws if rt.get("middleware") is not None else None,
-                                            "uri": rt["full_uri"], "method": verb.upper()})
+                                     entry_kind="http_route", attrs=attrs)
                     n += 1
                     act = rt.get("action") or {}
                     if act.get("class"):

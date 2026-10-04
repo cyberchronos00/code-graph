@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Laravel resource routes follow `ResourceRegistrar` (#118): `Route::resource` / `apiResource` and the plural
+  `resources` / `apiResources` expand dotted names (`playlists.songs` → `/playlists/{playlist}/songs` and
+  `.../songs/{song}`), use the singular resource parameter (`Str::singular`, then `-` → `_`, so `playlist-folders`
+  → `{playlist_folder}`), and honour `parameters` / `parameter`, `shallow`, `only` / `except`, `names` / `name`
+  and `scoped` (binding fields stored on the route). A slash in the name is a URI prefix; the route count and
+  handler lookup are unchanged.
 - Socket.IO in JS / TS (#32, part 1): `endpoint:socketio:<namespace>#<event>` from socket.io servers (`new Server`,
   `io.of('/ns')`, connection callbacks, `X.use(mw)` guards), socket.io-client (`io(url)`, `Manager.socket`), rooms and
   broadcasts, `emitWithAck` / `timeout().emit` requests, chained listeners and emit wrappers resolved at their call

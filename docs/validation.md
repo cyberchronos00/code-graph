@@ -118,6 +118,8 @@ plugin knows the check, e.g. Laravel broadcast channel callbacks). Index time in
 | laravelio/laravel.io | 24be489 | laravel | php, typescript, laravel | 6 / 6 | 64 / 0 / 64 | – | 2.55 s | 0.01 s |
 | netbox-community/netbox | 251458b | django, djangorestframework | python, django, djangorestframework | 6 / 6 | 956 / 92 / 864 | name pattern 105, preset django 31, preset djangorestframework 2 | 34.78 s | 1.2 s |
 | saleor/saleor | 8385ca6 | django | python, django | 6 / 6 | 9 / 0 / 9 | – | 68.31 s | 0.37 s |
+
+Laravel resource routes follow `ResourceRegistrar` (#118). On koel the six nested registrations (`albums.songs`, `artists.albums`, `artists.songs`, `playlist-folders.playlists`, `playlists.songs`, `podcasts.episodes`) expand to the registrar's URLs with singular parameters (`playlist-folders` → `{playlist_folder}`), and no resource route is left with a dotted path segment (only `GET /manifest.json` and `GET /manifest-remote.json` keep a dot, as registered). The route count is unchanged.
 | immich-app/immich `server/` | c5e06dc | nest, express | typescript, nest, express | 4 / 4 | 295 / 295 / 0 | name pattern 295, preset nest 295 | 12.3 s | 0.28 s |
 | immich-app/immich `mobile/` | c5e06dc | flutter | python, dart | 3 / 3 | – | – | 3.79 s | 0.07 s |
 | calcom/cal.com `apps/api/v2` | 54343aa | nest | typescript, nest | 3 / 3 | 162 / 140 / 22 | name pattern 217 | 7.76 s | 0.01 s |

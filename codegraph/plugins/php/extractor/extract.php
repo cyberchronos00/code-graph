@@ -486,6 +486,178 @@ function configTree(Expr\Array_ $a, Ctx $c, string $prefix = ''): array {
     return $out;
 }
 
+/** English singular, in the order Laravel's `Str::singular` (Doctrine inflector) applies it:
+ *  irregular whole word, then uninflected, then the first matching transformation. */
+function laravelSingular(string $word): string {
+    static $irregular = [
+        'children' => 'child', 'men' => 'man', 'women' => 'woman', 'people' => 'person',
+        'mice' => 'mouse', 'geese' => 'goose', 'feet' => 'foot', 'teeth' => 'tooth',
+        'criteria' => 'criterion', 'phenomena' => 'phenomenon', 'alumni' => 'alumnus',
+        'leaves' => 'leaf', 'knives' => 'knife', 'lives' => 'life', 'wives' => 'wife',
+        'selves' => 'self', 'shelves' => 'shelf', 'halves' => 'half', 'loaves' => 'loaf',
+        'octopi' => 'octopus', 'person' => 'person',
+    ];
+    $lower = strtolower($word);
+    if (isset($irregular[$lower])) return $irregular[$lower];
+    static $uninflected = '/^(?:.*media|.*ss|advice|aircraft|art|baggage|bison|blood|butter|cattle|chassis|clippers|clothing|cod|compression|corps|data|debris|diabetes|equipment|feedback|fish|flour|furniture|gold|hardware|hovercraft|information|jeans|knowledge|luggage|money|moose|news|offspring|pants|plankton|police|rice|series|sheep|species|staff|sugar|swine|talent|traffic|travel|trousers|tuna|wheat|wisdom|status|clothes)$/i';
+    if (preg_match($uninflected, $word)) return $word;
+    static $rules = [
+        '/(s)tatuses$/i' => '$1tatus',
+        '/(quiz)zes$/i' => '$1',
+        '/(matr)ices$/i' => '$1ix',
+        '/(vert|ind)ices$/i' => '$1ex',
+        '/^(ox)en/i' => '$1',
+        '/(alias)(es)*$/i' => '$1',
+        '/(octop|vir)(us|i)$/i' => '$1us',
+        '/(cris|ax|test)es$/i' => '$1is',
+        '/(shoe)s$/i' => '$1',
+        '/(o)es$/i' => '$1',
+        '/(bus)(es)*$/i' => '$1',
+        '/(x|ch|ss|sh)es$/i' => '$1',
+        '/(m)ovies$/i' => '$1ovie',
+        '/(s)eries$/i' => '$1eries',
+        '/([^aeiouy]|qu)ies$/i' => '$1y',
+        '/([lr])ves$/i' => '$1f',
+        '/(tive)s$/i' => '$1',
+        '/(hive)s$/i' => '$1',
+        '/([^f])ves$/i' => '$1fe',
+        '/(^analy)ses$/i' => '$1sis',
+        '/((a)naly|(b)a|(d)iagno|(p)arenthe|(p)rogno|(s)ynop|(t)he)ses$/i' => '$1$2sis',
+        '/([ti])a$/i' => '$1um',
+        '/(n)ews$/i' => '$1ews',
+        '/(ss)$/i' => '$1',
+        '/s$/i' => '',
+    ];
+    foreach ($rules as $pattern => $replacement) {
+        $next = preg_replace($pattern, $replacement, $word, 1, $count);
+        if ($count) return $next;
+    }
+    return $word;
+}
+
+/** `ResourceRegistrar::getResourceWildcard`: explicit `parameters()`, otherwise singular, then `-` → `_`. */
+function resourceWildcard(string $segment, array $parameters): string {
+    if (isset($parameters[$segment]) && is_string($parameters[$segment]) && $parameters[$segment] !== '') {
+        $value = $parameters[$segment];
+    } else {
+        $value = laravelSingular($segment);
+    }
+    return str_replace('-', '_', $value);
+}
+
+/** Base URI (`getResourceUri`): dotted names expand, then the last `{param}` is stripped for the collection path. */
+function resourceBaseUri(string $name, array $parameters): string {
+    if (!str_contains($name, '.')) return $name;
+    $segments = explode('.', $name);
+    $parts = [];
+    foreach ($segments as $segment) {
+        $parts[] = $segment . '/{' . resourceWildcard($segment, $parameters) . '}';
+    }
+    $uri = implode('/', $parts);
+    $last = resourceWildcard((string) end($segments), $parameters);
+    return str_replace('/{' . $last . '}', '', $uri);
+}
+
+function resourceRouteName(string $resourceName, string $method, $names, string $as): string {
+    if (is_array($names) && isset($names[$method]) && is_string($names[$method])) return $names[$method];
+    $name = is_string($names) ? $names : $resourceName;
+    $prefix = $as !== '' ? $as . '.' : '';
+    return $prefix . $name . '.' . $method;
+}
+
+function resourceApplyOptions(array &$resource, array $opts): void {
+    if (isset($opts['only'])) $resource['only'] = array_values(array_filter((array) $opts['only'], 'is_string'));
+    if (isset($opts['except'])) $resource['except'] = array_values(array_filter((array) $opts['except'], 'is_string'));
+    if (isset($opts['parameters']) && is_array($opts['parameters'])) {
+        $resource['parameters'] = array_filter($opts['parameters'], 'is_string');
+    }
+    if (array_key_exists('shallow', $opts)) $resource['shallow'] = (bool) $opts['shallow'];
+    if (array_key_exists('names', $opts)) $resource['names'] = $opts['names'];
+    if (isset($opts['as']) && is_string($opts['as'])) $resource['as'] = $opts['as'];
+    $fields = $opts['bindingFields'] ?? ($opts['scoped'] ?? null);
+    if (is_array($fields)) {
+        $resource['scoped'] = true;
+        $resource['binding_fields'] = array_filter($fields, fn($v) => is_string($v) || $v === null);
+    }
+}
+
+function resourceRegistration(bool $api, array $items, int $line, array $opts): array {
+    $resource = [
+        'line' => $line, 'api' => $api, 'items' => $items, 'only' => null, 'except' => null,
+        'parameters' => [], 'shallow' => false, 'names' => null, 'as' => '', 'scoped' => false, 'binding_fields' => [],
+    ];
+    if ($api) {
+        $only = ['index', 'show', 'store', 'update', 'destroy'];
+        if (isset($opts['except'])) $only = array_values(array_diff($only, array_filter((array) $opts['except'], 'is_string')));
+        $opts = array_merge(['only' => $only], $opts);
+    }
+    resourceApplyOptions($resource, $opts);
+    return $resource;
+}
+
+function resourceItemsFromCall(string $lm, array $args): array {
+    if ($lm === 'apiresources' || $lm === 'resources') {
+        $arg = $args[0] ?? null;
+        $value = $arg instanceof Node\Arg ? $arg->value : null;
+        if (!($value instanceof Expr\Array_)) return [];
+        $items = [];
+        foreach ($value->items as $item) {
+            if ($item === null || $item->key === null) continue;
+            $name = literal($item->key);
+            if (!is_string($name)) continue;
+            $items[] = ['name' => $name, 'class' => strList($item->value)[0] ?? null];
+        }
+        return $items;
+    }
+    return [['name' => strList($args[0] ?? null)[0] ?? '?', 'class' => strList($args[1] ?? null)[0] ?? null]];
+}
+
+function expandResource(array $resource, array $local, array $localMw): array {
+    $defaults = ['index', 'create', 'store', 'show', 'edit', 'update', 'destroy'];
+    $methods = $defaults;
+    if ($resource['only']) $methods = array_values(array_intersect($methods, $resource['only']));
+    if ($resource['except']) $methods = array_values(array_diff($methods, $resource['except']));
+    $member = ['show' => true, 'edit' => true, 'update' => true, 'destroy' => true];
+    $verbs = ['index' => 'GET', 'create' => 'GET', 'store' => 'POST', 'show' => 'GET', 'edit' => 'GET', 'update' => 'PUT', 'destroy' => 'DELETE'];
+    $routes = [];
+    $parameters = $resource['parameters'];
+    foreach ($resource['items'] as $item) {
+        $raw = trim((string) $item['name'], '/');
+        $extra = '';
+        if (str_contains($raw, '/')) {
+            $segments = explode('/', $raw);
+            $extra = implode('/', array_slice($segments, 0, -1));
+            $raw = (string) end($segments);
+        }
+        $segments = $raw === '' ? [] : explode('.', $raw);
+        $last = $segments ? (string) end($segments) : $raw;
+        $base = resourceWildcard($last, $parameters);
+        foreach ($methods as $action) {
+            $uriName = ($resource['shallow'] && isset($member[$action])) ? $last : $raw;
+            $path = resourceBaseUri($uriName, $parameters);
+            if ($action === 'create') $path .= '/create';
+            elseif ($action === 'edit') $path .= '/{' . $base . '}/edit';
+            elseif (isset($member[$action])) $path .= '/{' . $base . '}';
+            $path = trim($extra . '/' . $path, '/');
+            $row = [
+                'methods' => [$verbs[$action]], 'uri' => $path,
+                'action' => ['class' => $item['class'], 'method' => $action], 'line' => $resource['line'],
+                'prefix' => $local['prefix'],
+                'full_uri' => '/' . trim($local['prefix'] . '/' . $path, '/'),
+                'middleware' => array_values(array_unique(array_merge($local['middleware'], $localMw))),
+                'name' => $local['name'] . resourceRouteName($uriName, $action, $resource['names'], $resource['as']),
+                'resource' => true,
+            ];
+            if ($resource['scoped']) {
+                $row['scoped'] = true;
+                if ($resource['binding_fields']) $row['binding_fields'] = $resource['binding_fields'];
+            }
+            $routes[] = $row;
+        }
+    }
+    return $routes;
+}
+
 /** routes/*.php: Route facade chains with group context (prefix/middleware/name/controller). */
 function routeChain(Expr $e): ?array {
     // returns list of [name, args, line] from root Route:: static call outward
@@ -518,7 +690,15 @@ function routeWalk(array $stmts, array $ctx, Ctx $c): array {
             if ($lm === 'prefix') { $p = strList($args[0] ?? null)[0] ?? ''; $local['prefix'] = trim($local['prefix'] . '/' . trim($p, '/'), '/'); }
             elseif ($lm === 'middleware') { $mw = []; foreach ($args as $a) $mw = array_merge($mw, strList($a)); if ($route || $resource) $localMw = array_merge($localMw, $mw); else $local['middleware'] = array_merge($local['middleware'], $mw); }
             elseif ($lm === 'withoutmiddleware') { /* recorded as-is */ $local['without_middleware'] = strList($args[0] ?? null); }
-            elseif ($lm === 'name' || $lm === 'as') { $n = strList($args[0] ?? null)[0] ?? ''; if ($route || $resource) $localName .= $n; else $local['name'] .= $n; }
+            elseif ($lm === 'name' && $resource) {
+                $method = strList($args[0] ?? null)[0] ?? '';
+                $given = strList($args[1] ?? null)[0] ?? '';
+                if ($method !== '' && $given !== '') {
+                    if (!is_array($resource['names'])) $resource['names'] = [];
+                    $resource['names'][$method] = $given;
+                }
+            }
+            elseif ($lm === 'name' || $lm === 'as') { $n = strList($args[0] ?? null)[0] ?? ''; if ($route) $localName .= $n; else $local['name'] .= $n; }
             elseif ($lm === 'controller') { $local['controller'] = strList($args[0] ?? null)[0] ?? null; }
             elseif ($lm === 'group') {
                 $a0 = $args[0] ?? null; $a1 = $args[1] ?? null;
@@ -553,11 +733,37 @@ function routeWalk(array $stmts, array $ctx, Ctx $c): array {
                 }
                 $route = ['methods' => $methods, 'uri' => $uri, 'action' => $action, 'line' => $line];
             }
-            elseif ($lm === 'apiresource' || $lm === 'resource') {
-                $resource = ['name' => strList($args[0] ?? null)[0] ?? '?', 'class' => strList($args[1] ?? null)[0] ?? null, 'api' => $lm === 'apiresource', 'line' => $line, 'only' => null, 'except' => null];
+            elseif (in_array($lm, ['apiresource', 'resource', 'apiresources', 'resources'], true)) {
+                $optArg = ($lm === 'apiresources' || $lm === 'resources') ? ($args[1] ?? null) : ($args[2] ?? null);
+                $optValue = $optArg instanceof Node\Arg ? literal($optArg->value) : null;
+                $opts = is_array($optValue) ? $optValue : [];
+                $api = $lm === 'apiresource' || $lm === 'apiresources';
+                $resource = resourceRegistration($api, resourceItemsFromCall($lm, $args), $line, $opts);
             }
-            elseif ($lm === 'only' && $resource) { $resource['only'] = strList($args[0] ?? null); }
-            elseif ($lm === 'except' && $resource) { $resource['except'] = strList($args[0] ?? null); }
+            elseif ($lm === 'only' && $resource) { $resource['only'] = []; foreach ($args as $a) $resource['only'] = array_merge($resource['only'], strList($a)); }
+            elseif ($lm === 'except' && $resource) { $resource['except'] = []; foreach ($args as $a) $resource['except'] = array_merge($resource['except'], strList($a)); }
+            elseif ($lm === 'parameters' && $resource) {
+                $value = ($args[0] ?? null) instanceof Node\Arg ? literal($args[0]->value) : null;
+                if (is_array($value)) $resource['parameters'] = array_filter($value, 'is_string');
+            }
+            elseif ($lm === 'parameter' && $resource) {
+                $previous = strList($args[0] ?? null)[0] ?? '';
+                $next = strList($args[1] ?? null)[0] ?? '';
+                if ($previous !== '' && $next !== '') $resource['parameters'][$previous] = $next;
+            }
+            elseif ($lm === 'shallow' && $resource) {
+                $value = ($args[0] ?? null) instanceof Node\Arg ? literal($args[0]->value) : true;
+                $resource['shallow'] = $value !== false;
+            }
+            elseif ($lm === 'names' && $resource) {
+                $value = ($args[0] ?? null) instanceof Node\Arg ? literal($args[0]->value) : null;
+                if (is_string($value) || is_array($value)) $resource['names'] = $value;
+            }
+            elseif ($lm === 'scoped' && $resource) {
+                $value = ($args[0] ?? null) instanceof Node\Arg ? literal($args[0]->value) : [];
+                $resource['scoped'] = true;
+                $resource['binding_fields'] = is_array($value) ? array_filter($value, fn($v) => is_string($v) || $v === null) : [];
+            }
             elseif ($lm === 'where' || $lm === 'wherenumber' || $lm === 'whereuuid') { }
         }
         if ($route) {
@@ -567,16 +773,7 @@ function routeWalk(array $stmts, array $ctx, Ctx $c): array {
             $route['name'] = $local['name'] . $localName;
             $routes[] = $route;
         } elseif ($resource) {
-            $acts = $resource['api'] ? ['index'=>['GET',''], 'store'=>['POST',''], 'show'=>['GET','/{id}'], 'update'=>['PUT','/{id}'], 'destroy'=>['DELETE','/{id}']]
-                : ['index'=>['GET',''], 'create'=>['GET','/create'], 'store'=>['POST',''], 'show'=>['GET','/{id}'], 'edit'=>['GET','/{id}/edit'], 'update'=>['PUT','/{id}'], 'destroy'=>['DELETE','/{id}']];
-            foreach ($acts as $a => [$verb, $suffix]) {
-                if ($resource['only'] && !in_array($a, $resource['only'], true)) continue;
-                if ($resource['except'] && in_array($a, $resource['except'], true)) continue;
-                $uri = trim($resource['name'], '/') . $suffix;
-                $routes[] = ['methods' => [$verb], 'uri' => $uri, 'action' => ['class' => $resource['class'], 'method' => $a], 'line' => $resource['line'],
-                    'prefix' => $local['prefix'], 'full_uri' => '/' . trim($local['prefix'] . '/' . $uri, '/'),
-                    'middleware' => array_values(array_unique(array_merge($local['middleware'], $localMw))), 'name' => $local['name'] . $resource['name'] . '.' . $a, 'resource' => true];
-            }
+            $routes = array_merge($routes, expandResource($resource, $local, $localMw));
         }
         if ($groupBody !== null) {
             $routes = array_merge($routes, routeWalk($groupBody, $local, $c));
