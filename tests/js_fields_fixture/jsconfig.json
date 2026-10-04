@@ -1,0 +1,1 @@
+{ "compilerOptions": { "allowJs": true, "checkJs": false, "jsx": "react-jsx", "target": "ES2022" }, "include": ["src"] }

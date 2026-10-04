@@ -232,6 +232,7 @@ class KotlinPlugin(LanguagePlugin):
         self.class_short: dict[str, list[Decl]] = defaultdict(list)
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.calls: list[tuple] = []          # (owner_id, name, receiver, line, file obj, decl)
+        self.call_branch: dict = {}           # (owner_id, line, name) -> {branch, branch_line} (#88)
         # properties with a custom accessor, `by lazy` or a delegate are nodes (#89); kept out of by_name / members so
         # a call `x()` never binds to one
         self.props: dict[str, dict] = {}                                   # decl id -> {"property", "accessors"}
@@ -242,6 +243,7 @@ class KotlinPlugin(LanguagePlugin):
         # stored properties of a class / enum are `field:<Type>.<name>` nodes with READS_PROP / WRITES_PROP (#88)
         self.fields: dict[str, dict[str, str]] = defaultdict(dict)        # class fqn -> name -> field id
         self.field_names: set[str] = set()
+        self.copies: list[tuple] = []         # (owner, receiver (type, text), [(arg name, line)], kf, decl): `x.copy(a = 1)`
         self.frefs: list[tuple] = []          # (owner_id, name, receiver (type, text) | None, line, file, decl, write)
         self.reads: list[tuple] = []          # (owner_id, name, receiver node, line, file obj, decl, read | write)
         self.http: list[dict] = []
@@ -797,6 +799,7 @@ class KotlinPlugin(LanguagePlugin):
                 self._refs(c, kf, d.id if d else owner, d or decl, ctx)
                 continue
             elif ty == "call_expression":
+                self._copy_call(c, kf, owner, decl)
                 if self._call(c, kf, owner, decl, ctx):
                     continue
             elif ty == "binary_expression":
@@ -908,7 +911,47 @@ class KotlinPlugin(LanguagePlugin):
                     if m:
                         self.navs.append((owner, None, m.group(1), kf.rel, line))
         self.calls.append((owner, name, rtext, line, kf, decl, self._accessor(c) if owner in self.props else None))
+        if name[:1].isupper():                      # a constructor or a composable: its branch (#88)
+            br = self._branch(c)
+            if br:
+                self.call_branch[(owner, line, name)] = br
         return False
+
+    def _branch(self, c) -> dict:
+        """The innermost `if` / `else` / `when` entry around a construction or a composable call inside its function
+        (#88): attrs.branch (`if (loading)`, `else of if (loading)`, `when Tab.Home`, `else of when (tab)`) and
+        attrs.branch_line, so a screen that swaps content under a condition shows it on the edge."""
+        x, prev = c.parent, c
+        while x is not None and x.type not in ("function_declaration", "class_body", "source_file",
+                                                "secondary_constructor", "anonymous_initializer", "getter", "setter"):
+            if x.type == "when_entry":
+                ch = x.children
+                if ch and ch[0].type == "else":
+                    w = x.parent
+                    subj = next((k for k in w.children if k.type == "when_subject"), None) if w is not None else None
+                    lab = "else of when" + (f" {self.t(subj)}" if subj is not None else "")
+                else:
+                    conds = []
+                    for k in ch:
+                        if k.type == "->":
+                            break
+                        if k.type != ",":
+                            conds.append(self.t(k))
+                    lab = "when " + ", ".join(conds)
+                if prev is not ch[0]:
+                    return {"branch": re.sub(r"\s+", " ", lab)[:80], "branch_line": x.start_point[0] + 1}
+            if x.type == "if_expression":
+                ch = x.children
+                lp = next((i for i, k in enumerate(ch) if k.type == "("), None)
+                rp = next((i for i, k in enumerate(ch) if k.type == ")"), None)
+                cond = " ".join(self.t(k) for k in ch[lp + 1:rp]) if lp is not None and rp is not None else ""
+                els = next((k for k in ch if k.type == "else"), None)
+                inside = rp is not None and prev.start_byte > ch[rp].start_byte
+                if inside:
+                    lab = ("else of " if els is not None and prev.start_byte > els.start_byte else "") + f"if ({cond})"
+                    return {"branch": re.sub(r"\s+", " ", lab)[:80], "branch_line": x.start_point[0] + 1}
+            prev, x = x, x.parent
+        return {}
 
     @staticmethod
     def _accessor(c) -> str | None:
@@ -1199,18 +1242,67 @@ class KotlinPlugin(LanguagePlugin):
             if self._how == "candidate":
                 how["candidates"] = len(targets)
                 self.st["call_candidate_edges"] += len(targets)
+            br = self.call_branch.get((owner, line, name), {})
             for t in targets[:MAX_CANDIDATES if self._how == "candidate" else 3]:
                 if t.kind == "class":
-                    self.b.add_edge(owner, t.id, "INSTANTIATES", kf.rel, line, HEURISTIC)
+                    self.b.add_edge(owner, t.id, "INSTANTIATES", kf.rel, line, HEURISTIC, **br)
                     ctor = [m for m in self.members.get(t.fqn, {}).get("init", [])]
                     self.b.add_edge(owner, t.id, "USES_TYPE", kf.rel, line, HEURISTIC, how="constructor call")
                     for m in ctor:
                         self.b.add_edge(owner, m.id, "CALLS", kf.rel, line, HEURISTIC)
                 else:
-                    self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, **how)
+                    composable = br and any(a[0] == "Composable" for a in t.annotations)
+                    self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, **how, **(br if composable else {}))
             self.st["calls_resolved"] += 1
         self._resolve_reads()
         self._resolve_fields()
+        self._resolve_copies()
+
+    def _copy_call(self, c, kf: KFile, owner: str, decl: Decl | None):
+        """`state.copy(loading = true)` on a data class: a write of each named field, `via: copy` (#88)."""
+        if not self.field_names or not c.children or c.children[0].type != "navigation_expression":
+            return
+        nav = c.children[0]
+        kids = [x for x in nav.children if x.type != "."]
+        if len(kids) != 2 or kids[1].type != "identifier" or self.t(kids[1]) != "copy":
+            return
+        args = next((x for x in c.children if x.type == "value_arguments"), None)
+        named = []
+        for a in (args.children if args is not None else []):
+            if a.type == "value_argument":
+                ids = [x for x in a.children if x.type == "identifier"]
+                eq = next((x for x in a.children if x.type == "="), None)
+                if ids and eq is not None and ids[0].start_byte < eq.start_byte:
+                    named.append((self.t(ids[0]), a.start_point[0] + 1))
+        if named:
+            self.copies.append((owner, (kids[0].type, self.t(kids[0])), named, kf, decl))
+
+    def _resolve_copies(self):
+        """A receiver of known type binds `resolved`. Otherwise (`it.copy(...)` in `update { }`) the one data class
+        whose fields include every named argument binds `heuristic`, `binding: name`; none or several bind nothing."""
+        for owner, (rtype, rt), named, kf, decl in self.copies:
+            cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
+            rname = re.sub(r"[?!]", "", rt).split(".")[-1].strip()
+            tyname = decl.types.get(rname) if decl is not None else None
+            if tyname is None and cls is not None:
+                tyname = self._field_type(cls, rname)
+            if tyname is None and decl is not None and decl.kind != "class" and rtype == "identifier":
+                tyname = self._local_type(decl, rname, kf)
+            tc = self._class_of(re.sub(r"[<(].*", "", tyname, flags=re.S).rstrip("?! ").split(".")[-1], kf) if tyname else None
+            conf, extra = RESOLVED, {}
+            if tc is None:
+                want = {n for n, _ in named}
+                cands = [k for k, f in self.fields.items() if want <= set(f)
+                         and "data" in getattr(self.classes.get(k), "modifiers", set())]
+                if len(cands) != 1:
+                    self.st["copy_unresolved"] += 1
+                    continue
+                tc, conf, extra = self.classes.get(cands[0]), HEURISTIC, {"binding": "name"}
+            for n, line in named:
+                fid = self._field_member(tc, n)
+                if fid and fid != owner:
+                    self.b.add_edge(owner, fid, "WRITES_PROP", kf.rel, line, conf, receiver=rt[:40], via="copy", **extra)
+                    self.st["stored_property_writes"] += 1
 
     def _field_member(self, cls: Decl | None, name: str, depth: int = 0) -> str | None:
         if cls is None or depth > 6:

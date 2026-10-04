@@ -31,3 +31,12 @@ class Vm {
     private val _state = kotlinx.coroutines.flow.MutableStateFlow(0)
     fun bump() { _state.value = 1 }
 }
+
+data class UiState(val loading: Boolean = false, val title: String = "")
+
+class Screen(var ui: UiState) {
+    fun load(s: UiState) {
+        ui = s.copy(loading = true)
+        listOf(s).map { it.copy(title = "t") }
+    }
+}

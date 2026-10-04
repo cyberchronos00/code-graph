@@ -198,6 +198,27 @@ function walkNode(Node $node, Ctx $c, \PhpParser\NameContext $nc): void {
         foreach ($mm as $m) addFact($c, ['t' => 'vartype', 'var' => $m[2], 'types' => docTypes($m[1], $nc), 'src' => 'doc'], $node);
     }
 
+    // #88: property writes that are not a plain `$o->p = v` (those are 'fetch' write facts below). A separate fact
+    // type, so framework handlers reading 'fetch' facts (model attributes, relations) see exactly what they saw before.
+    $pw = null;
+    if ($node instanceof Expr\AssignOp && !($node instanceof Expr\AssignOp\Coalesce)) $pw = [$node->var, 'compound'];
+    elseif ($node instanceof Expr\PreInc || $node instanceof Expr\PostInc || $node instanceof Expr\PreDec || $node instanceof Expr\PostDec) $pw = [$node->var, 'compound'];
+    elseif (($node instanceof Expr\Assign || $node instanceof Expr\AssignRef || $node instanceof Expr\AssignOp) && $node->var instanceof Expr\ArrayDimFetch) $pw = [$node->var, 'item'];
+    if ($pw) {
+        $tg = $pw[0];
+        while ($tg instanceof Expr\ArrayDimFetch) { $tg = $tg->var; if ($pw[1] === 'compound') $pw[1] = 'item'; }
+        if ($tg instanceof Expr\PropertyFetch || $tg instanceof Expr\NullsafePropertyFetch)
+            addFact($c, ['t' => 'pwrite', 'recv' => desc($tg->var, $c), 'prop' => nameStr($tg->name), 'via' => $pw[1]], $node);
+    }
+    if ($node instanceof Stmt\Unset_) {
+        foreach ($node->vars as $v) {
+            $via = 'unset';
+            while ($v instanceof Expr\ArrayDimFetch) { $v = $v->var; $via = 'item'; }
+            if ($v instanceof Expr\PropertyFetch || $v instanceof Expr\NullsafePropertyFetch)
+                addFact($c, ['t' => 'pwrite', 'recv' => desc($v->var, $c), 'prop' => nameStr($v->name), 'via' => $via], $node);
+        }
+    }
+
     if ($node instanceof Expr\Assign || $node instanceof Expr\AssignRef || $node instanceof Expr\AssignOp\Coalesce) {
         $target = $node->var;
         if ($target instanceof Expr\Variable && is_string($target->name)) {

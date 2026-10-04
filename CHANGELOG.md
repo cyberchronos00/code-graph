@@ -36,6 +36,20 @@ commands, output and the graph schema; such changes are listed under **Changed**
   A key path `\Type.x` is a READS_PROP with `via: keypath`. `@AppStorage("k")` and `@SceneStorage` fields carry `key`.
   An in-place mutation of an observed property also calls its `didSet`, and on a lazy var it still calls the initializer.
   IceCubesApp: 136 mutating, 239 binding and 2 inout writes, 14 key paths, 54 storage keys.
+- #88 phase 1, remaining items:
+  - JSX `RENDERS` and `new X` `INSTANTIATES` edges carry `branch` / `branch_line` (switch case, if / else, ternary,
+    `&&`). Kotlin composable calls and constructor calls do the same inside `if` / `else` / `when` entries.
+  - Plain JS classes: `this.x = ...` without a declaration is a field (`declared: this`). commander.js has 88.
+  - Pinia options store state (`hook: pinia`) and Vue Options API `data()` keys (`hook: data`) are field nodes.
+    Reads and writes come from `this.x`, `const s = useStore(); s.x`, and `useStore().x`.
+  - Kotlin data class `copy(x = v)` is a write with `via: copy`. It binds `resolved` with a known receiver type,
+    otherwise to the single data class with every named field (`heuristic`, `binding: name`).
+  - Swift: `items[i] = v` is a write with `via: item`, and `items[i]` is now a read. A key path with an inferred
+    root (`\.items`) binds by a unique stored-property name (`heuristic`). A subscript on a computed property is
+    now a CALLS edge with `property: read`, as other computed-property reads are.
+  - PHP class properties: declared and constructor-promoted properties are `property: stored` nodes.
+    `$this->x` (exact) and typed `$v->x` (resolved) reads and writes are READS_PROP / WRITES_PROP, with `via` =
+    compound / item / unset. koel: 1,218 stored properties (852 promoted). laravel.io: 204.
 - Visual view: edge confidence by dash pattern and width as well as colour (exact solid 2 px, resolved dashed,
   heuristic dotted), with every edge and border colour at least 3:1 on the canvas (checked by a unit test), and
   legend chips that hide / show resolved and heuristic edges client-side with the status counts updated (#82 item 7).

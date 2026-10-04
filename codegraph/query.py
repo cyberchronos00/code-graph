@@ -1189,10 +1189,16 @@ def override_lines(res: dict, limit: int = 8) -> list[str]:
 def prop_fields(st: GraphStore, spec: str) -> list[str]:
     """Stored-property field nodes for `Type.prop` / `field:Type.prop` / a qualified `Module.Type.prop` (#88)."""
     spec = spec[len("field:"):] if spec.startswith("field:") else spec
-    if "." not in spec or spec.startswith(("table:", "column:")):
+    spec = spec[len("property:"):] if spec.startswith("property:") else spec
+    if ("." not in spec and "::" not in spec) or spec.startswith(("table:", "column:")):
         return []
-    return [r["id"] for r in st.q("""SELECT id FROM nodes WHERE kind='field' AND attrs LIKE '%"property": "stored"%'
-                                     AND (fqn=? OR fqn LIKE ?) ORDER BY id""", (spec, f"%.{spec}"))]
+    # PHP: `User.name`, `User::$name`, `App\Models\User::$name` -> the `property:` node (fqn `App\Models\User::$name`)
+    cls, _, prop = spec.replace("::$", "::").replace("::", ".").rpartition(".")
+    php = f"{cls}::${prop.lstrip('$')}"
+    return [r["id"] for r in st.q("""SELECT id FROM nodes WHERE kind IN ('field', 'property')
+                                     AND attrs LIKE '%"property": "stored"%'
+                                     AND (fqn=? OR fqn LIKE ? OR fqn=? OR fqn LIKE ?) ORDER BY id""",
+                                  (spec, f"%.{spec}", php, f"%\\{php}"))]
 
 
 def prop_access(st: GraphStore, spec: str, kind: str) -> list[dict]:

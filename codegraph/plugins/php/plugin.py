@@ -396,7 +396,8 @@ class PhpProgram:
             for p in c.props.values():
                 pid = b.add_node("property", f"{c.fqcn}::${p['name']}", name=f"${p['name']}", fqn=f"{c.fqcn}::${p['name']}",
                                  file=c.file, line=p.get("line"), module=module_of(c.file), doc=p.get("doc"), lang="php",
-                                 attrs={**({"types": p.get("types"), "default": p.get("default")} if (p.get("types") or p.get("default") is not None) else {}), **ta})
+                                 attrs={**({"types": p.get("types"), "default": p.get("default")} if (p.get("types") or p.get("default") is not None) else {}),
+                                        **self._stored_attrs(p), **ta})
                 b.add_edge(cid, pid, "CONTAINS", c.file, p.get("line"), EXACT)
             for kind, vals in (("enum_case", c.cases), ("constant", c.consts)):     # #84
                 for v in vals:
@@ -429,6 +430,62 @@ class PhpProgram:
         for s in self.scripts.values():
             b.add_node("script", s.file, name=s.file, file=s.file, line=1, module=module_of(s.file), lang="php",
                        attrs={"test": True} if is_test_path(s.file) else {})
+
+    @staticmethod
+    def _is_stored(p: dict | None) -> bool:
+        """A declared (or constructor-promoted) instance property; not a docblock `@property` (Laravel's magic
+        attributes, which are columns) and not a static one."""
+        return bool(p) and p.get("src") != "doc" and not p.get("static")
+
+    def _stored_attrs(self, p: dict) -> dict:
+        if not self._is_stored(p):
+            return {}
+        return {"property": "stored", **({"promoted": True} if p.get("promoted") else {})}
+
+    def _prop_owner(self, fqcn: str, name: str) -> str | None:
+        """The class (`fqcn` or an ancestor / used trait) that declares instance property `name`."""
+        for a in self.ancestors(fqcn):
+            c = self.cls(a)
+            if c and name in c.props:
+                return c.fqcn if self._is_stored(c.props[name]) else None
+        return None
+
+    @classmethod
+    def _recv_text(cls, r: dict | None, depth: int = 0) -> str:
+        """`$cart`, `$this->pricer`, `$a->b->c`; `(call)` / `(expr)` for anything else."""
+        k = (r or {}).get("k")
+        if k == "this":
+            return "$this"
+        if k == "var" and r.get("n"):
+            return f"${r['n']}"
+        if k == "prop" and r.get("n") and depth < 3:
+            return f"{cls._recv_text(r.get('of'), depth + 1)}->{r['n']}"[:40]
+        return "(call)" if k in ("call", "mcall", "scall") else "(expr)"
+
+    def _emit_prop(self, fn: "PhpFunc", f: dict, ctx: "ResolveCtx"):
+        """`$this->x` / `$obj->x` reads and writes of a declared property (#88): READS_PROP / WRITES_PROP onto the
+        `property:` node. A plain `= v` is a write; `+=`, `++`, `[]=` / `[k] =` (`via: item`) and `unset()` are
+        writes with `via` (the walk also records them as reads). `$this` binds exactly; a typed receiver (a
+        parameter, a typed property, a local built by `new`) binds resolved; an unknown one binds nothing."""
+        name, recv = f.get("prop"), f.get("recv") or {}
+        if not name:
+            return
+        this = recv.get("k") == "this"
+        write = f["t"] == "pwrite" or bool(f.get("write"))
+        owners = []
+        for t in (ctx.type_of(recv) if recv else ()):
+            o = self.cls(t) and self._prop_owner(t, name)
+            if o and o not in owners:
+                owners.append(o)
+        if not owners:
+            self.stats["property_refs_unresolved"] += 1
+            return
+        for o in owners:
+            self.stats["property_writes" if write else "property_reads"] += 1
+            self.b.add_edge(fn.id, f"property:{o}::${name}", "WRITES_PROP" if write else "READS_PROP", fn.file,
+                            f.get("line"), EXACT if this else RESOLVED,
+                            receiver="this" if this else self._recv_text(recv),
+                            **({"via": f["via"]} if f.get("via") else {}))
 
     def value_of(self, fqcn: str, name: str | None) -> str | None:
         """The enum case or class constant `Class::NAME` names: the class's own, else an ancestor's or an
@@ -471,6 +528,8 @@ class PhpProgram:
                         ctor = self.find_method(c.fqcn, "__construct")
                         if ctor:
                             b.add_edge(fn.id, ctor.id, "CALLS", fn.file, line, EXACT)
+                elif t in ("fetch", "pwrite"):
+                    self._emit_prop(fn, f, ctx)
                 elif t == "classref" and f.get("class"):
                     c = self.cls(f["class"])
                     if c:

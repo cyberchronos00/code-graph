@@ -114,8 +114,18 @@ Every property access that the TypeScript checker resolves to a field is a `READ
 - an item assignment, as in `this.cache[k] = v` (`via: item`);
 - an in-place array / Map / Set method, as in `this.items.push(x)` (`via: mutating`).
 
-A plain JavaScript class that assigns `this.x = ...` in its constructor without declaring the field has no field
-node yet.
+In a `.js` / `.jsx` / `.mjs` / `.cjs` file, a class that assigns `this.x = ...` in its constructor, a method or an
+accessor without declaring `x` gets a field node (`declared: this`); a constructor write comes from the class node.
+
+A `RENDERS` (JSX) or `INSTANTIATES` (`new X`) edge inside a switch case, `if` / `else`, a ternary or `&&` / `||` /
+`??` carries attrs `branch` (`case 'x'`, `if (loading)`, `else of user ?`) and `branch_line`. Only one edge is kept per
+source, target and line, so a second branch on the same line is not recorded.
+
+A Pinia options store (`defineStore('cart', { state: () => ({ items: [] }) })`) has a field per state key,
+`field:<file>#<store>.<key>` (`property: state`, `hook: pinia`). A Vue Options API `data() { return {...} }` key is
+`field:<file.vue>#<key>` (`hook: data`). Writes and reads come from three forms: `this.x` in actions or methods,
+`s.x` with `const s = useCartStore()`, and `useCartStore().x`. Template reads of Options API data
+(`{{ count }}`) are not recorded yet.
 
 Component and composable state uses the same edges. The state variable is a `field:<file>#<Component>.<name>` node
 (`property: state`, `hook`). This covers React `const [count, setCount] = useState(0)` / `useReducer`, and Vue

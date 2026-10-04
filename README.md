@@ -345,7 +345,7 @@ without configuration; `cg config show` lists what was applied ([docs/configurat
 
 | language / framework | mode | what is modelled |
 |---|---|---|
-| PHP | exact + resolved (nikic/php-parser, type inference) | classes, methods, calls with type inference, properties, interfaces, traits |
+| PHP | exact + resolved (nikic/php-parser, type inference) | classes, methods, calls with type inference, properties (reads / writes of declared and promoted properties, [docs/php.md](docs/php.md)), interfaces, traits |
 | Laravel | exact + resolved | routes + middleware, Eloquent models → tables/columns, migrations, DB connections, config/env, commands, scheduler, jobs, events/listeners, container bindings, FormRequests, settings reads, broadcast channels (auth callbacks, `broadcastOn()`, the auth route), PHPUnit / Pest tests |
 | Filament | resolved | admin panels as entry points, resource `$model` binding |
 | TypeScript / Vue | exact + resolved (TypeScript checker, Vue SFC compiler) | modules, functions, components, template usage, HTTP calls (fetch, `$fetch`, axios, ofetch / ky instances) with base URLs from runtime config and env, Laravel Echo / pusher-js channel subscriptions, Vitest / Jest / Playwright / Cypress tests |

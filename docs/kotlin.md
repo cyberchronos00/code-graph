@@ -138,6 +138,13 @@ An unknown receiver binds nothing. Writes are `=` and compound assignments, plus
 - `items.add(x)` / `remove` / `clear` / `put` / `sort` … on the field (`via: mutating`);
 - `_state.value = x` on a `MutableStateFlow` / `LiveData` field (`via: value`).
 
+A data class `copy(x = v)` writes `x` (`via: copy`). With a known receiver type the edge is `resolved`. Otherwise it
+binds the one data class whose fields include every named argument (`heuristic`, `binding: name`); with no such
+class or several, nothing (stat `copy_unresolved`).
+
+A composable call or a constructor call inside `if` / `else` / a `when` entry carries attrs `branch` (`if (loading)`,
+`else of if (loading)`, `when Tab.Home`, `else of when (tab)`) and `branch_line`, as in Swift.
+
 `cg readers Type.prop` / `cg writers Type.prop` list them. Local delegated properties (`val x by remember { }`
 inside a function) belong to that function.
 

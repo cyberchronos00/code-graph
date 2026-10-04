@@ -91,6 +91,20 @@ def test_mutations_bindings_keypaths():
                                                          "key": "compact"}
 
 
+def test_subscript_writes_and_inferred_keypaths():
+    """`slots[0] = v` / `self.labels[k] = v` write with `via: item`; `slots[0]` reads; `\\.labels` (an inferred root)
+    binds the one type with a stored `labels`, heuristic, `binding: name`."""
+    e = edges(db(), ("READS_PROP", "WRITES_PROP"))
+    f = "method:Shelf.fill"
+    assert e[(f, "field:Shelf.slots", "WRITES_PROP", 44)] == {"receiver": "self", "via": "item"}
+    assert e[(f, "field:Shelf.labels", "WRITES_PROP", 45)] == {"receiver": "self", "via": "item"}
+    assert (f, "field:Shelf.slots", "READS_PROP", 46) in e and (f, "field:Shelf.slots", "WRITES_PROP", 46) not in e
+    assert e[(f, "field:Shelf.labels", "READS_PROP", 48)] == {"receiver": "\\", "via": "keypath", "binding": "name"}
+    c = sqlite3.connect(db()).execute("select confidence from edges where src=? and line=48 and kind='READS_PROP'",
+                                      (f,)).fetchone()
+    assert c[0] == "heuristic"
+
+
 def test_construction_branches():
     e = edges(db(), ("INSTANTIATES",))
     assert e[("function:screen", "class:Picker", "INSTANTIATES", 50)] == {"branch": "case .settings", "branch_line": 49}

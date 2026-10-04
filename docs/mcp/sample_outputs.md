@@ -41,7 +41,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 ```
 project=bookstore-api+bookstore-web root=None indexed_at=<indexed_at> index_seconds=None
 nodes: method×32, column×29, class×19, config×13, property×10, route×9, request_key×7, env×6, external_class×6, function×6, http×6, module×5, table×5, composable×4, resolution×4, script×4, setting×3, connection×2, external×2, i18n×2, page×2, admin×1, command×1, component×1, field×1, layout×1, store×1, type×1
-edges: CONTAINS×84, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, READS_PROP×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, CONNECTS_TO×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
+edges: CONTAINS×84, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, READS_PROP×7, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, CONNECTS_TO×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
 coverage bookstore-api: php 22 exact
 coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
 ```
@@ -323,7 +323,7 @@ structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php"
 ## `downstream {'target': 'page:/reports/:id', 'max_per_kind': 10}`  (570 chars)
 
 ```
-targets: page:app/pages/reports/[id].vue | reached 32 nodes | gate=new_inventory
+targets: page:app/pages/reports/[id].vue | reached 33 nodes | gate=new_inventory
 tables touched (2): orders, stores
 
 ## route (2)
@@ -494,13 +494,13 @@ ENTRY CHAINS (entry point -> modified code)
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
 
-## `index (gating fixture, temp db)`  (529 chars)
+## `index (gating fixture, temp db)`  (554 chars)
 
 ```
-indexed tests/gating_fixture -> fixture.db: 25 nodes, 55 edges in <s>s; gated edges {'new_inventory': 10}
+indexed tests/gating_fixture -> fixture.db: 25 nodes, 78 edges in <s>s; gated edges {'new_inventory': 20}
 project=gating_fixture root=tests/gating_fixture indexed_at=<indexed_at> index_seconds=<s>
 nodes: method×16, class×5, property×3, constant×1
-edges: CALLS×30(gated 10), CONTAINS×20, INJECTS×3, USES_VALUE×1, REFERENCES×1
+edges: CALLS×30(gated 10), READS_PROP×23(gated 10), CONTAINS×20, INJECTS×3, USES_VALUE×1, REFERENCES×1
 gate predicates: [new_inventory] Support\FeatureGate::oldMode=false; [new_inventory] Support\FeatureGate::usesNewInventory=true; [new_inventory] Support\Flags::on=true
 coverage gating_fixture: php 1 exact
 ```

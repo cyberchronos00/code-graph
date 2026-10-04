@@ -49,6 +49,9 @@ from pathlib import Path
 from ...core.syntax_errors import tree_spans
 from ...core.fsutil import keep_file
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+
+KEYPATH_STDLIB = frozenset("""self offset element count isEmpty first last key value keys values rawValue description
+debugDescription hashValue id startIndex endIndex length name""".split())
 from ...core.paths import rules as path_rules
 from ...core.plugin import GraphBuilder, LanguagePlugin, Project
 from ..native.ts import TreeSitterMissing
@@ -1208,10 +1211,30 @@ class SwiftPlugin(LanguagePlugin):
             self.b.add_edge(owner, vid, "USES_VALUE", sf.rel, line, EXACT, how=how)
             self.st["value_refs"] += 1
 
+    def _env_keypath(self, n) -> bool:
+        """`\\.x` rooted in EnvironmentValues / FocusedValues: `@Environment(\\.x)`, `.environment(\\.x, v)`,
+        `.transformEnvironment(\\.x)`, `@FocusedValue(\\.x)`; never a project type's stored property."""
+        a, d = n.parent, 0
+        while a is not None and d < 6:
+            if a.type == "attribute":
+                return True
+            if a.type == "call_expression":
+                return bool(re.search(r"(?i)(environment|focused\w*value|focusedSceneValue)\w*$", self.t(a.children[0])))
+            a, d = a.parent, d + 1
+        return False
+
     @staticmethod
-    def _is_callee(n) -> bool:
+    def _is_subscript(p) -> bool:
+        """`items[i]`: a call_expression whose suffix is `[...]`."""
+        suf = next((x for x in p.children if x.type == "call_suffix"), None)
+        va = next((x for x in suf.children if x.type == "value_arguments"), None) if suf is not None else None
+        return va is not None and bool(va.children) and va.children[0].type == "["
+
+    @classmethod
+    def _is_callee(cls, n) -> bool:
         p = n.parent
-        return p is not None and p.type == "call_expression" and p.children and p.children[0] == n
+        return (p is not None and p.type == "call_expression" and bool(p.children) and p.children[0] == n
+                and not cls._is_subscript(p))
 
     def _is_write(self, n):
         """True for an assignment target; "mutating" for the receiver of a mutating standard-library method
@@ -1224,6 +1247,9 @@ class SwiftPlugin(LanguagePlugin):
             return True
         if p.type == "prefix_expression" and self.t(p).lstrip().startswith("&"):
             return "inout"
+        if (p.type == "call_expression" and p.children and p.children[0] == n and self._is_subscript(p)
+                and p.parent is not None and p.parent.type == "directly_assignable_expression"):
+            return "item"                                   # `items[i] = v` / `self.map[k] = v`
         if p.type == "navigation_expression" and p.child_by_field_name("target") == n and self._is_callee(p):
             sfx = p.child_by_field_name("suffix")
             m = sfx.child_by_field_name("suffix") if sfx is not None else None
@@ -1246,7 +1272,8 @@ class SwiftPlugin(LanguagePlugin):
             return
         if target.type == "key_path_expression":
             root = self.t(target).lstrip("\\").strip()               # `\Basket.items`; `\.items` has no named root
-            if root and nm in self.field_names and re.fullmatch(r"[A-Z]\w*(\.\w+)*", root):
+            if nm in self.field_names and (re.fullmatch(r"[A-Z]\w*(\.\w+)*", root)
+                                           or (not root and not self._env_keypath(c))):
                 self.prop_refs.append((owner, nm, "\\" + root, c.start_point[0] + 1, sf, decl, "keypath"))
             return
         recv = re.sub(r"^\s*[!\-~&]+", "", self.t(target))
@@ -2107,7 +2134,15 @@ class SwiftPlugin(LanguagePlugin):
         where the type of `v` is known. An unknown receiver binds nothing (stored names are far too common)."""
         cls = self._encl_type(decl)
         fid = None
-        if write == "keypath":
+        conf, extra = RESOLVED, {}
+        if write == "keypath" and recv == "\\":
+            # `\.items` (root inferred by the compiler): the one type with a stored `items`, by name
+            # standard-library members (`enumerated()`'s `\\.offset`, a dictionary's `\\.key`) are never bound by name
+            cands = [] if name in KEYPATH_STDLIB else \
+                [f[name] for f in self.fields.values() if name in f and not name.startswith("_")]
+            fid = cands[0] if len(cands) == 1 else None
+            conf, extra = HEURISTIC, {"binding": "name"}
+        elif write == "keypath":
             fid = self._field_member(self._type(recv[1:].split(".")[-1]), name)
         elif recv is None or recv in ("self", "super"):
             fid = self._field_member(cls, name)
@@ -2121,7 +2156,7 @@ class SwiftPlugin(LanguagePlugin):
             return
         via = write if isinstance(write, str) else None
         write = bool(write) and via != "keypath"     # a key path names the property; whether it writes is unknown
-        self.b.add_edge(owner, fid, "WRITES_PROP" if write else "READS_PROP", sf.rel, line, RESOLVED,
+        self.b.add_edge(owner, fid, "WRITES_PROP" if write else "READS_PROP", sf.rel, line, conf, **extra,
                         **({"receiver": "self"} if recv in (None, "self", "super") else {"receiver": recv[:40]}),
                         **({"via": via} if via else {}),
                         **({"storage": "wrapper"} if name.startswith("_") else {}),

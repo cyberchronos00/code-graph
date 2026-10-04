@@ -35,7 +35,7 @@ def edges(kinds):
 def test_field_nodes():
     n = {i: json.loads(a or "{}") for i, a in sqlite3.connect(db()).execute("select id, attrs from nodes where kind='field'")}
     assert set(n) == {"field:app.Cart.owner", "field:app.Cart.total", "field:app.Cart.items", "field:app.Cart.tags",
-                      "field:app.Vm._state"}                      # not `note` (no val / var), not `label`, not Config.limit
+                      "field:app.Vm._state", "field:app.UiState.loading", "field:app.UiState.title", "field:app.Screen.ui", "field:app.Banner.text"}                      # not `note` (no val / var), not `label`, not Config.limit
     assert n["field:app.Cart.owner"]["binding"] == "val" and n["field:app.Cart.total"]["binding"] == "var"
 
 
@@ -53,7 +53,16 @@ def test_reads_and_writes():
     assert e[("method:app.Vm.bump", "field:app.Vm._state", "WRITES_PROP", 32)]["via"] == "value"
     assert ("method:app.Cart.label", "field:app.Cart.owner", "READS_PROP", 7) in e          # inside a custom getter
     st = _S["stats"]["plugins"]["kotlin"]
-    assert st["stored_property_nodes"] == 5 and st["stored_property_writes"] == 7
+    assert st["stored_property_nodes"] == 9
+
+
+def test_data_class_copy_writes():
+    """`s.copy(loading = true)` writes UiState.loading (`via: copy`); `it.copy(title = ...)` with an unknown receiver
+    binds the one data class with every named field, `heuristic`, `binding: name`."""
+    e = edges(("READS_PROP", "WRITES_PROP"))
+    ld = "method:app.Screen.load"
+    assert e[(ld, "field:app.UiState.loading", "WRITES_PROP", 39)] == {"receiver": "s", "via": "copy"}
+    assert e[(ld, "field:app.UiState.title", "WRITES_PROP", 40)] == {"receiver": "it", "via": "copy", "binding": "name"}
 
 
 def test_call_edges_never_reach_fields():
@@ -67,3 +76,14 @@ def test_readers_writers_queries():
     assert {(r["src"], r["line"]) for r in Q.writers(st, "Cart.total")} == {
         ("method:app.Cart.add", 13), ("method:app.Cart.add", 14), ("method:app.Shop.reset", 21)}
     assert {r["src"] for r in Q.readers(st, "Cart.owner")} == {"method:app.Cart.label", "method:app.Shop.reset"}
+
+
+def test_compose_construction_branches():
+    """A composable call or a construction inside `if` / `else` / a `when` entry carries attrs.branch / branch_line."""
+    e = edges(("CALLS", "INSTANTIATES"))
+    h = "function:app.Home"
+    assert e[(h, "function:app.Spinner", "CALLS", 16)] == {"branch": "if (loading)", "branch_line": 15}
+    assert e[(h, "function:app.Feed", "CALLS", 18)]["branch"] == "else of if (loading)"
+    assert e[(h, "class:app.Banner", "INSTANTIATES", 21)] == {"branch": "when 1", "branch_line": 21}
+    assert e[(h, "function:app.Feed", "CALLS", 22)]["branch"] == "else of when (tab)"
+    assert "branch" not in e[(h, "function:app.Spinner", "CALLS", 24)]

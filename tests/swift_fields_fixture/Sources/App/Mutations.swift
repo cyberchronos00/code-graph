@@ -35,3 +35,16 @@ struct BasketView: View {
 extension Text {
     func sorted<T>(by k: KeyPath<Basket, T>) -> Text { self }
 }
+
+struct Shelf {
+    var slots: [String] = []
+    var labels: [String: Int] = [:]
+
+    mutating func fill() {
+        slots[0] = "a"
+        self.labels["k"] = 1
+        let first = slots[0]
+        _ = first
+        _ = [Shelf()].map(\.labels)
+    }
+}

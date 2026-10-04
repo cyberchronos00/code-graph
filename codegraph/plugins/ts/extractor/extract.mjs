@@ -578,9 +578,9 @@ const TS_MUTATING = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'sort'
 function addField(cls, q, m, sf, r, parentId, how) {
   const nm = m.name.text
   const id = `field:${r}#${q}.${nm}`
-  if (usedIds.has(id)) return
+  if (usedIds.has(id)) { if (how === 'this') fieldIds.set(m, id); return }
   usedIds.add(id)
-  const fl = ts.getCombinedModifierFlags(m)
+  const fl = how === 'this' ? 0 : ts.getCombinedModifierFlags(m)
   nodes.push({ id, kind: 'field', name: `${q}.${nm}`, file: r, line: lineOf(m, sf), end_line: sf.getLineAndCharacterOfPosition(m.end).line + 1,
     doc: null, parent: parentId, attrs: { property: 'stored', declared: how, ...((fl & ts.ModifierFlags.Readonly) ? { readonly: true } : {}) } })
   fieldIds.set(m, id)
@@ -593,6 +593,94 @@ function addField(cls, q, m, sf, r, parentId, how) {
 const stateIds = new Map()        // declaration (VariableDeclaration / BindingElement) -> [field id, 'value' | 'setter' | 'reactive']
 const stateNames = new Set()
 const STATE_HOOKS = new Set(['useState', 'useReducer', 'ref', 'shallowRef', 'reactive', 'shallowReactive'])
+// Pinia options stores (`defineStore('cart', { state: () => ({ items: [] }), actions: {...} })`) and the Vue Options
+// API (`data() { return { count: 0 } }`): each state / data key is a `property: state` field (#88). `this.x` inside
+// that options object, and `store.x` / `useCart().x` on a store, are its reads / writes
+const optFields = new Map()       // options ObjectLiteralExpression -> Map(name -> field id)
+const storeFields = new Map()     // store VariableDeclaration -> Map(name -> field id)
+const optNames = new Set()
+function returnedObject(f) {
+  if (!f) return null
+  f = unwrap(f)
+  if (ts.isArrowFunction(f) && !ts.isBlock(f.body)) { const b = unwrap(f.body); return ts.isObjectLiteralExpression(b) ? b : null }
+  const body = f.body
+  if (!body || !ts.isBlock(body)) return null
+  for (const st of body.statements) if (ts.isReturnStatement(st) && st.expression && ts.isObjectLiteralExpression(unwrap(st.expression))) return unwrap(st.expression)
+  return null
+}
+function optionsFields(sf, r, fid) {
+  const reg = (obj, owner, ownerName, keyProp, hook, storeDecl) => {
+    const p = obj.properties.find(x => x.name && ts.isIdentifier(x.name) && x.name.text === keyProp)
+    if (!p) return
+    const ret = returnedObject(ts.isPropertyAssignment(p) ? p.initializer : (ts.isMethodDeclaration(p) ? p : null))
+    if (!ret) return
+    const m = new Map()
+    for (const q of ret.properties) {
+      if (!q.name || !(ts.isIdentifier(q.name) || ts.isStringLiteral(q.name))) continue
+      const nm = q.name.text
+      const id = `field:${r}#${ownerName ? ownerName + '.' : ''}${nm}`
+      if (!usedIds.has(id)) {
+        usedIds.add(id)
+        nodes.push({ id, kind: 'field', name: id.split('#').pop(), file: r, line: lineOf(q, sf), end_line: lineOf(q, sf), doc: null,
+          parent: owner, attrs: { property: 'state', hook } })
+        stats.state_field_nodes = (stats.state_field_nodes || 0) + 1
+      }
+      m.set(nm, id); optNames.add(nm)
+    }
+    optFields.set(obj, m)
+    if (storeDecl) storeFields.set(storeDecl, m)
+  }
+  const scan = (n) => {
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'defineStore') {
+      const obj = n.arguments.map(unwrap).find(a => a && ts.isObjectLiteralExpression(a))
+      const vd = ts.isVariableDeclaration(n.parent) ? n.parent : null
+      const sid = vd && declId.get(n)
+      if (obj && vd && ts.isIdentifier(vd.name)) reg(obj, sid || fid, vd.name.text, 'state', 'pinia', vd)
+    } else if (ts.isObjectLiteralExpression(n) && (ts.isExportAssignment(n.parent)
+        || (ts.isCallExpression(n.parent) && ts.isIdentifier(n.parent.expression) && n.parent.expression.text === 'defineComponent'))) {
+      reg(n, fid, '', 'data', 'data', null)
+    }
+    ts.forEachChild(n, scan)
+  }
+  scan(sf)
+}
+function storeOfExpr(e) {
+  e = unwrap(e)
+  let call = null
+  if (ts.isCallExpression(e)) call = e
+  else if (ts.isIdentifier(e)) {
+    let s = null
+    try { s = checker.getSymbolAtLocation(e) } catch { }
+    const vd = s && s.valueDeclaration
+    if (vd && ts.isVariableDeclaration(vd) && vd.initializer && ts.isCallExpression(unwrap(vd.initializer))) call = unwrap(vd.initializer)
+  }
+  if (!call || !ts.isIdentifier(call.expression)) return null
+  let s = null
+  try { s = checker.getSymbolAtLocation(call.expression) } catch { }
+  if (s && (s.flags & ts.SymbolFlags.Alias)) { try { s = checker.getAliasedSymbol(s) } catch { s = null } }
+  return (s && s.valueDeclaration && storeFields.get(s.valueDeclaration)) || null
+}
+function writeOf(node) {
+  const p = node.parent
+  const isAssign = (e) => e.parent && ts.isBinaryExpression(e.parent) && e.parent.left === e && e.parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && e.parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+  const isIncr = (e) => e.parent && (ts.isPrefixUnaryExpression(e.parent) || ts.isPostfixUnaryExpression(e.parent)) && (e.parent.operator === ts.SyntaxKind.PlusPlusToken || e.parent.operator === ts.SyntaxKind.MinusMinusToken)
+  if (isAssign(node) || isIncr(node) || (p && ts.isDeleteExpression(p))) return [true, undefined]
+  if (p && ts.isElementAccessExpression(p) && p.expression === node && (isAssign(p) || (p.parent && ts.isDeleteExpression(p.parent)))) return [true, 'item']
+  if (p && ts.isPropertyAccessExpression(p) && p.expression === node && TS_MUTATING.has(p.name.text) && p.parent && ts.isCallExpression(p.parent) && p.parent.expression === p) return [true, 'mutating']
+  return [false, undefined]
+}
+function optionsRef(node, cur, sf, r) {
+  let m = null
+  if (node.expression.kind === ts.SyntaxKind.ThisKeyword) {
+    for (let x = node.parent; x && !ts.isSourceFile(x); x = x.parent) if (optFields.has(x)) { m = optFields.get(x); break }
+  } else m = storeOfExpr(node.expression)
+  const fid = m && m.get(node.name.text)
+  if (!fid || fid === cur) return
+  const [write, via] = writeOf(node)
+  const recv = node.expression.kind === ts.SyntaxKind.ThisKeyword ? 'this' : node.expression.getText(sf).slice(0, 40)
+  addEdge(cur, fid, write ? 'WRITES_PROP' : 'READS_PROP', r, lineOf(node, sf), m === null ? 'resolved' : (recv === 'this' ? 'exact' : 'resolved'), { receiver: recv, ...(via ? { via } : {}) })
+  stats[write ? 'state_field_writes' : 'state_field_reads'] = (stats[write ? 'state_field_writes' : 'state_field_reads'] || 0) + 1
+}
 function stateDecl(d, cur, sf, r) {
   const init = unwrap(d.initializer)
   if (!init || !ts.isCallExpression(init)) return
@@ -896,6 +984,19 @@ for (const sf of sourceFiles) {
           if (ts.isIdentifier(p.name) && (ts.getCombinedModifierFlags(p) & (ts.ModifierFlags.ParameterPropertyModifier)))
             addField(node, q, p, sf, r, id, 'constructor')
         }
+      }
+      // plain JavaScript: `this.x = ...` in the constructor or a method declares the field (#88); in a .ts file the
+      // checker only accepts declared properties, so this only adds fields a JS class never declares
+      if (ts.isClassDeclaration(node) && /\.(c|m)?jsx?$/.test(r)) {
+        const declared = new Set(node.members.filter(m => m.name && (ts.isIdentifier(m.name) || ts.isPrivateIdentifier(m.name))).map(m => m.name.text))
+        const scan = (n) => {
+          if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isPropertyAccessExpression(n.left)
+              && n.left.expression.kind === ts.SyntaxKind.ThisKeyword && !declared.has(n.left.name.text)) {
+            addField(node, q, n.left, sf, r, id, 'this'); fieldIds.set(n, fieldIds.get(n.left))
+          }
+          if (!ts.isClassLike(n) && !(ts.isFunctionLike(n) && !ts.isArrowFunction(n) && !ts.isMethodDeclaration(n) && !ts.isConstructorDeclaration(n) && !ts.isAccessor(n))) ts.forEachChild(n, scan)
+        }
+        for (const m of node.members) if ((ts.isConstructorDeclaration(m) || ts.isMethodDeclaration(m) || ts.isAccessor(m)) && m.body) ts.forEachChild(m.body, scan)
       }
       if (kind === 'type') return
       ts.forEachChild(node, c => visit(c, q, id))
@@ -1999,6 +2100,30 @@ function bridgeModuleOf(e, depth) {
   return out
 }
 
+// the innermost if / else / ternary / `&&` / switch case around a construction or a JSX element (#88): attrs.branch
+// (`if (editing)`, `else of open ?`, `case 'settings'`, `user &&`) and attrs.branch_line, so the parent that swaps a
+// component or object under a condition shows on its INSTANTIATES / RENDERS edge
+function branchOf(node, sf) {
+  let prev = node, x = node.parent
+  const lab = (t) => t.replace(/\s+/g, ' ').slice(0, 80)
+  const at = (n) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1
+  while (x && !ts.isFunctionLike(x) && !ts.isSourceFile(x) && !ts.isClassLike(x)) {
+    if (ts.isIfStatement(x) && prev !== x.expression) {
+      const c = `if (${x.expression.getText(sf)})`
+      return { branch: lab(prev === x.elseStatement ? `else of ${c}` : c), branch_line: at(x) }
+    }
+    if (ts.isConditionalExpression(x) && prev !== x.condition) {
+      const c = `${x.condition.getText(sf)} ?`
+      return { branch: lab(prev === x.whenFalse ? `else of ${c}` : c), branch_line: at(x) }
+    }
+    if (ts.isBinaryExpression(x) && prev === x.right && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(x.operatorToken.kind))
+      return { branch: lab(`${x.left.getText(sf)} ${x.operatorToken.getText(sf)}`), branch_line: at(x) }
+    if (ts.isCaseClause(x) && prev !== x.expression) return { branch: lab(`case ${x.expression.getText(sf)}`), branch_line: at(x) }
+    if (ts.isDefaultClause(x)) return { branch: 'default', branch_line: at(x) }
+    prev = x; x = x.parent
+  }
+  return null
+}
 function edgeKindFor(targetId, isCall) {
   const k = targetId.split(':')[0]
   if (k === 'composable') return 'USES_COMPOSABLE'
@@ -2008,6 +2133,7 @@ function edgeKindFor(targetId, isCall) {
   return 'CALLS'
 }
 
+for (const sf of sourceFiles) { const real = realFile(sf); optionsFields(sf, rel(real), fileNode.get(real)) }
 for (const sf of sourceFiles) {
   const real = realFile(sf), r = rel(real), fid = fileNode.get(real)
   const isVue = real.endsWith('.vue')
@@ -2021,6 +2147,7 @@ for (const sf of sourceFiles) {
     const cur = stack[stack.length - 1]
     if (ts.isVariableDeclaration(node) && node.initializer && cur) stateDecl(node, cur, sf, r)
     if (ts.isIdentifier(node) && stateNames.has(node.text) && cur) stateRef(node, cur, sf, r)
+    if (ts.isPropertyAccessExpression(node) && optNames.has(node.name.text) && cur) optionsRef(node, cur, sf, r)
     // imports
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       const ms = checker.getSymbolAtLocation(node.moduleSpecifier)
@@ -2091,7 +2218,7 @@ for (const sf of sourceFiles) {
           if (['function', 'composable', 'method', 'store', 'component', 'page', 'layout'].includes(k)) {
             const tplTag = isVue && isTemplateLine(node, sf) && /^__tplc_/.test(enclosingFnName(node))
             const jsxTag = node.parent && (ts.isJsxOpeningElement(node.parent) || ts.isJsxSelfClosingElement(node.parent)) && node.parent.tagName === node
-            if (jsxTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['jsx', ...t.via] })
+            if (jsxTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['jsx', ...t.via], ...(branchOf(node.parent, sf) || {}) })
             else if (tplTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['template', ...t.via] })
             else if (!['component', 'page', 'layout'].includes(k)) addEdge(cur, t.id, edgeKindFor(t.id), r, lineOf(node, sf), t.conf, { ref: true, via: t.via.length ? t.via : undefined, template: isVue && isTemplateLine(node, sf) || undefined })
           }
@@ -2268,7 +2395,8 @@ function handleCall(node, cur, sf, r, encFn) {
   let kind = edgeKindFor(t.id, true)
   if (kind === 'REFERENCES_TYPE') return
   const recv = kind === 'CALLS' && ts.isPropertyAccessExpression(callee) ? receiverClasses(callee.expression, t.id) : null
-  addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined, recv: recv || undefined })
+  const br = kind === 'INSTANTIATES' && !inTpl ? branchOf(node, sf) : null
+  addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined, recv: recv || undefined, ...(br || {}) })
   callSites.push({ target: t.id, node, cur, r, line })
 }
 
