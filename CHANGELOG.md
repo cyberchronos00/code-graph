@@ -10,6 +10,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Kotlin callable references (`recv::fn`, `::fn`, `Type::fn`, `::Foo`) are `REFERENCES_FN` edges (`how: callback`) (#125), so `impact` lists Compose callbacks and ViewModel wiring. The receiver type comes from a parameter, property, constructor, local, `hiltViewModel<T>()` or a `viewModel()` / `viewModels()` delegate; extensions on that type count. Overloads use the arity of a function-typed parameter when the reference is passed as an argument. scip-java maps the same occurrences when an index is present.
 - Nuxt auto-imports from `imports.dirs` / `imports.imports` without a `.nuxt/` directory (#116): on a clean
   checkout the stand-in reads `nuxt.config` (and each layer's) and scans the configured directories the way
   unimport does — a path with an extension is one file, `dir` becomes `dir/*.{ts,js,…}`, a trailing slash or
@@ -28,7 +29,6 @@ commands, output and the graph schema; such changes are listed under **Changed**
   broadcasts, `emitWithAck` / `timeout().emit` requests, chained listeners and emit wrappers resolved at their call
   sites, plus a Socket.IO endpoint for every Nest `@SubscribeMessage` handler on a socket.io gateway. A TS client now
   links with a Node, Nest or python-socketio server.
-
 - Plain JavaScript projects without `tsconfig.json` / `jsconfig.json` are indexed (#136): JS module files outside
   tests, docs, examples, assets and build output make their top directories source dirs of a synthesized `allowJs`
   program (`plugins.typescript.program.synthesized`). A Python / PHP / Rust / Go root needs a `package.json`

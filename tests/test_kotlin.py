@@ -83,9 +83,27 @@ def test_expect_actual_and_source_sets():
     assert not attrs("fix", "function:demo.greeting").get("platforms")
 
 
+def test_callable_references():
+    refs = rows("fix", "SELECT src, dst, confidence, attrs FROM edges WHERE kind='REFERENCES_FN'")
+    got = {(s, d) for s, d, _, _ in refs}
+    assert ("function:demo.screen", "function:demo.navigateToTopic") in got
+    assert ("function:demo.screen", "method:demo.VM.followTopic") in got
+    assert ("function:demo.screen", "function:demo.helper") in got
+    assert ("function:demo.screen", "function:demo.screen.local") in got
+    assert ("function:demo.screen", "class:demo.Foo") in got
+    assert ("method:demo.Screen.wire", "method:demo.VM.followTopic") in got
+    assert ("function:demo.callsOne", "method:demo.Widget.go") in got
+    assert ("function:demo.callsBoth", "method:demo.Widget.go") in got
+    assert ("function:demo.callsNone", "method:demo.Widget.go") not in got
+    how = [json.loads(a).get("how") for s, d, c, a in refs
+           if (s, d) == ("function:demo.screen", "function:demo.navigateToTopic")]
+    assert how == ["callback"]
+    assert all(c == "heuristic" for s, d, c, _ in refs if s == "function:demo.screen")
+
+
 def test_coverage_reports_kotlin_heuristic():
     cov = [c for c in _S["fix_stats"]["coverage"]["languages"] if c["language"] == "kotlin"][0]
-    assert cov["status"] == "heuristic" and cov["reason"] and cov["files"] == 7
+    assert cov["status"] == "heuristic" and cov["reason"] and cov["files"] == 8
     assert not any(o.get("language") == "kotlin" for o in _S["fix_stats"]["coverage"].get("other", []))
 
 
