@@ -41,6 +41,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `bin/eslint.js` (`script_without_node` 1 → 0). node-express-boilerplate: its `bin/createNodejsApp.js` beside `src/` gains a node (+5 nodes, nothing
   lost); capacitor unchanged. A root `jsconfig.json` alone enables the TypeScript plugin.
 
+- `cg parity --structure` (#93): symbols still missing after the name rules are paired by shared localization keys,
+  string literals, endpoints, called member names and already-paired callees (IDF-weighted, mutual best, role and UI
+  checks), and word tail / head rename rules learned from the non-exact pairs are applied to the rest. Inferred matches
+  carry `score` / `evidence` or the rule and are listed apart; `--write-map` writes them as a `--map` file. Off by
+  default, so the existing output is unchanged. Bitwarden: 101 / 124 inferred matches per direction, Element X
+  Android → iOS 91. The false "missing" rate in random samples is not lower yet (see docs/parity.md).
+
 ### Fixed
 
 - Kotlin (#81): a suspend lambda used as an expression (`val b = suspend { 1 }`, `X to suspend { ... }`) no longer

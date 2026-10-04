@@ -96,9 +96,10 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `external [PATTERN] [--protocol P] [--source S] [--tls-off]`: external systems (databases, caches, brokers, mail
   relays, directories, file-transfer hosts, object stores, third-party HTTP hosts) with the code and connections
   using them, address source, credential source (location only) and TLS. See [external.md](external.md).
-- `parity --db SRC --against TGT [--map FILE] [--strip-prefix WORD]... [--no-fuzzy]`: port gap report, the types,
-  functions, enum cases and constants of SRC with no counterpart in TGT (an iOS app and its Android port), grouped by
-  folder, with the match confidence. See [parity.md](parity.md).
+- `parity --db SRC --against TGT [--map FILE] [--strip-prefix WORD]... [--no-fuzzy] [--structure [--no-learn]
+  [--write-map FILE]]`: port gap report, the types, functions, enum cases and constants of SRC with no counterpart in
+  TGT (an iOS app and its Android port), grouped by folder, with the match confidence; `--structure` also pairs
+  renamed symbols by what they use, with the evidence. See [parity.md](parity.md).
 - `tests SPEC [--no-paths]`: the tests that exercise a symbol, route or table, direct and transitive. See
   [channels-and-tests.md](channels-and-tests.md#tests).
 - `platforms [summary|divergence] [--target T] [--kind K]`: platform-specific code: the project's targets and where
@@ -725,8 +726,8 @@ options:
 
 ```
 usage: python -m codegraph.cli parity [-h] --db DB --against AGAINST [--map MAP] [--no-fuzzy]
-                 [--strip-prefix STRIP_PREFIX] [--json]
-                 [--max-items MAX_ITEMS]
+                 [--strip-prefix STRIP_PREFIX] [--structure] [--no-learn]
+                 [--write-map WRITE_MAP] [--json] [--max-items MAX_ITEMS]
 
 options:
   -h, --help            show this help message and exit
@@ -738,6 +739,14 @@ options:
                         a name prefix one side adds (`Vault` in
                         VaultAddEditState for AddEditState), ignored when
                         matching (repeatable)
+  --structure           also pair symbols whose names differ by what they use:
+                        shared strings, localization keys, endpoints and
+                        already-paired callees, plus rename rules learned from
+                        the pairs found (#93); matches carry their evidence
+  --no-learn            with --structure: no learned rename rules
+  --write-map WRITE_MAP
+                        with --structure: write the inferred pairs as a --map
+                        JSON file to review
   --json
   --max-items MAX_ITEMS
 ```

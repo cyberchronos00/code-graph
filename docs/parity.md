@@ -58,6 +58,38 @@ A `normalized` match is a match after these rewrites:
 A nested type (`State.FormField`) is looked for inside its owner's counterpart. Anywhere else it matches by exact
 name only, so a generic `Keys` or `FieldType` does not meet an unrelated type.
 
+## Matching by structure (`--structure`)
+
+Off by default: without it the output is the name matching above, unchanged. With `--structure`, the symbols still
+missing after the name rules are paired by what they use ([#93](https://github.com/cyberchronos00/code-graph/issues/93),
+`codegraph/parity_structure.py`). Each symbol's declaration span and outgoing edges give it a feature set:
+
+| feature | from |
+|---|---|
+| `l10n:<key>` | localization keys: `Localizations.creatingAccount`, `L10n.actionCancel`, `R.string.creating_account`, `BitwardenString.x`, `CommonStrings.x` (case and `_` folded, so the two platforms' keys meet) |
+| `str:<text>` | string literals of 5 to 80 characters: URL paths, header names, analytics events, accessibility ids |
+| `http:<path>` | HTTP endpoints it calls, path parameters folded |
+| `sym:<target>` | symbols it calls, instantiates or navigates to that are already paired (renamed to the target's name) |
+| `call:<name>` | the names of the members it calls (two words or more): `getDevices` on an `AuthService` and on an `AuthRepository` |
+| `w:<stem>` | the stemmed content words of its own name (role, UI and event words left out) |
+
+Two symbols pair when they share at least one use and either two uses or two name words, the IDF-weighted cosine of
+their features is at least 0.3, each is the other's best candidate and the runner-up scores below 0.8 of the best.
+The category must agree (a SwiftUI view type also meets a `@Composable` function), types and top-level symbols must
+agree on being UI code, and architecture roles must not clash (a `…Coordinator` does not meet a `…State`; `Processor`
+meets `ViewModel`, `Request` meets `Api`). Compose previews and preview providers are left out. Members of a type
+paired this way are then compared like those of a name match.
+
+Rename rules are learned from the non-exact type pairs: a word tail (`Coordinator` → `Navigator`) or head rewrite seen
+at least twice, and in two thirds of the pairs with that source tail, is applied to the remaining missing types and
+top-level symbols (confidence `learned`). The rules are listed in the text output and in `--json` `learned_rules`;
+`--no-learn` turns them off.
+
+Inferred matches have confidence `structure` (with `score` and `evidence`, the shared features with the most weight)
+or `learned` (with the rule), are listed in their own `== INFERRED` section and counted in `summary.inferred`, so they
+never read as name matches. `--write-map FILE` writes them as a `--map` file to review, edit and commit; fed back with
+`--map` they become `explicit` matches.
+
 ## Buckets
 
 - **missing:** no counterpart found. These are grouped by folder in the text output. A Gradle `src/main/kotlin/`
@@ -98,6 +130,24 @@ The real gaps in the samples were platform-only code and code the other side mod
   doesn't have.
 
 Read the list as "no counterpart with a related name". Use `--map` and `--strip-prefix` for systematic renames.
+
+### With `--structure` (October 2026)
+
+| pair | inferred matches | right in a hand-checked sample of 20 | sampled "missing" now matched |
+|---|---|---|---|
+| Bitwarden iOS → Android | 101 (of 3,048 missing) | 13 right, 2 wrong (15 of the 20 sampled are still inferred after tightening) | 0 / 20 |
+| Bitwarden Android → iOS | 124 (of 7,661) | 7 right, 4 wrong (11 of 20 still inferred) | 0 / 20 (1 wrong match) |
+| Element X Android → iOS | 91 (of 7,910) | about 16 / 20 | 0 / 20 |
+| Element X iOS → Android | 1 | — | — |
+
+The inferred matches are mostly right where the two apps share localization keys or accessibility ids (SwiftUI
+subviews ↔ composables, display-label helpers, request ↔ API types). The wrong ones share generic keys
+(`l10n:yes`, `l10n:phone`) or one string. They are a small part of "missing": a random sample of 20 missing symbols
+per direction had no match before or after, so the false "missing" rate is unchanged. In those samples the false
+ones are counterparts with different names that use nothing the other side uses in a way the graph sees
+(`ViewItemState` ↔ `VaultItemState`, `IdentityTokenResponseModel` ↔ `GetTokenResponseJson`,
+`LoginFormState` ↔ `LoginScreenViewStateBindings`). Element X iOS → Android puts 3,551 of 4,184 source symbols in
+`platform_only`, because the iOS symbols are tagged `ios` and the Android graph builds only `android`.
 
 `--json` returns `matched`, `missing`, `unknown` and `platform_only` lists (symbol, kind, file:line, folder group,
 target and confidence for a match, and `owner_matched` for a member of a matched type), plus `summary`.

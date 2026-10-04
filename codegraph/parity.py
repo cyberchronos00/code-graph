@@ -131,7 +131,7 @@ def load(db: str) -> dict:
         for nm, sym in members.pop(owner).items():
             top.setdefault(f"{owner}.{nm}", sym)
     return {"types": types, "members": members, "top": top, "err_files": err_files, "platforms": platforms, "db": db,
-            "support": support}
+            "support": support, "root": root, "lines_of": lines_of}
 
 
 def _first_word(name: str) -> str:
@@ -213,17 +213,20 @@ def _cat(sym: dict, is_type: bool) -> str:
 
 
 def parity(source_db: str, target_db: str, mapping: dict | None = None, fuzzy: bool = True,
-           strip_prefixes: list[str] | None = None) -> dict:
+           strip_prefixes: list[str] | None = None, structure: bool = False, learn: bool = True) -> dict:
     """See the module docstring. `strip_prefixes`: name prefixes one side adds (`Vault` in `VaultAddEditState`
-    for `AddEditState`), dropped before normalized matching on both sides."""
+    for `AddEditState`), dropped before normalized matching on both sides. `structure` (#93): after the name rules,
+    pair the rest by shared strings, localization keys, endpoints and paired callees, and (`learn`) apply rename
+    rules learned from the pairs found (codegraph/parity_structure.py); off, the output is the name matching alone."""
     _PREFIXES[:] = [p.lower() for p in strip_prefixes or ()]
     try:
-        return _parity(source_db, target_db, mapping, fuzzy)
+        return _parity(source_db, target_db, mapping, fuzzy, structure, learn)
     finally:
         _PREFIXES.clear()
 
 
-def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool) -> dict:
+def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool, structure: bool = False,
+            learn: bool = True) -> dict:
     S, T = load(source_db), load(target_db)
     mapping = mapping or {}
     exact_ix, norm_ix, comp_ix, all_short = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
@@ -338,26 +341,35 @@ def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool) -
     for o, ms in T["members"].items():
         for k in ms:
             t_member_owner[norm_member(k)].add(o)
-    for sfq, tfq in tmap.items():
-        tm = dict(T["members"].get(tfq, {}))
-        for nt in t_nested.get(tfq, ()):               # Kotlin sealed-class actions / events: `data object LockClick`
-            tm.setdefault(_short(nt), T["types"][nt])
-        tm_norm = {norm_member(k): k for k in tm}
-        for nm, sym in sorted(S["members"].get(sfq, {}).items()):
-            if nm in ("body", "init", "deinit", "hash", "description", "encode", "hashValue") or sym["override"]:
-                out["skipped"] += 1          # lifecycle / platform overrides (viewDidLoad, onCreate) and boilerplate
-                continue
-            if nm in tm:
-                out["matched"].append(_row(sym, f"{tfq}.{nm}", "exact"))
-            elif norm_member(nm) in tm_norm:
-                out["matched"].append(_row(sym, f"{tfq}.{tm_norm[norm_member(nm)]}", "normalized"))
-            elif len(_words(nm)) >= 3 and len(t_member_owner.get(norm_member(nm), ())) == 1:
-                # a specific name (three words or more) declared on exactly one other target type: moved there
-                o = next(iter(t_member_owner[norm_member(nm)]))
-                hit = next(k for k in T["members"][o] if norm_member(k) == norm_member(nm))
-                out["matched"].append(_row(sym, f"{o}.{hit}", "moved"))
-            else:
-                out[bucket(sym)].append(_row(sym, None, None, owner_match=tfq))
+
+    def match_members(pairs):
+        for sfq, tfq in pairs.items():
+            tm = dict(T["members"].get(tfq, {}))
+            for nt in t_nested.get(tfq, ()):               # Kotlin sealed-class actions / events: `data object LockClick`
+                tm.setdefault(_short(nt), T["types"][nt])
+            tm_norm = {norm_member(k): k for k in tm}
+            for nm, sym in sorted(S["members"].get(sfq, {}).items()):
+                if nm in ("body", "init", "deinit", "hash", "description", "encode", "hashValue") or sym["override"]:
+                    out["skipped"] += 1          # lifecycle / platform overrides (viewDidLoad, onCreate) and boilerplate
+                    continue
+                if nm in tm:
+                    out["matched"].append(_row(sym, f"{tfq}.{nm}", "exact"))
+                elif norm_member(nm) in tm_norm:
+                    out["matched"].append(_row(sym, f"{tfq}.{tm_norm[norm_member(nm)]}", "normalized"))
+                elif len(_words(nm)) >= 3 and len(t_member_owner.get(norm_member(nm), ())) == 1:
+                    # a specific name (three words or more) declared on exactly one other target type: moved there
+                    o = next(iter(t_member_owner[norm_member(nm)]))
+                    hit = next(k for k in T["members"][o] if norm_member(k) == norm_member(nm))
+                    out["matched"].append(_row(sym, f"{o}.{hit}", "moved"))
+                else:
+                    out[bucket(sym)].append(_row(sym, None, None, owner_match=tfq))
+
+    match_members(tmap)
+    if structure:
+        _structure(S, T, out, tmap, learn)
+        inferred = {r["symbol"]: r["target"] for r in out["matched"] if r.get("confidence") in ("structure", "learned")
+                    and r["symbol"] in S["types"] and r["target"] in T["types"]}
+        match_members(inferred)
     counts = defaultdict(int)
     for r in out["matched"]:
         counts[r["confidence"]] += 1
@@ -366,7 +378,30 @@ def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool) -
                       "skipped_test_support": S["support"],
                       "missing": len(out["missing"]), "unknown": len(out["unknown"]),
                       "platform_only": len(out["platform_only"])}
+    if structure:
+        out["summary"]["inferred"] = sum(1 for r in out["matched"] if r["confidence"] in ("structure", "learned"))
     return out
+
+
+def _structure(S, T, out, tmap, learn):
+    from . import parity_structure as PS
+    sym_of, cat_of, t_syms, t_cat = {}, {}, {}, {}
+    for G, syms, cats, owners in ((S, sym_of, cat_of, tmap), (T, t_syms, t_cat, None)):
+        for is_type, coll in ((True, G["types"]), (False, G["top"])):
+            for fq, sym in coll.items():
+                syms[fq], cats[fq] = sym, _cat(sym, is_type)
+        for o, ms in G["members"].items():
+            if owners is not None and o not in owners:
+                continue
+            for nm, sym in ms.items():
+                fq = f"{o}.{nm}"
+                syms[fq], cats[fq] = sym, _cat(sym, False)
+    out["learned_rules"] = PS.match(S, T, out, sym_of, cat_of, t_syms, t_cat, learn=learn)["rules"]
+
+
+def rename_map(res: dict) -> dict:
+    """The structure / learned matches as a `--map` file ({source: target}) to review and commit."""
+    return {r["symbol"]: r["target"] for r in res["matched"] if r.get("confidence") in ("structure", "learned")}
 
 
 def _row(sym, target, how, owner_match=None) -> dict:
@@ -414,6 +449,16 @@ def render(res: dict, max_items: int = 200) -> str:
                 lines.append(f"    {r['symbol']}  [{r['kind']}] {r['file']}:{r['line']}")
         if shown < s["missing"]:
             lines.append(f"  ... {s['missing'] - shown} more (--json for all)")
+    inferred = [r for r in res["matched"] if r.get("confidence") in ("structure", "learned")]
+    if inferred:
+        lines += ["", f"== INFERRED matches (not by name): {len(inferred)}"]
+        for r in inferred[:max_items]:
+            sc = f" {r['score']}" if "score" in r else ""
+            lines.append(f"    {r['symbol']} -> {r['target']}  [{r['confidence']}{sc}] {', '.join(r.get('evidence') or [])}")
+    for rule in res.get("learned_rules") or []:
+        if rule is (res.get("learned_rules") or [None])[0]:
+            lines += ["", "== LEARNED rename rules"]
+        lines.append(f"    {rule['at']}: {rule['from']!r} -> {rule['to']!r} (seen {rule['support']}x)")
     if res["unknown"]:
         lines += ["", f"== UNKNOWN (file parsed with syntax errors): {s['unknown']}"]
         lines += [f"    {r['symbol']}  {r['file']}:{r['line']}" for r in res["unknown"][:max_items]]

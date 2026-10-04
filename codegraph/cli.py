@@ -184,6 +184,11 @@ def main(argv=None):
     p.add_argument("--no-fuzzy", action="store_true", help="no fuzzy (shortened / plural word) name matches")
     p.add_argument("--strip-prefix", action="append", default=[], help="a name prefix one side adds (`Vault` in "
                    "VaultAddEditState for AddEditState), ignored when matching (repeatable)")
+    p.add_argument("--structure", action="store_true", help="also pair symbols whose names differ by what they use: "
+                   "shared strings, localization keys, endpoints and already-paired callees, plus rename rules learned "
+                   "from the pairs found (#93); matches carry their evidence")
+    p.add_argument("--no-learn", action="store_true", help="with --structure: no learned rename rules")
+    p.add_argument("--write-map", help="with --structure: write the inferred pairs as a --map JSON file to review")
     p.add_argument("--json", action="store_true"); p.add_argument("--max-items", type=int, default=200)
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
@@ -340,7 +345,11 @@ def main(argv=None):
     if a.cmd == "parity":
         from . import parity as PA
         mapping = json.loads(open(a.map, encoding="utf-8").read()) if a.map else None
-        res = PA.parity(a.db, a.against, mapping=mapping, fuzzy=not a.no_fuzzy, strip_prefixes=a.strip_prefix)
+        res = PA.parity(a.db, a.against, mapping=mapping, fuzzy=not a.no_fuzzy, strip_prefixes=a.strip_prefix,
+                        structure=a.structure, learn=not a.no_learn)
+        if a.write_map:
+            with open(a.write_map, "w", encoding="utf-8") as fh:
+                json.dump(PA.rename_map(res), fh, indent=1, sort_keys=True)
         print(json.dumps(res, indent=1, default=str) if a.json else PA.render(res, max_items=a.max_items))
         return
     if a.cmd == "serve":
