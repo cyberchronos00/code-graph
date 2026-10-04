@@ -771,6 +771,38 @@ const sourceFiles = program.getSourceFiles().filter(projectSf)
 // (`fetch: (o: Opts) => Promise<R>`) become member nodes too; method signatures always do
 const aliasTarget = sym => { for (let i = 0; sym && (sym.flags & ts.SymbolFlags.Alias) && i < 6; i++) { try { sym = checker.getAliasedSymbol(sym) } catch { return null } } return sym }
 const ifaceDecls = sym => ((sym && sym.declarations) || []).filter(d => ts.isInterfaceDeclaration(d) || (ts.isTypeAliasDeclaration(d) && ts.isTypeLiteralNode(d.type)))
+// project interfaces / object type aliases expected where `n` stands (a typed variable, a return value, an argument,
+// `satisfies`): one type, `| undefined` / `| null` aside
+const ctxType = n => {
+  let ct = null
+  try { ct = checker.getContextualType(n) } catch { }
+  if (!ct) return null
+  const ts0 = ct.isUnion() ? ct.types.filter(t => !(t.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null))) : [ct]
+  return ts0.length === 1 ? ts0[0] : null
+}
+const projIfaces = t => t ? ifaceDecls(t.aliasSymbol || t.getSymbol()).filter(d => projectSf(d.getSourceFile())) : []
+const ctxIfaces = n => projIfaces(ctxType(n))
+// a class passed as a value where a constructor of an interface is expected (`register(FollowingFeedAPI)` with
+// `register(c: new () => FeedAPI)`): those interfaces
+const ctorIfaces = n => {
+  const t = ctxType(n)
+  if (!t) return []
+  const out = []
+  for (const sig of t.getConstructSignatures()) { let rt = null; try { rt = checker.getReturnTypeOfSignature(sig) } catch { } for (const d of projIfaces(rt)) if (!out.includes(d)) out.push(d) }
+  return out
+}
+const fnMembers = o => o.properties.filter(p => ts.isMethodDeclaration(p) || (ts.isPropertyAssignment(p) && isFn(unwrap(p.initializer))))
+const VALUE_SLOT = n => n.parent && ((ts.isCallExpression(n.parent) || ts.isNewExpression(n.parent)) && (n.parent.arguments || []).includes(n)
+  || ts.isArrayLiteralExpression(n.parent) || (ts.isPropertyAssignment(n.parent) && n.parent.initializer === n)
+  || ts.isShorthandPropertyAssignment(n.parent) || (ts.isVariableDeclaration(n.parent) && n.parent.initializer === n)
+  || ts.isReturnStatement(n.parent))
+const classOfValue = n => {
+  if (!ts.isIdentifier(n) || !VALUE_SLOT(n)) return null
+  let sym = null
+  try { sym = ts.isShorthandPropertyAssignment(n.parent) ? checker.getShorthandAssignmentValueSymbol(n.parent) : checker.getSymbolAtLocation(n) } catch { }
+  sym = aliasTarget(sym)
+  return ((sym && sym.declarations) || []).find(x => ts.isClassDeclaration(x) && projectSf(x.getSourceFile())) || null
+}
 const implementedIfaces = new Set()
 {
   const addIface = (d, depth = 0) => {
@@ -789,10 +821,11 @@ const implementedIfaces = new Set()
         try { sym = aliasTarget(checker.getSymbolAtLocation(t.expression)) } catch { }
         for (const d of ifaceDecls(sym)) addIface(d)
       }
-    }
+    } else if (ts.isObjectLiteralExpression(n) && fnMembers(n).length) for (const d of ctxIfaces(n)) addIface(d)   // `const api: FeedAPI = { fetch() {..} }`
+    else if (classOfValue(n)) for (const d of ctorIfaces(n)) addIface(d)
     ts.forEachChild(n, walk)
   }
-  for (const sf of sourceFiles) if (sf.text.includes('implements')) walk(sf)
+  for (const sf of sourceFiles) if (!realFile(sf).endsWith('.vue')) walk(sf)
 }
 const isFnType = t => t && (ts.isFunctionTypeNode(t) || (ts.isParenthesizedTypeNode(t) && isFnType(t.type)))
 // members of an interface / object type alias: `method:<file>#Iface.member` (attrs.signature; no body). A call on an
@@ -1629,6 +1662,36 @@ const callSites = []
     }
     walk(sf)
   }
+  // object literals where an interface is expected (`const api: FeedAPI = { fetch() {..} }`, a factory returning one,
+  // an argument, `satisfies`): their function members implement the interface's; a class passed as a value where a
+  // constructor of an interface is expected (`register(FollowingFeedAPI)`): structurally, as for `new X()`
+  let nol = 0
+  for (const sf of sourceFiles) {
+    if (realFile(sf).endsWith('.vue')) continue
+    const r = rel(realFile(sf))
+    const done = new Set()
+    const walk = n => {
+      if (ts.isObjectLiteralExpression(n)) {
+        const fm = fnMembers(n).filter(p => declId.has(p))
+        if (fm.length) for (const d of ctxIfaces(n)) for (const p of fm) {
+          const nm = memberName(p), im = nm && ifaceMember(d, nm)
+          if (im && im !== declId.get(p)) { addEdge(im, declId.get(p), 'IMPLEMENTED_BY', r, lineOf(p, sf), 'exact', { via: ['object_literal'] }); nol++ }
+        }
+      } else {
+        const cd = classOfValue(n)
+        if (cd && declId.has(cd)) for (const d of ctorIfaces(n)) {
+          const key = `${declId.get(cd)}|${declId.get(d)}`
+          if (done.has(key) || ownIfaces(cd).includes(d)) continue
+          done.add(key)
+          const csf = cd.getSourceFile()
+          no += implementsIfaces(cd, rel(realFile(csf)), csf, [[d, false]], 'resolved', { via: ['structural'], at: `${r}:${lineOf(n, sf)}` }, () => false)
+        }
+      }
+      ts.forEachChild(n, walk)
+    }
+    walk(sf)
+  }
+  if (nol) { stats.object_literal_impl_edges = nol; no += nol }
   if (nh) stats.class_heritage_edges = nh
   if (no) stats.override_edges = no
 }

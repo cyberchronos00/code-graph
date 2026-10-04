@@ -431,3 +431,61 @@ def test_php_inherited_calls_carry_the_receiver(tmp_path):
     res = Q.impact(GraphStore(str(db)), "A::shared")
     names = {c["fqn"] for c in res["callers"]}
     assert "App\\Client::useA" in names and "App\\Client::useB" not in names
+
+
+TS_OBJ = {
+    "tsconfig.json": '{"compilerOptions": {"strict": true, "target": "es2020"}, "include": ["src"]}',
+    "package.json": '{"name": "feeds", "devDependencies": {"typescript": "5"}}',
+    "src/api.ts": '''
+        export interface FeedAPI {
+          fetch(cursor: string): Promise<string[]>
+          label: (x: number) => string
+        }
+        export interface Other {
+          fetch(cursor: string): Promise<string[]>
+        }
+        export const discover: FeedAPI = {
+          async fetch(cursor) { return [cursor] },
+          label: x => String(x),
+        }
+        export function makeFeed(n: number): FeedAPI {
+          return {
+            fetch: async c => [c, String(n)],
+            label(x) { return `${x}` },
+          }
+        }
+        export const sat = {
+          async fetch(c: string) { return [c] },
+          label: (x: number) => '',
+        } satisfies FeedAPI
+        export const either: FeedAPI | Other = { async fetch(c: string) { return [c] }, label: () => '' }
+        export const loose = { async fetch(c: string) { return [c] } }
+        export class Following {
+          async fetch(cursor: string) { return [cursor] }
+          label = (x: number) => ''
+        }
+        export function register(ctor: new () => FeedAPI) { return new ctor() }
+        register(Following)
+        export function load(api: FeedAPI) { return api.fetch('a') + api.label(1) }
+    ''',
+}
+
+
+@needs_ts
+def test_ts_object_literals_and_class_values_implement_interfaces(tmp_path):
+    st, _ = build(tmp_path, TS_OBJ, "obj")
+    A = "src/api.ts#"
+    impl = edges(st, "IMPLEMENTED_BY")
+    # a typed variable, a factory's return value, `satisfies`: the function members implement the interface's,
+    # function-typed properties (`label`) included
+    for obj in ("discover", "makeFeed", "sat"):
+        for m in ("fetch", "label"):
+            assert impl[(f"method:{A}FeedAPI.{m}", f"function:{A}{obj}.{m}")] == ("exact", {"via": ["object_literal"]})
+    # a class passed where `new () => FeedAPI` is expected: structural
+    conf, a = impl[(f"method:{A}FeedAPI.fetch", f"method:{A}Following.fetch")]
+    assert conf == "resolved" and a == {"via": ["structural"], "at": "src/api.ts:29"}
+    # a union of two interfaces, an untyped literal: nothing
+    assert not [k for k in impl if "either." in k[1] or "loose." in k[1] or "Other." in k[0]]
+    imp = Q.impact(st, "makeFeed.fetch")
+    assert [o["fqn"] for o in imp["overrides"]] == ["FeedAPI.fetch"]
+    assert [c["id"] for c in imp["callers"]] == [f"function:{A}load"]

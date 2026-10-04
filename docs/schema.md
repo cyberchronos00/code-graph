@@ -89,7 +89,8 @@ READS_COLUMN✓, WRITES_COLUMN✓, MENTIONS_COLUMN✓ (heuristic: a literal equa
 USES_CONNECTION✓, REGISTERS_CONNECTION✓, READS_CONFIG✓, WRITES_CONFIG✓, READS_ENV✓, REFERS_TO✓ (config value → connection), CONFIGURED_BY✓, CONFIG_CONTAINS✓,
 TS: EXTENDS / IMPLEMENTS (class → project class or interface), OVERRIDDEN_BY / IMPLEMENTED_BY (base class,
 `implements`-ed class or interface member → override; interface members are `method` nodes with `attrs.signature`;
-`via: structural` for a class used as an interface without `implements`), CALLS `attrs.recv` (the receiver's project
+`via: structural` for a class used as an interface without `implements`, `via: object_literal` for the function
+members of an object literal typed as the interface), CALLS `attrs.recv` (the receiver's project
 classes when the call lands on an inherited method; Python, Kotlin, Swift, Dart and PHP too, #62), IMPORTS, RENDERS✓ (template component usage), USES_COMPOSABLE✓, USES_STORE✓, HTTP_CALLS✓ (→ http endpoint), MATCHES_ROUTE✓
 (http endpoint → backend route, combined DB only), USES_LAYOUT, USES_I18N, REFERENCES_TYPE.
 Native: USES_TYPE✓, ACCESSES_FIELD✓ (field or enum variant), USES_VALUE✓ (const/static/global/object macro; in the

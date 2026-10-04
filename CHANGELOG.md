@@ -10,6 +10,15 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- TypeScript object literals as interface implementations (#96): an object literal where a project interface or
+  object type alias is expected (a typed variable, a factory's return value, an argument, `satisfies`) links its
+  function members to the interface's with `IMPLEMENTED_BY` (`exact`, `via: object_literal`), and the interface's
+  function-typed properties become member nodes, so calls through them get a target. A class passed as a value
+  where a constructor of the interface is expected (`register(Following)`) gets structural `IMPLEMENTED_BY` as for
+  `new X()`. social-app IMPLEMENTED_BY 34 -> 111 (+36 members, +27 calls, +39 test calls); mattermost-mobile
+  0 -> 46 (the keyboard state machine's `guard` / `action` transitions, the resume-gate strategies; +105 test
+  calls); immich server 5 -> 9. No edges lost (8 REFERENCES_TYPE / 1 TEST_USES moved from interfaces to their
+  members).
 - Swift availability against the deployment target (#100): the lowest deployment target per OS is read from
   Xcode build settings (`.pbxproj`, `.xcconfig`, XcodeGen YAML), XcodeGen `deploymentTarget:` and `Package.swift`
   `platforms:` (index stats `deployment_targets`). An `@available` / `#available` requirement it already meets always
