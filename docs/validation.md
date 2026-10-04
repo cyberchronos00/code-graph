@@ -1020,3 +1020,25 @@ A jsconfig-configured index gives the same edges; the pattern is tracked in #138
 `tests/plainjs_fixture`: a CommonJS app (functions, `require` calls, a mocha test, an amqplib endpoint; its
 `webpack.config.js` is ignored), an ESM library (`"type": "module"`, `exports`), and a Python project with a tooling-only
 `package.json`, which gets no JS program.
+
+## Socket.IO in JS / TS (#32 part 1)
+
+| Project | Endpoints | Sends / receivers | Linked | Notes |
+|---|---|---|---|---|
+| excalidraw-room 03ff435 + excalidraw ed10ac7 | 11 (after `cg link`) | 11 / 10 | 10 of 11 | Room server and collab client. `WS_EVENTS.*` constants and the `volatile ? A : B` event pair resolve; `broadcast-unfollow` really has no listener (`no_receiver`) |
+| immich c5e06dc | 21 | 31 / 17 | 12 | 30 of the sends go through the `clientSend` / `clientBroadcast` / `serverSend` wrappers and are resolved at their callers. The web listeners are chained (`websocket.on(..).on(..)`) or come through `$lib/stores/websocket`. Most unmatched events are only listened to by the Dart mobile app (part 3) |
+| outline 478e812 | 54 | 11 / 54 | 11 | The server sends most events as `emit(event.name, ..)`, which is not a literal (left out) |
+| open-webui 8bd8b4f | 19 | 34 / 16 | 6 | The python-socketio server is created under `if WEBSOCKET_MANAGER == 'redis'` and was not found before. It now pairs with the TS collaboration client. The rest of the client lives in `.svelte` files, which are not scanned |
+| nest 35142c3 | 10 (tests only) | 18 TEST_CALLS | n/a | The `net` / TCP sockets of `@nestjs/microservices` and `httpServer.on('connection')` produce nothing |
+| socket.io 1eaa582 | 19 (tests only) | 19 TEST_CALLS | n/a | Only the test suites use the public API |
+
+Unchanged (same nodes and edges): ws, express, request, node-gyp, mocha, pino, nodemailer, amqplib, kafkajs, jayson,
+commander.js, electron-fiddle, nestjs-boilerplate, node-express-boilerplate, zigbee2mqtt, mcp-servers, elk,
+grpc-node, opentelemetry-demo, create-t3-app, saleor-dashboard, mattermost-mobile, social-app, cal.com and
+full-stack-fastapi-template. No edges were removed anywhere. A random 20 of the 154 new JS / TS edges in the five
+projects above were checked by hand against the source, and all 20 were correct. They include multi-line
+`socket.on(\n "event", ..)` calls, a `WS_EVENTS.USER_FOLLOW_CHANGE` constant, wrapper sends with their room
+argument, and immich's server-to-server `server.on('AppRestart')`. `tests/test_realtime.py` covers
+`tests/realtime_fixture`: a server with a namespace, middleware, rooms, an ack, a template event, an emit wrapper and
+a `net` socket that is not Socket.IO; a socket.io-client app with chained listeners; and a Nest gateway with a guard.
+Both pairs are linked with `cg link`, and a python-socketio server created under a module-level `if` is also covered.

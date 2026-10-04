@@ -27,6 +27,16 @@ LIFECYCLE = {"connect", "disconnect", "connect_error"}
 LIB = "python-socketio"
 
 
+def _module_level(body):
+    """Module-level statements, including those under `if` / `try` / `with` blocks (`if REDIS: sio = AsyncServer(..)`)."""
+    for st in body:
+        yield st
+        if isinstance(st, (ast.If, ast.Try, ast.With)):
+            for blk in (getattr(st, "body", []), getattr(st, "orelse", []), getattr(st, "finalbody", []),
+                        *[h.body for h in getattr(st, "handlers", [])]):
+                yield from _module_level(blk)
+
+
 def _full(m, dn: str | None) -> str | None:
     if not dn:
         return None
@@ -89,7 +99,7 @@ def index(prog, b, walk_body) -> dict:
         return {}
     objs: dict[tuple[str, str], str] = {}
     for m in mods:
-        for st in m.tree.body:
+        for st in _module_level(m.tree.body):
             if isinstance(st, (ast.Assign, ast.AnnAssign)) and isinstance(st.value, ast.Call):
                 full = _full(m, _dn(st.value.func))
                 role = "server" if full in SERVER else "client" if full in CLIENT else None

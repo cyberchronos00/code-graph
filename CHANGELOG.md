@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Socket.IO in JS / TS (#32, part 1): `endpoint:socketio:<namespace>#<event>` from socket.io servers (`new Server`,
+  `io.of('/ns')`, connection callbacks, `X.use(mw)` guards), socket.io-client (`io(url)`, `Manager.socket`), rooms and
+  broadcasts, `emitWithAck` / `timeout().emit` requests, chained listeners and emit wrappers resolved at their call
+  sites, plus a Socket.IO endpoint for every Nest `@SubscribeMessage` handler on a socket.io gateway. A TS client now
+  links with a Node, Nest or python-socketio server.
+
 - Plain JavaScript projects without `tsconfig.json` / `jsconfig.json` are indexed (#136): JS module files outside
   tests, docs, examples, assets and build output make their top directories source dirs of a synthesized `allowJs`
   program (`plugins.typescript.program.synthesized`). A Python / PHP / Rust / Go root needs a `package.json`
@@ -54,6 +60,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
   Plain Node GraphQL servers (apollo-server, @apollo/server, graphql-yoga, mercurius, ...) without a tsconfig are
   now indexed like the plain Node network programs of #39. On saleor 446 of the 448 schema root fields get a
   resolver; on saleor-dashboard 629 root-field requests come from the callers of 672 generated hooks.
+
+### Fixed
+
+- python-socketio servers created under a module-level `if` / `try` (`if REDIS_URL: sio = AsyncServer(..)`) were
+  not found (#32).
 
 ## [0.11.0] - 2026-10-04
 

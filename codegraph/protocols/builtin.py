@@ -74,7 +74,7 @@ register(Protocol("redis-pubsub", "tcp", "Redis PUBLISH -> SUBSCRIBE / PSUBSCRIB
 register(Protocol("redis-stream", "tcp", "Redis stream key: XADD -> XREAD / XREADGROUP (consumer group)", fanout=True,
                   ports=(6379,), schemes=("redis", "rediss")))
 register(Protocol("socketio", "tcp", "Socket.IO event (<namespace>#<event>; emit -> on, both directions; python-socketio "
-                  "server and client)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True,
+                  "and JS / TS socket.io servers, socket.io-client and Nest gateways)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True,
                   directional=True))
 
 # ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)

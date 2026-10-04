@@ -146,9 +146,13 @@ def test_nest_messages_and_bull_jobs_adapted(nest_db):
     msgs = protocols(st, protocol="nest-rpc")["endpoints"] + protocols(st, protocol="nest-ws")["endpoints"]
     assert msgs and all(m["id"].startswith("message:") for m in msgs)
     assert before == {r[0] for r in st.q("SELECT id FROM nodes WHERE kind IN ('message','job')")}
-    # no new nodes for adapted kinds, except the job / queue twins of Bull processors (#36), merged in the view
+    # no new nodes for adapted kinds, except the job / queue twins of Bull processors (#36), merged in the view, and
+    # the Socket.IO endpoints of ws gateway handlers (#32), which a socket.io-client links to
     eps = list(st.q("SELECT id, attrs FROM nodes WHERE kind='endpoint'"))
-    assert eps and all(json.loads(r["attrs"])["protocol"] in ("job", "queue") for r in eps)
+    assert eps and all(json.loads(r["attrs"])["protocol"] in ("job", "queue", "socketio") for r in eps)
+    sio = [r["id"] for r in eps if json.loads(r["attrs"])["protocol"] == "socketio"]
+    assert sio == ["endpoint:socketio:/inventory#watch"]
+    assert [m["name"] for m in protocols(st, protocol="nest-ws")["endpoints"]] == ["inventory:watch"]
     assert all(j["id"].startswith("job:") for j in protocols(st, protocol="job")["endpoints"])
     r = cli("protocols", "--db", str(nest_db))
     assert r.returncode == 0 and "bull" in r.stdout and "nest-rpc" in r.stdout

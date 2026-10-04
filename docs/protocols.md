@@ -148,6 +148,29 @@ used in their module or imported by name:
 `cg path "route:POST /orders" table:orders` runs route -> handler -> `SENDS_TO endpoint:socketio:/orders#order:created`
 -> `RECEIVED_BY` -> `WRITES_TABLE`.
 
+### Socket.IO in JS / TS (#32 part 1)
+
+`codegraph/realtime_events.py` writes the same `endpoint:socketio:<namespace>#<event>` nodes for Node servers, browser /
+Node clients and Nest gateways, so a TS client links with a Python or Node server. A file's process (`server` or
+`client`, recorded as `process`) comes from its `socket.io` / `socket.io-client` imports, or else from the nearest
+`package.json` dependencies.
+
+- objects: `new Server(..)`, `require('socket.io')(..)` and `io.of('/ns')` (server); `io(url)`, `io.connect(..)`
+  and `new Manager(..).socket('/ns')` (client, namespace from the URL path, `/` for a bare origin); Nest
+  `@WebSocketServer()` fields (the gateway's namespace); parameters and fields typed `Socket` / `Namespace` /
+  `Server`; the socket parameter of `X.on('connection', (socket) => ..)` (X's namespace).
+- send: `emit` (role `emit`), `emitWithAck` and `timeout(ms).emit` (role `request`), `send` (event `message`).
+  `.to(room)` / `.in(room)` / `.except(room)` / `.broadcast` are recorded as `room` / `broadcast`. A ternary event
+  name gives both events (heuristic).
+- receive: `on` / `once`, including chained `socket.on('a', ..).on('b', ..)`. `connect`, `disconnect`,
+  `connection` and the other reserved events are not endpoints.
+- wrappers: a function that emits its own parameter (`clientSend(event, room, ..)`) is resolved at its call sites,
+  through CALLS edges or, when there are none, through calls on a receiver named after its class (heuristic).
+- guards: `X.use(mw)` middleware is recorded on the server receivers of X's namespace.
+- Nest: each `message:ws:` handler of a gateway gets an `endpoint:socketio:<ns>#<pattern>` RECEIVED_BY with its
+  guards (`via` = the message node), unless the project uses `@nestjs/platform-ws` without
+  `@nestjs/platform-socket.io`.
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function
@@ -511,7 +534,7 @@ broker nodes (#40) on the endpoints, the repository's own wrapper classes (their
 
 ## Not covered yet
 
-- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (#32, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
+- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (#32, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in Dart / Swift / Kotlin and in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own
   endpoints (#32).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.

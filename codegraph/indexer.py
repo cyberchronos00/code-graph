@@ -264,6 +264,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (bk := apply_brokers(project, builder)):
         bk["seconds"] = round(time.time() - t_bk, 2)
         stats["brokers"] = bk
+    # realtime events (#32): Socket.IO in JS / TS (servers, socket.io-client, Nest gateways) -> endpoint:socketio
+    from .realtime_events import apply as apply_realtime
+    t_rt = time.time()
+    if (rt := apply_realtime(project, builder)):
+        rt["seconds"] = round(time.time() - t_rt, 2)
+        stats["realtime"] = rt
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)
