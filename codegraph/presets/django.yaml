@@ -23,3 +23,8 @@ access:
   mixins: [LoginRequiredMixin, PermissionRequiredMixin, UserPassesTestMixin, AccessMixin]
   name_pattern: '(auth|login|permission|staff|superuser|token|jwt)'
   opt_out_pattern: 'not_required|exempt|optional|allow_any'
+# A decorator records (model, view class, sub-path, detail flag). include(<expander>(app_label, model_name))
+# mounts those views. Names only: any project that uses these names is picked up.
+view_registry:
+  decorators: [register_model_view]
+  expanders: [get_model_urls]

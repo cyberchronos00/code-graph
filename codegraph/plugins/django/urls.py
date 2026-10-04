@@ -1,5 +1,6 @@
 """URL resolution: Django urlconfs (path/re_path/url/include, namespaces, nested includes), DRF routers
-(register/@action, trailing_slash, nested routers) and django-ninja (NinjaAPI/Router, add_router chains,
+(register/@action, trailing_slash, nested routers), model view registries (a decorator plus
+include(get_model_urls(...))) and django-ninja (NinjaAPI/Router, add_router chains,
 @router.<verb>, auth inheritance). Produces route dicts; plugin.py turns them into nodes/edges.
 
 Route dict: {method, uri ('/a/{id}/'), file, line, handler (FuncInfo|ClassInfo|None), view (text),
@@ -10,6 +11,7 @@ from __future__ import annotations
 import ast
 import re
 
+from ... import presets
 from ...core.model import EXACT, HEURISTIC, RESOLVED
 from ..python.plugin import ClassInfo, Ctx, FuncInfo, ModInfo, PyProgram, ann_text, const_str, dotted, kwarg
 
@@ -373,7 +375,14 @@ class UrlResolver:
         if t and t[0] == "var":
             self.walk(t[1], prefix, ns2, len(chain), chain, var=t[2])
             return
+        if isinstance(arg, ast.Call) and self._call_name(arg) in ModelViewRegistry.EXPANDERS:
+            self.p.viewreg.add_mount(m, arg, prefix, ns2, chain, conds, where, self.unresolved)
+            return
         self.unresolved.append({**where, "reason": f"include({ann_text(arg)}) unresolved"})
+
+    @staticmethod
+    def _call_name(call: ast.Call) -> str:
+        return (dotted(call.func) or "").split(".")[-1]
 
 
 # --------------------------------------------------------------------------------------- DRF routers
@@ -457,6 +466,130 @@ class DrfRouters:
         for k2 in r.get("extends", []):
             out += self.regs(k2, depth + 1)
         return out
+
+
+# ------------------------------------------------------------------------------- model view registries
+
+class ModelViewRegistry:
+    """`@register_model_view(Model, name, path=..., detail=...)` collected by name, then expanded where
+    `include(get_model_urls(app_label, model_name, detail=...))` mounts that model.
+
+    The decorator and expander names come from the Django preset (`view_registry`), so the same shape in
+    another project is picked up without a NetBox-specific path. A call whose model, path or app/model
+    arguments are not literals is recorded on the resolver's unresolved list.
+    """
+
+    DECORATORS = tuple(presets.values("django", "view_registry", "decorators", default=["register_model_view"]))
+    EXPANDERS = tuple(presets.values("django", "view_registry", "expanders", default=["get_model_urls"]))
+
+    def __init__(self, prog: PyProgram, models):
+        self.prog = prog
+        self.models = models
+        self.regs: dict[tuple, list] = {}
+        self.mounts: list = []
+        self.unresolved: list = []
+        self._collect()
+
+    def _collect(self):
+        prog = self.prog
+        owners = list(prog.classes.values()) + [f for f in prog.funcs.values() if f.kind != "method"]
+        for owner in owners:
+            for d in owner.decorators:
+                if not isinstance(d, ast.Call) or (dotted(d.func) or "").split(".")[-1] not in self.DECORATORS:
+                    continue
+                self._record(owner, d, owner.module)
+        # the call form `register_model_view(Model, 'x')(SomeView)` (or a dotted-path string), e.g. in a loop that
+        # registers one view for every model with a feature mixin
+        names = set(self.DECORATORS)
+        for m in prog.modules.values():
+            # only modules that import or define the decorator (an import inside a function counts)
+            if m.tree is None or not (names & set(m.funcs) or any(
+                    (a.asname or a.name).split(".")[-1] in names or a.name.split(".")[-1] in names
+                    for imp in m.import_nodes for a in imp.names)):
+                continue
+            for node in ast.walk(m.tree):
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Call) and len(node.args) == 1
+                        and (dotted(node.func.func) or "").split(".")[-1] in self.DECORATORS):
+                    continue
+                self._record(self._view_target(m, node.args[0]), node.func, m)
+
+    def _view_target(self, m: ModInfo, e):
+        if isinstance(e, ast.Constant) and isinstance(e.value, str) and "." in e.value:
+            mod, _, name = e.value.rpartition(".")
+            t = self.prog.lookup(mod, name)
+        else:
+            t = self.prog.infer(e, Ctx(m, None, None))
+        return t[1] if t and t[0] in ("type", "func") else None
+
+    def _record(self, owner, call: ast.Call, m: ModInfo):
+        where = {"file": m.file, "line": call.lineno}
+        fn = (dotted(call.func) or self.DECORATORS[0]).split(".")[-1]
+        model_e = call.args[0] if call.args else kwarg(call, "model")
+        if model_e is None:
+            self.unresolved.append({**where, "reason": f"{fn}() unresolved"})
+            return
+        if owner is None:
+            self.unresolved.append({**where, "reason": f"{fn}({ann_text(model_e)}) view unresolved"})
+            return
+        t = self.prog.infer(model_e, Ctx(m, None, None))
+        if not t or t[0] != "type":
+            self.unresolved.append({**where, "reason": f"{(dotted(call.func) or 'register_model_view').split('.')[-1]}({ann_text(model_e)}) unresolved"})
+            return
+        label = self.models.app_label(t[1])
+        model_name = t[1].name.lower()
+        reg_name, path, detail, reason = self._flags(call)
+        if reason:
+            self.unresolved.append({**where, "reason": reason})
+            return
+        self.regs.setdefault((label, model_name), []).append({
+            "name": reg_name, "path": path, "detail": detail, "target": owner,
+            "file": where["file"], "line": where["line"],
+        })
+
+    def _flags(self, call: ast.Call):
+        """(url name, sub-path, detail, reason). path defaults to the name, as the NetBox helper does."""
+        name_n = call.args[1] if len(call.args) > 1 else kwarg(call, "name")
+        if name_n is None:
+            reg_name = ""
+        else:
+            reg_name = const_str(name_n)
+            if reg_name is None:
+                return None, None, None, f"{(dotted(call.func) or 'register_model_view').split('.')[-1]}(name={ann_text(name_n)}) unresolved"
+        path_n = call.args[2] if len(call.args) > 2 else kwarg(call, "path")
+        if path_n is None or (isinstance(path_n, ast.Constant) and path_n.value is None):
+            path = reg_name
+        else:
+            path = const_str(path_n)
+            if path is None:
+                return None, None, None, f"{(dotted(call.func) or 'register_model_view').split('.')[-1]}(path={ann_text(path_n)}) unresolved"
+        detail_n = call.args[3] if len(call.args) > 3 else kwarg(call, "detail")
+        if detail_n is None:
+            detail = True
+        elif isinstance(detail_n, ast.Constant) and isinstance(detail_n.value, bool):
+            detail = detail_n.value
+        else:
+            return None, None, None, f"{(dotted(call.func) or 'register_model_view').split('.')[-1]}(detail={ann_text(detail_n)}) unresolved"
+        return reg_name, path, detail, None
+
+    def add_mount(self, m: ModInfo, call: ast.Call, prefix, ns, chain, conds, where, unresolved: list):
+        app = const_str(call.args[0]) if call.args else const_str(kwarg(call, "app_label"))
+        model = const_str(call.args[1]) if len(call.args) > 1 else const_str(kwarg(call, "model_name"))
+        detail_n = call.args[2] if len(call.args) > 2 else kwarg(call, "detail")
+        if detail_n is None:
+            detail = True
+        elif isinstance(detail_n, ast.Constant) and isinstance(detail_n.value, bool):
+            detail = detail_n.value
+        else:
+            unresolved.append({**where, "reason": f"include({ann_text(call)}) unresolved"})
+            return
+        if not app or model is None:
+            unresolved.append({**where, "reason": f"include({ann_text(call)}) unresolved"})
+            return
+        self.mounts.append({"app": app, "model": model.lower(), "detail": detail, "prefix": prefix,
+                            "ns": ns, "chain": chain, "conds": conds, "file": where["file"], "line": where["line"]})
+
+    def matching(self, app: str, model: str, detail: bool) -> list:
+        return [r for r in self.regs.get((app, model), []) if r["detail"] is detail]
 
 
 # --------------------------------------------------------------------------------------- django-ninja

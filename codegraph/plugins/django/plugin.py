@@ -10,7 +10,8 @@ contribute:
     READS/WRITES_TABLE and READS/WRITES_COLUMN edges;
   * urlconfs from ROOT_URLCONF (or every unincluded urls module): path/re_path/url/include (nested, namespaces,
     i18n_patterns), function views (require_http_methods / api_view), class-based views (method handlers,
-    generic views), DRF routers (ViewSets, @action, trailing_slash, nested routers), django-ninja (NinjaAPI,
+    generic views), DRF routers (ViewSets, @action, trailing_slash, nested routers), model view registries
+    (register_model_view / include(get_model_urls(...))), django-ninja (NinjaAPI,
     Router, add_router chains, @router.<verb>, auth inheritance, request/response schemas), ninja-extra
     controllers; route nodes are http_route entry points with ROUTES_TO edges;
   * wire schemas (ninja/pydantic Schema, DRF serializers) as class attrs.schema_fields, USES_SCHEMA edges;
@@ -32,7 +33,7 @@ from ...core.plugin import FrameworkPlugin, GraphBuilder, Project
 from ..python.plugin import ClassInfo, Ctx, FuncInfo, ModInfo, PyProgram, ann_text, const_str, dotted, kwarg, walk_body
 from .models import Models, emit_models, orm_edges
 from .schemas import Schemas
-from .urls import ACTION_ROUTES, GENERIC_METHODS, HTTP_METHODS, VIEWSET_ACTIONS, DrfRouters, Ninja, UrlResolver, regex_to_template
+from .urls import ACTION_ROUTES, GENERIC_METHODS, HTTP_METHODS, VIEWSET_ACTIONS, DrfRouters, ModelViewRegistry, Ninja, UrlResolver, regex_to_template
 from . import extras
 
 # view-level access checks recorded on route nodes (attrs.access); `routes` / `search` read them
@@ -98,6 +99,7 @@ class DjangoPlugin(FrameworkPlugin):
         st["models"] = emit_models(self.models, b)
         st["settings"] = extras.settings(self)
         self.drf = DrfRouters(prog)
+        self.viewreg = ModelViewRegistry(prog, self.models)
         self.ninja = Ninja(prog)
         self.urls = UrlResolver(prog, self)
         self.route_list = self.urls.routes
@@ -111,6 +113,7 @@ class DjangoPlugin(FrameworkPlugin):
                     orphan_roots.append(m.name)
         self.ninja_routes()
         self.drf_routes()
+        self.registry_routes()
         self.channels()
         n_routes = self.emit_routes()
         ops = {"orm_reads": 0, "orm_writes": 0}
@@ -126,6 +129,7 @@ class DjangoPlugin(FrameworkPlugin):
         st["schemas"] = self.emit_schemas()
         st["routes"] = n_routes
         st["root_urlconf"] = [m.name for m in roots]
+        self.urls.unresolved.extend(self.viewreg.unresolved)
         st["urlconf_unresolved"] = self.urls.unresolved[:30]
         prog.url_unresolved = self.urls.unresolved  # read by the blind-spot detectors (codegraph/blindspots.py)
         st["urlconf_unincluded"] = orphan_roots[:30]
@@ -133,6 +137,7 @@ class DjangoPlugin(FrameworkPlugin):
                        "routers": sum(1 for v in self.ninja.objs.values() if v["kind"] == "router"),
                        "operations": len(self.ninja.ops), "unmounted_ops": self._unmounted_ops}
         st["drf"] = {"routers": len(self.drf.routers), "registrations": sum(len(r["regs"]) for r in self.drf.routers.values())}
+        st["view_registry"] = {"registrations": sum(len(v) for v in self.viewreg.regs.values()), "mounts": len(self.viewreg.mounts)}
         return st
 
     def setting_str(self, key: str) -> str | None:
@@ -266,6 +271,33 @@ class DjangoPlugin(FrameworkPlugin):
                 if n not in seen:
                     seen.add(n)
                     yield f
+
+    def registry_routes(self):
+        """Expand model-view registry mounts into the same class-based routes path() would emit. A (verb, path) that a
+        handwritten path() (or an earlier mount) already routes is kept as it was."""
+        start = len(self.route_list)
+        seen = {(r["method"], re.sub(r"/{2,}", "/", r["uri"])) for r in self.route_list}
+        for mt in self.viewreg.mounts:
+            for reg in self.viewreg.matching(mt["app"], mt["model"], mt["detail"]):
+                sub = f"{reg['path']}/" if reg["path"] else ""
+                full = mt["prefix"] + sub
+                name = f"{mt['model']}_{reg['name']}" if reg["name"] else mt["model"]
+                where = {"file": reg["file"], "line": reg["line"]}
+                chain = list(mt["chain"])
+                if not chain or chain[-1] != f"{mt['file']}:{mt['line']}":
+                    chain.append(f"{mt['file']}:{mt['line']}")
+                target = reg["target"]
+                if isinstance(target, FuncInfo):
+                    self.emit_fbv(target, full, where, name, mt["ns"], chain, mt["conds"], True, None)
+                else:
+                    self.emit_cbv(("type", target), None, full, where, name, mt["ns"], chain, mt["conds"], True, None, None)
+        kept = []
+        for r in self.route_list[start:]:
+            k = (r["method"], re.sub(r"/{2,}", "/", "/" + r["uri"].lstrip("/")))
+            if k not in seen:
+                seen.add(k)
+                kept.append(r)
+        self.route_list[start:] = kept
 
     def drf_routes(self):
         prog = self.prog
