@@ -19,6 +19,10 @@ const ROOT = path.resolve(cfg.root)
 const rel = p => path.relative(ROOT, p).split(path.sep).join('/')
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options'])
 const FETCH_FNS = new Set(['$fetch', 'useFetch', 'useLazyFetch', 'ofetch', 'fetch'])
+// realtime clients (#32): `new WebSocket(url)` -> http:WS, `new EventSource(url)` -> http:GET with stream sse
+const WS_CTORS = new Map([['WebSocket', 'websocket'], ['ReconnectingWebSocket', 'reconnecting-websocket'], ['ReconnectingWebsocket', 'reconnecting-websocket'],
+  ['Sockette', 'sockette'], ['EventSource', 'eventsource'], ['EventSourcePolyfill', 'eventsource'], ['NativeEventSource', 'eventsource'],
+  ['ReconnectingEventSource', 'eventsource']])
 const I18N_FNS = new Set(['t', '$t', 'te', '$te', 'tm', 'rt'])
 const SKIP_FILE = /(\.test|\.spec)\.(ts|js|mts)$/
 // directory rules from the presets and .cg.yaml (codegraph/core/paths.py PathRules.extractor_cfg): names the walks
@@ -1223,6 +1227,13 @@ const nodeById = new Map(nodes.map(n => [n.id, n]))
 
 // ---------- symbol -> target node ----------
 const projectDecl = d => d && projectSf(d.getSourceFile())
+// `new WebSocket(..)` on a class / function the project declares itself (a wrapper named like the browser API)
+function ownClass(id) {
+  let sym = null
+  try { sym = checker.getSymbolAtLocation(id) } catch { return false }
+  if (sym && sym.flags & ts.SymbolFlags.Alias) { try { sym = checker.getAliasedSymbol(sym) } catch { } }
+  return !!(sym && (sym.declarations || []).some(d => projectDecl(d) && !ts.isImportSpecifier(d) && !ts.isImportClause(d) && !ts.isNamespaceImport(d)))
+}
 function declToNode(d) {
   if (!d) return null
   if (declId.has(d)) return declId.get(d)
@@ -2599,6 +2610,14 @@ function handleCall(node, cur, sf, r, encFn) {
     if (ts.isArrayLiteralExpression(k)) k = unwrap(k.elements[0])
     if (k && (ts.isStringLiteralLike(k) || ts.isTemplateExpression(k) || ts.isBinaryExpression(k) || ts.isIdentifier(k) || ts.isCallExpression(k)))
       http = { client: 'swr', method: 'GET', urlExpr: k, base: null, baseConf: 'exact', baseVia: [] }
+  } else if (ts.isNewExpression(node) && ts.isIdentifier(callee) && WS_CTORS.has(callee.text) && node.arguments && node.arguments[0] && !ownClass(callee)) {
+    const c = WS_CTORS.get(callee.text), sse = c === 'eventsource'
+    http = { client: c, method: sse ? 'GET' : 'WS', urlExpr: node.arguments[0], base: null, baseConf: 'exact', baseVia: [], stream: sse ? 'sse' : undefined }
+  } else if (ts.isCallExpression(node) && ts.isIdentifier(callee) && callee.text === 'fetchEventSource' && node.arguments[0] && !ownClass(callee)) {
+    // @microsoft/fetch-event-source: fetchEventSource(url, { method, body, onmessage })
+    const m = objProp(node.arguments[1], 'method')
+    http = { client: 'fetch-event-source', method: m && ts.isStringLiteralLike(unwrap(m)) ? unwrap(m).text.toUpperCase() : 'GET', urlExpr: node.arguments[0],
+      base: null, baseConf: 'exact', baseVia: [], stream: 'sse' }
   } else if (ts.isCallExpression(node) && ts.isIdentifier(callee) && FETCH_FNS.has(callee.text)) {
     const o = node.arguments[1]; const m = objProp(o, 'method')
     const method = m && ts.isStringLiteralLike(unwrap(m)) ? unwrap(m).text.toUpperCase() : 'GET'
@@ -2632,7 +2651,7 @@ function handleCall(node, cur, sf, r, encFn) {
     const v = http.urlExpr ? evalStr(http.urlExpr, 0, { params }) : { vals: [PH('?')], conf: 'resolved' }
     const rec = { src: cur, file: r, line, client: http.client, method: http.method, template: inTpl || undefined, test: testSf || undefined,
       urls: shapeDedupe(v.vals).map(render), url_conf: v.conf, base: http.base && shapeDedupe(http.base).map(render), base_conf: http.baseConf, base_via: http.baseVia,
-      expr: http.urlExpr ? http.urlExpr.getText().slice(0, 160) : null, query: http.query, body: http.body }
+      expr: http.urlExpr ? http.urlExpr.getText().slice(0, 160) : null, query: http.query, body: http.body, stream: http.stream }
     // URL built from a parameter of the enclosing function: expand at its call sites (1 level)
     const depParams = [...params].filter(p => encFn && encFn.parameters && encFn.parameters.some(x => ts.isIdentifier(x.name) && x.name.text === p))
     if (depParams.length && encFn) deferredParamCalls.push({ rec, encFn, urlExpr: http.urlExpr })

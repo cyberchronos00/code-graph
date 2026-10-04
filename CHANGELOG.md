@@ -24,6 +24,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   → `{playlist_folder}`), and honour `parameters` / `parameter`, `shallow`, `only` / `except`, `names` / `name`
   and `scoped` (binding fields stored on the route). A slash in the name is a URI prefix; the route count and
   handler lookup are unchanged.
+- WebSocket connections and Server-Sent Events (#32, part 2): `ws` servers (`new WebSocketServer({ path, port })`
+  with their `connection` handler), express-ws / Elysia `app.ws(path, h)`, @fastify/websocket `{ websocket: true }`,
+  Hono `upgradeWebSocket` and Python `websockets.serve` are `route:WS` websocket entry points; browser `new
+  WebSocket(url)` / `ReconnectingWebSocket` / `Sockette` are `http:WS` client endpoints and link to them like HTTP
+  calls (`${proto}://${location.host}/x` reads as `{host}/x`). `new EventSource(url)` / `fetchEventSource` clients and
+  routes answering `text/event-stream` (headers, `media_type=`, `EventSourceResponse`, Hono `streamSSE`, Nest `@Sse`)
+  carry `stream: sse` and form the `sse` protocol of `cg protocols`.
 - Socket.IO in JS / TS (#32, part 1): `endpoint:socketio:<namespace>#<event>` from socket.io servers (`new Server`,
   `io.of('/ns')`, connection callbacks, `X.use(mw)` guards), socket.io-client (`io(url)`, `Manager.socket`), rooms and
   broadcasts, `emitWithAck` / `timeout().emit` requests, chained listeners and emit wrappers resolved at their call
@@ -168,6 +175,9 @@ tree-sitter-swift 0.7.4 (pinned, #133).
 
 ### Changed
 
+- @fastify/websocket routes (`{ websocket: true }`) and Hono `upgradeWebSocket(..)` routes are `route:WS <path>`
+  (entry kind `websocket`) instead of `route:GET <path>` (#32). Routes and calls with `stream: sse` move from the
+  `http` protocol of `cg protocols` to `sse`.
 - Kotlin typed Compose pages of nested destinations keep the outer class (#99): `page:kotlin:SettingsRoute.Standard`
   instead of one `page:kotlin:Standard` shared by every `*.Standard` route.
 - Kotlin: a bare capitalised call matching only a nested class elsewhere (`AppResumeScreenData.SendScreen`) and a

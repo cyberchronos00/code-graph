@@ -1,0 +1,1 @@
+{"name": "live-web", "version": "1.0.0", "dependencies": {"reconnecting-websocket": "^4.4.0", "@microsoft/fetch-event-source": "^2.0.1"}}

@@ -55,9 +55,11 @@ def protocol_of(kind: str, nid: str, a: dict, lang: str | None) -> str | None:
     if kind == "endpoint":
         return a.get("protocol")
     if kind == "http":
-        return "ws" if a.get("method") == "WS" else "http"
+        return "ws" if a.get("method") == "WS" else "sse" if a.get("stream") == "sse" else "http"
     if kind == "route":
         m = (a.get("method") or "").upper()
+        if a.get("stream") == "sse":
+            return "sse"
         return "ws" if m == "WS" else "graphql" if m == "GRAPHQL" or nid.startswith("route:GRAPHQL ") else "http"
     if kind in ("channel", "channel_sub"):
         return "pusher"

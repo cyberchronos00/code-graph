@@ -9,8 +9,13 @@ A = "adapter"
 # ---- existing kinds, adapted (no new nodes or edges)
 register(Protocol("http", "tcp", "HTTP request: client endpoint http:<METHOD> <path> -> route (MATCHES_ROUTE, cg link)",
                   matcher=M.path, ports=(80, 443), schemes=("http", "https"), source=A, kinds=("http", "route"), guards=True))
-register(Protocol("ws", "tcp", "WebSocket route (Django Channels consumer, route:WS <path>)", matcher=M.path, ports=(80, 443),
-                  schemes=("ws", "wss"), source=A, kinds=("route",), guards=True))
+register(Protocol("ws", "tcp", "WebSocket connection: client endpoint http:WS <path> (browser WebSocket, ws, Dart "
+                  "web_socket_channel) -> route:WS <path> (ws servers, express-ws, @fastify/websocket, Hono, FastAPI / "
+                  "Starlette, Django Channels consumers, python websockets)", matcher=M.path, ports=(80, 443),
+                  schemes=("ws", "wss"), source=A, kinds=("http", "route"), guards=True))
+register(Protocol("sse", "tcp", "Server-Sent Events stream: EventSource / fetchEventSource client endpoint (http:GET with "
+                  "stream sse) -> a route answering text/event-stream (Nest @Sse, Hono streamSSE, EventSourceResponse)",
+                  matcher=M.path, ports=(80, 443), schemes=("http", "https"), source=A, kinds=("http", "route"), guards=True))
 register(Protocol("graphql", "tcp", "GraphQL root field <Query|Mutation|Subscription>.<field> (codegraph/graphql.py): "
                   "operations (useQuery / client.query / codegen hooks / gql documents) -> schema resolvers (resolver maps, "
                   "graphene, strawberry, ariadne, Nest route:GRAPHQL)", kinds=("endpoint", "route"), guards=True))

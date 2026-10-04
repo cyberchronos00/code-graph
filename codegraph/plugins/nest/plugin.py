@@ -503,6 +503,8 @@ class NestPlugin(FrameworkPlugin):
                                     ra["version"] = v
                                 if mpath:
                                     ra["router_module_path"] = mpath
+                                if n == "Sse":
+                                    ra["stream"] = "sse"
                                 add_route(b, method, uri, [m["id"]], c["file"], d.get("line") or m["line"], "nest", "exact", ra, mw)
                                 st["routes"] += 1
 

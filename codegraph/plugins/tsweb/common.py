@@ -201,16 +201,17 @@ def module_of(path: str | None) -> str | None:
 # ---------------------------------------------------------------- routes
 def add_route(b: GraphBuilder, method: str, uri: str, handlers: list[str], file: str, line: int, framework: str,
               confidence: str = "exact", attrs: dict | None = None, middleware: list[tuple[str, str, str]] | None = None) -> str:
-    """route:<METHOD> <uri>, entry kind http_route; ROUTES_TO each handler; USES_MIDDLEWARE (node, name, conf)."""
+    """route:<METHOD> <uri>, entry kind http_route (websocket for WS); ROUTES_TO each handler; USES_MIDDLEWARE (node, name, conf)."""
     method = method.upper()
     key = f"{method} {uri}"
     a = {"uri": uri, "method": method, "framework": framework, **(attrs or {})}
     if middleware:
         a["middleware"] = list(dict.fromkeys([m[1] for m in middleware if m[1]]))
-    rid = b.add_node("route", key, name=key, file=file, line=line, module=module_of(file), lang="ts", entry_kind="http_route", attrs=a)
+    ek = "websocket" if method == "WS" else "http_route"
+    rid = b.add_node("route", key, name=key, file=file, line=line, module=module_of(file), lang="ts", entry_kind=ek, attrs=a)
     n = b.nodes[rid]
     if n.entry_kind is None:
-        n.entry_kind = "http_route"
+        n.entry_kind = ek
     for h in handlers:
         if h and b.has(h):
             b.add_edge(rid, h, "ROUTES_TO", file=file, line=line, confidence=confidence)

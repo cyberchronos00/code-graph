@@ -26,7 +26,7 @@ from ..tsweb.common import (TEST_SKIP_RE, add_route, express_path, finish, fw_fa
                             last_name, merge_extractor_cfg, obj, ref_nodes, register, sval, svals)
 
 VERBS = {"get": "GET", "post": "POST", "put": "PUT", "patch": "PATCH", "delete": "DELETE", "del": "DELETE", "head": "HEAD",
-         "options": "OPTIONS", "all": "ANY", "any": "ANY"}
+         "options": "OPTIONS", "all": "ANY", "any": "ANY", "ws": "WS"}   # ws: express-ws `app.ws(path, h)`, Elysia
 MODS = {"express": "express", "koa": "koa", "@koa/router": "koa-router", "koa-router": "koa-router", "fastify": "fastify",
         "hono": "hono", "elysia": "elysia", "polka": "polka", "restify": "restify", "h3": "h3", "@hono/zod-openapi": "hono"}
 APP_FACTORIES = {"express": "express", "Fastify": "fastify", "fastify": "fastify", "Koa": "koa", "Hono": "hono", "OpenAPIHono": "hono",
@@ -369,6 +369,9 @@ class ExpressPlugin(FrameworkPlugin):
             fns = [a for a in flat if not (isinstance(a, dict) and a.get("obj") is not None)]
             handlers = fns[-1:] or [opts.get("handler")]
             mids = fns[:-1]
+        # websocket upgrades declared on an HTTP verb: @fastify/websocket `{ websocket: true }`, Hono `upgradeWebSocket(h)`
+        if obj_b(opts.get("websocket")) or any(isinstance(h, dict) and last_name(h.get("call")) == "upgradeWebSocket" for h in handlers):
+            methods = ["WS"]
         mw = [self.mw_of(x) for x in mids]
         for k in MW_OPTS:
             v = opts.get(k)
@@ -421,6 +424,10 @@ class ExpressPlugin(FrameworkPlugin):
                         if not handler_nodes and not counted:
                             st["routes_unresolved_handler"] += 1   # once per route call that produced routes
                             counted = True
+
+
+def obj_b(d) -> bool:
+    return isinstance(d, dict) and d.get("b") is True
 
 
 def _weaker(a, b):

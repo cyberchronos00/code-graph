@@ -1045,6 +1045,32 @@ argument, and immich's server-to-server `server.on('AppRestart')`. `tests/test_r
 a `net` socket that is not Socket.IO; a socket.io-client app with chained listeners; and a Nest gateway with a guard.
 Both pairs are linked with `cg link`, and a python-socketio server created under a module-level `if` is also covered.
 
+## WebSocket connections and SSE (#32 part 2)
+
+| Project | New | Notes |
+|---|---|---|
+| outline 478e812 | `route:WS /collaboration/{rest*}`, 1 test client | `new WebSocket.Server({ noServer: true })` behind `req.url?.startsWith(path)` in the upgrade handler: a prefix route (heuristic) handled by `init`. The collaboration client is a Hocuspocus provider, not a `WebSocket` call |
+| zigbee2mqtt 344b6e0 | `route:WS /{path}` | Two `new WebSocket.Server(..)` with `path: posix.join(this.baseUrl, "api")`; the path stays unresolved (heuristic) and both route to `Frontend.onWebSocketConnection` |
+| coolify 0ed423a | `http:WS /terminal/ws` | The terminal client builds `${protocol}://${host}${port}${path}` from an object literal; the server in `docker/coolify-terminal/` is outside the indexed tree |
+| aiocoap f867dc4 | `route:WS /` | `websockets.asyncio.server.serve(functools.partial(self._new_connection, ..), host, port)`: handler `_new_connection` |
+| open-webui 8bd8b4f | 16 routes `stream: sse` | `StreamingResponse(.., media_type='text/event-stream')` in the chat, message, file-status and Ollama / OpenAI proxy handlers; the proxies stream only when the upstream does |
+| nest 35142c3 | 9 test clients | `new WebSocket('ws://localhost:8080')` / `new EventSource(url + '/sse')` in e2e specs (TEST_HTTP) |
+| socket.io 1eaa582 | 2 test clients | `ws://localhost:${port}/engine.io` in the engine.io tests |
+| jayson 4c368aa | `route:WS /` (port 12345), 1 client | The typings test file starts a server and a client on a literal port (`origin_kind: other`, not matched) |
+| vito 661e497 | none | `new WebSocket(`${tokenData.url}?token=..`)`: the whole URL comes from the server, so no endpoint |
+| openai-agents-python 81f0ccf | none | Every `websockets.serve` is in a test (not an entry point); the FastAPI WS routes were already there. The browser clients live in `examples/*/static/`, which is not indexed |
+
+Unchanged (same nodes and edges): ws, express, immich, excalidraw, excalidraw-room, authentik, tauri, gen, python-sdk,
+langgraph, httpie, invoiceninja, firefly-iii, opentelemetry-demo, mattermost-mobile, elk, social-app,
+saleor-dashboard and cal.com; clash-verge-rev differs only in Rust edges from the rust-analyzer index (no JS / TS change, its
+`ws` use is in an unindexed `scripts/perf/`). No edges were removed anywhere else. A random 20 of the 56 added edges and changed routes in
+the projects above were checked by hand against the source, and all 20 were correct; three are open-webui proxy routes
+that answer SSE only when the upstream or the `stream` flag asks for it. `tests/test_websockets.py` covers
+`tests/ws_fixture`: a `ws` server with a path, one on a port with an inline handler, a `noServer` server behind an
+upgrade prefix check, express-ws on a mounted router, @fastify/websocket and Hono WS routes, express / Hono / FastAPI
+SSE routes (and two that only look like it), python `websockets.serve`, and a browser client using `WebSocket`,
+`ReconnectingWebSocket`, `EventSource` and `fetchEventSource`, linked with `cg link`.
+
 ## JS callback variables, property reads and returns (#138)
 
 Call edges are CALLS, TEST_CALLS and RENDERS, counted by (kind, source, target, line), before -> after.

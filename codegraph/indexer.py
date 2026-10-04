@@ -270,6 +270,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (rt := apply_realtime(project, builder)):
         rt["seconds"] = round(time.time() - t_rt, 2)
         stats["realtime"] = rt
+    # raw WebSocket servers (`ws`, python websockets) and SSE routes (#32 part 2)
+    from .realtime_ws import apply as apply_ws
+    t_ws = time.time()
+    if (wsst := apply_ws(project, builder)):
+        wsst["seconds"] = round(time.time() - t_ws, 2)
+        stats["websockets"] = wsst
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

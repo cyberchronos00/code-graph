@@ -61,7 +61,7 @@ Shared matchers (`codegraph/protocols/matchers.py`):
 
 | matcher | rules | protocols |
 |---|---|---|
-| `path` | URL segments, `{param}` / `{rest*}` / embedded params, one literal segment in common (the `cg link` route matcher) | http, ws |
+| `path` | URL segments, `{param}` / `{rest*}` / embedded params, one literal segment in common (the `cg link` route matcher) | http, ws, sse |
 | `mqtt` | `/` levels, `+` one level, `#` the rest (last only, also the parent level) | mqtt |
 | `nats` | `.` tokens, `*` one token, `>` one or more (last only) | nats |
 | `amqp` | `<exchange>/<routing key>`: the same exchange, then the key by topic-exchange rules (`.` words, `*` one word, `#` zero or more, anywhere); `queue:<name>` exact | amqp |
@@ -77,8 +77,8 @@ Node ids are unchanged; `cg protocols` reads them through adapters (no extra nod
 
 | kind | protocol | senders | receivers | matches |
 |---|---|---|---|---|
-| `http` | http (`http:WS ...`: ws) | HTTP_CALLS | - | MATCHES_ROUTE -> route |
-| `route` | http, ws (`route:WS`), graphql (`route:GRAPHQL`; senders through its `endpoint:graphql:` twin) | (tests: TEST_HTTP) | ROUTES_TO | <- MATCHES_ROUTE |
+| `http` | http (`http:WS ...`: ws; `stream: sse`: sse) | HTTP_CALLS | - | MATCHES_ROUTE -> route |
+| `route` | http, ws (`route:WS`), sse (`stream: sse`), graphql (`route:GRAPHQL`; senders through its `endpoint:graphql:` twin) | (tests: TEST_HTTP) | ROUTES_TO | <- MATCHES_ROUTE |
 | `channel` | pusher | BROADCASTS_ON (events) | - | <- MATCHES_CHANNEL |
 | `channel_sub` | pusher | - | SUBSCRIBES_CHANNEL (client code) | MATCHES_CHANNEL -> channel |
 | `message` | nest-rpc, nest-event, nest-ws, grpc (Nest `@GrpcMethod`) | DISPATCHES (ClientProxy.send / emit) | HANDLED_BY | - |
@@ -170,6 +170,29 @@ Node clients and Nest gateways, so a TS client links with a Python or Node serve
 - Nest: each `message:ws:` handler of a gateway gets an `endpoint:socketio:<ns>#<pattern>` RECEIVED_BY with its
   guards (`via` = the message node), unless the project uses `@nestjs/platform-ws` without
   `@nestjs/platform-socket.io`.
+
+## WebSocket connections and Server-Sent Events (#32 part 2)
+
+WebSocket connections are routes: a client endpoint `http:WS <path>` matches a `route:WS <path>` (entry kind
+`websocket`) with the HTTP path matcher, in the repo and across repos with `cg link`. SSE streams stay HTTP routes
+and calls, marked `stream: sse`; `cg protocols --protocol sse` lists them (and `--protocol http` no longer does).
+
+| side | WebSocket (`ws`) | SSE (`sse`) |
+|---|---|---|
+| server | `ws`: `new WebSocketServer({ path, port, server })` / `new WebSocket.Server(..)`, handler of `wss.on('connection', h)` (`codegraph/realtime_ws.py`); express-ws / Elysia `app.ws(path, h)`, @fastify/websocket `{ websocket: true }`, Hono `upgradeWebSocket(h)` (express plugin); Python `websockets.serve(handler, host, port)`; FastAPI / Starlette `@app.websocket`, Django Channels (unchanged) | a route whose handler sets `Content-Type: text/event-stream` (header, `media_type=`, `mimetype=`; not an `Accept` header), returns `EventSourceResponse(..)` or calls Hono `streamSSE(..)`; Nest `@Sse()` |
+| client | browser `new WebSocket(url)`, `ReconnectingWebSocket`, `Sockette`; Dart `web_socket_channel` (unchanged) | `new EventSource(url)` (and polyfills), `fetchEventSource(url, { method })` |
+
+- A `ws` server without a `path` option takes any path: it is `route:WS /` with `any_path` (and `ports` when the port
+  is a literal) and is not matched by path. A `noServer` server takes the path its upgrade handler checks before
+  `handleUpgrade` (`pathname === '/x'`, or `req.url.startsWith(p)` as `p/{rest*}`, heuristic). Servers started by tests
+  are not entry points. An inline connection callback without its own node leaves
+  `handler_unresolved` rather than routing to the module.
+- Client URLs: `${proto}://${location.host}/x` and `wss://${host}/x` are read as `{host}/x` (the page's or a
+  configured server, like `${origin}/x` for HTTP); `ws://localhost:9100` keeps its origin (`origin_kind: other`, not
+  matched). A same-origin relative URL is not matched across repos unless it is under `/api/`, as for HTTP.
+- Not yet: message names inside a connection (`switch (msg.type)` / `send(JSON.stringify({ type }))`), SSE `event:`
+  names, Nest `@nestjs/platform-ws` gateway paths and Python
+  WebSocket clients.
 
 ## Raw TCP / UDP sockets
 

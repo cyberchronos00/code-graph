@@ -14,7 +14,7 @@
 // Values are described, never executed: {s} string (URL-template folded by evalStr), {n}, {b}, {arr}, {obj},
 // {fn,node,body}, {ref,key,node}, {call,node,args,recv,ret}, {new,node,args}, {require,module,exp}, {expr}.
 import nodePath from 'node:path'
-const ROUTE_VERBS = new Set(['get', 'post', 'put', 'patch', 'delete', 'del', 'head', 'options', 'all', 'any'])
+const ROUTE_VERBS = new Set(['get', 'post', 'put', 'patch', 'delete', 'del', 'head', 'options', 'all', 'any', 'ws'])   // ws: express-ws / Elysia
 const ROUTER_METHODS = new Set([...ROUTE_VERBS, 'use', 'lazyUse', 'route', 'register', 'mount', 'basePath', 'prefix',
   'setGlobalPrefix', 'enableVersioning', 'useGlobalGuards', 'useGlobalInterceptors', 'useGlobalPipes', 'useGlobalFilters',
   'on', 'method', 'addHook', 'group', 'routes', 'connectMicroservice'])

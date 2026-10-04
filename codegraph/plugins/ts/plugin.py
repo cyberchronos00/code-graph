@@ -85,6 +85,18 @@ def normalize_client_url(url: str) -> tuple[str, dict]:
     return u, info
 
 
+def ws_url(url: str) -> str:
+    """WebSocket client URL -> the shape normalize_client_url keys HTTP calls by: a placeholder scheme
+    (`${proto}://host`) is ws://, and a placeholder host (`ws://${location.host}/x`, `wss://${host}`) is the page's
+    or a configured server, i.e. the origin placeholder an HTTP call to `${origin}/x` has."""
+    u = re.sub(r"^\{[^{}/]*\}:?//", "ws://", url.strip())
+    m = re.match(r"^wss?://(\{[^{}/]*\})(?::(?:\d+|\{[^{}/]*\}))?(?=/|\?|$)", u) or re.match(r"^(\{[^{}/]*\})(?=\?|$)", u)
+    if not m:
+        return u
+    rest = u[m.end():]
+    return m.group(1) + ("/" + rest if not rest.startswith("/") else rest)   # `${url}?token=..`: the whole URL is opaque
+
+
 def join_url(base: str | None, url: str) -> str:
     if not base or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url) or url.startswith("{"):
         return url
@@ -460,7 +472,7 @@ class TypeScriptPlugin(LanguagePlugin):
             bases = prefer_config(a.get("base")) or [None]
             for base in bases:
                 for url in prefer_config(a["urls"]):
-                    path, info = normalize_client_url(join_url(base, url))
+                    path, info = normalize_client_url(join_url(base, ws_url(url) if a["method"] == "WS" else url))
                     origin = info.get("origin")
                     if path == "/" and not base and origin and origin.startswith("{") and not is_config_ph(origin):
                         # the whole URL is an opaque value (a wrapper's parameter without callers): no endpoint to name
@@ -495,6 +507,8 @@ class TypeScriptPlugin(LanguagePlugin):
                                                                                 "origin": origin, "origin_kind": okind})
                     if resolved_base:
                         builder.nodes[nid].attrs["base"] = resolved_base
+                    if a.get("stream"):
+                        builder.nodes[nid].attrs["stream"] = a["stream"]
                     ctx.http_nodes.setdefault(nid, {"method": a["method"], "path": path, "calls": []})["calls"].append(a)
                     conf = min_conf(a["url_conf"], a.get("base_conf") or "exact", "resolved" if resolved_base else "exact")
                     if a.get("test"):
