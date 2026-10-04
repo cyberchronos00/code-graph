@@ -549,6 +549,7 @@ class KotlinPlugin(LanguagePlugin):
                 dc = Decl(f"{kind}:{fq}{self._variant(kf, mods)}", kind, nm, fq, kf.rel, c.start_point[0] + 1,
                           c.end_point[0] + 1, cls.fqn if cls else None, [], anns, mods, recv,
                           self._params(params) if params is not None else {}, kf.test, self._name_line(c))
+                self._local_types(c, dc.types)
                 self._add_decl(dc, kind)
             elif ty == "enum_entry" and cls is not None:
                 nm = self._name(c)
@@ -760,6 +761,20 @@ class KotlinPlugin(LanguagePlugin):
                     out[self.t(ids[0])] = self.t(ty).split("<")[0].rstrip("?").split(".")[-1]
         return out
 
+    def _local_types(self, fn, types: dict):
+        """`val repo = OrderRepository(..)` / `val api: OrdersApi = ..` in a function body (not in nested classes or
+        functions): the local's type, so `repo.save()` binds through it (#96). Parameters win; flow-insensitive."""
+        body = next((c for c in fn.children if c.type == "function_body"), None)
+        stack = list(body.children) if body is not None else []
+        while stack:
+            n = stack.pop()
+            if n.type in ("class_declaration", "object_declaration", "function_declaration"):
+                continue
+            if n.type == "property_declaration":
+                for k, v in self._prop_type(n).items():
+                    types.setdefault(k, v)
+            stack.extend(n.children)
+
     def _prop_type(self, d) -> dict:
         v = next((c for c in d.children if c.type == "variable_declaration"), None)
         if v is None:
@@ -770,7 +785,8 @@ class KotlinPlugin(LanguagePlugin):
             return {self.t(ids[0]): self.t(ty).split("<")[0].rstrip("?").split(".")[-1]}
         # val api = Retrofit...create(OrdersApi::class.java) / val repo = OrderRepository(...)
         txt = self.t(d)
-        m = re.search(r"create\(\s*(\w+)::class", txt) or re.search(r"=\s*([A-Z]\w*)\s*\(", txt)
+        m = re.search(r"create\(\s*(\w+)::class", txt) or re.match(r"[^=]*=(?!=)\s*([A-Z]\w*)\s*\(", txt) \
+            or re.search(r"\bby\s+lazy\s*(?:\([^)]*\))?\s*\{\s*([A-Z]\w*)\s*\(", txt)   # by lazy { Repo(..) }
         if ids and m:
             return {self.t(ids[0]): m.group(1)}
         return {}

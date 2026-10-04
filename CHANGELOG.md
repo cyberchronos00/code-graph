@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Kotlin receiver types (#96): a function's locals (`val repo = OrderRepo()`, `val api: OrdersApi = ..`) and
+  `by lazy { OrderRepo() }` properties type their receivers, and an initializer is read only after its own `=`
+  (`val same = a == Foo()` and `= X(..)` inside a `mockk<T> { }` block no longer type the property). ktor-samples:
+  the postgres sample's `ArticleService` calls bind exactly (8 name / candidate edges replaced); KaMPKit: the
+  `BreedRepository.refreshBreeds` wrong candidates are gone; bitwarden-android: 211 `heuristic` name / candidate edges out (the
+  6 sampled were wrong: `Bundle.getString` matched to 5 project `getString`s, cross-module `toViewState`), 234 in
+  (the `AuthSdkSource` calls in AuthRepositoryTest checked correct), +35 `recv`; nowinandroid unchanged.
 - Dispatch narrowing (#96): `impact` / `tests` / `reaches` on an override `Sub.method` leave out the calls into
   the base method it overrides whose receiver type is known and cannot be a `Sub`, as for an inherited spec (note
   `Sub.run overrides Base.run (its callers narrowed to Sub: ...)`, JSON `override_narrowed`). Python receivers

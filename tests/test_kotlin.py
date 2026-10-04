@@ -284,3 +284,23 @@ def test_statement_suspend_lambda_parses():
     out, n = _suspend_lambdas(src)
     assert n == 2 and len(out) == len(src)
     assert b"    ;       {\n        h()" in out and b"suspend fun k" in out
+
+
+def test_function_locals_and_lazy_properties_type_their_receivers(tmp_path):
+    # #96 item 5: `val repo = OrderRepo()` in a function body and `by lazy { UserRepo() }` give the receiver type,
+    # so a call on them landing on an inherited method carries attrs.recv; `val same = 1 == UserRepo()...` does not
+    from codegraph.core.store import GraphStore
+    from codegraph.indexer import index_project
+    src = tmp_path / "k" / "src" / "main" / "kotlin" / "app"
+    src.mkdir(parents=True)
+    (src / "Repo.kt").write_text(
+        "package app\n\nopen class Base {\n    fun save(x: Int) = x\n}\n\nclass OrderRepo : Base()\n\n"
+        "class UserRepo : Base()\n\nclass Service {\n    private val lazyRepo by lazy { UserRepo() }\n\n"
+        "    fun place() {\n        val repo = OrderRepo()\n        repo.save(1)\n"
+        "        val same = 1 == UserRepo().hashCode()\n        same.save(3)\n        lazyRepo.save(2)\n    }\n}\n")
+    index_project(tmp_path / "k", tmp_path / "k.db", "k")
+    st = GraphStore(str(tmp_path / "k.db"))
+    got = {r["line"]: r["attrs"] for r in st.q("SELECT line, attrs FROM edges WHERE kind='CALLS' AND dst='method:app.Base.save'")}
+    assert json.loads(got[16])["recv"] == ["class:app.OrderRepo"]
+    assert json.loads(got[19])["recv"] == ["class:app.UserRepo"]
+    assert 18 not in got or "recv" not in json.loads(got[18] or "{}")
