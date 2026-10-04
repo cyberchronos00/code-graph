@@ -103,6 +103,7 @@ class ClassInfo:
     inner: dict = field(default_factory=dict)          # nested classes (Meta, Config) -> ast.ClassDef
     decorators: list = field(default_factory=list)
     self_attrs: dict = field(default_factory=dict)     # self.x = value  -> [value ast]
+    self_attr_lines: dict = field(default_factory=dict)  # self.x -> line of its first assignment (#88 field nodes)
     outer: "ClassInfo | None" = None
 
     @property
@@ -439,6 +440,7 @@ class PyProgram:
                             if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self":
                                 c.self_attrs.setdefault(t.attr, []).append(
                                     (sub.value, getattr(sub, "annotation", None), f))
+                                c.self_attr_lines.setdefault(t.attr, sub.lineno)
             elif isinstance(st, ast.ClassDef):
                 if st.name in ("Meta", "Config", "Media", "Params", "Input", "Output"):
                     c.inner[st.name] = st
@@ -1423,6 +1425,9 @@ class PythonPlugin(LanguagePlugin):
             n_env += self.env_reads(prog, b, f.id, f.node, ctx)
         for m in prog.modules.values():
             n_env += self.env_reads(prog, b, m.id, m.tree, Ctx(m, None, None), top_only=True)
+        # stored attributes -> field:<Class>.<attr> nodes with READS_PROP / WRITES_PROP (fields.py, #88)
+        from .fields import index as fields_index
+        fld_st = fields_index(prog, b, Ctx, walk_body)
         refs = self.references_and_entries(prog, b, conf_ct, rp)
         from .values import Values
         val_st = Values(prog, b).run()
@@ -1454,6 +1459,7 @@ class PythonPlugin(LanguagePlugin):
         st.update({"classes": len(prog.classes), "functions": sum(1 for f in prog.funcs.values() if f.kind == "function"),
                    "methods": sum(1 for f in prog.funcs.values() if f.kind == "method"), "imports": n_imp,
                    "extends": n_ext, "calls": conf_ct, "env_reads": n_env, **refs, "values": val_st,
+                   **fld_st,
                    **({"tests": tests_st} if tests_st else {}),
                    "parse_error_files": [e["file"] for e in prog.parse_errors[:20]],
                    "roots_mode": prog.root_plan.mode, "source_roots": prog.roots_report,

@@ -171,6 +171,33 @@ identical before and after (27,897 in netbox). In opentelemetry-python the funct
 `_create_otlp_grpc_*_exporter` from the HTTP exporter class to the gRPC one. The Python plugin takes about 5-10% longer
 (ansible 11.5 s -> 12.4 s, netbox 13.9 s -> 14.8 s, best of three on a shared machine).
 
+## Stored attributes (`cg readers` / `cg writers`)
+
+These are `field:<Class>.<attr>` nodes (#88), with attrs `property: stored` and `declared: self | class`:
+- a class's instance attributes, i.e. `self.x = ...` in any of its methods;
+- its annotated class-level attributes, such as dataclass, pydantic or attrs fields. `ClassVar` / `Final` /
+  `InitVar` are excluded.
+
+Plain class-level assignments are not fields: they are constants or descriptors, and Django model fields are the
+Django plugin's own `field:` nodes. Methods, properties and nested classes are never fields.
+
+An access is a `READS_PROP` / `WRITES_PROP` edge (`resolved`, attr `receiver`) when the type inference knows the
+receiver's class and that class (or a base) declares the field. The receiver can be `self`, an annotated parameter,
+a local `c = Cart()` or a typed attribute (`self.app.name`). An unknown receiver binds nothing.
+
+Writes are:
+- assignment, augmented assignment and `del` targets;
+- `self.items.append(x)` and the other in-place list / dict / set / deque methods (`via: mutating`);
+- item assignment or deletion, as in `self.cache[k] = v` (`via: item`).
+
+Test code's accesses are `TEST_USES`. Corpus results (call edges and all other edges unchanged):
+
+| corpus | fields | reads | writes |
+|---|---|---|---|
+| flask | 119 | 290 | 130 |
+| beets | 1,558 | 3,467 | 1,016 |
+| openai-agents-python | 5,030 | 9,785 | 2,822 |
+
 ## Tests (pytest and unittest)
 
 pytest and unittest suites are indexed as test cases, so `cg tests <symbol>` lists the tests that exercise a function

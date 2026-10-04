@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Python stored attributes (#88): `self.x = ...` and annotated class-level attributes (dataclass / pydantic) are
+  `field:<Class>.<attr>` nodes.
+  - Accesses through an inferred receiver type are READS_PROP / WRITES_PROP.
+  - `self.items.append(x)` is a write with `via: mutating`; `self.cache[k] = v` is a write with `via: item`.
+  - All other edges are unchanged on flask, httpie, beets, netbox and openai-agents-python.
 - Kotlin stored properties (#88): a class / enum body `val` / `var` without accessors and a constructor `val` /
   `var` are `field:<Type>.<name>` nodes.
   - `x` / `this.x` and `v.x` with a known type of `v` are READS_PROP / WRITES_PROP edges.
