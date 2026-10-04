@@ -502,7 +502,7 @@ Kotlin and Rust (part 2) use the same endpoints:
   `object` constants (`Topics.INVOICES`, looked up in the file that declares the class), Rust `format!("a.{}", x)`,
   `std::env::var("X").unwrap_or(..)` / `unwrap_or_else(|_| ..)`, `&x` / `.as_str()` / `.to_string()`.
 
-Not covered yet (follow-up #FOLLOWUP): SQS / SNS / EventBridge / Google Pub/Sub / Azure Service Bus, STOMP and
+Not covered yet (follow-up #137): SQS / SNS / EventBridge / Google Pub/Sub / Azure Service Bus, STOMP and
 Spring `@MessageMapping`, ZeroMQ, JetStream streams and consumers, Kafka and AMQP names from config files, queue
 bindings declared in infrastructure as code (serverless, SAM / CDK, Terraform event source mappings, KEDA),
 broker nodes (#40) on the endpoints, the repository's own wrapper classes (their callers' topics), Rust amqprs
