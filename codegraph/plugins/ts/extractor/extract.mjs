@@ -267,6 +267,61 @@ if (INDEX_TESTS) {
   for (const d of srcDirs) walkTests(d, false)
   for (const d of TEST_ROOTS) { const p = path.resolve(ROOT, d); if (fs.existsSync(p) && fs.statSync(p).isDirectory()) walkTests(p, true) }
 }
+// scripts the tests run in a subprocess (`spawnSync('node', [path.join(__dirname, '..', 'tools', 'gen.js')])`,
+// `execSync('node tools/gen.js')`) outside every source dir are source files too, so the subprocess link
+// (process_runs.py) has a module node to land on (#106). Literals in the call and in the last assignment of a name
+// it passes are read, like process_runs does; scripts in test trees stay test code.
+{
+  const RUN_RX = /\b(?:spawn|spawnSync|execFile|execFileSync|fork|exec|execSync|execa|execaSync|execaNode|execaCommand|execaCommandSync)\s*\(/g
+  const LIT_RX = /(['"`])((?:\\.|(?!\1)[^\\])*?)\1/gs
+  const lits = t => [...t.matchAll(LIT_RX)].map(x => x[2])
+  const LIT_AT = new RegExp(LIT_RX.source, 'ys')
+  const argsText = (src, start) => {
+    let depth = 0
+    for (let i = start, n = Math.min(src.length, start + 600); i < n; i++) {
+      const c = src[i]
+      if ('([{'.includes(c)) depth++
+      else if (')]}'.includes(c) && --depth === 0) return src.slice(start + 1, i)
+      else if ('\'"`'.includes(c)) { LIT_AT.lastIndex = i; const m = LIT_AT.exec(src); if (m) i = m.index + m[0].length - 1 }
+    }
+    return src.slice(start + 1, start + 600)
+  }
+  const found = new Set()
+  const consider = (tf, p) => {
+    const r = rel(p)
+    if (!r || r.startsWith('..') || path.isAbsolute(r) || !SRC_EXT.test(r) || r.endsWith('.d.ts') || testFiles.has(p)) return false
+    if (srcFiles.has(p) || srcDirs.some(d => p.startsWith(d + path.sep)) || isTestRel(r) || sourceSkipped(r) || excludedRel(r)) return false
+    try { if (!fs.statSync(p).isFile()) return false } catch { return false }
+    found.add(p)
+    return true
+  }
+  for (const tf of testFiles) {
+    let src
+    try { src = fs.readFileSync(tf, 'utf8') } catch { continue }
+    if (!/child_process|execa/.test(src)) continue
+    for (const m of src.matchAll(RUN_RX)) {
+      const args = argsText(src, m.index + m[0].length - 1)
+      let ls = lits(args)
+      for (const id of new Set(args.replace(LIT_RX, '').match(/(?<![\w.$])[A-Za-z_]\w*\b(?!\s*[(.])/g) || [])) {
+        const am = [...src.slice(0, m.index).matchAll(new RegExp(`(?<![\\w.$])${id}\\s*=(?!=)\\s*([^;]+);`, 'g'))].pop()
+        if (am) ls = ls.concat(lits(am[1]))
+      }
+      ls = ls.flatMap(x => /\s/.test(x.trim()) ? x.trim().split(/\s+/) : [x])
+      ls.forEach((x, i) => {
+        if (!SRC_EXT.test(x) || x.startsWith('-')) return
+        const segs = ls.slice(Math.max(0, i - 3), i).filter(y => /^[\w.\-/]+$/.test(y) && !y.startsWith('-'))
+        for (let k = segs.length; k >= 0; k--) {
+          const t = [...segs.slice(segs.length - k), x].join('/').replace(/\\/g, '/')
+          const cands = t.startsWith('./') || t.startsWith('../') ? [path.resolve(path.dirname(tf), t)] : []
+          cands.push(path.resolve(ROOT, t.replace(/^\/+/, '')))
+          if (cands.some(c => consider(tf, c))) break
+        }
+      })
+    }
+  }
+  for (const p of found) srcFiles.add(p)
+  if (found.size) process.stderr.write(`codegraph: scripts the tests run: ${[...found].map(rel).sort().join(', ')}\n`)
+}
 const vueFiles = allFiles.filter(f => f.endsWith('.vue'))
 const vueSet = new Set(vueFiles)
 

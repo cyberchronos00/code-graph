@@ -176,12 +176,13 @@ def test_node_child_process_and_execa(tmp_path):
     st = build(tmp_path, "js", NODE)
     got = via_sub(st)
     dsts = sorted({d for v in got.values() for d, _h in v})
-    assert dsts == ["module:src/build.js", "module:src/cli.js"], got
+    # ../tools/gen.js from test/ is tools/gen.js (outside the source dirs: a source file because a test runs it,
+    # #106), never test/tools/gen.js
+    assert dsts == ["module:src/build.js", "module:src/cli.js", "module:tools/gen.js"], got
     hows = sorted(h for v in got.values() for _d, h in v)
-    assert hows.count("package bin") == 1 and len(hows) == 5, got
-    assert st.stats["process_runs"]["linked"] == 5
-    # ../tools/gen.js from test/ is tools/gen.js (no node: only top-level code), never test/tools/gen.js
-    assert st.stats["process_runs"]["script_without_node"] == 1, st.stats["process_runs"]
+    assert hows.count("package bin") == 1 and len(hows) == 6, got
+    assert st.stats["process_runs"]["linked"] == 6
+    assert "script_without_node" not in st.stats["process_runs"], st.stats["process_runs"]
 
 
 def test_dart_process_run(tmp_path):
@@ -333,3 +334,35 @@ def test_bin_script_outside_the_source_dirs_is_a_source_file(tmp_path):
     assert got == {"test:test/tool.test.js#tool": {("module:bin/tool.js", "node script")}}, got
     calls = {d for _s, d, _a in edges(st, "CALLS", src="module:bin/tool.js")}
     assert "function:src/run.js#run" in calls, calls
+
+
+SCRIPT_OUTSIDE = {
+    "tsconfig.json": '{"compilerOptions": {"allowJs": true, "checkJs": false}, "include": ["src"]}',
+    "package.json": '{"name": "app", "version": "1.0.0", "devDependencies": {"jest": "29"}}',
+    "src/db.js": '''
+        export function seedRows(n) { return n; }
+        ''',
+    "scripts/seed.mjs": '''
+        import { seedRows } from "../src/db.js";
+        export function seed() { return seedRows(3); }
+        seed();
+        ''',
+    "scripts/unused.js": "console.log(1);\n",
+    "test/seed.test.js": '''
+        const { spawnSync, execSync } = require("child_process");
+        const SEED = "scripts/seed.mjs";
+        test("seed", () => { spawnSync(process.execPath, [SEED]); });
+        test("seed again", () => { execSync("node ./scripts/seed.mjs --rows 3"); });
+        ''',
+}
+
+
+def test_script_outside_the_source_dirs_that_a_test_runs_is_a_source_file(tmp_path):
+    st = build(tmp_path, "scriptout", SCRIPT_OUTSIDE)
+    mods = {r["id"] for r in st.q("SELECT id FROM nodes WHERE kind='module'")}
+    assert "module:scripts/seed.mjs" in mods and "module:scripts/unused.js" not in mods, mods
+    got = via_sub(st)
+    assert got == {"test:test/seed.test.js#seed": {("module:scripts/seed.mjs", "node script")},
+                   "test:test/seed.test.js#seed again": {("module:scripts/seed.mjs", "node script")}}, got
+    calls = {d for _s, d, _a in edges(st, "CALLS", src="function:scripts/seed.mjs#seed")}
+    assert "function:src/db.js#seedRows" in calls, calls

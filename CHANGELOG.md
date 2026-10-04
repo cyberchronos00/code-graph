@@ -31,6 +31,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
   invocation a test node, calling what the invocation's closure calls and what the macro body calls
   (`crate::util::setup(..)`). ripgrep: 705 more test cases (492 → 1197); `cg tests function:rg::main` finds 349
   integration tests (none before), 20 sampled new edges correct.
+- Scripts outside every source dir that a test runs in a subprocess (#106): `spawnSync('node',
+  [path.join(__dirname, '..', 'tools', 'gen.js')])`, `execSync('node scripts/seed.mjs')` or a name assigned the path
+  make that script a TypeScript / JavaScript source file, so the test links to its module node instead of counting
+  `script_without_node`. No change on commander.js, eslint, electron-fiddle, capacitor, mcp-servers or
+  nestjs-boilerplate (none of their tests run such a script).
 
 ### Changed
 

@@ -199,7 +199,10 @@ similarity of their callee sets.
   `module`, `bin`, `exports` and `files` entries in a sub-directory make that top directory a source dir, one at the
   root (`index.js`) is a source file; `dist/`-style build output stays skipped. Beside source dirs, a `bin` script
   outside them (`bin/cli.js` next to `src/`) is a source file, so a test that runs it in a subprocess has a module
-  node to link to (#94). A root `jsconfig.json` alone also enables the TypeScript plugin.
+  node to link to (#94). So is a script outside every source dir that a test runs (`spawnSync('node',
+  [path.join(__dirname, '..', 'tools', 'gen.js')])`, `execSync('node scripts/seed.mjs')`; read from the call's
+  literals and the last assignment of a name it passes; scripts inside test trees stay test code; #106). A root
+  `jsconfig.json` alone also enables the TypeScript plugin.
 - **TypeScript in a sub-directory of a non-JS repo.** A root with no `package.json` at all (a Swift / Kotlin / Rust /
   Dart app with a `web/` directory) is handled the same way, with every `tsconfig.json` one or two levels down,
   `package.json` next to it or not. A PHP or Python backend root (`composer.json`, `pyproject.toml`, `manage.py`,
