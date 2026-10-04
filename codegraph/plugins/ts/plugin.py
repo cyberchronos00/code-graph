@@ -51,6 +51,7 @@ class TsContext:
     extractor_cfg: dict[str, Any] = field(default_factory=dict)
     facts: dict[str, Any] = field(default_factory=dict)
     http_nodes: dict[str, dict] = field(default_factory=dict)
+    synthesized_js: list[str] = field(default_factory=list)     # plain JS source dirs without a config (#136)
 
 
 def min_conf(*cs: str) -> str:
@@ -188,6 +189,109 @@ def node_socket_dirs(root: Path, limit: int = 400) -> list[str]:
     return ["."] if "." in out else out
 
 
+# plain JavaScript without a tsconfig / jsconfig (#136): module syntax tells program files from bundled assets
+JS_MODULE = re.compile(r"""\brequire\(\s*['"][^'"\n]+['"]\s*\)|^[ \t]*import\s+(?:[\w*{$][^;\n]*?\s+from\s+)?['"][^'"\n]+['"]|"""
+                       r"""^[ \t]*export\s+(?:default\b|const\b|let\b|var\b|function\b|class\b|async\b|\{|\*)|\bmodule\.exports\b|"""
+                       r"""\bexports\.[\w$]+\s*=""", re.M)
+# build / lint / test tooling configuration: never a reason to start a JS program
+JS_TOOLING = re.compile(r"""(?:^|[./_-])(?:config|conf|rc)\.[cm]?js$|\.min\.js$|^(?:gruntfile|gulpfile|webpack|rollup|vite|babel|"""
+                        r"""jest|karma|eslint|prettier|postcss|tailwind|stylelint|commitlint|lint-staged|metro|svelte|astro|"""
+                        r"""playwright|cypress|vitest|nuxt|next|tsup|esbuild|makefile|jsdoc|protractor|wdio|nodemon|pm2|"""
+                        r"""ecosystem|dangerfile|renovate|release)\b[\w.-]*\.[cm]?js$""", re.I)
+JS_EXTS = (".js", ".mjs", ".cjs", ".jsx")
+# a root with one of these is a project in another language; it gets a JS program only for a declared Node package
+OTHER_LANGS = ("python", "php", "rust", "go", "dart", "java", "kotlin", "swift", "c_cpp")
+PLAIN_SKIP = {"test", "tests", "__tests__", "spec", "examples", "example", "docs", "doc", "build", "dist", "out",
+              "coverage", "vendor", "static", "public", "assets", "www", "fixtures", "benchmark", "benchmarks",
+              "bench", "site", "_site", "tmp", "temp", "third_party", "external", "e2e"}
+
+
+def plain_js_dirs(root: Path, limit: int = 600) -> list[str]:
+    """Top-level directories (or `.`) holding JS program files of a project without tsconfig / jsconfig (#136):
+    `.js` / `.mjs` / `.cjs` / `.jsx` files with `require` / `import` / `export` / `module.exports`, outside the preset
+    skip dirs, tests, docs, examples, static assets and build output, and not build-tool configuration."""
+    out, seen = [], 0
+    skip = set(SKIP_DIRS) | PLAIN_SKIP
+
+    def files(d: Path, depth: int):
+        try:
+            entries = sorted(d.iterdir())
+        except OSError:
+            return
+        for x in entries:
+            if x.is_file() and x.suffix in JS_EXTS and not JS_TOOLING.search(x.name):
+                yield x
+        if depth < 3:
+            for sub in entries:
+                if sub.is_dir() and sub.name not in skip and not sub.name.startswith("."):
+                    yield from files(sub, depth + 1)
+    for p in files(root, 0):
+        seen += 1
+        if seen > limit:
+            break
+        try:
+            if JS_MODULE.search(p.read_text(errors="replace")[:20000]):
+                rel = p.relative_to(root).parts
+                d = "." if len(rel) == 1 else rel[0]
+                if d not in out:
+                    out.append(d)
+        except OSError:
+            continue
+    return ["."] if "." in out else out
+
+
+def _node_package(root: Path) -> bool:
+    """package.json declares a Node package entry (`main` / `bin` / `exports`) that exists."""
+    try:
+        d = json.loads((root / "package.json").read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(d, dict):
+        return False
+    ents = []
+    for k in ("main", "bin", "exports"):
+        v = d.get(k)
+        stack = [v]
+        while stack:
+            x = stack.pop()
+            if isinstance(x, str):
+                ents.append(x)
+            elif isinstance(x, dict):
+                stack.extend(x.values())
+            elif isinstance(x, list):
+                stack.extend(x)
+    for e in ents:
+        if e.endswith(".d.ts") or e.endswith(".json"):
+            continue
+        f = (root / e).resolve()
+        if any(c.exists() for c in (f, f.with_name(f.name + ".js"), f / "index.js")):
+            return True
+    return False
+
+
+def plain_js_program(project: Project) -> list[str]:
+    """Source dirs of a plain JS project that has no tsconfig / jsconfig (#136), or [] when it is not one: the root
+    has a package.json (or, without one, at least two JS module files and no other language's markers), and a root
+    with another language's markers (pyproject.toml, composer.json, Cargo.toml ...) also declares a Node package
+    entry, so JS tooling configs and static assets next to a Python / PHP / Rust project start no program."""
+    root = project.root
+    if project.exists("tsconfig.json") or project.exists("jsconfig.json"):
+        return []
+    langs = project.detected.get("languages") or {}
+    other = [x for x in OTHER_LANGS if x in langs]
+    has_pkg = project.exists("package.json")
+    if other and not (has_pkg and _node_package(root)):
+        return []
+    dirs = plain_js_dirs(root)
+    if not dirs:
+        return []
+    if not has_pkg:
+        n = sum(1 for p in root.glob("*") if p.suffix in JS_EXTS and p.is_file() and not JS_TOOLING.search(p.name))
+        if dirs != ["."] or n < 2:
+            return []
+    return dirs
+
+
 class TypeScriptPlugin(LanguagePlugin):
     name = "typescript"
 
@@ -195,6 +299,10 @@ class TypeScriptPlugin(LanguagePlugin):
         self.program: TsContext | None = None
 
     def detect(self, project: Project) -> bool:
+        return self.detect_configured(project) or bool(plain_js_program(project))   # any other plain JS project (#136)
+
+    def detect_configured(self, project: Project) -> bool:
+        """The projects indexed before #136: a tsconfig / jsconfig, or one of the plain-JS special cases."""
         if project.exists("tsconfig.json") or project.exists("jsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
             return True
         if project.exists("package.json") and cordova_www_dirs(project.root):
@@ -239,6 +347,11 @@ class TypeScriptPlugin(LanguagePlugin):
             # a plain Node program (no framework, no tsconfig) using net / dgram / tls: its JS files with allowJs (#39)
             from ..tsweb.common import TEST_SKIP_RE, merge_extractor_cfg
             merge_extractor_cfg(ctx.extractor_cfg, src_dirs=nd, skip_re=TEST_SKIP_RE, walk_src=True, allow_js=True)
+        elif not self.detect_configured(project) and (pj := plain_js_program(project)):
+            # plain JavaScript without tsconfig / jsconfig (#136): a synthesized allowJs program over its source dirs
+            from ..tsweb.common import TEST_SKIP_RE, merge_extractor_cfg
+            merge_extractor_cfg(ctx.extractor_cfg, src_dirs=pj, skip_re=TEST_SKIP_RE, walk_src=True, allow_js=True)
+            ctx.synthesized_js = pj
         # the walks' directory rules (codegraph/presets: common + typescript skip_dirs, the test walk's
         # test_walk_skip_dirs, the tsconfig files that are resolution input only), adjusted by .cg.yaml skip_dirs.add /
         # keep and include; exclude globs and skip_dirs.add names also drop files the tsconfig itself lists
@@ -492,6 +605,9 @@ class TypeScriptPlugin(LanguagePlugin):
                    "config_base_urls_unresolved": sorted(base_unresolved), "http_url_unknown": n_url_unknown})
         st.update({"extract_seconds": round(t_extract, 2), "http_edges": n_http, "http_endpoints": len(ctx.http_nodes),
                    "api_origins": self.api_origins})
+        if ctx.synthesized_js:
+            # no tsconfig / jsconfig: the file set comes from these directories (#136)
+            st["program"] = {"synthesized": True, "reason": "no tsconfig.json / jsconfig.json", "src_dirs": ctx.synthesized_js}
         return st
 
 

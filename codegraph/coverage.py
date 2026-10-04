@@ -376,7 +376,8 @@ def _ts_not_run(root, with_php: bool) -> tuple[str, str]:
     root = Path(root)
     has_pkg = (root / "package.json").is_file()
     reason = ("the TypeScript plugin did not run: no tsconfig.json / jsconfig.json at the indexed root"
-              + (", and its package.json declares no typescript dependency, no package tsconfigs and no server framework"
+              + (", and no plain JS program: no JS module files outside tests / docs / examples / assets, or another "
+                 "language's root whose package.json declares no main / bin / exports (#136)"
                  if has_pkg else " and no package.json"))
     found = []
     base = len(root.parts)

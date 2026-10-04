@@ -1,0 +1,1 @@
+{"name": "cjs-app", "version": "1.0.0", "main": "src/index.js", "scripts": {"test": "mocha"}, "dependencies": {"amqplib": "^0.10.0"}, "devDependencies": {"mocha": "^10.0.0"}}

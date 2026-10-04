@@ -951,7 +951,7 @@ now unchanged. `tests/test_jobs.py` covers the cross-repo cases on `tests/jobs_f
 
 | Project | Endpoints | Edges | Notes |
 |---|---|---|---|
-| rabbitmq-tutorials 6771f3e, `python` / `php` / `javascript-nodejs` | 9 / 9 / 10 | 6 SENDS_TO, 6 RECEIVED_BY, 3 MATCHES_ENDPOINT each (js: 7 RECEIVED_BY) | The six tutorial topologies in three languages. Hello / work queues (`queue:hello`, `queue:task_queue`) and RPC (`queue:rpc_queue`) pair by queue name. Fanout `logs`, direct `direct_logs` and topic `topic_logs` exchanges reach the consumers through the bindings of their server-named queues (pika `result.method.queue`, amqplib `q.queue`, php-amqplib `list($queue_name, ,)`). Binding keys come from argv, so the bindings are `<exchange>/#` (heuristic). The RPC reply (`props.reply_to`) and the callback queue held in `self.callback_queue` are counted as unresolved. The JS directory has no jsconfig, so it was indexed with one added (plain JS without a config is not indexed) |
+| rabbitmq-tutorials 6771f3e, `python` / `php` / `javascript-nodejs` | 9 / 9 / 10 | 6 SENDS_TO, 6 RECEIVED_BY, 3 MATCHES_ENDPOINT each (js: 7 RECEIVED_BY) | The six tutorial topologies in three languages. Hello / work queues (`queue:hello`, `queue:task_queue`) and RPC (`queue:rpc_queue`) pair by queue name. Fanout `logs`, direct `direct_logs` and topic `topic_logs` exchanges reach the consumers through the bindings of their server-named queues (pika `result.method.queue`, amqplib `q.queue`, php-amqplib `list($queue_name, ,)`). Binding keys come from argv, so the bindings are `<exchange>/#` (heuristic). The RPC reply (`props.reply_to`) and the callback queue held in `self.callback_queue` are counted as unresolved. The JS directory has no jsconfig, so it was indexed with one added (plain JS without a config was not indexed then; since #136 it is, with the same edges) |
 | nats-by-example 232213c, Python and Node examples | 9 + 8 | 17 + 10 SENDS_TO, 4 + 1 RECEIVED_BY, 4 + 4 MATCHES_ENDPOINT | `greet.*` subscriptions match `greet.joe` / `greet.bob` publishes and requests. Nested `cb=greet_handler` functions have no node of their own, so the receiver is the enclosing `main`. JetStream publishes have no core subscriber (`no_receiver`; stream consumers are part 2) |
 | kafkajs 55b0b41 `examples/` | 1 | 1 SENDS_TO, 1 RECEIVED_BY | `producer.send({topic, messages})` and `consumer.subscribe({topic})` with the shorthand `{ topic }` (the examples' `require('../index')` was pointed at `kafkajs`) |
 | outline 478e812 | 4 | 2 SENDS_TO, 2 RECEIVED_BY, 2 MATCHES_ENDPOINT, 1 TEST_CALLS | ioredis `publish(\`${CHANNEL_PREFIX}:${documentId}\`)` matches `psubscribe(\`${CHANNEL_PREFIX}:*\`)`. 14 `.publish(` calls on outline's own classes with a `publish` method (`document.publish(ctx, ..)`) are skipped as wrapper calls |
@@ -999,3 +999,24 @@ fraud-detection rows were checked by hand against the source; all 20 were correc
   with `env::var(..).unwrap_or_else(..)`;
 - the `cg link` of the two (`billing.invoices` linked).
 
+## Plain JavaScript without tsconfig / jsconfig (#136)
+
+| Project | Before | After | Notes |
+|---|---|---|---|
+| request 3c0cddc | no JS program | 74 modules, 195 functions, 14 http nodes; 1,064 edges besides CONTAINS (816 TEST_CALLS, 215 CALLS) | Plain CommonJS at the root (`index.js`, `lib/`, `tests/`), no typescript dependency. Exactly the graph a hand-written `jsconfig.json` gives (1,064 of 1,064 edges equal) |
+| node-gyp 399f6fa | Python only (gyp) | plus 33 JS modules, 117 functions, 43 methods, 121 tests; 845 JS edges | `bin/` and `lib/` are the source dirs; `commitlint.config.mjs`, `eslint.config.js` and `.github/scripts` are left out (coverage lists them as excluded / unmapped). The Python graph is unchanged |
+| rabbitmq-tutorials `javascript-nodejs` | no JS program | 12 modules, 14 functions, 16 broker edges | Identical to the #35 run with a jsconfig added (same nodes and edges) |
+| rabbitmq-tutorials `javascript-nodejs-stream`, kafkajs `examples/` | no JS program | 4 modules each | Root-level example scripts |
+
+Unchanged (same nodes and edges): django, sphinx, koel, thrift, full-stack-fastapi-template (other-language roots
+whose package.json only carries tooling or a frontend workspace), and statsd, jayson, kafkajs, eslint,
+cordova-toast, capacitor-plugins, create-t3-turbo, ws, express and amqplib, which one of the earlier rules already
+picked up. A scan of every corpus root finds no other project that the new rule adds. A random 20 of the 1,909 edges
+added in request and node-gyp were checked by hand against the source. 15 were correct and 1 was imprecise: `request.get(..)`
+resolves to `request`, because `get` is assigned at run time. 4 were wrong, all from one pattern the JS extractor
+already had: a variable that holds a call with a callback (`var server = http.createServer(function (req, res) {..})`)
+becomes a function node, and its later uses (`server.url`, `s2.listen(..)`, `return l`) are recorded as calls of it.
+A jsconfig-configured index gives the same edges; the pattern is tracked in #138. `tests/test_plain_js.py` covers
+`tests/plainjs_fixture`: a CommonJS app (functions, `require` calls, a mocha test, an amqplib endpoint; its
+`webpack.config.js` is ignored), an ESM library (`"type": "module"`, `exports`), and a Python project with a tooling-only
+`package.json`, which gets no JS program.

@@ -204,6 +204,17 @@ similarity of their callee sets.
   [path.join(__dirname, '..', 'tools', 'gen.js')])`, `execSync('node scripts/seed.mjs')`; read from the call's
   literals and the last assignment of a name it passes; scripts inside test trees stay test code; #106). A root
   `jsconfig.json` alone also enables the TypeScript plugin.
+- **Plain JavaScript without any config (#136).** A project that none of the cases above picks up (no tsconfig /
+  jsconfig, no typescript dependency, no package tsconfigs, no server framework, no Cordova / Laravel asset dirs) is
+  still indexed when it holds JS program files: `.js` / `.mjs` / `.cjs` / `.jsx` files with `require` / `import` /
+  `export` / `module.exports`, looked up three levels deep outside the preset skip dirs, tests, docs, examples,
+  static assets and build output. Build-tool configuration (`webpack.config.js`, `eslint.config.js`, `Gruntfile.js`,
+  `*.min.js`, ...) does not count. The top directories holding them (or `.`) become source dirs of a synthesized
+  `allowJs` program, and the plugin stats say so (`plugins.typescript.program`: `synthesized`, `reason`,
+  `src_dirs`). A root with another language's markers (`pyproject.toml`, `composer.json`, `Cargo.toml`, `go.mod`,
+  ...) gets this program only when its `package.json` declares a `main` / `bin` / `exports` entry that exists, so
+  JS tooling and static files next to a Python / PHP / Rust project start no program. Without a `package.json`,
+  two module files at the root are needed.
 - **TypeScript in a sub-directory of a non-JS repo.** A root with no `package.json` at all (a Swift / Kotlin / Rust /
   Dart app with a `web/` directory) is handled the same way, with every `tsconfig.json` one or two levels down,
   `package.json` next to it or not. A PHP or Python backend root (`composer.json`, `pyproject.toml`, `manage.py`,

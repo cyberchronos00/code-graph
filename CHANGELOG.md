@@ -10,6 +10,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Plain JavaScript projects without `tsconfig.json` / `jsconfig.json` are indexed (#136): JS module files outside
+  tests, docs, examples, assets and build output make their top directories source dirs of a synthesized `allowJs`
+  program (`plugins.typescript.program.synthesized`). A Python / PHP / Rust / Go root needs a `package.json`
+  `main` / `bin` / `exports` entry, so JS tooling configs alone start no program.
 - Message brokers, part 2 (#35): Kotlin (Spring `@KafkaListener` / `@RabbitListener` with queues and
   `QueueBinding`s, kafka-clients, `KafkaTemplate`, the RabbitMQ Java client, kourier, `RabbitTemplate`, Paho /
   HiveMQ, jnats, Jedis / Lettuce) and Rust (lapin, rdkafka, async-nats, rumqttc, redis-rs) producers and consumers.
