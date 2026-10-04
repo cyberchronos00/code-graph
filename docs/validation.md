@@ -1044,3 +1044,29 @@ argument, and immich's server-to-server `server.on('AppRestart')`. `tests/test_r
 `tests/realtime_fixture`: a server with a namespace, middleware, rooms, an ack, a template event, an emit wrapper and
 a `net` socket that is not Socket.IO; a socket.io-client app with chained listeners; and a Nest gateway with a guard.
 Both pairs are linked with `cg link`, and a python-socketio server created under a module-level `if` is also covered.
+
+## JS callback variables, property reads and returns (#138)
+
+Call edges are CALLS, TEST_CALLS and RENDERS, counted by (kind, source, target, line), before -> after.
+
+| Project | Functions | Call edges | Notes |
+|---|---|---|---|
+| request 3c0cddc | 195 -> 136 | 1,031 -> 745 (-326, +40) | The 59 lost function nodes are `var s = http.createServer(cb)`, `var r = request(url, cb)` and `.map(cb)` results. No calls of `server` / `s` / `s2` remain (163 before). The callbacks' own calls move to the enclosing test or module. `request(..)` calls and expando calls like `request.get(..)` are kept |
+| saleor-dashboard f9093f2 | 9,348 -> 9,317 | 34,511 -> 33,819 (-701, +9) | Mostly `Comp.displayName = ".."` (about 480) and zod schemas / fixtures (`appManifestSchema.safeParse`, `attributes[0]`) |
+| cal.com 54343aa | 7,131 -> 7,070 | 20,472 -> 20,227 (-253, +8) | zod schemas (`z.string().transform(fn)`), `vi.hoisted(() => ({..}))` mocks, `displayName`, `return handler` |
+| excalidraw ed10ac7 | 3,263 -> 3,259 | 26,796 -> 26,573 (-224, +1) | `displayName`, `X.prototype.y = ..` in the woff2 bindings. `Object.assign(withInternalFallback(..), {..})` components and `<MainMenu.Item>` tags are kept |
+| eslint | 4,534 -> 4,534 | 16,705 -> 16,288 (-417) | Bundled benchmark files (`_.isFinite = function ..`, `Buffer.prototype.x = ..`) |
+| outline 478e812 | 3,998 -> 3,945 | 24,025 -> 23,906 (-167, +48) | `createLazyRegistry(() => ..)` registries and `.map(cb)` results. Their callbacks' calls now come from the module |
+| immich c5e06dc | 3,125 -> 3,110 | 22,355 -> 22,194 (-165, +4) | Test fixtures (`Object.fromEntries(..map(cb))`) and `mocks.x` reads. `vitest.fn(impl)` mocks are kept |
+| socket.io 1eaa582, mocha a9fc529, jayson 4c368aa | 876 -> 849, 511 -> 506, 226 -> 220 | -154, -114, -68 | `Mocha.prototype.x = ..`, `return fn`, `.map(cb)` and `.filter(cb)` results |
+| social-app, mattermost-mobile | 5,701 -> 5,686, 5,756 -> 5,744 | -77, -95 | Same patterns |
+
+Unchanged: node-gyp, commander.js, capacitor-plugins, breeze-nuxt, examples-es and fullstack-tutorial
+(`styled('img')(fn)` stays a component). ws, pino, amqplib, kafkajs, nodemailer, express, nest, elk, mcp-servers,
+electron-fiddle, open-webui, excalidraw-room, create-t3-turbo, cordova-toast, statsd and capacitor lose 2 to 30 edges
+each, from the same patterns. A random 20 of the 2,380 changed call edges in ten of these projects were checked by
+hand against the source: 16 removed and 4 added. 19 were correct. They include six `displayName` / `PreviewProps`
+writes, a zod schema, an array result of `.map(cb)`, `s.url` on a server, `vi.hoisted(() => ({..}))`, a
+`Mocha.prototype` write, and callbacks' calls moved to their module. One added edge is in a minified bundle
+(`socket.io.min.js`) and could not be checked. `tests/test_js_refs.py` covers `tests/jsref_fixture`: a factory
+callback, a wrapper, expando assignments, `return l` and test-file reads of a server.

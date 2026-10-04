@@ -648,6 +648,31 @@ function wrappedFn(init, depth = 0) {
   }
   return null
 }
+// `const f = debounce(() => ..)` / `useCallback(..)` / `React.memo(..)`: the variable holds the wrapped function, so
+// it is named after the variable. `const server = http.createServer((req, res) => ..)` passes a callback and holds
+// an object (#138): a known non-callable type, or with no type a method call on an object (other than lodash /
+// React / styled / test-mock namespaces and `Object.assign`), is not a wrapper.
+const WRAP_NS = /^(?:_|lodash|React|R|Ramda|fp|util|utils|Vue|vi|vitest|jest|sinon|styled)$/   // `vi.fn(impl)` mocks impl
+function wrapperOf(init, decl) {
+  const f = wrappedFn(init)
+  if (!f) return null
+  let t = null
+  try { t = checker.getTypeAtLocation(decl.name) } catch { t = null }
+  const vague = x => !!(x.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) || (x.isUnionOrIntersection() && x.types.some(vague))
+  if (t && !vague(t)) {
+    const nn = checker.getNonNullableType(t)
+    if (nn.getCallSignatures().length) return f
+    if (nn.isUnion() && nn.types.some(x => x.getCallSignatures().length)) return f
+    return null
+  }
+  const c = unwrap(unwrap(init).expression)
+  if (ts.isIdentifier(c) || ts.isCallExpression(c)) return f          // `debounce(fn)`, curried `styled('img')(fn)`
+  if (ts.isPropertyAccessExpression(c) && ts.isIdentifier(unwrap(c.expression)) && (WRAP_NS.test(unwrap(c.expression).text)
+      || c.getText() === 'Object.assign')) return f                     // `Object.assign(Comp, { Item })`
+  stats.callback_not_wrapper = (stats.callback_not_wrapper || 0) + 1
+  return null
+}
+const REF_CALL_PROPS = new Set(['call', 'apply', 'bind', 'value'])
 const isModuleExports = e => { e = unwrap(e); return !!e && ts.isPropertyAccessExpression(e) && e.getText() === 'module.exports' }
 const nodes = []                  // {id, kind, name, file, line, end_line, doc, parent, attrs}
 const declId = new Map()          // ts.Node (declaration) -> node id
@@ -1029,7 +1054,7 @@ for (const sf of sourceFiles) {
       if (isFn(init)) { name = node.name.text; kind = 'function'; body = init }
       else if (ts.isCallExpression(init) && ts.isIdentifier(init.expression) && init.expression.text === 'defineStore') {
         name = node.name.text; kind = 'store'; body = init
-      } else if (!qual && (wrapped = wrappedFn(init))) { name = node.name.text; kind = 'function'; body = wrapped }
+      } else if (!qual && (wrapped = wrapperOf(init, node))) { name = node.name.text; kind = 'function'; body = wrapped }
       else if (!qual && ts.isObjectLiteralExpression(init)) { ts.forEachChild(init, c => visit(c, node.name.text, parentId, true)); return }
     } else if (ts.isPropertyAssignment(node) && inObj && node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) && ts.isObjectLiteralExpression(unwrap(node.initializer))) {
       ts.forEachChild(node, c => visit(c, qual ? `${qual}.${node.name.text}` : node.name.text, parentId, true)); return
@@ -1038,7 +1063,7 @@ for (const sf of sourceFiles) {
       if (ts.isMethodDeclaration(node) || isFn(init)) { name = node.name.text; kind = ts.isMethodDeclaration(node) && ts.isClassLike(node.parent) ? 'method' : 'function'; body = init }
     } else if (ts.isPropertyDeclaration(node) && node.name && ts.isIdentifier(node.name) && node.initializer && ts.isClassLike(node.parent)) {
       const init = unwrap(node.initializer)
-      const f = isFn(init) ? init : wrappedFn(init)
+      const f = isFn(init) ? init : wrapperOf(init, node)
       if (f) { name = node.name.text; kind = 'method'; body = f }
     } else if (ts.isExportAssignment(node) && !qual) {
       const ex = unwrap(node.expression)
@@ -2449,7 +2474,17 @@ for (const sf of sourceFiles) {
     if (ts.isIdentifier(node) && !isDeclName(node) && !(node.parent && (ts.isCallExpression(node.parent) || ts.isNewExpression(node.parent)) && node.parent.expression === node)
         && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node && ts.isCallExpression(node.parent.parent) && node.parent.parent.expression === node.parent)
         && !ts.isImportSpecifier(node.parent) && !ts.isImportClause(node.parent) && !ts.isExportSpecifier(node.parent)
-        && !ts.isBindingElement(node.parent) && !ts.isShorthandPropertyAssignment(node.parent) && !ts.isTypeReferenceNode(node.parent) && !ts.isQualifiedName(node.parent)) {
+        && !ts.isBindingElement(node.parent) && !ts.isShorthandPropertyAssignment(node.parent) && !ts.isTypeReferenceNode(node.parent) && !ts.isQualifiedName(node.parent)
+        // #138: `server.url` / `fn['x']` read a property of the function object, `return l` hands the function back and
+        // `request = request.defaults(..)` assigns the variable; none of them calls it. `fn.call(..)` / `.apply` /
+        // `.bind`, `.value` of a Vue `computed` getter and an expando method call (`request.get(..)` with
+        // `request.get = verbFunc('get')`) still count
+        && !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node && !REF_CALL_PROPS.has(node.parent.name.text)
+             && !(ts.isCallExpression(node.parent.parent) && node.parent.parent.expression === node.parent)
+             && !(ts.isJsxOpeningLikeElement(node.parent.parent) || ts.isJsxClosingElement(node.parent.parent)))   // <Menu.Item>
+        && !(ts.isElementAccessExpression(node.parent) && node.parent.expression === node)
+        && !(ts.isReturnStatement(node.parent) && node.parent.expression === node)
+        && !(ts.isBinaryExpression(node.parent) && node.parent.left === node && node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken)) {
       const sym = checker.getSymbolAtLocation(node)
       if (sym) {
         const t = resolveSymbol(sym)

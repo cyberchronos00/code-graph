@@ -76,6 +76,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- JavaScript / TypeScript (#138): a variable that holds the result of a call taking a callback
+  (`var server = http.createServer((req, res) => ..)`, `const schema = z.string().transform(fn)`,
+  `const pieces = s.split(':').map(fn)`) is no longer a function node named after the variable, so its later uses
+  are not recorded as calls of the callback. Wrappers still are (`debounce(fn)`, `useCallback(fn)`, `memo(fn)`,
+  `styled('img')(fn)`, `vi.fn(fn)`, `Object.assign(Comp, {..})`, or any call whose result type has call
+  signatures). Property reads and writes on a function (`Comp.displayName = ..`, `Foo.prototype.x = ..`,
+  `server.url`), `return fn` and assignments to a function variable no longer count as calls of it. `fn.call` /
+  `.apply` / `.bind`, a Vue `computed(..).value`, `<Menu.Item>` and expando method calls (`request.get(..)`) still do.
 - python-socketio servers created under a module-level `if` / `try` (`if REDIS_URL: sio = AsyncServer(..)`) were
   not found (#32).
 
