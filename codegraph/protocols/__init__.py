@@ -258,6 +258,7 @@ def link_db(db) -> dict:
         f"SELECT id, json_extract(attrs,'$.protocol'), name FROM nodes WHERE kind='endpoint' AND json_extract(attrs,'$.protocol') IN ({q})", names)}
     if not eps:
         return {}
+    rq_paths = _rq_import_paths(db, eps)
     senders = {r[0] for r in db.execute("SELECT DISTINCT dst FROM edges WHERE kind='SENDS_TO' OR (kind='TEST_CALLS' AND "
                                         "json_extract(attrs,'$.orig')='SENDS_TO')") if r[0] in eps}
     receivers = {r[0] for r in db.execute("SELECT DISTINCT src FROM edges WHERE kind='RECEIVED_BY'") if r[0] in eps}
@@ -286,7 +287,57 @@ def link_db(db) -> dict:
                    [(s, d, "MATCHES_ENDPOINT", *loc.get(d, (None, None)), c, CONFIDENCE_RANK[c], json.dumps(a), None)
                     for s, d, c, a in rows])
     db.commit()
+    if rq_paths:
+        st.setdefault("job", {})["rq_import_paths"] = rq_paths
     return st
+
+
+def _path_template(path: str):
+    """`app.tasks.send_{kind}` -> ("app.tasks", regex of the function paths it names); (None, None) when the module
+    part is itself computed."""
+    import re
+    head = path.split("{", 1)[0]
+    if "." not in head:
+        return None, None
+    mod = head.rsplit(".", 1)[0]
+    rx = re.compile("".join(r"\w+" if p.startswith("{") else re.escape(p) for p in re.split(r"(\{[^{}]*\})", path) if p))
+    return mod, rx
+
+
+def _rq_import_paths(db, eps) -> int:
+    """RQ runs a job by import path: an enqueued `job:rq:<dotted.path>` (or `<module>.{x}` template) nothing receives
+    is received by the other repo's function of that path (RECEIVED_BY, heuristic; the worker repo has no marker)."""
+    import json
+    from ..core.model import CONFIDENCE_RANK
+    have = {r[0] for r in db.execute("SELECT DISTINCT src FROM edges WHERE kind='RECEIVED_BY' AND src LIKE 'endpoint:job:rq:%'")}
+    added = 0
+    for nid in [n for n in eps if n.startswith("endpoint:job:rq:") and n not in have]:
+        path = nid[len("endpoint:job:rq:"):]
+        if "{" in path:
+            mod, rx = _path_template(path)
+            rows = [] if not mod else db.execute("SELECT id, file, line FROM nodes WHERE kind='function' AND id LIKE ? ESCAPE '\\'",
+                                                 ("function:" + mod.replace("_", "\\_") + ".%",)).fetchall()
+            rows = [r for r in rows if rx.fullmatch(r[0][len("function:"):]) and "." not in r[0][len("function:" + mod) + 1:]
+                    and not r[0].rsplit(".", 1)[-1].startswith("_")]
+        else:
+            rows = db.execute("SELECT id, file, line FROM nodes WHERE id=? AND kind='function'", (f"function:{path}",)).fetchall()
+        for fid, file, line in rows:
+            ep = f"endpoint:job:rq:{fid[len('function:'):]}"
+            if ep in have:
+                continue
+            if ep not in eps:
+                db.execute("INSERT OR IGNORE INTO nodes(id, kind, name, fqn, file, line, lang, entry_kind, attrs) "
+                           "VALUES (?, 'endpoint', ?, ?, ?, ?, 'python', 'message_handler', ?)",
+                           (ep, "rq:" + fid[len("function:"):], "rq:" + fid[len("function:"):], file, line,
+                            json.dumps({"protocol": "job", "transport": "tcp", "framework": "rq", "task": fid[len("function:"):],
+                                        "by_import_path": True})))
+                eps[ep] = ("job", "rq:" + fid[len("function:"):])
+            db.execute("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)",
+                       (ep, fid, "RECEIVED_BY", file, line, "heuristic", CONFIDENCE_RANK["heuristic"],
+                        json.dumps({"how": "import path (cg link)", "library": "rq"}), None))
+            have.add(ep)
+            added += 1
+    return added
 
 
 def external_match(patterns: list[str], protocol: str, name: str) -> str | None:

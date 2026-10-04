@@ -138,6 +138,10 @@ Issues and pull requests that extend it are welcome.
     blind spots (detectors `django_dynamic_urlpatterns`, `django_unresolved_include`);
   - GraphQL (graphene, strawberry, ariadne) root fields are protocol endpoints (`endpoint:graphql:Query.x`,
     [protocols.md](protocols.md#graphql-root-fields)), not routes; object-type fields are not modelled;
+  - Celery / RQ / Dramatiq jobs pair by task name and queue ([protocols.md](protocols.md#job-queues-celery-rq-dramatiq));
+    tasks enqueued through a project wrapper (netbox `JobRunner.enqueue`), actors held in attributes and queue names
+    computed at run time are not followed; worker processes are read from Procfile / compose / systemd / supervisor
+    / scripts only (a worker started by a custom CLI, such as authentik's `ak worker`, is not seen);
   - ORM reads/writes are detected on `Model.objects...`, related managers and instance `.save()/.delete()` when the receiver
     type is known; raw SQL and `QuerySet` values passed through untyped helpers are not;
   - response shapes are derived from returned dict literals, helper functions and declared `response=` schemas; values

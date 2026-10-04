@@ -10,6 +10,15 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Job queues as protocol endpoints (#36, part 1, Python): `endpoint:job:<celery|rq|dramatiq>:<name>`, RECEIVED_BY
+  the task function and SENDS_TO from enqueue sites (Celery `.delay` / `.apply_async` / `send_task("name")`, RQ
+  `enqueue(func | "dotted.path" | f-string)` and `@job`, Dramatiq `.send` / `.send_with_options` / `actor=`), plus
+  `endpoint:queue:<framework>/<queue>` from `queue=`, `task_routes` / `CELERY_TASK_ROUTES` and `Queue("x")`. Worker
+  processes come from Procfile, compose, systemd, supervisor and scripts (`celery worker -Q`, `rq worker a b`,
+  `dramatiq mod -Q`). The new check `no_consumer` flags a queue that jobs are sent to and that no worker in the repo
+  consumes. Celery outside Django is now covered. The Django plugin's `job` nodes keep their DISPATCHES and entries;
+  their endpoint twins carry the task name for `cg link`, which also resolves RQ import paths to the worker repo's
+  functions. `cg protocols --protocol job` lists the adapted job nodes too.
 - GraphQL root fields as protocol endpoints (#34, part 1): `endpoint:graphql:<Query|Mutation|Subscription>.<field>`
   from SDL files, gql templates and Python `gql("..")` strings (`extend type`, custom `schema { query: X }` roots).
   RECEIVED_BY comes from JS / TS resolver maps (spreads, references, `subscribe`), graphene root classes and their

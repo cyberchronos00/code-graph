@@ -1,0 +1,7 @@
+services:
+  mailer-worker:
+    image: mailer
+    command: ["rq", "worker", "--url", "redis://redis:6379", "emails"]
+  digest-worker:
+    image: mailer
+    command: dramatiq mailer.actors -Q digest --processes 2

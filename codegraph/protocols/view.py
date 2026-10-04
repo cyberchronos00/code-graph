@@ -10,7 +10,8 @@ and from the node kinds cg emitted before it, read through adapters with their i
   channel_sub   pusher                           -                                  SUBSCRIBES_CHANNEL (code) MATCHES_CHANNEL ->
   message       nest-rpc / nest-event / nest-ws / grpc   DISPATCHES                 HANDLED_BY
   job           bull / laravel-queue / celery    DISPATCHES (also to the handler,   HANDLED_BY
-                                                 via=job), SCHEDULES
+                                                 via=job), SCHEDULES, SENDS_TO (the
+                                                 endpoint:job twin's, merged; #36)
   event         laravel-event / nest-event-emitter / django-signal   DISPATCHES     LISTENED_BY / HANDLED_BY
   endpoint      attrs.protocol (bridges, MQTT, Socket.IO, ...)   SENDS_TO           RECEIVED_BY               MATCHES_ENDPOINT
 
@@ -21,6 +22,7 @@ a single backend graph does not call every route `no_sender`):
   test_sender_only received, sent from tests only
   ambiguous        one sender matched several receivers equally well
   schema_mismatch  senders and receivers name different message types
+  no_consumer      a queue jobs are sent to; the repo starts workers (Procfile, compose, ...) and none consumes it
   unguarded        a receiver reachable from outside (http / ws / graphql routes, Socket.IO handlers, ...) with no
                    auth guard recorded (the same classification as `cg routes --unguarded`)
   external         declared external in .cg.yaml (protocols.external: ["kafka:audit.*"]), a third-party HTTP origin,
@@ -41,7 +43,7 @@ EDGE_ROLE_KINDS = ("HTTP_CALLS", "MATCHES_ROUTE", "ROUTES_TO", "USES_MIDDLEWARE"
                    "SENDS_TO", "RECEIVED_BY", "MATCHES_ENDPOINT", "TEST_CALLS")
 NEST = {"rpc": "nest-rpc", "event": "nest-event", "ws": "nest-ws", "grpc": "grpc"}
 SEND_IN = {"http": ("HTTP_CALLS",), "route": ("SENDS_TO",), "channel": ("BROADCASTS_ON",), "message": ("DISPATCHES",),
-           "job": ("DISPATCHES", "SCHEDULES"), "event": ("DISPATCHES",), "endpoint": ("SENDS_TO",)}
+           "job": ("DISPATCHES", "SCHEDULES", "SENDS_TO"), "event": ("DISPATCHES",), "endpoint": ("SENDS_TO",)}
 RECV_OUT = {"route": ("ROUTES_TO",), "message": ("HANDLED_BY",), "job": ("HANDLED_BY",),
             "event": ("LISTENED_BY", "HANDLED_BY"), "endpoint": ("RECEIVED_BY",)}
 RECV_IN = {"channel_sub": ("SUBSCRIBES_CHANNEL",)}
@@ -136,6 +138,26 @@ def _load(st):
                 e["dst"] = twin[e["dst"]]
             out.append(e)
         edges = out
+    # job queues (#36): a Celery job node of the Django plugin and its endpoint:job:celery:<name> twin are one endpoint,
+    # shown as the job node (its DISPATCHES / SCHEDULES); the twin's senders and matches move to it
+    jt = {nid: n["attrs"]["job_node"] for nid, n in nodes.items()
+          if n["kind"] == "endpoint" and n["attrs"].get("job_node") in nodes}
+    if jt:
+        for t, nid in jt.items():
+            for k in ("queue", "processes", "task"):
+                if nodes[t]["attrs"].get(k) is not None:
+                    nodes[nid]["attrs"].setdefault(k, nodes[t]["attrs"][k])
+            del nodes[t]
+        out = []
+        for e in edges:
+            if e["src"] in jt:
+                if e["kind"] == "RECEIVED_BY":
+                    continue
+                e["src"] = jt[e["src"]]
+            if e["dst"] in jt:
+                e["dst"] = jt[e["dst"]]
+            out.append(e)
+        edges = out
     return nodes, edges
 
 
@@ -228,6 +250,8 @@ def collect(st) -> dict:
             if (recv and not sent or not own and n["receivers"] and not psent) and psend[n["protocol"]] \
                     and not n["external"] and not skip_route and not (n["served"] and not n["receivers"]):
                 ck.append("test_sender_only" if n["test_senders"] or any(x["test_senders"] for x in peers) else "no_sender")
+            if n["protocol"] == "queue" and a.get("workers_known") and not a.get("consumers") and n["senders"]:
+                ck.append("no_consumer")       # produced; the repo starts workers, none of them consumes this queue (#36)
             outs = [m for m in n["matches"] if m["dir"] == "out"]
             amb = any(m.get("ambiguous") for m in outs)
             if not amb and len(outs) > 1:
@@ -266,6 +290,7 @@ def collect(st) -> dict:
     return ep
 
 
+JOB_ADAPTERS = ("celery", "bull", "laravel-queue")   # `--protocol job` also lists the job nodes of the plugins
 SOCKET_ATTRS = ("port", "port_envs", "bind_addresses", "exposure", "multicast_group")
 
 
@@ -291,7 +316,7 @@ def protocols(st, pattern: str | None = None, protocol: str | None = None, side:
         p = pattern[len("endpoint:"):] if pattern and pattern.startswith("endpoint:") else pattern
         for nid in sorted(ep):
             n = ep[nid]
-            if protocol and n["protocol"] != protocol:
+            if protocol and n["protocol"] != protocol and not (protocol == "job" and n["protocol"] in JOB_ADAPTERS):
                 continue
             if listeners and (n["protocol"] not in ("tcp", "udp") or not n["receivers"]):
                 continue

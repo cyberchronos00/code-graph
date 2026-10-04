@@ -1,0 +1,2 @@
+worker: celery -A billing.app worker -Q billing,celery --concurrency 4
+beat: celery -A billing.app beat

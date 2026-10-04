@@ -98,6 +98,7 @@ alone does not report every route as `no_sender`, nor a client every call as `no
 | `test_sender_only` | received, sent from tests only |
 | `ambiguous` | a sender matched several receivers equally well (HTTP: several routes; request protocols: ties) |
 | `schema_mismatch` | senders and receivers name different message types (when both are known) |
+| `no_consumer` | a job queue that jobs are sent to; the repo starts workers of that framework and none consumes it ([job queues](#job-queues-celery-rq-dramatiq)) |
 | `unguarded` | a receiver reachable from outside (HTTP / WebSocket / GraphQL routes, server-side Socket.IO handlers) with no auth guard: routes are classified as in `cg routes --unguarded`; a guard a plugin records on a receiver (a Socket.IO `connect` handler that rejects) counts as auth; Nest message handlers (`nest-rpc`, `nest-event`, `nest-ws`, `grpc`) record their `@UseGuards` (handler and class) and `APP_GUARD` guard classes, classified like route guards (`app.useGlobalGuards()` binds the HTTP app only, so it does not count) |
 | `external` | declared in `.cg.yaml` (`protocols.external`), a third-party HTTP origin, a signal the framework itself sends (Django's `post_save`, `request_finished`, ...: never `no_sender`), or a bridge module implemented outside the repo |
 
@@ -360,10 +361,68 @@ root-field requests (TEST_CALLS). On saleor-dashboard (Apollo + codegen, f9093f2
 the callers of 672 generated hooks and from `client.query({query})` calls, and every requested field is declared in
 its schema copy.
 
+## Job queues (Celery, RQ, Dramatiq)
+
+`codegraph/jobs.py` (#36 part 1, Python) adds two endpoint protocols:
+
+- `endpoint:job:<framework>:<name>`: one per task. RECEIVED_BY the function that runs it; SENDS_TO (role `enqueue`,
+  or `schedule`) from the code that enqueues it. `attrs.queue` is the queue it is routed to (the framework default
+  when none is named) and `attrs.processes` the worker processes that consume that queue.
+- `endpoint:queue:<framework>/<queue>`: one per named queue. SENDS_TO from enqueue sites whose queue is known,
+  RECEIVED_BY the tasks routed to it. `attrs.consumers` lists the worker processes that consume it, with
+  `consumers_at`. A consumed queue is `served` (a worker takes any job off it), so a producer in one repo and a
+  worker in another link by queue name.
+
+Task names are what crosses repos: index both repos and run `cg link`. Endpoint ids are shared, so a
+`send_task("billing.charge")` in a web app joins the `@app.task(name="billing.charge")` of the worker repo.
+
+**Celery** (any Python project that imports celery):
+- Tasks: `@app.task` / `@shared_task` / `@celery.task` / `@periodic_task` (`name=`, `queue=`; the name defaults to
+  the function's dotted path).
+- Sends: `.delay` / `.apply_async(queue=)` / `.s` / `.si` / `.signature` / `.delay_on_commit` on a task, and
+  `send_task("name", queue=)` / `app.signature("name")` by name.
+- Queues: `task_routes` / `CELERY_TASK_ROUTES` globs (`{"billing.export.*": {"queue": "exports"}}`).
+  `task_default_queue` changes the default from `celery`.
+- Settings constants (`queue=settings.X`) resolve from `X = "lit"`, or from `os.environ.get("E", "lit")` (heuristic),
+  in the same file or in one non-test settings / config module.
+- In a Django project the plugin's `job:<task>` nodes (with their DISPATCHES / SCHEDULES and `queue_job` entries)
+  stay as they were. The endpoint gets `job_node` and is no entry point itself. A send the plugin already records
+  as DISPATCHES is not repeated. `cg protocols` shows one entry, the job node (protocol `celery`), with the twin's
+  queue and cross-repo senders. `--protocol job` lists these adapted job nodes too.
+
+**RQ / django-rq:**
+- `Queue("name")` variables, `q.enqueue(func | "dotted.path" | f"pkg.mod.{x}")`, `enqueue_call(func=)`,
+  `enqueue_in` / `enqueue_at`, `django_rq.enqueue`, `get_queue("x").enqueue`, and `@job("x")` functions with
+  `.delay()`.
+- The job is named by the function's dotted path. A path or f-string template whose module is in the repo gets the
+  module's top-level functions as receivers (heuristic for templates).
+- When the function lives in another repo (RQ needs no marker on the worker side), `cg link` adds RECEIVED_BY from
+  `job:rq:<path>` to the other repo's function of that path (heuristic; `rq_import_paths` in the link stats).
+
+**Dramatiq:** `@dramatiq.actor` / `@actor` (`actor_name=`, `queue_name=`). Sends are `.send()` /
+`.send_with_options(queue_name=)`, plus `actor=x` keyword registrations (authentik's `ScheduleSpec(actor=..)`,
+role `schedule`, heuristic).
+
+**Worker processes** come from Procfile, docker-compose / compose files, systemd `.service`, supervisor `.conf`,
+Dockerfile, shell scripts, Makefile / justfile, pyproject (poe tasks), fly / render / k8s yaml and entrypoints:
+- `celery -A x worker -Q a,b` (default queue: `celery`, or `task_default_queue`);
+- `rq worker a b` and `manage.py rqworker a b` (default: `default`);
+- `dramatiq pkg.mod -Q a` (default: `default`).
+
+The process is named by the Procfile key, the compose service, the supervisor program or the file name.
+
+**Check `no_consumer`:** jobs are sent to the queue, the repo starts workers of that framework, and none of them
+consumes the queue. Examples are a `task_routes` queue missing from `-Q`, and saleor's `observability` queue, which
+its only worker command (pyproject `celery worker`, default queue) does not consume.
+
+Not covered yet (#36 part 2): BullMQ / Bull outside Nest, Laravel queues and Horizon, Symfony Messenger, Huey, arq,
+apalis, Spring JMS, graphile-worker, Agenda. Also job classes run through a framework wrapper (netbox's
+`JobRunner.enqueue`) and actors passed around as attributes (`self.sync_task.send_with_options`).
+
 ## Not covered yet
 
 - Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
-  children (#32, #35-#38); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
+  children (#32, #35, #37, #38); job queues beyond Celery / RQ / Dramatiq (#36 part 2); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
   endpoints (#32).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.

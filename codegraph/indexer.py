@@ -252,6 +252,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (gq := apply_graphql(project, builder)):
         gq["seconds"] = round(time.time() - t_gq, 2)
         stats["graphql"] = gq
+    # job queues (#36): endpoint:job:<framework>:<name> / endpoint:queue:<framework>/<queue>, workers from process files
+    from .jobs import apply as apply_jobs
+    t_jb = time.time()
+    if (jb := apply_jobs(project, builder)):
+        jb["seconds"] = round(time.time() - t_jb, 2)
+        stats["jobs"] = jb
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)
