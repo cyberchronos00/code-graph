@@ -8,6 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-04
+
+First release on PyPI, as `cg-code-graph` (`pipx install cg-code-graph`, `uv tool install cg-code-graph`); the
+commands stay `cg` and `cg-mcp`. Also: Swift generated code and deployment targets (#100), dispatch through object
+literals, mixins, override specs and Kotlin locals / test doubles (#96), bridge event names from enums, helpers,
+locals and computed properties (#95), Tauri plugin command names (#97), Nest `@OnEvent({ name })` (#101).
+Cache version 3 (unchanged).
+
 ### Changed
 
 - Nest `@OnEvent({ name: 'X', ... })` names its event (#101), including a project's own `SetMetadata`-based
@@ -1024,7 +1032,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/cyberchronos00/code-graph/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/cyberchronos00/code-graph/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cyberchronos00/code-graph/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/cyberchronos00/code-graph/compare/v0.8.1...v0.8.2
