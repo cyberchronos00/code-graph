@@ -8,6 +8,20 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- GraphQL root fields as protocol endpoints (#34, part 1): `endpoint:graphql:<Query|Mutation|Subscription>.<field>`
+  from SDL files, gql templates and Python `gql("..")` strings (`extend type`, custom `schema { query: X }` roots).
+  RECEIVED_BY comes from JS / TS resolver maps (spreads, references, `subscribe`), graphene root classes and their
+  bases (`resolve_x`, `Mutation.Field()` -> `perform_mutation` / `mutate`), strawberry, ariadne and Nest
+  `@Resolver`s (whose `route:GRAPHQL` stays the entry and is now listed under `graphql`, not `http`). SENDS_TO comes
+  from Apollo / urql hooks, `client.query({query})`-style calls, graphql-request, codegen `use<Op>Query` hooks
+  (attributed to their callers) and Python document constants, with `operation`, `operation_kind` and the requested
+  `fields`. Declared fields count as served, so a requested field that no schema declares gets `no_receiver`.
+  Plain Node GraphQL servers (apollo-server, @apollo/server, graphql-yoga, mercurius, ...) without a tsconfig are
+  now indexed like the plain Node network programs of #39. On saleor 446 of the 448 schema root fields get a
+  resolver; on saleor-dashboard 629 root-field requests come from the callers of 672 generated hooks.
+
 ## [0.11.0] - 2026-10-04
 
 Protocol links for RPC contracts and raw sockets: gRPC services from `.proto` files (#33), Thrift, tRPC router

@@ -246,6 +246,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (rp := apply_rpc(project, builder)):
         rp["seconds"] = round(time.time() - t_rpc, 2)
         stats["rpc"] = rp
+    # GraphQL (#34): schema root fields endpoint:graphql:Query.x, their resolvers and the operations requesting them
+    from .graphql import apply as apply_graphql
+    t_gq = time.time()
+    if (gq := apply_graphql(project, builder)):
+        gq["seconds"] = round(time.time() - t_gq, 2)
+        stats["graphql"] = gq
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

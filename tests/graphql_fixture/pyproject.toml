@@ -1,0 +1,4 @@
+[project]
+name = "fixture-graphql-py"
+version = "0.1.0"
+dependencies = ["graphene>=3", "strawberry-graphql", "ariadne", "gql"]

@@ -235,6 +235,7 @@ def apply(builder, externals: list | tuple = ()) -> dict:
             if e.attrs.get("process"):
                 procs[("recv", e.src)].add(e.attrs["process"])
             loc.setdefault(e.src, (e.file, e.line))      # the match is evidenced where the receiver registers
+    receivers |= {nid for nid in eps if builder.nodes[nid].attrs.get("served")}   # GraphQL schema fields (#34)
     for nid in eps:
         a = builder.nodes[nid].attrs
         a["side"] = "both" if nid in senders and nid in receivers else "send" if nid in senders else "receive" if nid in receivers else "none"
@@ -260,6 +261,8 @@ def link_db(db) -> dict:
     senders = {r[0] for r in db.execute("SELECT DISTINCT dst FROM edges WHERE kind='SENDS_TO' OR (kind='TEST_CALLS' AND "
                                         "json_extract(attrs,'$.orig')='SENDS_TO')") if r[0] in eps}
     receivers = {r[0] for r in db.execute("SELECT DISTINCT src FROM edges WHERE kind='RECEIVED_BY'") if r[0] in eps}
+    receivers |= {r[0] for r in db.execute("SELECT id FROM nodes WHERE kind='endpoint' AND "
+                                           "json_extract(attrs,'$.served') IS NOT NULL") if r[0] in eps}
     existing = {(r[0], r[1]) for r in db.execute("SELECT src, dst FROM edges WHERE kind='MATCHES_ENDPOINT'")}
     externals = []
     for alias in ("b", "f"):          # protocols.external of both repos (.cg.yaml, in their index stats)

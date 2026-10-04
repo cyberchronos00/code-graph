@@ -158,7 +158,8 @@ def cordova_www_dirs(root: Path) -> list[str]:
 
 
 NODE_NET = re.compile(r"""(?:require\(\s*|from\s+)['"](?:node:)?(?:net|dgram|tls|@grpc/grpc-js|grpc|@grpc/proto-loader|thrift|"""
-                      r"""@connectrpc/connect(?:-node)?)['"]""")
+                      r"""@connectrpc/connect(?:-node)?|apollo-server(?:-[\w-]+)?|@apollo/server(?:/[\w-]+)?|graphql-yoga|express-graphql|"""
+                      r"""graphql-http(?:/[\w-]+)?|mercurius|@graphql-tools/schema)['"]""")
 
 
 def node_socket_dirs(root: Path, limit: int = 400) -> list[str]:

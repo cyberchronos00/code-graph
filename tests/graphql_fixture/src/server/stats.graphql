@@ -1,0 +1,7 @@
+extend type Query {
+  stats: Stats
+}
+
+type Stats {
+  books: Int
+}

@@ -136,7 +136,8 @@ Issues and pull requests that extend it are welcome.
     registered through third-party registries (NetBox `register_model_view`, Wagtail hooks/viewsets) are only partly
     resolved; the `urlpatterns` entries built that way and `include()` targets cg could not follow are reported as
     blind spots (detectors `django_dynamic_urlpatterns`, `django_unresolved_include`);
-  - GraphQL (graphene, strawberry, ariadne) schemas are not modelled as routes;
+  - GraphQL (graphene, strawberry, ariadne) root fields are protocol endpoints (`endpoint:graphql:Query.x`,
+    [protocols.md](protocols.md#graphql-root-fields)), not routes; object-type fields are not modelled;
   - ORM reads/writes are detected on `Model.objects...`, related managers and instance `.save()/.delete()` when the receiver
     type is known; raw SQL and `QuerySet` values passed through untyped helpers are not;
   - response shapes are derived from returned dict literals, helper functions and declared `response=` schemas; values
@@ -151,7 +152,7 @@ Issues and pull requests that extend it are welcome.
   - DI frameworks (get_it, injectable, Riverpod) are resolved only for the typed lookup forms (`getIt<T>()`, `read<T>()`, `of<T>()`);
   - URLs built from runtime values (config objects loaded at runtime, interceptors that rewrite paths) become `{param}` or
     an `unknown` origin; Dio without a traceable `baseUrl` is matched by path suffix and capped at `heuristic`;
-  - GraphQL/gRPC clients and Firebase SDK calls are not modelled as HTTP calls;
+  - GraphQL clients (graphql_flutter, ferry), gRPC clients and Firebase SDK calls are not modelled as HTTP calls;
   - generated code: `.g.dart` is read for JSON keys, `.freezed.dart`, `.mocks.dart`, `.config.dart` and `.gr.dart` are skipped;
   - bloc `state_flow` works on `on<E>` handlers, `emit(...)` (incl. `copyWith(status: X.y)`) and UI checks
     (`is`, `switch`, `==` on enum-like values); states derived in `buildWhen`/selectors are not interpreted;

@@ -19,7 +19,7 @@ path parameters, and the handler symbol.
 | paperless-ngx | DRF routers, ViewSets, `@action` (incl. regex `url_path`), Channels, Celery, signals | 353 / 407 | 10 s | 7,672 / 31,332 | 223 | 20/20 paths; 3 handlers external (RedirectView, allauth) | 0 |
 | netbox | large DRF API, plugin URL registries | 980 / 1,290 | 29 s | 23,917 / 112,393 | 956 | 20/20 | 0 |
 | wagtail | admin viewsets, hooks, many `include()` levels | 1,058 / 1,324 | 29 s | 22,395 / 69,911 | 195 | 20/20 paths; 5 handlers unresolved (viewset registry `as_view`, external LoginView) | 0 |
-| saleor | GraphQL-first API | 2,867 / 4,335 | 68 s | 30,521 / 134,683 | 9 | n/a (GraphQL is not modelled) | 0 |
+| saleor | GraphQL-first API | 2,867 / 4,335 | 68 s | 30,521 / 134,683 | 9 | n/a (GraphQL root fields are protocol endpoints, see #34 below) | 0 |
 
 The difference between files and parsed files is migrations (skipped by default; `python_include_migrations` turns
 them on) and files over the size cap. No file failed `ast.parse`.
@@ -894,3 +894,21 @@ Before -> after on the C/C++ corpora (heuristic mode):
 A random 20 of the added edges were checked by hand against the source: 20 correct. The removed edges were
 spot-checked by group (the cross-program USES_TYPE / USES_VALUE mirrors and the `.str()` / `.size()` / handler
 guesses were all wrong before), except the 22 leveldb calls above.
+
+## GraphQL root fields (#34 part 1)
+
+| Project | Root-field endpoints | Edges | Notes |
+|---|---|---|---|
+| saleor 8385ca6 (graphene) | 455 (448 in schema.graphql) | 446 RECEIVED_BY, 6,106 TEST_CALLS | `Query(AccountQueries, ...)` / `Mutation(...)` of `build_federated_schema(..)`: 333 `X.Field()` mutations (262 own `perform_mutation` / `mutate`, 71 inherited, heuristic), 89 `resolve_*`, 24 `resolver=`; the two schema fields without a resolver are federation's `_entities` / `_service`; the 7 extra endpoints are test schemas. Tests post `QUERY = """..."""` constants and per-test `query` locals |
+| saleor-dashboard f9093f2 (Apollo + graphql-codegen) | 457 (schema copy) | 625 SENDS_TO, 4 TEST_CALLS | callers of 672 generated `use<Op>Query` / `Mutation` hooks and `client.query({query: XDocument})`; 25 calls to hand-written `use..Query` wrappers name no operation (stats only) |
+| fullstack-tutorial fca98de, `final/server` + `final/client` | 6 + 8 | 6 RECEIVED_BY, 6 TEST_CALLS; 7 SENDS_TO | apollo-server resolver map (plain Node, now indexed); `useQuery` / `useMutation` clients; `@client` fields skipped; `cg link` joins all 6 server fields with their client senders |
+| strawberry-examples ff2bd0d | 8 | 9 RECEIVED_BY | four apps; `@strawberry.field` / `mutation` / `subscription` roots of `strawberry.Schema(..)` |
+| netbox 251458b (strawberry-django) | 260 | 5 TEST_CALLS | `strawberry_django.field()` root fields are served by the default resolver (no function); `auto_camel_case=False` keeps snake_case |
+| nest `sample/` 12, 22, 23, 33 (35142c3) | 4, 6, 5, 5 | 20 RECEIVED_BY | endpoint twins of the `route:GRAPHQL` routes |
+
+The 20 #39 corpora are unchanged except netbox (the 5 TEST_CALLS above and 1 endpoint at snapshot time; 260
+endpoints with the final strawberry-django rule). A random 20 of the new edges across these corpora were checked by
+hand against the source: 20 correct. An earlier sample found per-test `query = """..."""` locals bound to the first
+one in the file; the binding now prefers the calling function's own assignment, then module level, then an import.
+`tests/test_graphql.py` covers the document parser, SDL, resolver maps, Apollo clients, a codegen hook, Nest twins in
+`cg protocols`, graphene, strawberry, ariadne and Python clients on `tests/graphql_fixture`.

@@ -1,0 +1,2 @@
+{ "compilerOptions": { "target": "ES2022", "module": "commonjs", "strict": false, "jsx": "react-jsx", "allowJs": true,
+                       "experimentalDecorators": true, "emitDecoratorMetadata": true, "skipLibCheck": true }, "include": ["src"] }

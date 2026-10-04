@@ -75,7 +75,7 @@ Node ids are unchanged; `cg protocols` reads them through adapters (no extra nod
 | kind | protocol | senders | receivers | matches |
 |---|---|---|---|---|
 | `http` | http (`http:WS ...`: ws) | HTTP_CALLS | - | MATCHES_ROUTE -> route |
-| `route` | http, ws (`route:WS`), graphql (`route:GRAPHQL`) | (tests: TEST_HTTP) | ROUTES_TO | <- MATCHES_ROUTE |
+| `route` | http, ws (`route:WS`), graphql (`route:GRAPHQL`; senders through its `endpoint:graphql:` twin) | (tests: TEST_HTTP) | ROUTES_TO | <- MATCHES_ROUTE |
 | `channel` | pusher | BROADCASTS_ON (events) | - | <- MATCHES_CHANNEL |
 | `channel_sub` | pusher | - | SUBSCRIBES_CHANNEL (client code) | MATCHES_CHANNEL -> channel |
 | `message` | nest-rpc, nest-event, nest-ws, grpc (Nest `@GrpcMethod`) | DISPATCHES (ClientProxy.send / emit) | HANDLED_BY | - |
@@ -296,10 +296,74 @@ variable holding it), `addMethod("x", fn)`, `onRequest` / `onNotification`, Pyth
 `.sendNotification("x", ..)`, jsonrpcclient `request("x")`, and request payloads `{"jsonrpc": "2.0", "method":
 "x"}` in any language, which also covers calls to an external JSON-RPC API.
 
+## GraphQL (root fields)
+
+`endpoint:graphql:<Query|Mutation|Subscription>.<field>`, one per root field (`codegraph/graphql.py`). Object-type
+fields (`Book.author`) are not endpoints yet.
+
+**Schema.** SDL comes from `.graphql` / `.graphqls` / `.gql` files, from `gql` / `graphql` / `/* GraphQL */` template
+literals, and from Python `gql("""...""")` strings, including `extend type Query` and custom root names
+(`schema { query: RootQuery }`). Each declared root field gets an endpoint with `root`, `field`, `type` (the return
+type) and `declared_in`. `served: schema` marks the field as received even when cg finds no resolver function (a
+default resolver, or a schema copy in a client repo). `cg protocols` therefore counts a declared field as received,
+and it never reports `no_sender` for one that has no resolver.
+
+**Resolvers** (RECEIVED_BY):
+- **JS / TS resolver maps.** Supported shapes are `{Query: {books: fn, author(..) {..}}, Mutation: {..}}`, spreads
+  (`...bookQueries`, looked up in the same file or the only file that declares the variable), shorthand and
+  identifier values (`stats: statsResolver`), and `Subscription: {x: {subscribe}}`. Apollo cache `typePolicies` are
+  skipped.
+- **graphene.** The `query=` / `mutation=` / `subscription=` classes of `graphene.Schema(..)`,
+  `build_federated_schema(..)` and similar calls, with the root fields of all their in-project bases (saleor's
+  `Query(AccountQueries, ProductQueries, ...)`). A field `x = graphene.Field(..)` is resolved by `resolve_x` (also
+  in a base), or by `resolver=fn`. A mutation field `x = CreateItem.Field()` is resolved by the mutation's own
+  `perform_mutation` / `mutate`; an inherited one is `heuristic` and records `inherited_from`. For a subscription
+  field, `subscribe_x` is tried first. Python names become camelCase unless `auto_camelcase=False`.
+- **strawberry.** The roots of `strawberry.Schema(..)`: `@strawberry.field` / `mutation` / `subscription` methods
+  (`name=` honoured), and `x: T = strawberry.field(resolver=fn)`. Names are camelCase.
+- **ariadne.** `QueryType()` / `MutationType()` / `SubscriptionType()` / `ObjectType("Query")` with
+  `@query.field("x")`, `@subscription.source("x")` and `set_field("x", fn)`.
+- **Nest.** `@Resolver` + `@Query` / `@Mutation` / `@Subscription` already give `route:GRAPHQL Query.x`
+  ([ts-frameworks.md](ts-frameworks.md)). The endpoint twin `endpoint:graphql:Query.x` is RECEIVED_BY the same
+  method and is not an entry point itself. `cg protocols` shows one entry, the route, with the twin's senders and
+  the route's guards (`unguarded` is checked as for HTTP routes). The route kind is now reported under `graphql`,
+  not `http`.
+
+A root field declared in graphene or strawberry code without a resolver function is `served` by the framework (the
+default resolver).
+
+**Operations** (SENDS_TO, one per root field requested, with attrs `operation`, `operation_kind` and `fields`, the
+field's first-level selection with fragment spreads and inline fragments expanded):
+- Apollo / urql hooks `useQuery` / `useLazyQuery` / `useMutation` / `useSubscription` / `useSuspenseQuery` /
+  `useBackgroundQuery(DOC)` (generic type arguments allowed).
+- Any call with a `{query | mutation | document: DOC}` object (`client.query`, `client.mutate`,
+  `server.executeOperation`, test helpers), except the cache calls (`readQuery`, `writeQuery`, ...). Objects nested
+  in options such as `refetchQueries: [{query: X}]` are not sends.
+- urql / graphql-request `.query(DOC)`, `.mutation(DOC)`, `request(url, DOC)`, and inline `useQuery(gql`...`)`.
+- graphql-codegen hooks `use<Op>Query` / `LazyQuery` / `SuspenseQuery` / `Mutation` / `Subscription(..)`, matched
+  by operation name and kind. The generated hook itself (`*.generated.ts`, `__generated__/`) is a wrapper: its
+  callers send.
+- Python: documents assigned to a name (`QUERY = """query ..."""`, `gql("""...""")`) that are passed to a call
+  (`client.execute(QUERY)`, `api_client.post_graphql(QUERY, ..)`). These are `heuristic`; calls from tests become
+  TEST_CALLS.
+
+`DOC` is a variable bound to a document: in the same file, the only one with that name, or the one its import names.
+Fields marked `@client` (Apollo local state) and `__typename` / `__schema` are skipped. Fields whose name is
+interpolated (`${x}`, f-string `{field}`) are counted as `dynamic_root_fields`, not sent. A requested root field that
+no schema in the graph declares and no resolver receives gets `no_receiver`. In a client-only repo whose schema lives
+in the server repo, index both and run `cg link`: endpoint ids are shared, so the two sides join.
+
+On saleor (graphene, 8385ca6), the checked-in schema.graphql declares 448 root fields and 446 of them get a resolver:
+333 `.Field()` mutations (71 through an inherited `perform_mutation` / `mutate`), plus `resolve_*` methods and
+`resolver=` functions. The two without one are federation's `_entities` / `_service`. The tests post 6,106 distinct
+root-field requests (TEST_CALLS). On saleor-dashboard (Apollo + codegen, f9093f2), 629 root-field requests come from
+the callers of 672 generated hooks and from `client.query({query})` calls, and every requested field is declared in
+its schema copy.
+
 ## Not covered yet
 
 - Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
-  children (#32-#38); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
+  children (#32, #35-#38); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
   endpoints (#32).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.
@@ -309,5 +373,9 @@ variable holding it), `addMethod("x", fn)`, `onRequest` / `onNotification`, Pyth
   are not merged with the contract endpoints; DEFINES / USES_SCHEMA edges to message types. Thrift, tRPC and
   JSON-RPC: Java RMI and Java Thrift (no Java plugin), tRPC `lazy()` routers, jayson methods wrapped in
   `jayson.Method(..)`, LSP well-known methods, PHP top-level clients (no module node).
+- GraphQL (#34 part 1): object-type field endpoints and `operation:` nodes, operations that live only in `.graphql`
+  files (Relay, codegen documents with no hook call), hand-written hooks that wrap a codegen hook (their callers),
+  Lighthouse (PHP), async-graphql / juniper (Rust), Spring for GraphQL / DGS, Apollo Kotlin / iOS, graphql_flutter,
+  TypeGraphQL / Pothos code-first schemas, guards and `@deprecated` field checks.
 - Sockets (#39): QUIC / ALPN, WebRTC data channels, message-type framing on a port, Go (no plugin), servers whose port
   comes only from a config file, and `env:` endpoints across repositories in `cg link` (follow-up issue).

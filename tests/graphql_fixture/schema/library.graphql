@@ -1,0 +1,32 @@
+# the library service's schema
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+type Query {
+  "All the books"
+  books(first: Int = 10): [Book!]!
+  author(id: ID!): Author
+  ping: String
+}
+
+type Mutation {
+  addBook(title: String!): Book
+}
+
+type Subscription {
+  bookAdded: Book
+}
+
+type Book {
+  id: ID!
+  title: String
+  author: Author
+}
+
+type Author {
+  id: ID!
+  name: String
+}

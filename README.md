@@ -541,7 +541,8 @@ The scope as of v0.3, so you know how far each answer reaches. The full list is 
   (`getattr`, DI containers, Riverpod/Provider lookups without a type) fall back to `heuristic` or stay unresolved.
   Python dispatch tables, plugin lists, callbacks and registering decorators are followed as function references
   ([docs/python.md](docs/python.md#entry-points-and-function-references)).
-  GraphQL APIs (graphene/strawberry) and Django template rendering are not modelled.
+  GraphQL root fields (graphene / strawberry / ariadne) are protocol endpoints ([docs/protocols.md](docs/protocols.md#graphql-root-fields));
+  object-type fields and Django template rendering are not modelled.
 - **Next to index:** seeders, `Artisan::command` closures, observers fired by model writes, Nuxt server routes, and
   navigation edges (`NuxtLink`, `navigateTo`).
 - **Broadcast channels** are read from `Broadcast::channel` and `broadcastOn()`; names cg cannot evaluate keep a
@@ -601,14 +602,14 @@ Ideas we are exploring after v0.3. Feedback on priorities is welcome.
 - Swift: `URLComponents` and helper-built URLs, `Info.plist` / `.xcconfig` base URLs, OS-version conditions, App Intents /
   widget entries, value navigation through variables ([docs/swift.md](docs/swift.md#not-covered-yet)).
 - Protocol links: extraction for MQTT, NATS, AMQP, Kafka and Redis pub/sub (matchers registered), Socket.IO outside
-  Python, raw WebSocket / SSE message names, gRPC / GraphQL / webhooks (epic #29; [docs/protocols.md](docs/protocols.md#not-covered-yet)).
+  Python, raw WebSocket / SSE message names, GraphQL object-type fields, webhooks (epic #29; [docs/protocols.md](docs/protocols.md#not-covered-yet)).
 - AI harnesses: TypeScript MCP servers / clients and the Vercel AI SDK, LangGraph graphs, agent runners, tools declared
   inside functions ([docs/ai-tools.md](docs/ai-tools.md#not-covered-yet)).
 - External systems: client constructors with literal arguments (`psycopg.connect(host=)`, `new Redis()`, ...),
   Spring / Rails / Kubernetes configuration, env reads through config schemas ([docs/external.md](docs/external.md#not-covered-yet)).
 - Web / native bridges beyond Capacitor, React Native, Flutter channels and Pigeon: React Native events, Capacitor
   `notifyListeners`, Cordova plugins and native UI components ([docs/bridges.md](docs/bridges.md#not-covered-yet)).
-- More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state); GraphQL APIs.
+- More HTTP clients beyond fetch, axios, ofetch and ky, and response-field modelling for the TypeScript client (setting → API response → client state).
 
 ## Documentation
 

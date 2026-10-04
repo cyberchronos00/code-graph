@@ -40,7 +40,7 @@ EDGE_ROLE_KINDS = ("HTTP_CALLS", "MATCHES_ROUTE", "ROUTES_TO", "USES_MIDDLEWARE"
                    "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL", "DISPATCHES", "HANDLED_BY", "LISTENED_BY", "SCHEDULES",
                    "SENDS_TO", "RECEIVED_BY", "MATCHES_ENDPOINT", "TEST_CALLS")
 NEST = {"rpc": "nest-rpc", "event": "nest-event", "ws": "nest-ws", "grpc": "grpc"}
-SEND_IN = {"http": ("HTTP_CALLS",), "channel": ("BROADCASTS_ON",), "message": ("DISPATCHES",),
+SEND_IN = {"http": ("HTTP_CALLS",), "route": ("SENDS_TO",), "channel": ("BROADCASTS_ON",), "message": ("DISPATCHES",),
            "job": ("DISPATCHES", "SCHEDULES"), "event": ("DISPATCHES",), "endpoint": ("SENDS_TO",)}
 RECV_OUT = {"route": ("ROUTES_TO",), "message": ("HANDLED_BY",), "job": ("HANDLED_BY",),
             "event": ("LISTENED_BY", "HANDLED_BY"), "endpoint": ("RECEIVED_BY",)}
@@ -56,7 +56,7 @@ def protocol_of(kind: str, nid: str, a: dict, lang: str | None) -> str | None:
         return "ws" if a.get("method") == "WS" else "http"
     if kind == "route":
         m = (a.get("method") or "").upper()
-        return "ws" if m == "WS" else "graphql" if m == "GRAPHQL" else "http"
+        return "ws" if m == "WS" else "graphql" if m == "GRAPHQL" or nid.startswith("route:GRAPHQL ") else "http"
     if kind in ("channel", "channel_sub"):
         return "pusher"
     if kind == "message":
@@ -112,6 +112,30 @@ def _load(st):
     q2 = ",".join("?" * len(EDGE_ROLE_KINDS))
     edges = [dict(r) for r in st.q(f"SELECT src, dst, kind, file, line, confidence, attrs FROM edges WHERE kind IN ({q2})",
                                    EDGE_ROLE_KINDS)]
+    # GraphQL (#34): a Nest route:GRAPHQL Query.x and its endpoint:graphql:Query.x twin are one endpoint, shown as the
+    # route (its guards); the twin's senders and matches move to the route, its RECEIVED_BY repeats the ROUTES_TO
+    twin = {}
+    for nid, n in nodes.items():
+        if n["kind"] == "route" and n["protocol"] == "graphql" and n["attrs"].get("graphql") in ("Query", "Mutation", "Subscription"):
+            t = f"endpoint:graphql:{n['attrs']['graphql']}.{n['attrs'].get('field')}"
+            if t in nodes:
+                twin[t] = nid
+    if twin:
+        for t, nid in twin.items():
+            for k in ("served", "declared_in", "type"):
+                if nodes[t]["attrs"].get(k) is not None:
+                    nodes[nid]["attrs"].setdefault(k, nodes[t]["attrs"][k])
+            del nodes[t]
+        out = []
+        for e in edges:
+            if e["src"] in twin:
+                if e["kind"] == "RECEIVED_BY":
+                    continue
+                e["src"] = twin[e["src"]]
+            if e["dst"] in twin:
+                e["dst"] = twin[e["dst"]]
+            out.append(e)
+        edges = out
     return nodes, edges
 
 
@@ -157,7 +181,9 @@ def collect(st) -> dict:
     psend, precv = defaultdict(bool), defaultdict(bool)
     for n in ep.values():
         psend[n["protocol"]] |= bool(n["senders"])
-        precv[n["protocol"]] |= bool(n["receivers"])
+        # a GraphQL root field the schema declares is served (default resolver, a resolver cg does not see; #34)
+        n["served"] = n["kind"] == "endpoint" and bool(n["attrs"].get("served"))
+        precv[n["protocol"]] |= bool(n["receivers"]) or n["served"]
     gs = guard_setup(st)
     is_auth = AuthMatcher(None, gs["applied"], gs["auth_patterns"], gs["secret_patterns"])
     ext = _externals(st)
@@ -169,6 +195,7 @@ def collect(st) -> dict:
                          {x["process"] for x in n["receivers"] if x.get("process")})
         psent = any(x["senders"] for x in peers)
         precv_ = any(x["receivers"] or x["kind"] == "route" for x in peers)   # a matched route receives
+        precv_ = precv_ or n["served"]
         if own:
             sent = bool(n["senders"]) or psent
             recv = bool(n["receivers"]) or precv_
@@ -176,7 +203,7 @@ def collect(st) -> dict:
             sent = psent or (bool(n["senders"]) and not n["receivers"])
             recv = precv_ or (bool(n["receivers"]) and not n["senders"])
         n["side"] = "both" if n["senders"] and n["receivers"] else "send" if n["senders"] or (n["kind"] == "http") \
-            else "receive" if n["receivers"] or n["kind"] in ("route",) else ("send" if n["test_senders"] else "none")
+            else "receive" if n["receivers"] or n["kind"] in ("route",) or n["served"] else ("send" if n["test_senders"] else "none")
         n["linked"] = sent and recv
         if not own:
             n["linked"] = bool((n["senders"] and precv_) or (n["receivers"] and psent))
@@ -199,7 +226,7 @@ def collect(st) -> dict:
                     and not n["external"] and not test_only:
                 ck.append("no_receiver")
             if (recv and not sent or not own and n["receivers"] and not psent) and psend[n["protocol"]] \
-                    and not n["external"] and not skip_route:
+                    and not n["external"] and not skip_route and not (n["served"] and not n["receivers"]):
                 ck.append("test_sender_only" if n["test_senders"] or any(x["test_senders"] for x in peers) else "no_sender")
             outs = [m for m in n["matches"] if m["dir"] == "out"]
             amb = any(m.get("ambiguous") for m in outs)

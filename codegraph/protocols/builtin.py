@@ -11,7 +11,9 @@ register(Protocol("http", "tcp", "HTTP request: client endpoint http:<METHOD> <p
                   matcher=M.path, ports=(80, 443), schemes=("http", "https"), source=A, kinds=("http", "route"), guards=True))
 register(Protocol("ws", "tcp", "WebSocket route (Django Channels consumer, route:WS <path>)", matcher=M.path, ports=(80, 443),
                   schemes=("ws", "wss"), source=A, kinds=("route",), guards=True))
-register(Protocol("graphql", "tcp", "GraphQL operation resolver (route:GRAPHQL Query.x)", source=A, kinds=("route",), guards=True))
+register(Protocol("graphql", "tcp", "GraphQL root field <Query|Mutation|Subscription>.<field> (codegraph/graphql.py): "
+                  "operations (useQuery / client.query / codegen hooks / gql documents) -> schema resolvers (resolver maps, "
+                  "graphene, strawberry, ariadne, Nest route:GRAPHQL)", kinds=("endpoint", "route"), guards=True))
 register(Protocol("pusher", "tcp", "Pusher protocol broadcast channel (Laravel Broadcast::channel / broadcastOn -> Echo / "
                   "pusher-js subscription; MATCHES_CHANNEL; the `cg channels` view)", matcher=M.dotted, fanout=True,
                   source=A, kinds=("channel", "channel_sub")))
