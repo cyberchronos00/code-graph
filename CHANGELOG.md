@@ -10,6 +10,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Kotlin callable references (`recv::fn`, `::fn`, `Type::fn`, `::Foo`) are `REFERENCES_FN` edges (`how: callback`), so `impact` lists Compose callbacks and ViewModel wiring. The receiver type comes from a parameter, property, constructor, local, `hiltViewModel<T>()` or a `viewModel()` / `viewModels()` delegate; extensions on that type count. Overloads use the arity of a function-typed parameter when the reference is passed as an argument. scip-java maps the same occurrences when an index is present.
 - Plain JavaScript projects without `tsconfig.json` / `jsconfig.json` are indexed (#136): JS module files outside
   tests, docs, examples, assets and build output make their top directories source dirs of a synthesized `allowJs`
   program (`plugins.typescript.program.synthesized`). A Python / PHP / Rust / Go root needs a `package.json`

@@ -166,6 +166,7 @@ class Decl:
     types: dict = field(default_factory=dict)          # param / property name -> type name
     test: bool = False
     name_line: int | None = None                        # line of the name identifier (SCIP definitions sit there)
+    slots: list = field(default_factory=list)           # value parameters (name, function-type arity or None)
 
 
 def _module_root(rel: str) -> str:
@@ -315,6 +316,7 @@ class KotlinPlugin(LanguagePlugin):
         self.props_by_name: dict[str, list[Decl]] = defaultdict(list)
         self.prop_members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.prop_at: dict[tuple, Decl] = {}                               # (file, start byte) -> decl
+        self.locals: dict[tuple, list] = {}                                # (file, enclosing id) -> local functions
         self.stored_names: set[str] = set()                                # plain stored properties / ctor vals
         # stored properties of a class / enum are `field:<Type>.<name>` nodes with READS_PROP / WRITES_PROP (#88)
         self.fields: dict[str, dict[str, str]] = defaultdict(dict)        # class fqn -> name -> field id
@@ -322,6 +324,7 @@ class KotlinPlugin(LanguagePlugin):
         self.copies: list[tuple] = []         # (owner, receiver (type, text), [(arg name, line)], kf, decl): `x.copy(a = 1)`
         self.frefs: list[tuple] = []          # (owner_id, name, receiver (type, text) | None, line, file, decl, write)
         self.reads: list[tuple] = []          # (owner_id, name, receiver node, line, file obj, decl, read | write)
+        self.fnrefs: list[tuple] = []         # callable references recv::fn / ::fn / Type::fn (REFERENCES_FN)
         self.http: list[dict] = []
         self.navs: list[tuple] = []
         self.base_urls: set[str] = set()
@@ -570,9 +573,11 @@ class KotlinPlugin(LanguagePlugin):
                 params = next((d for d in c.children if d.type == "function_value_parameters"), None)
                 dc = Decl(f"{kind}:{fq}{self._variant(kf, mods)}", kind, nm, fq, kf.rel, c.start_point[0] + 1,
                           c.end_point[0] + 1, cls.fqn if cls else None, [], anns, mods, recv,
-                          self._params(params) if params is not None else {}, kf.test, self._name_line(c))
+                          self._params(params) if params is not None else {}, kf.test, self._name_line(c),
+                          slots=self._fn_slots(params))
                 self._local_types(c, dc.types)
                 self._add_decl(dc, kind)
+                self._local_fns(c, kf, dc)
             elif ty == "enum_entry" and cls is not None:
                 nm = self._name(c)
                 if nm:
@@ -783,6 +788,56 @@ class KotlinPlugin(LanguagePlugin):
                     out[self.t(ids[0])] = self.t(ty).split("<")[0].rstrip("?").split(".")[-1]
         return out
 
+    def _fn_slots(self, n) -> list:
+        """Value parameters as (name, arity): arity is the parameter count of a function type, else None."""
+        out = []
+        for p in (n.children if n is not None else []):
+            if p.type == "function_value_parameters":
+                return self._fn_slots(p)
+            if p.type != "parameter":
+                continue
+            ids = [c for c in p.children if c.type == "identifier"]
+            if not ids:
+                continue
+            ft = next((c for c in p.children if c.type == "function_type"), None)
+            out.append((self.t(ids[0]), self._type_arity(ft) if ft is not None else None))
+        return out
+
+    @staticmethod
+    def _type_arity(ft) -> int:
+        """Parameter count of a function type, ignoring a receiver (`Foo.(Int) -> Unit` counts 1)."""
+        ftp = next((c for c in ft.children if c.type == "function_type_parameters"), None)
+        if ftp is None:
+            return 0
+        return sum(1 for c in ftp.children if c.type in ("parameter", "user_type", "function_type", "nullable_type",
+                                                         "parenthesized_type"))
+
+    def _local_fns(self, fn, kf: KFile, parent: Decl):
+        """A local `fun` is a node of its enclosing function (`::helper` resolves to it) and stays out of call
+        resolution by name, so a local never steals a CALLS edge from a top-level function."""
+        body = next((c for c in fn.children if c.type == "function_body"), None)
+        if body is None:
+            return
+        stack = list(body.children)
+        while stack:
+            n = stack.pop()
+            if n.type in ("class_declaration", "object_declaration", "companion_object"):
+                continue
+            if n.type == "function_declaration":
+                nm = self._name(n)
+                if nm:
+                    anns, mods = self._annotations(n)
+                    params = next((d for d in n.children if d.type == "function_value_parameters"), None)
+                    fq = f"{parent.fqn}.{nm}"
+                    dc = Decl(f"function:{fq}{self._variant(kf, mods)}", "function", nm, fq, kf.rel,
+                              n.start_point[0] + 1, n.end_point[0] + 1, None, [], anns, mods, None,
+                              self._params(params) if params is not None else {}, kf.test, self._name_line(n),
+                              slots=self._fn_slots(params))
+                    self._add_decl(dc, "function", local_of=parent.id)
+                    self._local_fns(n, kf, dc)
+                continue
+            stack.extend(n.children)
+
     def _local_types(self, fn, types: dict):
         """`val repo = OrderRepository(..)` / `val api: OrdersApi = ..` in a function body (not in nested classes or
         functions): the local's type, so `repo.save()` binds through it (#96). Parameters win; flow-insensitive."""
@@ -809,12 +864,13 @@ class KotlinPlugin(LanguagePlugin):
         txt = self.t(d)
         m = re.search(r"create\(\s*(\w+)::class", txt) or re.match(r"[^=]*=(?!=)\s*([A-Z]\w*)\s*\(", txt) \
             or re.search(r"\bby\s+lazy\s*(?:\([^)]*\))?\s*\{\s*([A-Z]\w*)\s*\(", txt) \
-            or re.match(r"[^=]*=(?!=)\s*(?:mockk|spyk|mock|spy)\s*<\s*([A-Z]\w*)", txt)   # = mockk<Repo> { .. }
+            or re.match(r"[^=]*=(?!=)\s*(?:mockk|spyk|mock|spy)\s*<\s*([A-Z]\w*)", txt) \
+            or re.search(r"\b(?:hiltViewModel|viewModel|viewModels)\s*<\s*([A-Z]\w*)", txt)
         if ids and m:
             return {self.t(ids[0]): m.group(1)}
         return {}
 
-    def _add_decl(self, d: Decl, display_kind: str, prop: bool = False):
+    def _add_decl(self, d: Decl, display_kind: str, prop: bool = False, local_of: str | None = None):
         attrs = {"kotlin_kind": display_kind}
         if d.test:
             attrs["test"] = True
@@ -837,6 +893,13 @@ class KotlinPlugin(LanguagePlugin):
             if any(a[0] == "ParameterizedTest" for a in d.annotations):
                 n.attrs["parameterized"] = True
         self.decls[d.id] = d
+        if local_of:
+            # kept out of decls so a local fun does not take over the calls in its body (those stay on the
+            # enclosing function, as before) and a `WindowInsets()` constructor is not a call of an outer composable
+            self.decls.pop(d.id, None)
+            self.b.add_edge(local_of, d.id, "CONTAINS", d.file, d.line, EXACT)
+            self.locals.setdefault((d.file, local_of), []).append(d)
+            return
         if prop:
             if d.cls:
                 self.b.add_edge(f"class:{d.cls}", d.id, "CONTAINS", d.file, d.line, EXACT)
@@ -908,6 +971,9 @@ class KotlinPlugin(LanguagePlugin):
                 d = self._decl_at(kf, c, ("class",)) if ty != "companion_object" else None
                 self._refs(c, kf, d.id if d else owner, d or decl, ctx)
                 continue
+            elif ty == "callable_reference" or (
+                    ty == "navigation_expression" and any(x.type == "::" for x in c.children)):
+                self._collect_fnref(c, kf, owner, decl)
             elif ty == "call_expression":
                 self._copy_call(c, kf, owner, decl)
                 if self._call(c, kf, owner, decl, ctx):
@@ -1119,6 +1185,8 @@ class KotlinPlugin(LanguagePlugin):
             if len(kids) != 2 or kids[1].type != "identifier":
                 return
             nm, recv = self.t(kids[1]), kids[0]
+            if any(x.type == "::" for x in c.children):
+                return                               # `recv::fn`: a callable reference, not a property read
             if (recv.type == "unary_expression" and len(recv.children) == 2
                     and recv.children[0].type in ("++", "--")):
                 pre, recv = True, recv.children[1]   # `--c.n` parses as `(--c).n`
@@ -1339,6 +1407,8 @@ class KotlinPlugin(LanguagePlugin):
             kids = [x for x in c.children if x.type != "."]
             if len(kids) != 2 or kids[1].type != "identifier":
                 return
+            if any(x.type == "::" for x in c.children):
+                return                               # `Type::fn`, not a use of an enum entry
             tgt, nm = self.t(kids[0]), self.t(kids[1])
             vid = None
             if re.fullmatch(r"[A-Za-z_][\w.]*", tgt):
@@ -1476,6 +1546,249 @@ class KotlinPlugin(LanguagePlugin):
         self._resolve_reads()
         self._resolve_fields()
         self._resolve_copies()
+        self._resolve_fnrefs()
+
+    def _collect_fnref(self, c, kf: KFile, owner: str, decl: Decl | None):
+        """`recv::fn`, `::fn`, `Type::fn` (not `::class`): a function passed as a value."""
+        if c.type == "callable_reference":
+            ids = [x for x in c.children if x.type == "identifier"]
+            if not ids:
+                return
+            name = self.t(ids[-1])
+            recv, form = None, "unbound"
+        else:
+            kids = c.children
+            i = next((k for k, x in enumerate(kids) if x.type == "::"), None)
+            if i is None or i + 1 >= len(kids) or kids[i + 1].type != "identifier":
+                return
+            name = self.t(kids[i + 1])
+            recv = kids[i - 1] if i else None
+            form = "recv"
+        if name == "class" or not name:
+            return
+        line = c.start_point[0] + 1
+        # overloads share a node id; only the last one stays in `decls`, so the body of an earlier one is
+        # walked as the file. The reference still belongs to the function whose range contains it.
+        cover = self._covering_fn(kf, line, decl)
+        src = cover.id if cover is not None and cover.kind in ("function", "method") else owner
+        self.fnrefs.append((src, name, recv, form, line, kf, cover, self._arg_spec(c)))
+
+    def _covering_fn(self, kf: KFile, line: int, fallback: Decl | None) -> Decl | None:
+        best = fallback if fallback is not None and fallback.kind in ("function", "method") else None
+        seen = set()
+        pools = [self.decls.values(), *(self.by_name.values()), *(getattr(self, "locals", {}).values())]
+        for pool in pools:
+            for d in pool:
+                if id(d) in seen or d.kind not in ("function", "method") or d.file != kf.rel:
+                    continue
+                seen.add(id(d))
+                if d.line <= line <= d.end and (best is None or d.end - d.line < best.end - best.line):
+                    best = d
+        return best
+
+    def _arg_spec(self, node):
+        """When the reference is a call argument: (call node, index, parameter name or None)."""
+        va = node.parent
+        if va is None or va.type != "value_argument":
+            return None
+        args = va.parent
+        if args is None or args.type != "value_arguments":
+            return None
+        call = args.parent
+        if call is None or call.type != "call_expression":
+            return None
+        index = sum(1 for x in args.children if x.type == "value_argument" and x.start_byte < va.start_byte)
+        ids = [x for x in va.children if x.type == "identifier"]
+        eq = next((x for x in va.children if x.type == "="), None)
+        argname = self.t(ids[0]) if ids and eq is not None and ids[0].start_byte < eq.start_byte else None
+        return (call, index, argname)
+
+    def _resolve_fnrefs(self):
+        for owner, name, recv, form, line, kf, decl, spec in self.fnrefs:
+            self.cur = kf
+            arity = self._arg_arity(spec, kf, decl) if spec else None
+            targets = self._fn_targets(name, recv, form, kf, decl, arity)
+            if not targets:
+                self.st["fn_refs_unresolved"] += 1
+                continue
+            extra = {}
+            if len(targets) > 1:
+                extra = {"binding": "candidate", "candidates": len(targets)}
+            for t in targets:
+                if t.id == owner:
+                    continue
+                self.b.add_edge(owner, t.id, "REFERENCES_FN", kf.rel, line, HEURISTIC, how="callback", **extra)
+            self.st["fn_refs"] += 1
+
+    def _arg_arity(self, spec, kf: KFile, decl: Decl | None):
+        """Arity of the function-typed parameter this reference is passed to, when every candidate callee agrees."""
+        call, index, argname = spec
+        callee = call.children[0] if call.children else None
+        if callee is None:
+            return None
+        recv, name = None, None
+        if callee.type == "identifier":
+            name = self.t(callee)
+        elif callee.type == "navigation_expression":
+            ids = [x for x in callee.children if x.type not in (".",)]
+            if ids and ids[-1].type == "identifier":
+                name = self.t(ids[-1])
+                recv = self.t(ids[0]) if len(ids) > 1 else None
+        if not name:
+            return None
+        found = []
+        for t in self._targets(name, recv, kf, decl):
+            if t.kind == "class":
+                continue
+            if argname:
+                hit = next((a for n, a in t.slots if n == argname), "missing")
+                if hit == "missing":
+                    continue
+            elif index < len(t.slots):
+                hit = t.slots[index][1]
+            else:
+                continue
+            if hit is not None:
+                found.append(hit)
+        return found[0] if found and len(set(found)) == 1 else None
+
+    def _fn_targets(self, name: str, recv, form: str, kf: KFile, decl: Decl | None, arity: int | None) -> list[Decl]:
+        if form == "unbound":
+            cands = list(self._locals_named(name, kf, decl))
+            cands += [d for d in self.by_name.get(name, []) if d.kind == "function" and self._fn_in_scope(d, name, kf)]
+            if not cands and name[:1].isupper():
+                c = self._class_in_scope(name, kf)
+                return [c] if c is not None else []
+            return self._by_arity(cands, arity, unbound=True)
+        ty, bound = self._recv_kind(recv, kf, decl)
+        if not ty:
+            return []
+        short = re.sub(r"[<(].*", "", ty, flags=re.S).rstrip("?! ").split(".")[-1]
+        tc = self._class_of(short, kf) if short[:1].isupper() else None
+        if bound == "type" and tc is not None and self.b.nodes[tc.id].attrs.get("kotlin_kind") == "object":
+            bound = "bound"
+        r = []
+        if tc is not None:
+            r = [d for d in self._member(tc, name) if d.kind != "class"]
+        r += self._ext_fns(name, short, kf)
+        # a member is in scope with its type; an extension only when the file can see it
+        seen, out = set(), []
+        for d in r:
+            if d.id in seen:
+                continue
+            if d.kind == "function" and not self._fn_in_scope(d, name, kf):
+                continue
+            seen.add(d.id)
+            out.append(d)
+        return self._by_arity(self._same_set(out, kf), arity, unbound=bound != "bound")
+
+    def _by_arity(self, cands: list[Decl], arity: int | None, unbound: bool) -> list[Decl]:
+        """Keep callables whose parameter count matches a function-typed parameter. An unbound member or extension
+        takes the receiver as its first parameter (`Type::fn`); a bound `recv::fn` does not."""
+        if arity is None:
+            return cands
+        hit = []
+        for d in cands:
+            if d.kind == "class":
+                hit.append(d)
+                continue
+            extra = 1 if unbound and (d.kind == "method" or d.receiver) else 0
+            if len(d.slots) + extra == arity:
+                hit.append(d)
+        return hit
+
+    def _ext_fns(self, name: str, short: str, kf: KFile) -> list[Decl]:
+        return [d for d in self.by_name.get(name, []) if d.kind == "function" and d.receiver
+                and d.receiver.rstrip("?").split(".")[-1].split("<")[0] == short and self._fn_in_scope(d, name, kf)]
+
+    def _locals_named(self, name: str, kf: KFile, decl: Decl | None) -> list[Decl]:
+        if decl is None:
+            return []
+        out = []
+        for (rel, parent), fns in self.locals.items():
+            if rel != kf.rel:
+                continue
+            if parent == decl.id:
+                out += [x for x in fns if x.name == name]
+                continue
+            p = self.decls.get(parent)
+            if p is not None and p.line <= decl.line and decl.end <= p.end:
+                out += [x for x in fns if x.name == name]
+        return list({x.id: x for x in out}.values())
+
+    def _fn_in_scope(self, d: Decl, name: str, kf: KFile) -> bool:
+        if d.file == kf.rel:
+            return True
+        pkg = d.fqn.rsplit(".", 1)[0] if "." in d.fqn else ""
+        if pkg and pkg == kf.package:
+            return True
+        if kf.imports.get(name) == d.fqn:
+            return True
+        return any(d.fqn.startswith(s + ".") for s in kf.star)
+
+    def _class_in_scope(self, name: str, kf: KFile) -> Decl | None:
+        c = self._class_of(name, kf)
+        if c is None:
+            return None
+        if c.file == kf.rel or kf.imports.get(name) == c.fqn or c.fqn == f"{kf.package}.{name}":
+            return c
+        if any(c.fqn.startswith(s + ".") for s in kf.star):
+            return c
+        return None
+
+    def _recv_kind(self, recv, kf: KFile, decl: Decl | None) -> tuple[str | None, str]:
+        """(type short name, 'bound' | 'type') of the receiver of a callable reference."""
+        if recv is None:
+            return None, "bound"
+        if recv.type == "parenthesized_expression":
+            inner = next((x for x in recv.children if x.is_named), None)
+            return self._recv_kind(inner, kf, decl) if inner is not None else (None, "bound")
+        if recv.type == "this_expression":
+            if decl is not None and decl.receiver and self.t(recv) == "this":
+                return decl.receiver.split(".")[-1], "bound"
+            cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
+            return (cls.name, "bound") if cls is not None else (None, "bound")
+        if recv.type == "super_expression":
+            cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
+            return (cls.supers[0], "bound") if cls is not None and cls.supers else (None, "bound")
+        if recv.type == "call_expression":
+            return self._vm_call_type(recv), "bound"
+        if recv.type == "navigation_expression":
+            text = self.t(recv)
+            if re.fullmatch(r"[A-Z]\w*(?:\.[A-Z]\w*)*", text):
+                return text.split(".")[-1], "type"
+            return None, "bound"
+        if recv.type != "identifier":
+            return None, "bound"
+        nm = self.t(recv)
+        if nm[:1].isupper():
+            return nm, "type"
+        return self._name_type(nm, kf, decl), "bound"
+
+    def _vm_call_type(self, c) -> str | None:
+        callee = c.children[0] if c.children else None
+        if callee is None or callee.type != "identifier" or self.t(callee) not in ("hiltViewModel", "viewModel", "viewModels"):
+            return None
+        targs = next((x for x in c.children if x.type == "type_arguments"), None)
+        if targs is None:
+            return None
+        proj = next((x for x in targs.children if x.type == "type_projection"), None)
+        if proj is None:
+            return None
+        m = re.match(r"\s*([A-Z]\w*)", self.t(proj))
+        return m.group(1) if m else None
+
+    def _name_type(self, name: str, kf: KFile, decl: Decl | None) -> str | None:
+        """Type of a parameter, constructor property, stored property or local (`hiltViewModel<T>()`, `by viewModel()`)."""
+        cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
+        ty = decl.types.get(name) if decl is not None else None
+        if ty is None and cls is not None:
+            ty = self._field_type(cls, name)
+        if ty is None and decl is not None and decl.kind != "class":
+            ty = self._local_type(decl, name, kf)
+        if ty:
+            return re.sub(r"[<(].*", "", ty, flags=re.S).rstrip("?! ").split(".")[-1]
+        return None
 
     def _copy_call(self, c, kf: KFile, owner: str, decl: Decl | None):
         """`state.copy(loading = true)` on a data class: a write of each named field, `via: copy` (#88)."""

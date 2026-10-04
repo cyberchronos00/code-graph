@@ -12,9 +12,11 @@ failed), and `cg coverage` reports it.
 Mapping: SCIP definitions are matched to the tree-sitter declarations by (file, line of the name, name), so node ids
 do not change. Every reference to a project method / function becomes a CALLS edge (a constructor reference
 `Foo#<init>().` an INSTANTIATES edge) from the innermost declaration around it (a Ktor route handler lambda or
-Compose page, else the function / method, else the class, else the file), confidence exact. The heuristic call edges
-of the files the index covers are replaced; files it does not cover keep them. The overlap of both layers is kept
-as precision / recall of the heuristic layer against the exact one (`stats["exact_vs_heuristic"]`).
+Compose page, else the function / method, else the class, else the file), confidence exact. A callable reference
+(`recv::fn`, `::fn`, `Type::fn`, `::Foo`) is a REFERENCES_FN edge (`how: callback`) instead. The heuristic call
+and callable-reference edges of the files the index covers are replaced; files it does not cover keep them. The
+overlap of both layers is kept as precision / recall of the heuristic layer against the exact one
+(`stats["exact_vs_heuristic"]`).
 
 Mixed Kotlin / Java modules: the Java documents of the same index (scip-java indexes both) are imported too, since
 the generic SCIP importer skips an index this layer consumed. Java classes and methods become `java` nodes (ids from
@@ -366,13 +368,20 @@ class ExactLayer:
                 src = self._owner(owners, rel, o.line + 1)
                 if src is None or src == dst:
                     continue
-                self.b.add_edge(src, dst, kind, rel, o.line + 1, EXACT, source="scip")
+                fnref = not java and self._is_fn_ref(rel, o)
+                if fnref:
+                    kind = "REFERENCES_FN"
+                if kind == "REFERENCES_FN":
+                    self.b.add_edge(src, dst, kind, rel, o.line + 1, EXACT, source="scip", how="callback")
+                else:
+                    self.b.add_edge(src, dst, kind, rel, o.line + 1, EXACT, source="scip")
                 if kind == "INSTANTIATES":
                     self.b.add_edge(src, dst, "USES_TYPE", rel, o.line + 1, EXACT, how="constructor call", source="scip")
                 if java:
                     st["java"]["references"] += 1
                     continue
-                exact.add((src, dst, kind))
+                if kind in CALL_KINDS:
+                    exact.add((src, dst, kind))
                 st["scip_references"] = st.get("scip_references", 0) + 1
         agree = len(heur & exact)
         st["exact_vs_heuristic"] = {
@@ -424,6 +433,11 @@ class ExactLayer:
                 continue
             if e.attrs.get("property"):
                 continue      # property reads / writes (#89): scip-java reports them as accessors, not mapped yet
+            if e.kind == "REFERENCES_FN" and e.attrs.get("how") == "callback":
+                n = self.b.nodes.get(e.src)
+                if n is not None and n.lang == "kotlin":
+                    del self.b.edges[key]
+                continue
 
             if e.kind in CALL_KINDS or (e.kind == "USES_TYPE" and e.attrs.get("how") == "constructor call"):
                 n = self.b.nodes.get(e.src)
@@ -454,6 +468,20 @@ class ExactLayer:
                     and n.line):
                 idx[n.file].append((n.line, n.end_line or n.line, 0, nid))
         return idx
+
+    def _is_fn_ref(self, rel: str, o) -> bool:
+        """True when the occurrence sits on a callable reference (`::name` / `recv::name`)."""
+        kf = getattr(self.p, "_kf_by_rel", {}).get(rel)
+        if kf is None:
+            return False
+        lines = kf.src.splitlines()
+        if o.line < 0 or o.line >= len(lines):
+            return False
+        line = lines[o.line]
+        col = o.col
+        if col >= 2 and line[col - 2:col] == b"::":
+            return True
+        return col < len(line) and line[col:col + 2] == b"::"
 
     def _owner(self, owners: dict, rel: str, line: int) -> str:
         best = None
