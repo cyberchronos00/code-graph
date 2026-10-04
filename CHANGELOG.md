@@ -75,6 +75,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Rust exact mode: older rust-analyzer releases (1.83) give function and closure parameters global SCIP symbols
+  (`put().(e)`). Such a symbol no longer becomes a synthetic function node, or a link to a function of the same name,
+  so node ids no longer depend on the rust-analyzer version. With 1.83 on mini-redis, 12 spurious function nodes and
+  52 spurious REFERENCES_FN edges from parameter uses are gone (20 sampled, all wrong before) (#130), and the node ids now
+  match those from a current release. Current releases emit `local` symbols, so their graphs do not change.
 - TypeScript `process.env.X = ...` no longer counts as reading `X` (#103).
 - Kotlin exact mode: an explicit `get()` / `set(v)` accessor in a scip-java 0.13 index matches its property instead
   of counting as an unmatched declaration. The stats list up to 10 unmatched declarations

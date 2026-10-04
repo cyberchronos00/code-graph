@@ -527,7 +527,7 @@ class RustPlugin(LanguagePlugin):
                 continue
             for rel, o in defs:
                 d = scipread.descriptors(sym)
-                if not d or not d[1]:
+                if not d or not d[1] or d[1][-1][1] in (")", "["):   # a parameter / type parameter, not an item
                     continue
                 name = d[1][-1][0]
                 it = self.by_pos.get((rel, o.line + 1, name))

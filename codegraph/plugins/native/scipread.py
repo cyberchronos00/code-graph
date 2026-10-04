@@ -147,7 +147,8 @@ _DESC = re.compile(r"(`(?:[^`]|``)*`|[^\s/#.()\[\]:!`]+)?(/|#|\.|:|!|\(([^)]*)\)
 
 def descriptors(symbol: str) -> tuple[str, list[tuple[str, str]]] | None:
     """'<scheme> <manager> <package> <version> <descriptors>' -> (package, [(name, suffix)]).
-    suffix: '/' namespace, '#' type, '.' term, '(' method, '!' macro, '[' type parameter / impl disambiguator."""
+    suffix: '/' namespace, '#' type, '.' term, '(' method, '!' macro, '[' type parameter / impl disambiguator,
+    ')' parameter."""
     if symbol.startswith("local "):
         return None
     parts = symbol.split(" ", 4)
@@ -157,6 +158,13 @@ def descriptors(symbol: str) -> tuple[str, list[tuple[str, str]]] | None:
     out = []
     i = 0
     while i < len(desc):
+        if desc[i] == "(":  # (name) parameter: older rust-analyzer releases (1.83) give parameters global symbols
+            j = desc.find(")", i + 1)
+            if j < 0:
+                break
+            out.append((desc[i + 1:j].strip("`"), ")"))
+            i = j + 1
+            continue
         if desc[i] == "[":  # [name] type parameter (rust-analyzer uses it for impl#[Type][Trait])
             j = i + 1
             depth = 1

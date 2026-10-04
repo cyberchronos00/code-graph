@@ -177,3 +177,13 @@ def test_macro_generated_tests(scip_mode):
     assert g.has("CALLS", "function:mtest_fixture::tests::greets_world", "function:mtest_fixture::greet")
     # calls in the invocation's own tokens (the closure) belong to the generated test
     assert g.has("CALLS", f"function:{IT}::cli::prints_hello", f"method:{IT}::util::Cli::arg")
+
+
+def test_scip_parameter_symbols_are_not_items():
+    """rust-analyzer 1.83 gives closure / fn parameters global symbols (`put().(e)`); they are not items, so the
+    import must not turn their parent descriptor into a synthetic function node (node ids would then depend on the
+    rust-analyzer version)."""
+    from codegraph.plugins.native import scipread
+    pkg, d = scipread.descriptors("rust-analyzer cargo kv-core 0.1.0 file/store/put().(e)")
+    assert pkg == "kv-core" and d[-1] == ("e", ")") and d[-2] == ("put", "(")
+    assert scipread.descriptors("rust-analyzer cargo kv-core 0.1.0 codec/impl#[Plain][Codec]decode().")[1][-1] == ("decode", "(")
