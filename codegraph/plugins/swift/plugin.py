@@ -57,6 +57,8 @@ VALUE_SITES = frozenset({"navigation_expression", "call_expression", "simple_ide
                          "equality_expression", "property_declaration", "parameter"})
 
 EXTS = (".swift",)
+BRANCH_STOP = frozenset({"function_declaration", "init_declaration", "class_declaration", "protocol_declaration",
+                         "computed_property", "subscript_declaration", "source_file", "property_declaration"})
 VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
 TEST_IMPORTS = {"XCTest", "Testing"}
 TEST_PATH = re.compile(r"(^|/)(Tests?|\w+Tests|\w+UITests)/|Tests?\.swift$")
@@ -434,6 +436,10 @@ class SwiftPlugin(LanguagePlugin):
         self.props_in: dict[str, list[Decl]] = defaultdict(list)   # file -> property nodes
         self.stored_names: set[str] = set()      # names of plain stored properties anywhere in the project
         self.stored_in: dict[str, set[str]] = defaultdict(set)    # type fqn -> its stored property names
+        self.fields: dict[str, dict[str, str]] = defaultdict(dict)  # type fqn -> stored instance property -> field id
+        self.field_names: set[str] = set()
+        self.branch_of: dict[tuple, dict] = {}     # (owner, line, type name) -> enclosing branch of a construction
+        self.branch_at: dict[tuple, dict] = {}     # (file, line, type name) -> the same, for the exact layer
         self.values: dict[str, dict[str, str]] = defaultdict(dict)  # type fqn ("" file level) -> case/constant -> id
         self.globals_: dict[str, list] = {}      # file-level constant name -> [(id, file, test, private)]
         self.prop_refs: list[tuple] = []         # (owner, name, receiver | None, line, sf, decl, write)
@@ -860,10 +866,35 @@ class SwiftPlugin(LanguagePlugin):
             if nm and tn:
                 d.types[nm] = tn
 
+    def _field(self, cls: Decl, nm: str, sf: SFile, c, attrs: list):
+        """A stored instance property (`var count = 0`, `@State private var value`, `@Published var items`) is a
+        `field:<Type>.<name>` node (#88): reads and writes of it are READS_PROP / WRITES_PROP edges, for `cg readers` /
+        `cg writers Type.prop`. Its property wrapper, if any, is attrs.wrapper."""
+        if nm in self.fields.get(cls.fqn, {}):
+            return
+        kw = next((self.t(x).split()[0] for x in c.children if x.type == "value_binding_pattern" and self.t(x).strip()), "var")
+        a = {"property": "stored", "binding": "let" if kw == "let" else "var"}
+        wrappers = [x for x in attrs if x not in ("MainActor", "objc", "IBOutlet", "IBInspectable", "available", "nonobjc")]
+        if wrappers:
+            a["wrapper"] = wrappers[0]
+        if sf.test:
+            a["test"] = True
+        fid = self.b.add_node("field", f"{cls.fqn}.{nm}", name=nm, fqn=f"{cls.fqn}.{nm}", file=sf.rel,
+                              line=c.start_point[0] + 1, end_line=c.end_point[0] + 1,
+                              module=getattr(self.b.nodes.get(cls.id), "module", None), lang="swift", attrs=a)
+        self.b.add_edge(cls.id, fid, "CONTAINS", sf.rel, c.start_point[0] + 1, EXACT)
+        self.fields[cls.fqn][nm] = fid
+        self.field_names.add(nm)
+        if wrappers:          # `_value = State(initialValue: x)`: the wrapper's storage is the same property
+            self.fields[cls.fqn]["_" + nm] = fid
+            self.field_names.add("_" + nm)
+        self.st["stored_property_nodes"] += 1
+
     def _prop_decl(self, c, nm: str, sf: SFile, cls: Decl):
         """A computed property, a stored property with `willSet` / `didSet`, or a `lazy var` with an initializer
         becomes a node (`method:<Type>.<name>`, attrs.property, #72): the calls in its body come from it, and reads
-        (writes, for observers) of it are CALLS edges to it. A plain stored property stays out of the graph."""
+        (writes, for observers) of it are CALLS edges to it. A plain stored instance property is a `field:` node with
+        READS_PROP / WRITES_PROP edges instead (#88)."""
         comp = next((x for x in c.children if x.type == "computed_property"), None)
         obs = next((x for x in c.children if x.type == "willset_didset_block"), None)
         attrs, mods = self._mods(c)
@@ -871,6 +902,8 @@ class SwiftPlugin(LanguagePlugin):
         if not (comp or obs or lazy):
             if mods & {"static", "class"}:
                 self._value(cls, "constant", nm, sf, c)    # `static let shared = …` (#84)
+            elif "extension-only" not in cls.modifiers:
+                self._field(cls, nm, sf, c, attrs)
             self.stored_names.add(nm)
             self.stored_in[cls.fqn].add(nm)     # hides a protocol extension's default of that name
             return
@@ -1044,9 +1077,9 @@ class SwiftPlugin(LanguagePlugin):
                 if pd is not None and "property" in pd.modifiers:
                     self._refs(c, sf, pd.id, pd, ctx)
                     continue
-            elif ty == "navigation_expression" and self.prop_names:
+            elif ty == "navigation_expression" and (self.prop_names or self.field_names):
                 self._prop_nav(c, sf, owner, decl)
-            elif ty == "simple_identifier" and self.prop_names:
+            elif ty == "simple_identifier" and (self.prop_names or self.field_names):
                 self._prop_bare(c, sf, owner, decl)
             elif ty == "call_expression":
                 if self._call(c, sf, owner, decl, ctx):
@@ -1177,7 +1210,7 @@ class SwiftPlugin(LanguagePlugin):
         sfx = c.child_by_field_name("suffix")
         nmn = sfx.child_by_field_name("suffix") if sfx is not None else None
         nm = self.t(nmn) if nmn is not None else None
-        if not nm or nm not in self.prop_names or self._is_callee(c):
+        if not nm or (nm not in self.prop_names and nm not in self.field_names) or self._is_callee(c):
             return
         target = c.child_by_field_name("target")
         if target is None or target.type == "key_path_expression":
@@ -1189,7 +1222,7 @@ class SwiftPlugin(LanguagePlugin):
         """`summary` inside a member of the type that declares it (an implicit `self.summary`)."""
         nm = self.t(c)
         p = c.parent
-        if nm not in self.prop_names or p is None or p.type in NOT_A_READ or self._is_callee(c):
+        if (nm not in self.prop_names and nm not in self.field_names) or p is None or p.type in NOT_A_READ or self._is_callee(c):
             return
         if p.type == "value_argument" and p.child_by_field_name("value") != c:
             return
@@ -1348,8 +1381,47 @@ class SwiftPlugin(LanguagePlugin):
                         inner[pname] = (pfx, guards)
                     self._refs(lam, sf, owner, decl, {**ctx, "routers": inner})
                     return True
+        if name[:1].isupper() and recv is None:
+            br = self._branch(c)
+            if br:
+                self.branch_of[(owner, line, name)] = br
+                self.branch_at[(sf.rel, line, name)] = br
         self.calls.append((owner, name, recv, line, sf, decl, tuple(lab or "_" for lab, _v in al), lam is not None))
         return False
+
+    def _branch(self, c) -> dict:
+        """The innermost `switch` case / `if` / `guard` / ternary branch around a construction (#88): attrs.branch
+        (`case .settings`, `if isEditing`, `else of if isEditing`) and attrs.branch_line, so the parent that rebuilds
+        or swaps a view under a condition is visible on its INSTANTIATES edge."""
+        x, prev = c.parent, c
+        while x is not None and x.type not in BRANCH_STOP:
+            t = x.type
+            if t == "switch_entry":
+                pats = [self.t(p) for p in x.children if p.type == "switch_pattern"]
+                lab = ("case " + ", ".join(pats)) if pats else "default"
+                return {"branch": re.sub(r"\s+", " ", lab)[:80], "branch_line": x.start_point[0] + 1}
+            if t in ("if_statement", "guard_statement"):
+                ch = x.children
+                els = next((k for k in ch if k.type == "else"), None)
+                cond = []
+                for k in ch[1:]:
+                    if k.type in ("{", "else", "statements"):
+                        break
+                    cond.append(self.t(k))
+                kw = "guard" if t == "guard_statement" else "if"
+                lab = f"{kw} {' '.join(cond)}"
+                if els is not None and prev.start_byte > els.start_byte:
+                    lab = "else of " + lab
+                return {"branch": re.sub(r"\s+", " ", lab)[:80], "branch_line": x.start_point[0] + 1}
+            if t == "ternary_expression" and x.children:
+                colon = next((k for k in x.children if k.type == ":"), None)
+                lab = f"{self.t(x.children[0])} ?"
+                if colon is not None and prev.start_byte > colon.start_byte:
+                    lab = "else of " + lab
+                if prev is not x.children[0]:
+                    return {"branch": re.sub(r"\s+", " ", lab)[:80], "branch_line": x.start_point[0] + 1}
+            prev, x = x, x.parent
+        return {}
 
     # ---- Vapor helpers
     def _router(self, recv: str, routers: dict):
@@ -1883,7 +1955,8 @@ class SwiftPlugin(LanguagePlugin):
                         # the SDK's initializers, not a project one
                         self.st["calls_sdk_initializer"] += 1
                         continue
-                    self.b.add_edge(owner, t.id, "INSTANTIATES", sf.rel, line, HEURISTIC)
+                    self.b.add_edge(owner, t.id, "INSTANTIATES", sf.rel, line, HEURISTIC,
+                                    **self.branch_of.get((owner, line, name), {}))
                     for m in hit:
                         self.b.add_edge(owner, m.id, "CALLS", sf.rel, line, HEURISTIC)
                 else:
@@ -1955,6 +2028,9 @@ class SwiftPlugin(LanguagePlugin):
         """CALLS edges for reads of computed / lazy properties and writes of computed / observed ones (`property`:
         `read` | `write`); a read of a stored property with observers runs no code of it."""
         for owner, name, recv, line, sf, decl, write in self.prop_refs:
+            if name not in self.prop_names:
+                self._field_ref(owner, name, recv, line, sf, decl, write)
+                continue
             self._how = None
             self._at = (sf, line)
             targets = [t for t in self._prop_targets(name, recv, decl) if self._sees(t, True)]
@@ -1969,6 +2045,44 @@ class SwiftPlugin(LanguagePlugin):
                                 **how, **self._accessor_attr(decl, line))
                 done = True
             self.st["property_refs_resolved" if done else "property_refs_unresolved"] += 1
+            if not done and name in self.field_names:
+                self._field_ref(owner, name, recv, line, sf, decl, write)
+
+    def _field_member(self, cls: Decl | None, name: str, depth: int = 0) -> str | None:
+        """The field node of a stored property `name` of a type or its superclasses."""
+        if cls is None or depth > 6:
+            return None
+        fid = self.fields.get(cls.fqn, {}).get(name)
+        if fid:
+            return fid
+        for s in cls.supers:
+            sc = self.types.get(s)
+            if sc is not None and sc is not cls:
+                r = self._field_member(sc, name, depth + 1)
+                if r:
+                    return r
+        return None
+
+    def _field_ref(self, owner, name, recv, line, sf, decl, write):
+        """READS_PROP / WRITES_PROP to a stored property (#88): `self.x` / a bare `x` inside its type, or `v.x`
+        where the type of `v` is known. An unknown receiver binds nothing (stored names are far too common)."""
+        cls = self._encl_type(decl)
+        fid = None
+        if recv is None or recv in ("self", "super"):
+            fid = self._field_member(cls, name)
+        elif recv not in ("Self",):
+            self._at = (sf, line)
+            kind, tname = self._recv_type(recv, decl, cls)
+            if kind == "type":
+                fid = self._field_member(self._type(tname), name)
+        if fid is None or fid == owner:
+            self.st["stored_property_refs_unresolved"] += 1
+            return
+        self.b.add_edge(owner, fid, "WRITES_PROP" if write else "READS_PROP", sf.rel, line, RESOLVED,
+                        **({"receiver": "self"} if recv in (None, "self", "super") else {"receiver": recv[:40]}),
+                        **({"storage": "wrapper"} if name.startswith("_") else {}),
+                        **self._accessor_attr(decl, line))
+        self.st["stored_property_writes" if write else "stored_property_reads"] += 1
 
     @staticmethod
     def _accessor_attr(decl: Decl | None, line: int) -> dict:

@@ -194,13 +194,14 @@ def main(argv=None):
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
              "siblings": "code related to a symbol: class hierarchy, the same method in sibling classes, shared resources, co-callers",
-             "writers": "code that writes a table (or column)",
+             "writers": "code that writes a table (or column), or a stored property `Type.prop`",
+             "readers": "code that reads a stored property `Type.prop` (READS_PROP)",
              "impact": "callers of a method up to their entry points (reverse walk), overrides listed apart",
              "stats": "node / edge counts of a graph DB",
              "node": "one node's details and its incoming / outgoing edges",
              "downstream": "forward dependencies of a symbol or page (calls, HTTP, routes, services, tables)",
              "api-calls": "client HTTP calls with call sites, request keys and the matched route"}
-    for name in ("reaches", "siblings", "writers", "impact", "stats", "node", "downstream", "api-calls"):
+    for name in ("reaches", "siblings", "writers", "readers", "impact", "stats", "node", "downstream", "api-calls"):
         p = sub.add_parser(name, help=helps[name])
         if name == "reaches":
             p.add_argument("specs", nargs="+")
@@ -480,16 +481,21 @@ def main(argv=None):
                 print(f"  {h['method']} {h['path']} -> {h['route'].split(':', 1)[1]}  @ {ev}"
                       + (f"  sends {', '.join(h['sends'])}" if h["sends"] else "") + f"  [{h['snapshot']}]")
         _note(_completeness(st, list(res["targets"]) + [c["id"] for c in res["callers"]]), False)
-    elif a.cmd == "writers":
-        rows = Q.writers(st, a.spec)
+    elif a.cmd in ("writers", "readers"):
+        rows = Q.writers(st, a.spec) if a.cmd == "writers" else Q.readers(st, a.spec)
         if a.json:
             print(json.dumps(rows, indent=1)); return
         if not rows:
-            print(Q.explain_no_writers(st, a.spec)); return
+            print(Q.explain_no_writers(st, a.spec, a.cmd)); return
         for r in rows:
             ek = ",".join(sorted(r["entry_kinds"]))
-            print(f"[{r['module']}] {r['fqn']}  {r['kind']} {r['dst']}  @{r['file']}:{r['line']} ({r['confidence']})  entries: {ek}")
-        print(f"{len(rows)} write edges, {len({r['src'] for r in rows})} writers")
+            ex = {k: v for k, v in (r.get("attrs") or {}).items() if k in ("receiver", "accessor", "storage")}
+            extra = ("  " + " ".join(f"{k}={v}" for k, v in ex.items())) if ex else ""
+            kind = f"{r['kind']}({r['attrs']['orig']})" if r.get("test") else r['kind']
+            print(f"[{r['module']}] {r['fqn']}  {kind} {r['dst']}  @{r['file']}:{r['line']} ({r['confidence']}){extra}  entries: {ek}")
+        verb = "write" if a.cmd == "writers" else "read"
+        nt = sum(1 for r in rows if r.get("test"))
+        print(f"{len(rows)} {verb} edges, {len({r['src'] for r in rows})} {a.cmd}" + (f" ({nt} from test code)" if nt else ""))
     elif a.cmd == "siblings":
         res = Q.siblings(st, a.spec)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_siblings(st, a.spec, res))

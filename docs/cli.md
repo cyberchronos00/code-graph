@@ -68,7 +68,8 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
   callers on a combined graph (see [Routes and guards](#routes-and-guards)).
 - `search NAME [--kind K]`: nodes by name / FQN substring (with their root-relative `file:line`), plus the routes whose
   middleware, guard or auth names match.
-- `writers TABLE`, `siblings SYMBOL`, `node SPEC`, `stats`: writers of a table, similar code, node details, counts.
+- `writers TABLE`, `writers Type.prop` / `readers Type.prop`, `siblings SYMBOL`, `node SPEC`, `stats`: writers of a
+  table, writers / readers of a stored property (Swift, #88), similar code, node details, counts.
   `node` prints the node (location, fqn, platforms, attrs) and its outgoing / incoming edges, the same edge from one
   site once with a count; `stats` prints the project, its languages, the coverage summary line and the node / edge
   counts. With `--json` each prints one JSON document (`node`: a list of `{node, out, in}`; `stats`: `{project, root,
@@ -444,6 +445,28 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                         indexed; 'none' to disable)
+```
+
+### `readers`
+
+```
+usage: python -m codegraph.cli readers [-h] --db DB [--json]
+                         [--min-confidence {heuristic,resolved,exact}] [--no-paths]
+                         [--max-depth MAX_DEPTH] [--gate GATE]
+                         spec
+
+positional arguments:
+  spec
+
+options:
+  -h, --help            show this help message and exit
+  --db DB
+  --json
+  --min-confidence {heuristic,resolved,exact}
+  --no-paths
+  --max-depth MAX_DEPTH
+  --gate GATE           gate scenario for live/gated split (default: the one
+                               indexed; 'none' to disable)
 ```
 
 ### `siblings`

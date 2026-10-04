@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Swift stored properties and construction branches (#88, phase 1): a stored instance property is a
+  `field:<Type>.<name>` node (`binding`, property `wrapper`), with `READS_PROP` / `WRITES_PROP` edges from `self.x`,
+  bare `x` and `v.x` with a known type of `v` (`storage: wrapper` for `_x = State(...)`); new `cg readers Type.prop`
+  and `cg writers Type.prop` (also MCP `readers` / `writers`). An `INSTANTIATES` edge inside a `switch` case / `if` /
+  `else` / `guard` / ternary carries `branch` and `branch_line`, in exact mode too. IceCubesApp: 2,392 fields,
+  5,506 reads, 1,373 writes, 277 of 686 constructions with a branch; call edges are identical.
+
 - Swift value navigation (#68): the views per case of `navigationDestination(for: Route.self) { switch ... }` are
   `NAVIGATES_TO` targets of `NavigationLink(value: Route.x(...))` and of `navigate(to:)` / `push` / `append` on a
   router or navigation path (`routerPath.navigate(to: .x)`). IceCubesApp: pages 21 → 36, NAVIGATES_TO 21 → 92.

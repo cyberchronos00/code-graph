@@ -1,9 +1,9 @@
 """Swift computed properties, observers and lazy properties as nodes (#72), on tests/swift_props_fixture: the calls
 inside a property's body come from `method:<Type>.<name>` (with `accessor: get | set | willSet | didSet` where the
 body has separate clauses), and a read of a computed / lazy property or a write of a computed / observed one is a
-CALLS edge to it (`property: read | write`) with the receiver rules of method calls. A plain stored property stays
-out of the graph. The exact layer (index store) yields the same edges. A Swift / Kotlin type node that calls the
-target itself (a stored property's initializer, a Kotlin custom getter) is listed by impact `(in a property)`."""
+CALLS edge to it (`property: read | write`) with the receiver rules of method calls. A plain stored property gets
+no `method:` node (it is a `field:` node since #88, tests/test_swift_fields.py). The exact layer (index store) yields
+the same edges. A Swift / Kotlin type node that calls the target itself (a stored property's initializer, a Kotlin custom getter) is listed by impact `(in a property)`."""
 import json
 import shutil
 import sqlite3

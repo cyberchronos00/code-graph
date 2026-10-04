@@ -1186,7 +1186,45 @@ def override_lines(res: dict, limit: int = 8) -> list[str]:
     return out
 
 
+def prop_fields(st: GraphStore, spec: str) -> list[str]:
+    """Stored-property field nodes for `Type.prop` / `field:Type.prop` / a qualified `Module.Type.prop` (#88)."""
+    spec = spec[len("field:"):] if spec.startswith("field:") else spec
+    if "." not in spec or spec.startswith(("table:", "column:")):
+        return []
+    return [r["id"] for r in st.q("""SELECT id FROM nodes WHERE kind='field' AND attrs LIKE '%"property": "stored"%'
+                                     AND (fqn=? OR fqn LIKE ?) ORDER BY id""", (spec, f"%.{spec}"))]
+
+
+def prop_access(st: GraphStore, spec: str, kind: str) -> list[dict]:
+    """READS_PROP / WRITES_PROP edges into the field nodes of `spec`, with the entry kinds reaching each site. Test code's
+    accesses (retyped TEST_USES with attrs.orig = kind) come last, with `test: True`."""
+    fids = prop_fields(st, spec)
+    if not fids:
+        return []
+    q = ",".join("?" * len(fids))
+    rows = st.q(f"""SELECT e.src, e.kind, e.dst, e.file, e.line, e.confidence, e.attrs, n.module, n.fqn
+                    FROM edges e JOIN nodes n ON n.id = e.src
+                    WHERE (e.kind=? OR (e.kind='TEST_USES' AND e.attrs LIKE ?)) AND e.dst IN ({q})
+                    ORDER BY e.kind='TEST_USES', n.module, n.fqn, e.line""", (kind, f'%"orig": "{kind}"%', *fids))
+    ents = entry_info(st, list({r["src"] for r in rows}))
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["attrs"] = json.loads(d["attrs"] or "{}")
+        d["test"] = r["kind"] == "TEST_USES"
+        d["entry_kinds"] = {k: v[0] for k, v in ents.get(r["src"], {}).items()}
+        out.append(d)
+    return out
+
+
+def readers(st: GraphStore, spec: str) -> list[dict]:
+    """Code that reads a stored property `Type.prop` (READS_PROP)."""
+    return prop_access(st, spec, "READS_PROP")
+
+
 def writers(st: GraphStore, table: str) -> list[dict]:
+    if prop_fields(st, table):          # `writers Type.prop`: a stored property (#88)
+        return prop_access(st, table, "WRITES_PROP")
     table = table[len("table:"):] if table.startswith("table:") else table   # `writers table:X` == `writers X`
     rows = st.q("""SELECT e.src, e.kind, e.dst, e.file, e.line, e.confidence, n.module, n.fqn
                    FROM edges e JOIN nodes n ON n.id = e.src
@@ -1642,7 +1680,12 @@ def explain_no_callers(st: GraphStore, spec: str, targets: list[str], min_conf: 
             f"try: reaches('{s}') for every dependent over all edge kinds; search('{n.get('name') or spec}') for similarly named code.")
 
 
-def explain_no_writers(st: GraphStore, table: str) -> str:
+def explain_no_writers(st: GraphStore, table: str, what: str = "writers") -> str:
+    if prop_fields(st, table):
+        return (f"no {what} recorded for property {table!r}. Recorded: `self.x` / bare `x` inside its type and `v.x` with "
+                "a known type of `v`; access through an unknown receiver, a `$binding` or a key path is not modelled.")
+    if what == "readers":
+        return f"no stored property {table!r} in the graph (Swift stored properties are `field:` nodes; try `cg search {table}`)."
     t = table.split(":", 1)[1] if table.startswith("table:") else table
     if not st.q("SELECT 1 FROM nodes WHERE id=?", (f"table:{t}",)):
         near = [r["id"][6:] for r in st.q("SELECT id FROM nodes WHERE kind='table' AND id LIKE ? ORDER BY id LIMIT 6", (f"%{t}%",))]

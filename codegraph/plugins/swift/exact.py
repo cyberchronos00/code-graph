@@ -305,8 +305,10 @@ class ExactLayer:
                         continue
                     if prop is not None:
                         acc = {**acc, "property": "read" if accessor_kind.get(o.usr) == "getter" else "write"}
+                    br = self.p.branch_at.get((rel, o.line, self.b.nodes[dst].name), {}) \
+                        if kind == "INSTANTIATES" else {}
                     self.b.add_edge(src, dst, kind, rel, o.line, EXACT, source="indexstore",
-                                    **({"dynamic": True} if o.roles & ix.DYNAMIC else {}), **acc)
+                                    **({"dynamic": True} if o.roles & ix.DYNAMIC else {}), **acc, **br)
                     exact.add((src, dst, kind))
                     refs += 1
         st["index_references"] = refs

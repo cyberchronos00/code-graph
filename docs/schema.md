@@ -100,6 +100,8 @@ virtual dispatch (`attrs.dispatch`), and IMPLEMENTS links a Rust type to its tra
 Python/Django: REFERENCES_FN✓ (function taken as a value; `attrs.how` = collection, callback, assignment, decorator or
 entry point), CALLS through a dispatch table or plugin list (`attrs.via` = collection) and decorator applications
 (`attrs.via` = decorator), USES_SCHEMA (handler → ninja Schema / DRF serializer, attrs.role request|response).
+Swift: READS_PROP✓ / WRITES_PROP✓ (→ `field:<Type>.<name>`, a stored instance property; attrs `receiver`, `accessor`,
+`storage`; #88), INSTANTIATES `attrs.branch` / `branch_line` (the enclosing switch case / if / else / guard / ternary).
 Dart/Flutter: EMITS_STATE (bloc → state), HANDLES_STATE (UI → state check), NAVIGATES_TO (UI → page), PARSES_JSON (→ model).
 Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (event → channel; attrs `name`, `visibility`,
 `site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs

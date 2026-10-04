@@ -12,7 +12,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 
 ## Tools
 
-- `reaches`, `impact`, `siblings`, `writers`, `node`, `stats`;
+- `reaches`, `impact`, `siblings`, `writers` (a table, or `Type.prop` for a stored property), `readers(prop)`
+  (who reads a stored property `Type.prop`, Swift), `node`, `stats`;
 - `callers(symbol, min_confidence?, limit?)`: direct callers of a function, method or class (one level, with the call
   site and confidence; `ref@file:line` for code that takes the function as a value, such as a dispatch table or a
   callback); `impact` follows them up to the entry points and lists those references in a `by reference` line;

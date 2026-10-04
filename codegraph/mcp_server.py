@@ -574,11 +574,40 @@ def resolutions(concept: str, within: str | None = None, client: bool = True, de
     return out if len(out) <= max_chars else out[:max_chars] + f"\n… truncated ({len(out)} chars; narrow with `within`)"
 
 
+def _prop_text(st, spec: str, what: str, rows: list, limit: int) -> str:
+    """`readers` / `writers Type.prop` of a stored property (#88): one line per access site, tests last."""
+    if not rows:
+        return Q.explain_no_writers(st, spec, what)
+    nt = sum(1 for r in rows if r.get("test"))
+    out = [f"{spec}: {len(rows)} {'write' if what == 'writers' else 'read'} edges from {len({r['src'] for r in rows})} "
+           f"{what}" + (f" ({nt} from test code)" if nt else "")]
+    for r in rows[:limit]:
+        a = r.get("attrs") or {}
+        ex = " ".join(f"{k}={a[k]}" for k in ("receiver", "accessor", "storage") if k in a)
+        ek = ",".join(sorted(r["entry_kinds"])) or "-"
+        out.append(f"  {'[test] ' if r.get('test') else ''}{r['fqn']}  @{os.path.basename(r['file'] or '?')}:{r['line']}"
+                   f"  {ex}  entries: {ek}")
+    if len(rows) > limit:
+        out.append(f"  … +{len(rows) - limit} more")
+    return "\n".join(out)
+
+
+@tool
+def readers(prop: str, limit: int = 60) -> str:
+    """Who reads a stored property `Type.prop` (READS_PROP edges, Swift): each site with its receiver (`self`, a
+    typed variable), accessor and the entry-point kinds that reach it; test code's reads come last."""
+    st = _st()
+    return _prop_text(st, prop, "readers", Q.readers(st, prop), limit)
+
+
 @tool
 def writers(table: str, limit: int = 60) -> str:
     """Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
-    evidence lines and the entry-point kinds that reach each writer."""
+    evidence lines and the entry-point kinds that reach each writer. `Type.prop` instead of a table: who writes
+    that stored property (WRITES_PROP edges, Swift)."""
     st = _st()
+    if Q.prop_fields(st, table):
+        return _prop_text(st, table, "writers", Q.writers(st, table), limit)
     rows = Q.writers(st, table)
     if not rows:
         return Q.explain_no_writers(st, table)
