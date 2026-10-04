@@ -136,9 +136,12 @@ Issues and pull requests that extend it are welcome.
   - web frameworks without a plugin (Sanic, Litestar, Bottle, …): their route decorators are reported as blind spots
     (detector `python_decorator_routes`) instead of routes;
   - URL confs built in loops/functions (e.g. plugin registries that generate `path()` lists at import time) and views
-    registered through third-party registries (NetBox `register_model_view`, Wagtail hooks/viewsets) are only partly
-    resolved; the `urlpatterns` entries built that way and `include()` targets cg could not follow are reported as
-    blind spots (detectors `django_dynamic_urlpatterns`, `django_unresolved_include`);
+    registered through other third-party registries (Wagtail hooks/viewsets) are only partly resolved. A model view
+    registry is followed when it uses the Django preset names (`register_model_view` on a model class, mounted with
+    `include(get_model_urls(app_label, model_name))`): detail views sit under `<mount>{pk}/<sub>/` and list views
+    under `<mount><sub>/`. A decorator or `get_model_urls` call whose arguments are not literals is reported as a
+    blind spot (`django_unresolved_include`), as are other `include()` targets cg could not follow and
+    `urlpatterns` built in a loop (`django_dynamic_urlpatterns`);
   - GraphQL (graphene, strawberry, ariadne) root fields are protocol endpoints (`endpoint:graphql:Query.x`,
     [protocols.md](protocols.md#graphql-root-fields)), not routes; object-type fields are not modelled;
   - Celery / RQ / Dramatiq jobs pair by task name and queue ([protocols.md](protocols.md#job-queues));

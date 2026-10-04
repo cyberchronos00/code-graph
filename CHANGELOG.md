@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Django model view registries become routes (#124). A `@register_model_view(Model, name, path=..., detail=...)`
+  decoration and `include(get_model_urls(app_label, model_name))` expand into the same class-based routes as a
+  handwritten `path()`. The decorator and expander names come from the Django preset (`view_registry`), and a
+  call whose model, path or app/model arguments cannot be evaluated is listed with the other unresolved includes
+  (`cg coverage`).
 - `cg agents install|update|remove|show` (#144) opts a project in to cg's reading-rules guidance: it writes a
   single marked block into `AGENTS.md`, `CLAUDE.md` or `.cursor/rules/cg.mdc` (and, with `--mcp`, a `cg` entry
   in an MCP config), previewing the exact diff and asking before writing (`--dry-run` / `show` only preview,

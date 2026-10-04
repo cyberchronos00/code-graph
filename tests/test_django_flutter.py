@@ -203,6 +203,60 @@ def test_match_path_param_names_differ():
     assert not match_path("/api/books/{id}/reviews", "/api/books/{book_id}")[0]
 
 
+def test_model_view_registry_routes(tmp_path):
+    """register_model_view + include(get_model_urls) become routes; a non-literal call stays unresolved."""
+    root = tmp_path / "app"
+    files = {
+        "requirements.txt": "django\n",
+        "manage.py": "import os\n",
+        "proj/__init__.py": "",
+        "proj/urls.py": "from django.urls import include, path\nurlpatterns = [path('dcim/', include('dcim.urls'))]\n",
+        "utilities/__init__.py": "",
+        "utilities/views.py": "def register_model_view(model, name='', path=None, detail=True, kwargs=None):\n    return lambda cls: cls\n",
+        "utilities/urls.py": "def get_model_urls(app_label, model_name, detail=True):\n    return []\n",
+        "dcim/__init__.py": "",
+        "dcim/models.py": "from django.db import models\nclass Device(models.Model):\n    name = models.CharField(max_length=10)\n",
+        "dcim/views.py": (
+            "from django.views import View\nfrom utilities.views import register_model_view\nfrom .models import Device\n"
+            "def pick(model):\n    return model\n"
+            "@register_model_view(Device)\nclass DeviceView(View):\n    def get(self, request, pk):\n        return None\n"
+            "@register_model_view(Device, 'edit')\nclass DeviceEditView(View):\n"
+            "    def get(self, request, pk):\n        return None\n    def post(self, request, pk):\n        return None\n"
+            "@register_model_view(Device, 'list', path='', detail=False)\nclass DeviceListView(View):\n"
+            "    def get(self, request):\n        return None\n"
+            "@register_model_view(pick(Device))\nclass Hidden(View):\n    def get(self, request):\n        return None\n"
+        ),
+        "dcim/urls.py": (
+            "from django.urls import include, path\nfrom utilities.urls import get_model_urls\napp_name = 'dcim'\n"
+            "app = 'dcim'\nurlpatterns = [\n"
+            "    path('devices/', include(get_model_urls('dcim', 'device', detail=False))),\n"
+            "    path('devices/<int:pk>/', include(get_model_urls('dcim', 'device'))),\n"
+            "    path('dyn/<int:pk>/', include(get_model_urls(app, 'device'))),\n"
+            "]\n"
+        ),
+    }
+    for rel, body in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body)
+    db = tmp_path / "reg.db"
+    stats = index_project(root, db, "registry")
+    con = sqlite3.connect(db)
+    rows = dict(con.execute("SELECT id, attrs FROM nodes WHERE kind='route'"))
+    assert "route:GET /dcim/devices/{pk}/" in rows
+    assert "route:GET /dcim/devices/{pk}/edit/" in rows
+    assert "route:POST /dcim/devices/{pk}/edit/" in rows
+    assert "route:GET /dcim/devices/" in rows
+    get = json.loads(rows["route:GET /dcim/devices/{pk}/"])
+    assert get["view"] == "dcim.views.DeviceView"
+    dst = con.execute("SELECT dst FROM edges WHERE src='route:GET /dcim/devices/{pk}/' AND kind='ROUTES_TO'").fetchall()
+    assert ("method:dcim.views.DeviceView.get",) in dst
+    reasons = [u["reason"] for u in stats["plugins"]["python/django"]["urlconf_unresolved"]]
+    assert any("get_model_urls(app, 'device')" in r for r in reasons)
+    assert any("pick(Device)" in r for r in reasons)
+    assert not any("Hidden" in (json.loads(a).get("view") or "") for a in rows.values())
+
+
 def test_query_targets_python_symbols_and_files():
     from codegraph.core.store import GraphStore
     from codegraph.query import resolve_targets
