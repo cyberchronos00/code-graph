@@ -108,11 +108,14 @@ def test_kotlin_type_level_calls_count_as_callers(tmp_path):
 
         class Cart {
             val label: String get() = formatPrice(3)
+            val stored: String = formatPrice(4)
         }
         """))
     index_project(tmp_path / "k", tmp_path / "k.db", "k")
     res = Q.impact(GraphStore(tmp_path / "k.db"), "formatPrice")
-    assert [(c["fqn"], Q.caller_label(c)) for c in res["callers"]] == [("app.Cart", "  (in a property)")]
+    # a stored property's initializer stays on the class; a custom getter is its own node since #89
+    assert [(c["fqn"], Q.caller_label(c)) for c in res["callers"]] == [("app.Cart", "  (in a property)"),
+                                                                     ("app.Cart.label", "  (get)")]
 
 
 @needs_toolchain

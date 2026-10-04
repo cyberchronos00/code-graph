@@ -225,6 +225,14 @@ class KotlinPlugin(LanguagePlugin):
         self.class_short: dict[str, list[Decl]] = defaultdict(list)
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.calls: list[tuple] = []          # (owner_id, name, receiver, line, file obj, decl)
+        # properties with a custom accessor, `by lazy` or a delegate are nodes (#89); kept out of by_name / members so
+        # a call `x()` never binds to one
+        self.props: dict[str, dict] = {}                                   # decl id -> {"property", "accessors"}
+        self.props_by_name: dict[str, list[Decl]] = defaultdict(list)
+        self.prop_members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
+        self.prop_at: dict[tuple, Decl] = {}                               # (file, start byte) -> decl
+        self.stored_names: set[str] = set()                                # plain stored properties / ctor vals
+        self.reads: list[tuple] = []          # (owner_id, name, receiver node, line, file obj, decl, read | write)
         self.http: list[dict] = []
         self.navs: list[tuple] = []
         self.base_urls: set[str] = set()
@@ -420,7 +428,12 @@ class KotlinPlugin(LanguagePlugin):
                     for d in body.children:
                         if d.type == "property_declaration":
                             dc.types.update(self._prop_type(d))
+                            if not self._prop_kind(d):
+                                nm_ = self._name(next((x for x in d.children if x.type == "variable_declaration"), d))
+                                if nm_:
+                                    self.stored_names.add(nm_)
                     self._decls(body, kf, dc, None)
+                self.stored_names.update(types)
             elif ty == "function_declaration":
                 nm = self._name(c)
                 if not nm:
@@ -447,6 +460,8 @@ class KotlinPlugin(LanguagePlugin):
                 body = next((d for d in c.children if d.type == "class_body"), None)
                 if body is not None:                 # `GREEN { override fun label() = "g" }`: the enum's members
                     self._decls(body, kf, cls, fn)
+            elif ty == "property_declaration" and fn is None and self._prop_kind(c):
+                self._prop_decl(c, kf, cls)
             elif ty == "property_declaration" and fn is None and self._is_constant(c, cls):
                 nm = self._name(next((d for d in c.children if d.type == "variable_declaration"), c))
                 if nm:
@@ -459,6 +474,56 @@ class KotlinPlugin(LanguagePlugin):
                 pass
             else:
                 self._decls(c, kf, cls, fn)
+
+    def _prop_kind(self, c) -> tuple | None:
+        """(property kind, accessors) of a property that runs code when read or written (#89): a custom `get()` /
+        `set(value)` (custom), `by lazy { }` (lazy) or another delegate (delegated); None for a stored property."""
+        acc = []
+        for x in c.children:
+            if x.type == "getter":
+                acc.append("get")
+            elif x.type == "setter":
+                acc.append("set")
+            elif x.type == "property_delegate":
+                acc.append("lazy" if re.match(r"by\s+lazy\b", self.t(x)) else "delegate")
+        if not acc:
+            return None
+        kind = "custom" if ("get" in acc or "set" in acc) else ("lazy" if "lazy" in acc else "delegated")
+        return kind, acc
+
+    def _prop_decl(self, c, kf: KFile, cls: Decl | None):
+        """`method:<Type>.<name>` (in a class), `function:<package>.<name>` (top level; an extension property keeps
+        its receiver, as extension functions do), kotlin_kind property."""
+        v = next((x for x in c.children if x.type == "variable_declaration"), None)
+        nm = self._name(v) if v is not None else None
+        if not nm:
+            return
+        kind, acc = self._prop_kind(c)
+        recv = None
+        for d in c.children:
+            if d.type == "variable_declaration":
+                break
+            if d.type in ("user_type", "nullable_type"):
+                recv = self.t(d).split("<")[0].rstrip("?")
+        anns, mods = self._annotations(c)
+        owner = cls.fqn if cls else (kf.package or "")
+        fq = f"{owner}.{nm}" if owner else nm
+        k = "method" if cls else "function"
+        types = {}
+        ty = next((x for x in v.children if x.type in ("user_type", "nullable_type")), None)
+        dc = Decl(f"{k}:{fq}{self._variant(kf, mods)}", k, nm, fq, kf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
+                  cls.fqn if cls else None, [], anns, mods, recv, types, kf.test, self._name_line(v))
+        if dc.id in self.decls:
+            return
+        self.props[dc.id] = {"property": kind, "accessors": acc,
+                             "type": self.t(ty).split("<")[0].rstrip("?").split(".")[-1] if ty is not None else None}
+        self._add_decl(dc, "property", prop=True)
+        self.b.nodes[dc.id].attrs.update(property=kind, accessors=acc)
+        self.props_by_name[nm].append(dc)
+        if dc.cls:
+            self.prop_members[dc.cls][nm].append(dc)
+        self.prop_at[(kf.rel, c.start_byte)] = dc
+        self.st["property_nodes"] += 1
 
     def _is_constant(self, c, cls: Decl | None) -> bool:
         """`const val` anywhere; a `val` / `var` of an `object` or `companion object`; a file-level `val` (#84). No
@@ -598,7 +663,7 @@ class KotlinPlugin(LanguagePlugin):
             return {self.t(ids[0]): m.group(1)}
         return {}
 
-    def _add_decl(self, d: Decl, display_kind: str):
+    def _add_decl(self, d: Decl, display_kind: str, prop: bool = False):
         attrs = {"kotlin_kind": display_kind}
         if d.test:
             attrs["test"] = True
@@ -621,6 +686,10 @@ class KotlinPlugin(LanguagePlugin):
             if any(a[0] == "ParameterizedTest" for a in d.annotations):
                 n.attrs["parameterized"] = True
         self.decls[d.id] = d
+        if prop:
+            if d.cls:
+                self.b.add_edge(f"class:{d.cls}", d.id, "CONTAINS", d.file, d.line, EXACT)
+            return
         self.by_name[d.name].append(d)
         if d.kind == "class":
             if "expect" in d.modifiers:
@@ -671,6 +740,12 @@ class KotlinPlugin(LanguagePlugin):
             ty = c.type
             if self.values and ty in ("navigation_expression", "identifier"):
                 self._value_ref(c, kf, owner, decl)
+            if self.props_by_name and ty in ("navigation_expression", "identifier"):
+                self._prop_ref(c, kf, owner, decl)
+            if ty == "property_declaration" and (kf.rel, c.start_byte) in self.prop_at:
+                d = self.prop_at[(kf.rel, c.start_byte)]
+                self._refs(c, kf, d.id, d, {"prefix": "", "guards": [], "routing": False})
+                continue
             if ty == "function_declaration":
                 d = self._decl_at(kf, c, ("function", "method"))
                 if d is not None:
@@ -793,8 +868,50 @@ class KotlinPlugin(LanguagePlugin):
                     m = re.match(r"([A-Z]\w*)", self.t(first))
                     if m:
                         self.navs.append((owner, None, m.group(1), kf.rel, line))
-        self.calls.append((owner, name, rtext, line, kf, decl))
+        self.calls.append((owner, name, rtext, line, kf, decl, self._accessor(c) if owner in self.props else None))
         return False
+
+    @staticmethod
+    def _accessor(c) -> str | None:
+        """get / set / lazy / delegate: the part of a property node a call sits in (#89)."""
+        a = c.parent
+        while a is not None and a.type not in ("property_declaration", "function_declaration", "class_body"):
+            if a.type == "getter":
+                return "get"
+            if a.type == "setter":
+                return "set"
+            if a.type == "property_delegate":
+                return "lazy" if a.children and re.match(r"by\s+lazy\b", a.text.decode("utf-8", "replace")) else "delegate"
+            a = a.parent
+        return "init" if a is not None and a.type == "property_declaration" else None
+
+    def _prop_ref(self, c, kf: KFile, owner: str, decl: Decl | None):
+        """A read (or write) of a property node: `cart.label`, `summary`, `3.asPrice`, `cart.items = x` (#89)."""
+        p = c.parent
+        if c.type == "navigation_expression":
+            kids = [x for x in c.children if x.type != "."]
+            if len(kids) != 2 or kids[1].type != "identifier":
+                return
+            nm, recv = self.t(kids[1]), kids[0]
+        else:
+            if p is None or p.type in ("variable_declaration", "parameter", "class_parameter", "function_value_parameter",
+                                       "import", "qualified_identifier", "package_header", "user_type", "type_identifier",
+                                       "enum_entry", "function_declaration", "class_declaration", "object_declaration",
+                                       "lambda_parameters", "annotation", "constructor_invocation", "label",
+                                       "callable_reference"):
+                return
+            if p.type == "navigation_expression" and p.children and p.children[0] != c:
+                return
+            if p.type == "value_argument" and c.next_sibling is not None and c.next_sibling.type == "=":
+                return
+            nm, recv = self.t(c), None
+        if nm not in self.props_by_name:
+            return
+        if p is not None and p.type == "call_expression" and p.children and p.children[0] == c:
+            return                                   # `x.label()`: a call, not a property read
+        mode = "write" if p is not None and p.type == "assignment" and p.children and p.children[0] == c else "read"
+        rv = (recv.type, self.t(recv)) if recv is not None else None     # text now: self.t reads the current file
+        self.reads.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, mode))
 
     def _first_arg(self, args):
         if args is None:
@@ -1014,7 +1131,7 @@ class KotlinPlugin(LanguagePlugin):
         return []
 
     def _resolve_calls(self):
-        for owner, name, recv, line, kf, decl in self.calls:
+        for owner, name, recv, line, kf, decl, acc in self.calls:
             self._data_access(owner, name, recv, line, kf, decl)
             self._how = self._recv = None
             targets = self._targets(name, recv, kf, decl)
@@ -1022,6 +1139,8 @@ class KotlinPlugin(LanguagePlugin):
                 self.st["calls_unresolved"] += 1
                 continue
             how = {"binding": self._how} if self._how else {}
+            if acc:
+                how["accessor"] = acc
             # the receiver's class when the member was found on an ancestor: `impact Sub.m` narrows by it (#62)
             if self._recv is not None and any(t.kind != "class" and t.cls and t.cls != self._recv.fqn for t in targets):
                 how["recv"] = [self._recv.id]
@@ -1038,6 +1157,84 @@ class KotlinPlugin(LanguagePlugin):
                 else:
                     self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, **how)
             self.st["calls_resolved"] += 1
+        self._resolve_reads()
+
+    def _prop_member(self, cls: Decl, name: str, depth: int = 0) -> list[Decl]:
+        hit = self.prop_members.get(cls.fqn, {}).get(name)
+        if hit:
+            return hit
+        if depth > 6:
+            return []
+        for s_ in cls.supers:
+            sc = self.classes.get(s_) or (self.class_short.get(s_) or [None])[0]
+            if sc is not None and sc is not cls:
+                r = self._prop_member(sc, name, depth + 1)
+                if r:
+                    return r
+        return []
+
+    def _ext_props(self, name: str, ty: str) -> list[Decl]:
+        return [d for d in self.props_by_name.get(name, []) if d.receiver and d.receiver.split(".")[-1] == ty]
+
+    def _resolve_reads(self):
+        """Property reads / writes -> CALLS with `property: read | write`, on the receiver rules of calls (#83): a known
+        receiver type binds exactly or not at all; an unknown receiver binds only a name no stored property shares."""
+        LIT = {"integer_literal": "Int", "long_literal": "Long", "string_literal": "String", "real_literal": "Double",
+               "boolean_literal": "Boolean", "character_literal": "Char"}
+        for owner, name, recv, line, kf, decl, mode in self.reads:
+            cls = self.classes.get(decl.cls) if decl is not None and decl.cls else (
+                decl if decl is not None and decl.kind == "class" else None)
+            how, r = None, []
+            rt = recv[1] if recv is not None else None
+            if recv is None or rt == "this":
+                if recv is None and self._shadowed(decl, name, kf, line):
+                    continue
+                if cls is not None:
+                    r = self._prop_member(cls, name)
+                if not r and decl is not None and decl.receiver:
+                    rc = self._class_of(decl.receiver.split(".")[-1], kf)
+                    r = self._prop_member(rc, name) if rc is not None else []
+                    r = r or self._ext_props(name, decl.receiver.split(".")[-1])
+                if not r and recv is None:
+                    if cls is not None and (name in cls.types or self._field_type(cls, name)):
+                        continue                     # a stored property of the class shadows a top-level one
+                    fq = kf.imports.get(name)
+                    r = [d for d in self.props_by_name[name] if d.kind == "function" and not d.receiver
+                         and (d.fqn == fq if fq else d.fqn == f"{kf.package}.{name}")]
+            else:
+                rname = re.sub(r"[?!]", "", rt).split(".")[-1].strip()
+                tyname = LIT.get(recv[0])
+                if recv[0] == "number_literal":
+                    tyname = "Long" if rt.rstrip().endswith(("L", "l")) else ("Double" if "." in rt else "Int")
+                if tyname is None and decl is not None:
+                    tyname = decl.types.get(rname)
+                if tyname is None and cls is not None:
+                    tyname = self._field_type(cls, rname)
+                if tyname is None and rname[:1].isupper():
+                    tyname = re.sub(r"\s*[({].*$", "", rname, flags=re.S)
+                if tyname is None and rname in self.props_by_name:      # `cart.label.length` style chains
+                    pt = {self.props[d.id].get("type") for d in self.props_by_name[rname]} - {None}
+                    tyname = pt.pop() if len(pt) == 1 else None
+                if tyname:
+                    short = re.sub(r"[<(].*", "", tyname, flags=re.S).rstrip("?! ").split(".")[-1]
+                    tc = self._class_of(short, kf)
+                    r = (self._prop_member(tc, name) if tc is not None else []) or self._ext_props(name, short)
+                    if not r and tc is not None:
+                        comp = self.classes.get(f"{tc.fqn}.Companion")
+                        r = self._prop_member(comp, name) if comp else []
+                else:
+                    # extension / top-level properties never bind by name: `x.size` is far more often the library's
+                    cands = list({d.id: d for d in self.props_by_name[name] if d.cls}.values())
+                    if len(cands) == 1 and name not in self.stored_names and len(name) > 3:
+                        r, how = cands, "name"
+            if mode == "write":
+                r = [d for d in r if {"set", "delegate"} & set(self.props[d.id]["accessors"])]
+            for t in r[:3]:
+                if t.id == owner:
+                    continue
+                self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, property=mode,
+                                **({"binding": how} if how else {}))
+                self.st["property_reads" if mode == "read" else "property_writes"] += 1
 
     def _targets(self, name: str, recv: str | None, kf: KFile, decl: Decl | None) -> list[Decl]:
         cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None

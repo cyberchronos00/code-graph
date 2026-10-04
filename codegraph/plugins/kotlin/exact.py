@@ -412,6 +412,9 @@ class ExactLayer:
         for key, e in list(self.b.edges.items()):
             if e.confidence != HEURISTIC or e.file not in covered:
                 continue
+            if e.attrs.get("property"):
+                continue      # property reads / writes (#89): scip-java reports them as accessors, not mapped yet
+
             if e.kind in CALL_KINDS or (e.kind == "USES_TYPE" and e.attrs.get("how") == "constructor call"):
                 n = self.b.nodes.get(e.src)
                 if n is not None and n.lang == "kotlin":

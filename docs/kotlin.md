@@ -15,7 +15,7 @@ Other parse errors are listed by `cg coverage --details` with the declarations t
 
 | Area | Facts |
 |---|---|
-| Declarations | packages, classes, interfaces, objects, companion objects, top-level and extension functions, methods (`class:` / `function:` / `method:` ids by fully qualified name) |
+| Declarations | packages, classes, interfaces, objects, companion objects, top-level and extension functions, methods (`class:` / `function:` / `method:` ids by fully qualified name), properties with a custom accessor, `by lazy` or a delegate ([Properties that run code](#properties-that-run-code)) |
 | Calls | `CALLS` resolved through the enclosing class and its supertypes, the receiver's parameter / property type (`api.order()` with `api: OrdersApi`), imports, the same package and finally the method name alone (not for a receiver of a library type, `Headers.build { }` or `client: HttpClient`): one method of that name gives an edge with `binding: "name"`, two to five give a `candidate` edge to each (`binding: "candidate"`, flagged by `cg tests` / `impact`, left out of platform divergence; [#83](https://github.com/cyberchronos00/code-graph/issues/83)); constructor calls as `INSTANTIATES`; interface / superclass methods → overrides (`IMPLEMENTED_BY` / `OVERRIDDEN_BY`) |
 | Ktor server | `routing { route("/a") { get("/{id}") { } } }` and `fun Route.x()` extensions → `route:GET /a/{id}`; type-safe resources `get<Articles.Id> { }` with the path from `@Resource("{id}")` and its `parent` resource (or enclosing resource class); each handler lambda is its own node; `authenticate("jwt") { }` is recorded as the route's guard |
 | Spring | `@RestController` / `@Controller` with `@RequestMapping` prefixes, `@GetMapping` ... and `@RequestMapping(method = [...])`; `@PreAuthorize`, `@Secured`, `@RolesAllowed` on the class or method as guards; `SecurityFilterChain` URL rules (`requestMatchers("/admin/**").hasRole("ADMIN")`, `anyRequest().authenticated()`, the Kotlin DSL `authorize("/admin/**", hasRole("ADMIN"))`; first match wins, `permitAll` adds none) as guards on the routes they match (`security` attribute names the file); `@Scheduled` (`scheduled`) and `@KafkaListener` / `@RabbitListener` / `@JmsListener` / `@SqsListener` / `@EventListener` (`listener`) entry points |
@@ -105,7 +105,25 @@ Android Gradle plugin (`android_modules` in the stats) and names them in the rea
 rest of the build was indexed. Builds whose settings use `repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)`
 (the Android template default) reject the repository scip-java's Gradle plugin adds; the reason says so. Java fields and Java-only builds are not covered by this
 layer (index a Java-only build with scip-java and `--scip`). Property accessors are not call edges (a property read
-reports the synthetic getter, which may share its symbol with a declared `fun getX()`). Custom getters / setters (`val label get() = ...`) have no node of their own: their calls come from the class, and `impact` lists such a class as a caller, labelled `(in a property)`.
+reports the synthetic getter, which may share its symbol with a declared `fun getX()`): the heuristic property read /
+write edges (below) are kept in exact mode and left out of the precision / recall comparison, and calls inside an
+accessor come from the property node in both modes.
+
+## Properties that run code
+
+A property with a custom `get()` / `set(value)`, a `by lazy { }` initializer or another delegate (`by
+Delegates.observable(...)`, `by viewModels()`, `by remember { }` on a class member ...) is a node (#89):
+`method:<Type>.<name>` in a class, `function:<package>.<name>` at the top level (an extension property keeps its
+`receiver`, as extension functions do), with `kotlin_kind: property`, `property: custom | lazy | delegated` and
+`accessors: [get, set, lazy, delegate]`. The calls inside come from that node with `accessor: get | set | lazy |
+delegate` on the edge (impact shows `(get)`). A read (`cart.label`, an implicit `summary`, `3.asPrice`, a top-level
+`banner`) is a `CALLS` edge with `property: read`; an assignment to a property with a setter or delegate is
+`property: write`. Receivers follow the method-call rules: a known receiver type (a parameter / property type, a
+constructor call, a literal) binds exactly or not at all; an unknown receiver binds only a class member property whose
+name no stored property shares, with `binding: "name"` (extension and top-level properties never bind by name). Plain
+stored properties (`val x = 1`, constructor `val`s) stay out of the graph; a stored property's initializer still
+counts for its class, which `impact` lists as `(in a property)`. Local delegated properties (`val x by remember { }`
+inside a function) belong to that function.
 
 ## Roadmap
 

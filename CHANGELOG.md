@@ -28,6 +28,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   with their models and API-key env var; `impact external:...` / `impact table:...` list the code using the system
   instead of "no recorded callers".
 
+- Kotlin properties that run code are nodes (#89): custom `get()` / `set(value)`, `by lazy { }` and delegated
+  properties become `method:<Type>.<name>` / `function:<package>.<name>` (`kotlin_kind: property`); calls inside
+  them come from that node (`accessor: get | set | lazy | delegate`), and reads / writes are `CALLS` edges with
+  `property: read | write` on the method-call receiver rules. `impact` and `cg tests` follow a function reached only
+  through a property.
+
 ### Fixed
 
 - Kotlin (#81): a suspend lambda used as an expression (`val b = suspend { 1 }`, `X to suspend { ... }`) no longer
