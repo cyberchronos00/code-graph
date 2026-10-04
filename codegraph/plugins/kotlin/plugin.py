@@ -412,6 +412,7 @@ class KotlinPlugin(LanguagePlugin):
             except Exception as e:          # a corrupt / foreign index must not lose the heuristic graph
                 info["status"] = f"SCIP import failed ({type(e).__name__}: {e})"
             for k in ("exact_vs_heuristic", "scip_documents", "scip_files", "scip_defs_matched", "scip_defs_unmatched",
+                      "scip_defs_unmatched_samples",
                       "scip_references", "scip_refs_external", "java"):
                 if k in sst:
                     self.st[k] = sst[k]

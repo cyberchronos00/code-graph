@@ -65,6 +65,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 ### Fixed
 
 - TypeScript `process.env.X = ...` no longer counts as reading `X` (#103).
+- Kotlin exact mode: an explicit `get()` / `set(v)` accessor in a scip-java 0.13 index matches its property instead
+  of counting as an unmatched declaration. The stats list up to 10 unmatched declarations
+  (`scip_defs_unmatched_samples`) (#99).
 - `publish.yml` skips files already on PyPI (`skip-existing`). Publishing a GitHub release for a version that a
   `workflow_dispatch` run had already uploaded failed with "400 File already exists" (v0.10.1); it now succeeds.
 

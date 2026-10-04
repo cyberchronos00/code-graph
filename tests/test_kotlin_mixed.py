@@ -254,3 +254,27 @@ def test_repositories_mode_failure_reason(tmp_path, kotlin22, monkeypatch):
     status = st["plugins"]["kotlin"]["scip"]["status"]
     assert "prefer settings repositories" in status and "FAIL_ON_PROJECT_REPOS" in status
     assert "Android modules (app) need the Android SDK" in status
+
+
+def test_scip_java_013_explicit_getter_matches_property(tmp_path, isolated, monkeypatch):
+    """scip-java 0.13 defines an explicit `get()` accessor as `C#getX().` at the keyword: it is the property."""
+    import shutil
+    from codegraph.plugins.native import scipread
+    src = tmp_path / "src"
+    shutil.copytree(FIX, src)
+    shapes = src / "src/main/kotlin/demo/Shapes.kt"
+    text = shapes.read_text()
+    shapes.write_text(text + "\nclass Holder {\n    val isEmpty: Boolean\n        get() = true\n}\n")
+    line = text.count("\n") + 3                            # 0-based line of `get()`
+    real = scipread.load
+
+    def load(path):
+        idx = real(path)
+        o = scipread.Occ(line, 8, 11, "semanticdb maven . . demo/Holder#getIsEmpty().", scipread.DEFINITION, ())
+        idx.docs["src/main/kotlin/demo/Shapes.kt"].occs.append(o)
+        idx.defs.setdefault(o.symbol, []).append(("src/main/kotlin/demo/Shapes.kt", o))
+        return idx
+    monkeypatch.setattr(scipread, "load", load)
+    st = index_project(src, tmp_path / "g.db", "kotlin-mixed", scip=[str(SCIP22)])
+    k = st["plugins"]["kotlin"]
+    assert k["mode"] == "scip" and k["scip_defs_unmatched"] == 0 and "scip_defs_unmatched_samples" not in k

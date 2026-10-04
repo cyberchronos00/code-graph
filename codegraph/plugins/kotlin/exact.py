@@ -40,6 +40,7 @@ CALL_KINDS = ("CALLS", "INSTANTIATES")
 # `valueOf` / `entries` (`<init>` and `<anonymous object at ...>` start with "<")
 SYNTHETIC = re.compile(r"copy|component\d+|values|valueOf|entries")
 FACADE = re.compile(r"(?<=/)\w+Kt#(?=[^#]+\.$)")   # the JVM facade class of a Kotlin file's top-level functions
+ACCESSOR = re.compile(r"[gs]et[A-Z]\w*")                # a property accessor's JVM name
 
 
 def _has_kotlin_docs(path: str) -> bool:
@@ -301,10 +302,19 @@ class ExactLayer:
                         if d.name == name and d.line <= o.line + 1 <= d.end and (suf == "#") == (d.kind == "class"):
                             nid = d.id
                             break
+                if nid is None and suf == "(" and ACCESSOR.fullmatch(name):
+                    # an explicit `get()` / `set(v)` accessor: scip-java defines `getX().` at the keyword (0.13)
+                    pn = name[3].lower() + name[4:]
+                    for d in by_file.get(rel, ()):
+                        if d.name == pn and d.id in self.p.props and d.line <= o.line + 1 <= d.end:
+                            nid = d.id
+                            break
                 if nid is None:
                     if (suf in ("(", "#") and not name.startswith("<") and not SYNTHETIC.fullmatch(name)
                             and (rel, o.line, o.col) not in term_pos):
                         unmatched += 1
+                        if len(st.setdefault("scip_defs_unmatched_samples", [])) < 10:
+                            st["scip_defs_unmatched_samples"].append(f"{rel}:{o.line + 1}:{o.col + 1} {name}{suf}")
                     continue
                 sym[s] = nid
                 matched += 1
