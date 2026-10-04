@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Kotlin stored properties (#88): a class / enum body `val` / `var` without accessors and a constructor `val` /
+  `var` are `field:<Type>.<name>` nodes.
+  - `x` / `this.x` and `v.x` with a known type of `v` are READS_PROP / WRITES_PROP edges.
+  - `items.add(x)` and similar calls are writes with `via: mutating`; `_state.value = x` is a write with `via: value`.
+  - `cg readers` / `cg writers` and the MCP tools cover them.
+  - Corpus results: nowinandroid 469 fields; Element X 8,462 fields, 8,626 reads, 311 writes; Bitwarden 9,080
+    fields. All other edges are unchanged on five Kotlin corpora.
 - Swift stored properties: in-place mutations are now writes (#88). These are WRITES_PROP edges with `via`:
   - `mutating`: `items.append(x)`, `flag.toggle()`, or a project `mutating func` called on the field.
   - `inout`: `&x`.

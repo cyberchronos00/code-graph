@@ -120,9 +120,25 @@ delegate` on the edge (impact shows `(get)`). A read (`cart.label`, an implicit 
 `banner`) is a `CALLS` edge with `property: read`; an assignment to a property with a setter or delegate is
 `property: write`. Receivers follow the method-call rules: a known receiver type (a parameter / property type, a
 constructor call, a literal) binds exactly or not at all; an unknown receiver binds only a class member property whose
-name no stored property shares, with `binding: "name"` (extension and top-level properties never bind by name). Plain
-stored properties (`val x = 1`, constructor `val`s) stay out of the graph; a stored property's initializer still
-counts for its class, which `impact` lists as `(in a property)`. Local delegated properties (`val x by remember { }`
+name no stored property shares, with `binding: "name"` (extension and top-level properties never bind by name). A
+stored property's initializer counts for its class, which `impact` lists as `(in a property)`.
+
+## Stored properties
+
+A stored property of a class or enum is a `field:<Type>.<name>` node (#88), with attrs `property: stored` and
+`binding: val | var`. This covers a body `val` / `var` without accessors or a delegate, and a constructor `val` /
+`var` parameter. An `object`'s / companion's `val`s stay constants (#84), and a plain constructor parameter is not a
+field.
+
+Reads and writes are `READS_PROP` / `WRITES_PROP` edges (`resolved`, attr `receiver`) for:
+- `x` / `this.x` inside the class or a subclass, unless a parameter or local shadows it;
+- `v.x` where the type of `v` is known: a parameter, a property, or a local `val v = T(...)`.
+
+An unknown receiver binds nothing. Writes are `=` and compound assignments, plus:
+- `items.add(x)` / `remove` / `clear` / `put` / `sort` … on the field (`via: mutating`);
+- `_state.value = x` on a `MutableStateFlow` / `LiveData` field (`via: value`).
+
+`cg readers Type.prop` / `cg writers Type.prop` list them. Local delegated properties (`val x by remember { }`
 inside a function) belong to that function.
 
 ## Roadmap

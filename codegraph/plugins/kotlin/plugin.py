@@ -199,6 +199,13 @@ class KFile:
         self.source_set_dir = m.group(1) if m else None
 
 
+# mutating calls on a stored MutableList / MutableSet / MutableMap / StateFlow field: `items.add(x)` writes `items`
+KOTLIN_MUTATING = frozenset({
+    "add", "addAll", "remove", "removeAll", "removeAt", "removeIf", "removeFirst", "removeLast", "retainAll", "clear",
+    "put", "putAll", "set", "getOrPut", "compute", "computeIfAbsent", "merge", "sort", "sortBy", "sortWith",
+    "sortByDescending", "shuffle", "reverse", "fill", "update"})
+
+
 class KotlinPlugin(LanguagePlugin):
     name = "kotlin"
 
@@ -232,6 +239,10 @@ class KotlinPlugin(LanguagePlugin):
         self.prop_members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.prop_at: dict[tuple, Decl] = {}                               # (file, start byte) -> decl
         self.stored_names: set[str] = set()                                # plain stored properties / ctor vals
+        # stored properties of a class / enum are `field:<Type>.<name>` nodes with READS_PROP / WRITES_PROP (#88)
+        self.fields: dict[str, dict[str, str]] = defaultdict(dict)        # class fqn -> name -> field id
+        self.field_names: set[str] = set()
+        self.frefs: list[tuple] = []          # (owner_id, name, receiver (type, text) | None, line, file, decl, write)
         self.reads: list[tuple] = []          # (owner_id, name, receiver node, line, file obj, decl, read | write)
         self.http: list[dict] = []
         self.navs: list[tuple] = []
@@ -424,6 +435,15 @@ class KotlinPlugin(LanguagePlugin):
                           name_line=self._name_line(c))
                 self._add_decl(dc, kk)
                 body = next((d for d in c.children if d.type in ("class_body", "enum_class_body")), None)
+                if kk in ("class", "enum"):
+                    for d in c.children:
+                        if d.type == "primary_constructor":
+                            for cp in d.children:
+                                for q in (cp.children if cp.type == "class_parameters" else []):
+                                    kw = next((self.t(x) for x in q.children if x.type in ("val", "var")), None)
+                                    ids = [x for x in q.children if x.type == "identifier"]
+                                    if q.type == "class_parameter" and kw and ids:
+                                        self._field(dc, self.t(ids[0]), kw, kf, q)
                 if body is not None:
                     for d in body.children:
                         if d.type == "property_declaration":
@@ -432,6 +452,10 @@ class KotlinPlugin(LanguagePlugin):
                                 nm_ = self._name(next((x for x in d.children if x.type == "variable_declaration"), d))
                                 if nm_:
                                     self.stored_names.add(nm_)
+                                    kw = next((self.t(x).split()[-1] for x in d.children if x.type == "binding_pattern_kind"
+                                               or self.t(x) in ("val", "var")), "val")
+                                    if kk in ("class", "enum") and not self._is_constant(d, dc):
+                                        self._field(dc, nm_, kw, kf, d)
                     self._decls(body, kf, dc, None)
                 self.stored_names.update(types)
             elif ty == "function_declaration":
@@ -474,6 +498,21 @@ class KotlinPlugin(LanguagePlugin):
                 pass
             else:
                 self._decls(c, kf, cls, fn)
+
+    def _field(self, cls: Decl, nm: str, kw: str, kf: KFile, n):
+        """A stored property of a class (`var items = ...`, a constructor `val owner`): `field:<Type>.<name>` (#88)."""
+        if nm in self.fields[cls.fqn]:
+            return
+        a = {"property": "stored", "binding": "var" if kw.endswith("var") else "val"}
+        if kf.test:
+            a["test"] = True
+        fid = self.b.add_node("field", f"{cls.fqn}.{nm}", name=nm, fqn=f"{cls.fqn}.{nm}", file=kf.rel,
+                              line=n.start_point[0] + 1, end_line=n.end_point[0] + 1,
+                              module=getattr(self.b.nodes.get(cls.id), "module", None), lang="kotlin", attrs=a)
+        self.b.add_edge(cls.id, fid, "CONTAINS", kf.rel, n.start_point[0] + 1, EXACT)
+        self.fields[cls.fqn][nm] = fid
+        self.field_names.add(nm)
+        self.st["stored_property_nodes"] += 1
 
     def _prop_kind(self, c) -> tuple | None:
         """(property kind, accessors) of a property that runs code when read or written (#89): a custom `get()` /
@@ -740,7 +779,7 @@ class KotlinPlugin(LanguagePlugin):
             ty = c.type
             if self.values and ty in ("navigation_expression", "identifier"):
                 self._value_ref(c, kf, owner, decl)
-            if self.props_by_name and ty in ("navigation_expression", "identifier"):
+            if (self.props_by_name or self.field_names) and ty in ("navigation_expression", "identifier"):
                 self._prop_ref(c, kf, owner, decl)
             if ty == "property_declaration" and (kf.rel, c.start_byte) in self.prop_at:
                 d = self.prop_at[(kf.rel, c.start_byte)]
@@ -905,13 +944,26 @@ class KotlinPlugin(LanguagePlugin):
             if p.type == "value_argument" and c.next_sibling is not None and c.next_sibling.type == "=":
                 return
             nm, recv = self.t(c), None
-        if nm not in self.props_by_name:
+        if nm not in self.props_by_name and nm not in self.field_names:
             return
         if p is not None and p.type == "call_expression" and p.children and p.children[0] == c:
             return                                   # `x.label()`: a call, not a property read
         mode = "write" if p is not None and p.type == "assignment" and p.children and p.children[0] == c else "read"
         rv = (recv.type, self.t(recv)) if recv is not None else None     # text now: self.t reads the current file
-        self.reads.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, mode))
+        if nm in self.props_by_name:
+            self.reads.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, mode))
+        if nm in self.field_names:
+            w = mode == "write"
+            if not w and p is not None and p.type == "navigation_expression" and p.children and p.children[0] == c:
+                ids = [x for x in p.children if x.type == "identifier"]
+                gp = p.parent
+                if (len(ids) >= 1 and ids[-1] is not c and self.t(ids[-1]) in KOTLIN_MUTATING and gp is not None
+                        and gp.type == "call_expression" and gp.children and gp.children[0] == p):
+                    w = "mutating"                   # `items.add(x)` on a MutableList / Set / Map field
+                elif (len(ids) >= 1 and ids[-1] is not c and self.t(ids[-1]) == "value" and gp is not None
+                        and gp.type == "assignment" and gp.children and gp.children[0] == p):
+                    w = "value"                      # `_state.value = x` on a MutableStateFlow / LiveData field
+            self.frefs.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, w))
 
     def _first_arg(self, args):
         if args is None:
@@ -1158,6 +1210,57 @@ class KotlinPlugin(LanguagePlugin):
                     self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, **how)
             self.st["calls_resolved"] += 1
         self._resolve_reads()
+        self._resolve_fields()
+
+    def _field_member(self, cls: Decl | None, name: str, depth: int = 0) -> str | None:
+        if cls is None or depth > 6:
+            return None
+        if name in self.fields.get(cls.fqn, {}):
+            return self.fields[cls.fqn][name]
+        for s_ in cls.supers:
+            sc = self.classes.get(s_) or (self.class_short.get(s_) or [None])[0]
+            if sc is not None and sc is not cls:
+                r = self._field_member(sc, name, depth + 1)
+                if r:
+                    return r
+        return None
+
+    def _resolve_fields(self):
+        """READS_PROP / WRITES_PROP to stored-property field nodes (#88): `x` / `this.x` inside the class (or a
+        subclass), `v.x` where the type of `v` is known (a parameter, a property, a local `val v = T(...)`). An
+        unknown receiver binds nothing: stored names are far too common."""
+        for owner, name, recv, line, kf, decl, write in self.frefs:
+            cls = self.classes.get(decl.cls) if decl is not None and decl.cls else (
+                decl if decl is not None and decl.kind == "class" else None)
+            fid = None
+            rt = recv[1] if recv is not None else None
+            if recv is None or rt == "this":
+                if recv is None and self._shadowed(decl, name, kf, line):
+                    continue
+                fid = self._field_member(cls, name)
+            elif recv[0] in ("identifier", "this_expression") or re.fullmatch(r"[\w.]+", rt or ""):
+                rname = rt.split(".")[-1].strip()
+                tyname = decl.types.get(rname) if decl is not None else None
+                if tyname is None and cls is not None:
+                    tyname = self._field_type(cls, rname)
+                if tyname is None and decl is not None and decl.kind != "class":
+                    tyname = self._local_type(decl, rname, kf)
+                if tyname:
+                    tc = self._class_of(re.sub(r"[<(].*", "", tyname, flags=re.S).rstrip("?! ").split(".")[-1], kf)
+                    fid = self._field_member(tc, name)
+            if fid is None or fid == owner:
+                self.st["stored_property_refs_unresolved"] += 1
+                continue
+            self.b.add_edge(owner, fid, "WRITES_PROP" if write else "READS_PROP", kf.rel, line, RESOLVED,
+                            receiver="this" if recv is None or rt == "this" else rt[:40],
+                            **({"via": write} if isinstance(write, str) else {}))
+            self.st["stored_property_writes" if write else "stored_property_reads"] += 1
+
+    def _local_type(self, decl: Decl, name: str, kf: KFile) -> str | None:
+        """`val d = Cart(...)` inside the function body: the constructed type of a local."""
+        src = "\n".join(kf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:decl.end])
+        m = re.search(r"\b(?:val|var)\s+" + re.escape(name) + r"\s*(?::\s*([A-Z][\w.]*))?\s*=\s*([A-Z][\w.]*)\s*\(", src)
+        return (m.group(1) or m.group(2)) if m else None
 
     def _prop_member(self, cls: Decl, name: str, depth: int = 0) -> list[Decl]:
         hit = self.prop_members.get(cls.fqn, {}).get(name)
