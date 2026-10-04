@@ -19,6 +19,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
   not branch on the name (mcp-server-fetch, from the one `Tool(name=)` in `list_tools`). Every reference server's
   tools now have a handler: mcp-time 2 and mcp-fetch 1 (none before), all 3 correct.
 
+### Fixed
+
+- `publish.yml` skips files already on PyPI (`skip-existing`). Publishing a GitHub release for a version that a
+  `workflow_dispatch` run had already uploaded failed with "400 File already exists" (v0.10.1); it now succeeds.
+
 ## [0.10.1] - 2026-10-04
 
 First release on PyPI, as `cg-code-graph` (`pipx install cg-code-graph`, `uv tool install cg-code-graph`); the

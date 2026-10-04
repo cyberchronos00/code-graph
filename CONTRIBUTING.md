@@ -97,8 +97,9 @@ out. A tag without a GitHub release, or a GitHub release without the PyPI upload
    `gh release create vX.Y.Z --verify-tag --title vX.Y.Z --latest --notes-file <section.md>`.
 5. Publishing the release starts `publish.yml`, which builds the tag and uploads it to PyPI via trusted publishing
    (environment `pypi`). Check that the run succeeded and that https://pypi.org/project/cg-code-graph/X.Y.Z/ exists.
-   If the upload failed, rerun it with `gh workflow run publish.yml -f tag=vX.Y.Z`. PyPI never accepts the same
-   version twice, so a run against a version that is already uploaded fails at the upload step and changes nothing.
+   If the upload failed, rerun it with `gh workflow run publish.yml -f tag=vX.Y.Z`. The upload uses
+   `skip-existing: true`: files already on PyPI are skipped, never replaced, so a run for a version that is already
+   uploaded succeeds and changes nothing.
 6. Check the install from PyPI in a clean environment: `pipx install cg-code-graph==X.Y.Z` (or
    `uv tool install cg-code-graph==X.Y.Z`), then `cg --version` and `cg doctor`. Also check the tag path:
    `sh install.sh --version vX.Y.Z`. Users update with `uv tool upgrade cg-code-graph`, `pipx upgrade cg-code-graph`

@@ -62,3 +62,7 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # a release published for a version already on PyPI (uploaded earlier by a workflow_dispatch run)
+          # succeeds instead of failing with "400 File already exists"; PyPI files are never replaced
+          skip-existing: true
