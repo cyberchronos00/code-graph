@@ -50,7 +50,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
     longer marks `Room`'s fields lossy.
   - A read is not a read-back when the writer uses what it just built a few lines later, when the property holds a
     callback, or when the property is only used as an index. With that, mattermost-mobile, koel, solidtime,
-    Bitwarden iOS, elk and nowinandroid have 40 lossy writes and 0 round trips (5 false positives removed). Element X
+    Bitwarden iOS, elk and nowinandroid have 38 lossy writes and 0 round trips (5 false positives removed). Element X
     iOS has 6 lossy writes and 2 round trips. One is plausible: a permission level that is `max` of two power levels
     seeds an editable setting. The other is an `Int(...)` count conversion. The Element X
     round trip above (a harmless `PdfPage.renderHeight`) is gone too.
