@@ -5,7 +5,10 @@ Kotlin `launch { }` / `async { }`, a React `useEffect` callback, a JS / TS `asyn
 `async def` / `asyncio.create_task` — that comes after an `await` (Kotlin: `.await()`, `withContext`, `delay`,
 `.first()`), with no cancellation check (`Task.isCancelled`, `checkCancellation`, `isActive`, `ensureActive`, a
 `cancelled` / `ignore` flag, `signal.aborted`) and no comparison against a token, ID or generation captured before the
-await between the await and the write. A result that lands after the user moved on overwrites newer state.
+await between the await and the write. The write must use the awaited result, the awaited request must depend on an
+input (a parameter, prop, state or loop variable: a fixed `client.post("/auth.config")` cannot be overtaken by a
+newer request with other inputs), and the block must not be wrapped in a single-flight helper (`bundleAsync`,
+`dedupe`, `debounce`, `throttle`, `once`). A result that lands after the user moved on overwrites newer state.
 
 Findings are heuristic, read from the indexed source text with file:line evidence; they add no edges and change no
 counts. The other phase-3 rules (incomplete cache key, two writers, echo suppression) are not implemented yet."""
@@ -33,6 +36,23 @@ GUARD_RE = re.compile(r"\bisCancelled\b|checkCancellation|\bisActive\b|ensureAct
 CMP_RE = re.compile(r"(?:===?|!==?)")
 DECL_RE = re.compile(r"\b(?:let|var|val|const)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=|^\s*([a-z_]\w*)\s*=(?!=)")
 UI_HINT = ("wrapper", "hook")
+# the async block is wrapped in a single-flight / dedupe / rate limiter: concurrent runs cannot overtake each other
+SINGLE_FLIGHT_RE = re.compile(r"\b(?:bundle\w*|dedup\w*|single[Ff]light\w*|debounce\w*|throttle\w*|exhaust\w*|once)\s*\(")
+KEYWORDS = frozenset("""await try async let var val const self this it nil null None true false True False new return
+in of is as await_ undefined void typeof""".split())
+
+
+def _input_dependent(text: str) -> bool:
+    """Does the awaited request depend on an input (a parameter, prop, state or loop variable) rather than being a
+    fixed call (`client.post("/auth.config")`, `requestPhotoAccessIfNeeded()`)? Only then can a newer request
+    overtake it with different inputs."""
+    t = re.sub(r"""(['"`])(?:\\.|(?!\1).)*\1""", "''", text)       # string literals
+    t = re.sub(r"(?<![:\w])([A-Za-z_$][\w$]*)\s*:(?!:)", " ", t)      # labels / object keys (`url:`, `id:`)
+    t = re.sub(r"\b(?:this|self)\s*\.\s*", " SELFREF_", t)           # `this.x` / `self.x`: the instance's state
+    t = re.sub(r"\.\s*[A-Za-z_$][\w$]*", " ", t)                    # member names
+    t = re.sub(r"(?<![\w$])[A-Za-z_$][\w$]*\s*(?:<[^<>]*>)?\s*\(", " (", t)  # call names
+    ids = re.findall(r"(?<![\w$])[A-Za-z_$][\w$]*", t)
+    return any(i.startswith("SELFREF_") or (i not in KEYWORDS and not i[0].isupper()) for i in ids)
 TEST_PATH_RE = re.compile(r"(?:^|/)(?:tests?|__tests__|spec|testing|fixtures?|factories|Tests|UITests)/|"
                           r"[._-](?:test|spec)s?\.\w+:|Tests?\.swift:|Test\.kt:|(?:^|/)test_\w+\.py:")
 
@@ -100,7 +120,18 @@ def stale_async(st: GraphStore, include_tests: bool = False, limit: int = 500) -
         before = "\n".join(ls[o - 1:aw - 1]) + "\n" + ls[aw - 1].split("await")[0]
         after = "\n".join(ls[aw - 1:r["line"]])
         captured = {m.group(1) or m.group(2) for m in DECL_RE.finditer(before)} - {None}
-        if GUARD_RE.search(after):
+        if GUARD_RE.search(after) or SINGLE_FLIGHT_RE.search(ls[o - 1]):
+            continue
+        aw_line = ls[aw - 1]
+        k = max(aw_line.find("await"), 0)
+        stmt, depth = [], 0
+        for i in range(aw - 1, min(len(ls), aw + 5)):
+            x = ls[i][k:] if i == aw - 1 else ls[i]
+            stmt.append(x)
+            depth += sum(x.count(c) for c in "({[") - sum(x.count(c) for c in ")}]")
+            if depth <= 0:
+                break
+        if not _input_dependent(re.sub(r"^\s*await\b", "", "\n".join(stmt))):
             continue
         # the written value must come from the awaited result: a name bound on the await line (or derived from one
         # after it), or the await itself on the write line; a loading flag reset after the await is not a stale result

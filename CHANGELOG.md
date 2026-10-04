@@ -51,8 +51,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
   - The async blocks covered are Swift `Task` and async funcs, Kotlin `launch` / `async`, React `useEffect`, JS / TS
     `async` functions and `.then`, and Python `async def`.
   - It has text, `--json` and MCP `lint_async_state` output; findings are heuristic.
-  - Fixtures cover Swift, Kotlin, React and Python. Hand-checked precision is below the 50% target overall:
-    IceCubesApp 4 of 5, outline 3 of 8, social-app 2 of 9.
+  - The awaited request must depend on an input (a parameter, prop, state or loop variable). A block wrapped in a
+    single-flight helper (`bundleAsync`, `dedupe`, `debounce`, `throttle`, `once`) is skipped.
+  - Fixtures cover Swift, Kotlin, React and Python. Hand-checked precision is 8 of 12 (67%): IceCubesApp 4 of 5,
+    outline 2 of 3, social-app 2 of 4. Element X, Bitwarden and isowords have no findings.
   - Incomplete cache key, two writers and echo suppression are not implemented yet.
 - Kotlin stored-property refs no longer treat `{ x = …` (an assignment opening a body) or `f(x)` (an argument) as a
   local `x`. Element X gains 1,149 field refs and Bitwarden 418; all other edges are unchanged.

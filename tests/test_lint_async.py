@@ -44,11 +44,11 @@ def test_kotlin():
 def test_react():
     if not shutil.which("node"):
         pytest.skip("node not installed")
-    assert found("react") == [("src/Search.tsx:10", "async function", "heuristic")]        # not :22 (cancelled flag)
+    assert found("react") == [("src/Search.tsx:10", "async function", "heuristic")]  # not :22 (cancelled), :36 (bundleAsync)
 
 
 def test_python_and_cli_json():
-    assert found("python") == [("app/search.py:16", "async def", "heuristic")]               # not :23 (token)
+    assert found("python") == [("app/search.py:16", "async def", "heuristic")]   # not :23 (token), :27 (fixed request)
     out = subprocess.run([sys.executable, "-m", "codegraph.cli", "lint", "async-state", "--db", str(db("python")), "--json"],
                          capture_output=True, text=True, check=True, cwd=ROOT).stdout
     j = json.loads(out)

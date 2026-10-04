@@ -530,7 +530,10 @@ It flags a write of stored or UI state (a WRITES_PROP edge) that meets all of th
 - it writes the awaited result: a name bound on the await line or derived from one;
 - between the await and the write there is no cancellation check (`Task.isCancelled`, `checkCancellation`,
   `isActive`, `ensureActive`, a `cancelled` / `ignore` / `stale` / `mounted` flag, `signal.aborted`);
-- there is also no comparison against a token, ID or generation captured before the await.
+- there is also no comparison against a token, ID or generation captured before the await;
+- the awaited request depends on an input (a parameter, prop, state or loop variable), so a newer request with other
+  inputs can overtake it; a fixed `client.post("/auth.config")` does not;
+- the block is not wrapped in a single-flight helper (`bundleAsync`, `dedupe`, `debounce`, `throttle`, `once`).
 
 Writes are skipped when they go to an object the function just fetched (`doc.x = …` with a local receiver) and when
 they are in test paths (unless `--tests` is given).

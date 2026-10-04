@@ -21,3 +21,7 @@ class SearchState:
         found = await fetch(q)
         if mine == self.token:
             self.results = found
+
+    async def load_defaults(self):
+        found = await fetch("defaults")
+        self.results = found

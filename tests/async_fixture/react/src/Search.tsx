@@ -25,3 +25,14 @@ export function SearchGuarded({ q }: { q: string }) {
   }, [q])
   return <ul>{results.map((r) => <li key={r}>{r}</li>)}</ul>
 }
+
+const bundleAsync = <T,>(f: T): T => f
+
+export class Feed {
+  items: string[] = []
+
+  fetchNext = bundleAsync(async (q: string) => {
+    const page = await fetchResults(q)
+    this.items = page
+  })
+}
