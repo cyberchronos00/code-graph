@@ -17,6 +17,7 @@ Reads the extractor's decorator facts (extractor/fw.mjs) and adds:
               -> job (queue_job), producers @InjectQueue('q') + this.q.add('name') -> DISPATCHES; @OnEvent -> listener,
               EventEmitter2.emit('evt') -> DISPATCHES; @MessagePattern/@EventPattern and @WebSocketGateway +
               @SubscribeMessage -> message (message_handler), ClientProxy.send/emit -> DISPATCHES;
+              @WebSocketGateway on @nestjs/platform-ws (or useWebSocketAdapter(new WsAdapter)) -> route:WS;
               nest-commander @Command/@SubCommand -> command (cli_command, operator-only)
 """
 from __future__ import annotations
@@ -26,7 +27,7 @@ import re
 
 from ...core.plugin import FrameworkPlugin, GraphBuilder, Project
 from ..tsweb.common import (TEST_SKIP_RE, add_route, express_path, finish, fw_facts, has_server_framework, join_path,
-                            last_name, merge_extractor_cfg, module_of, obj, ref_nodes, register, sval, svals)
+                            last_name, merge_extractor_cfg, module_of, obj, pkg_deps, ref_nodes, register, sval, svals)
 
 ROUTE_DECOS = {"Get": "GET", "Post": "POST", "Put": "PUT", "Patch": "PATCH", "Delete": "DELETE", "All": "ANY",
                "Options": "OPTIONS", "Head": "HEAD", "Search": "SEARCH", "Sse": "GET"}
@@ -80,6 +81,39 @@ def _pattern(d) -> str | None:
     return d.get("ref")
 
 
+def _gw_port_path(args):
+    """(@WebSocketGateway args) -> (literal port or None, path expression or None, whether a path option is present)."""
+    port, spec, saw = None, None, False
+    for a in args or []:
+        if not isinstance(a, dict):
+            continue
+        n = a.get("n")
+        if isinstance(n, (int, float)) and not isinstance(n, bool):
+            port = int(n)
+            continue
+        if "path" in obj(a):
+            saw, spec = True, obj(a).get("path")
+    return port, spec, saw
+
+
+def _gw_uris(spec, saw: bool):
+    """(uri, confidence, any_path). No path matches every path; a same-file const / literal is exact; anything else is unresolved."""
+    if not saw:
+        return [("/", "exact", True)]
+    if isinstance(spec, dict) and (spec.get("conf") or "exact") == "exact":
+        vals = svals(spec)
+        if vals:
+            out = []
+            for v in vals:
+                if not isinstance(v, str) or not v:
+                    return [("/{path}", "heuristic", False)]
+                if not v.startswith("/") and not v.startswith("{"):
+                    v = "/" + v
+                out.append((v, "heuristic" if "{" in v else "exact", False))
+            return out
+    return [("/{path}", "heuristic", False)]
+
+
 class NestPlugin(FrameworkPlugin):
     name, language = "nest", "typescript"
 
@@ -96,10 +130,11 @@ class NestPlugin(FrameworkPlugin):
         F = fw_facts(ctx)
         st = {"modules": 0, "controllers": 0, "routes": 0, "providers": 0, "di_params": 0, "di_resolved": 0, "di_external": 0,
               "di_unresolved": 0, "di_calls": 0, "schedules": 0, "jobs": 0, "listeners": 0, "messages": 0, "commands": 0,
-              "graphql_ops": 0}
+              "graphql_ops": 0, "ws_routes": 0}
         if not F:
             return {**st, "status": "no facts"}
-        self.b, self.F = b, F
+        self.b, self.F, self.project = b, F, project
+        self.use_ws_adapter = False
         self.classes = {c["id"]: c for c in F.get("classes") or []}
         self.by_name = {}
         for c in self.classes.values():
@@ -131,6 +166,32 @@ class NestPlugin(FrameworkPlugin):
                     return p["node"]
             cls = self.supers.get(cls)
         return None
+
+    def _raw_ws(self) -> bool:
+        """Raw WebSocket adapter: platform-ws without socket.io, or `useWebSocketAdapter(new WsAdapter(..))`."""
+        if self.use_ws_adapter:
+            return True
+        deps = pkg_deps(self.project.root)
+        return "@nestjs/platform-ws" in deps and "@nestjs/platform-socket.io" not in deps
+
+    def _ws_gateway_route(self, c, gw, st):
+        """One `route:WS` per `@WebSocketGateway`. ROUTES_TO handleConnection, never the class."""
+        b = self.b
+        port, spec, saw = _gw_port_path(gw.get("args") or [])
+        h = self.method_of(c["id"], "handleConnection")
+        for uri, conf, any_path in _gw_uris(spec, saw):
+            attrs = {"any_path": True} if any_path else {}
+            rid = add_route(b, "WS", uri, [h] if h else [], c["file"], gw.get("line") or c["line"], "nest", conf, attrs)
+            n = b.nodes[rid]
+            if port is not None:
+                n.attrs["ports"] = sorted(set(n.attrs.get("ports") or []) | {port})
+            if any_path:
+                n.attrs["any_path"] = True
+            if not any(e.src == rid and e.kind == "ROUTES_TO" for e in b.edges.values()):
+                n.attrs["handler_unresolved"] = True
+            else:
+                n.attrs.pop("handler_unresolved", None)
+        st["ws_routes"] += 1
 
     def class_ids(self, d) -> list[str]:
         """Classes a described value names: X, forwardRef(() => X), X.forRoot(...) (the module class)."""
@@ -391,6 +452,11 @@ class NestPlugin(FrameworkPlugin):
                 versioning = {"type": "uri" if "URI" in typ or not typ else typ.split(".")[-1].lower(),
                               "prefix": "v" if "prefix" not in o else (sval(o["prefix"]) or ""),
                               "default": svals(o.get("defaultVersion")) or ([None] if o.get("defaultVersion") else [])}
+            elif m == "useWebSocketAdapter":
+                for a in args:
+                    nw = (a.get("new") if isinstance(a, dict) else None) or ""
+                    if nw.split(".")[-1] == "WsAdapter":
+                        self.use_ws_adapter = True
             elif m in GLOBAL_ENHANCERS:
                 for a in args:
                     for cid in self.class_ids(a):
@@ -527,6 +593,7 @@ class NestPlugin(FrameworkPlugin):
     def _entries(self, st):
         b = self.b
         events, messages, jobs = {}, {}, {}
+        raw_ws = self._raw_ws()                 # after _routes(): _app_config() has seen useWebSocketAdapter
         for c in self.classes.values():
             cd = _decos(c)
             proc = cd.get("Processor") if cd.get("Processor") and _is_nest(cd["Processor"]) and "microservices" not in (cd["Processor"].get("mod") or "") else None
@@ -539,6 +606,8 @@ class NestPlugin(FrameworkPlugin):
             if gw:
                 for a in gw.get("args") or []:
                     ns = ns or sval(obj(a).get("namespace"))
+                if raw_ws:
+                    self._ws_gateway_route(c, gw, st)
             cmd = cd.get("Command") or cd.get("SubCommand")
             if cmd and (cmd.get("mod") or "").startswith("nest-commander") or (cmd and cmd.get("mod") is None and any((x.get("text") or "").startswith("CommandRunner") for x in [c.get("extends") or {}])):
                 o = obj((cmd.get("args") or [None])[0])
@@ -613,6 +682,8 @@ class NestPlugin(FrameworkPlugin):
                     mid = b.add_node("message", key, name=f"{transport} {pat}", file=c["file"], line=d.get("line") or line, module=module_of(c["file"]),
                                      lang="ts", entry_kind="message_handler", attrs={"transport": transport, "pattern": pat, "namespace": ns, "framework": "nest",
                                                                                      "guards": list(dict.fromkeys(guards))})
+                    if transport == "ws" and raw_ws:
+                        b.nodes[mid].attrs["adapter"] = "ws"     # raw WebSocket adapter: no Socket.IO twin
                     b.add_edge(mid, m["id"], "HANDLED_BY", file=c["file"], line=d.get("line") or line, confidence="exact")
                     messages.setdefault(pat, []).append(mid)
                     st["messages"] += 1

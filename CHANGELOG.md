@@ -10,6 +10,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Nest `@WebSocketGateway` on `@nestjs/platform-ws` (or `useWebSocketAdapter(new WsAdapter(..))`) is a `route:WS`
+  (`path`, literal `ports`, `any_path` when there is no path, `handleConnection` or `handler_unresolved`), so a
+  browser WebSocket client can match it. `@SubscribeMessage` nodes stay, and Socket.IO gateways get no `route:WS`; a
+  project that calls `WsAdapter` gets no Socket.IO twins either (#146).
 - Django model view registries become routes (#124). A `@register_model_view(Model, name, path=..., detail=...)`
   decoration and `include(get_model_urls(app_label, model_name))` expand into the same class-based routes as a
   handwritten `path()`; the call form `register_model_view(Model, 'trace')(View)` (or a dotted-path view) registers

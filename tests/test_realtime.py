@@ -86,6 +86,8 @@ def test_nest_gateway(dbs):
     assert _attrs(db, E + "/admin#kick")["guards"] == ["WsAuthGuard"]
     st = _edges(db, "SENDS_TO")
     assert (h, E + "/admin#server:notice") in st and (h, E + "/admin#kicked") in st             # this.server / client: Socket
+    routes = [r[0] for r in sqlite3.connect(db).execute("select id from nodes where kind='route'")]
+    assert not [i for i in routes if i.startswith("route:WS")]                                  # socket.io gateway: no route:WS
 
 
 def test_link(dbs):

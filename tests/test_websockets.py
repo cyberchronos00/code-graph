@@ -22,11 +22,13 @@ FX = ROOT / "tests" / "ws_fixture"
 def dbs(tmp_path_factory):
     d = tmp_path_factory.mktemp("ws")
     out = {}
-    for r in ("live-server", "live-web", "py-live"):
+    for r in ("live-server", "live-web", "py-live", "nest-ws", "nest-ws-web", "nest-ws-adapter"):
         out[r + "-stats"] = index_project(FX / r, d / f"{r}.db", r)
         out[r] = d / f"{r}.db"
     out["link"] = d / "link.db"
     link(str(out["live-server"]), str(out["live-web"]), str(out["link"]), backend_name="live-server", frontend_name="live-web")
+    out["link-nest"] = d / "link-nest.db"
+    link(str(out["nest-ws"]), str(out["nest-ws-web"]), str(out["link-nest"]), backend_name="nest-ws", frontend_name="nest-ws-web")
     return out
 
 
@@ -95,3 +97,34 @@ def test_link_and_view(dbs):
     assert "WS /live" in ws and "WS /ws/hono" in ws
     sse = {(e["kind"], e["name"]) for e in protocols(GraphStore(db), protocol="sse")["endpoints"]}
     assert ("http", "GET /events") in sse and ("route", "GET /events") in sse and ("route", "GET /plain") not in sse
+
+
+def test_nest_platform_ws(dbs):
+    db = dbs["nest-ws"]
+    routes = _nodes(db, "route")
+    rt = _edges(db, "ROUTES_TO")
+    ev = routes["route:WS /events"]
+    assert ev[0] == "websocket" and ev[1]["framework"] == "nest" and ev[1]["uri"] == "/events"
+    assert "any_path" not in ev[1] and "ports" not in ev[1]
+    assert rt[("route:WS /events", "method:src/events.gateway.ts#EventsGateway.handleConnection")] == "exact"
+    port = routes["route:WS /"][1]
+    assert port["any_path"] and port["ports"] == [8081] and port["handler_unresolved"] and port["framework"] == "nest"
+    assert not [k for k in rt if k[0] == "route:WS /"]
+    stats = routes["route:WS /stats"]
+    assert stats[1]["ports"] == [8080] and stats[1]["framework"] == "nest"
+    assert rt[("route:WS /stats", "method:src/events.gateway.ts#StatsGateway.handleConnection")] == "exact"
+    assert routes["route:WS /{path}"][1]["framework"] == "nest"
+    assert rt[("route:WS /{path}", "method:src/events.gateway.ts#ConfigGateway.handleConnection")] == "heuristic"
+    assert _nodes(db, "message")["message:ws:events"][0] == "message_handler"
+    mr = _edges(dbs["link-nest"], "MATCHES_ROUTE")
+    assert ("http:WS /events", "route:WS /events") in mr
+
+
+def test_nest_ws_adapter_without_socketio_twins(dbs):
+    # both adapters in package.json, but main.ts calls useWebSocketAdapter(new WsAdapter(app)): the raw WebSocket adapter
+    db = dbs["nest-ws-adapter"]
+    routes = _nodes(db, "route")
+    assert routes["route:WS /live"][1]["framework"] == "nest"
+    assert ("route:WS /live", "method:src/live.gateway.ts#LiveGateway.handleConnection") in _edges(db, "ROUTES_TO")
+    assert _nodes(db, "message")["message:ws:chat"][1]["adapter"] == "ws"                   # the message node stays
+    assert not [k for k in _nodes(db, "endpoint") if k.startswith("endpoint:socketio:")]     # no Socket.IO twins

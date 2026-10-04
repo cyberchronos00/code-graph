@@ -169,7 +169,7 @@ Node clients and Nest gateways, so a TS client links with a Python or Node serve
 - guards: `X.use(mw)` middleware is recorded on the server receivers of X's namespace.
 - Nest: each `message:ws:` handler of a gateway gets an `endpoint:socketio:<ns>#<pattern>` RECEIVED_BY with its
   guards (`via` = the message node), unless the project uses `@nestjs/platform-ws` without
-  `@nestjs/platform-socket.io`.
+  `@nestjs/platform-socket.io` or calls `useWebSocketAdapter(new WsAdapter(..))` (the raw WebSocket adapter).
 
 ## WebSocket connections and Server-Sent Events (#32 part 2)
 
@@ -179,7 +179,7 @@ and calls, marked `stream: sse`; `cg protocols --protocol sse` lists them (and `
 
 | side | WebSocket (`ws`) | SSE (`sse`) |
 |---|---|---|
-| server | `ws`: `new WebSocketServer({ path, port, server })` / `new WebSocket.Server(..)`, handler of `wss.on('connection', h)` (`codegraph/realtime_ws.py`); express-ws / Elysia `app.ws(path, h)`, @fastify/websocket `{ websocket: true }`, Hono `upgradeWebSocket(h)` (express plugin); Python `websockets.serve(handler, host, port)`; FastAPI / Starlette `@app.websocket`, Django Channels (unchanged) | a route whose handler sets `Content-Type: text/event-stream` (header, `media_type=`, `mimetype=`; not an `Accept` header), returns `EventSourceResponse(..)` or calls Hono `streamSSE(..)`; Nest `@Sse()` |
+| server | `ws`: `new WebSocketServer({ path, port, server })` / `new WebSocket.Server(..)`, handler of `wss.on('connection', h)` (`codegraph/realtime_ws.py`); express-ws / Elysia `app.ws(path, h)`, @fastify/websocket `{ websocket: true }`, Hono `upgradeWebSocket(h)` (express plugin); Python `websockets.serve(handler, host, port)`; FastAPI / Starlette `@app.websocket`, Django Channels (unchanged); Nest `@WebSocketGateway` on `@nestjs/platform-ws` (`codegraph/plugins/nest/plugin.py`) | a route whose handler sets `Content-Type: text/event-stream` (header, `media_type=`, `mimetype=`; not an `Accept` header), returns `EventSourceResponse(..)` or calls Hono `streamSSE(..)`; Nest `@Sse()` |
 | client | browser `new WebSocket(url)`, `ReconnectingWebSocket`, `Sockette`; Dart `web_socket_channel` (unchanged) | `new EventSource(url)` (and polyfills), `fetchEventSource(url, { method })` |
 
 - A `ws` server without a `path` option takes any path: it is `route:WS /` with `any_path` (and `ports` when the port
@@ -187,12 +187,18 @@ and calls, marked `stream: sse`; `cg protocols --protocol sse` lists them (and `
   `handleUpgrade` (`pathname === '/x'`, or `req.url.startsWith(p)` as `p/{rest*}`, heuristic). Servers started by tests
   are not entry points. An inline connection callback without its own node leaves
   `handler_unresolved` rather than routing to the module.
+- Nest `@WebSocketGateway` is `route:WS <path>` (`framework: nest`, entry kind websocket) when the project depends on
+  `@nestjs/platform-ws` and not `@nestjs/platform-socket.io`, or when `useWebSocketAdapter(new WsAdapter(..))` is found.
+  `{ path: '/events' }` and `(8080, { path: '/events' })` are `/events` (`ports: [8080]` when the port is a literal).
+  No `path` is `route:WS /` with `any_path` (not matched by path). A non-literal path resolves a same-file constant;
+  otherwise it stays unresolved (`/{path}`, heuristic). The route points at `handleConnection` when that method exists,
+  otherwise `handler_unresolved` (never the class). `@SubscribeMessage` `message:ws:` nodes stay as they are, and a
+  Socket.IO gateway project gets no `route:WS`.
 - Client URLs: `${proto}://${location.host}/x` and `wss://${host}/x` are read as `{host}/x` (the page's or a
   configured server, like `${origin}/x` for HTTP); `ws://localhost:9100` keeps its origin (`origin_kind: other`, not
   matched). A same-origin relative URL is not matched across repos unless it is under `/api/`, as for HTTP.
 - Not yet: message names inside a connection (`switch (msg.type)` / `send(JSON.stringify({ type }))`), SSE `event:`
-  names, Nest `@nestjs/platform-ws` gateway paths and Python
-  WebSocket clients.
+  names, and Python WebSocket clients.
 
 ## Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32 part 3)
 

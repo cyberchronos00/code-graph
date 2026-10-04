@@ -450,6 +450,8 @@ def nest_twins(project, b, st) -> None:
     for nid, n in list(b.nodes.items()):
         if n.kind != "message" or (n.attrs or {}).get("transport") != "ws" or (n.attrs or {}).get("framework") != "nest":
             continue
+        if n.attrs.get("adapter") == "ws":
+            continue                            # the Nest plugin found `useWebSocketAdapter(new WsAdapter(..))`
         pat = n.attrs.get("pattern")
         if not pat or pat in LIFECYCLE:
             continue
