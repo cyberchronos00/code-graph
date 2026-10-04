@@ -48,6 +48,7 @@ rust:
   targets: off                         # extra rust-analyzer runs per target: auto (default), off, or [windows, macos]
 protocols:
   external: ["kafka:audit.*"]          # <protocol>:<name glob> endpoints handled outside the analysed repos
+lossy: [squash, "toDisplay*"]          # extra lossy-transform call names / globs for `cg roundtrip`
 ```
 
 | key | meaning | flag |
@@ -57,6 +58,7 @@ protocols:
 | `exclude` | gitignore-style globs (`legacy/**`, `*.generated.ts`, `/tools`), applied by every language plugin and by the coverage scan | |
 | `skip_dirs.add` / `skip_dirs.keep` | directory names to add to, or take out of, the shared skip lists (every walk: the language plugins, the TypeScript and Dart extractors, the coverage scan; `keep` also lets a walk into a hidden directory such as `.storybook`) | |
 | `include` | directories (relative to the indexed root) that are indexed although a built-in skip covers them: a skipped directory name (`build/`, `dist/`, `node_modules/@acme/sdk`) or generated files. Only the path down to them is walked, not the rest of the skipped directory; `exclude` globs still apply inside them | |
+| `lossy` | extra lossy-transform call names or globs for `cg roundtrip` ([cli.md](cli.md#roundtrip)), next to the built-in clamp / min / max / round / `fit*` names and `@cg-lossy` doc tags | |
 | `apps` | monorepo apps `{name, root, role: backend \| frontend, links}` ([below](#monorepo-apps)) | `cg index --no-apps` indexes the root as one project |
 | `generated.paths` / `generated.vendored` / `generated.keep` | globs of generated / vendored files detection misses, and of hand-maintained files it should leave alone ([generated.md](generated.md)) | |
 | `protocols.external` | protocol endpoints a known outside party sends or receives (`kafka:audit.*`, `socketio:/#audit:*`, `http:GET /status`): `cg protocols` marks them external instead of `no_receiver` / `no_sender` ([protocols.md](protocols.md#checks)) | |

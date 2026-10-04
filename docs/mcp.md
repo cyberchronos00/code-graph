@@ -12,7 +12,7 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 
 ## Tools
 
-- `reaches`, `impact`, `siblings`, `writers` (a table, or `Type.prop` for a stored property), `readers(prop)`
+- `reaches`, `impact`, `siblings`, `writers` (a table, or `Type.prop` for a stored property), `readers(prop)`, `roundtrip(prop)` (heuristic: a lossy write read back to seed UI state, #88), `lint_async_state` (heuristic: stale async results, #88)
   (who reads a stored property `Type.prop`, Swift), `node`, `stats`;
 - `callers(symbol, min_confidence?, limit?)`: direct callers of a function, method or class (one level, with the call
   site and confidence; `ref@file:line` for code that takes the function as a value, such as a dispatch table or a

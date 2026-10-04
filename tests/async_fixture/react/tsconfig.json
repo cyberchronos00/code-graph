@@ -1,0 +1,1 @@
+{ "compilerOptions": { "jsx": "react-jsx", "strict": false, "target": "es2020", "module": "esnext" }, "include": ["src"] }

@@ -52,7 +52,7 @@ SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None:
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
     "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
     "platforms": {"targets", "paths", "file_suffixes", "path_conventions"}, "include": None, "apps": None,
-    "rust": {"targets"}, "protocols": {"external"},
+    "rust": {"targets"}, "protocols": {"external"}, "lossy": None,
 }
 APP_KEYS = ("name", "root", "role", "links")
 APP_ROLES = ("backend", "frontend")
@@ -299,6 +299,8 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
     vz = _section(data, "viz", fname)
     if vz is not None and vz.get("presets") is not None:
         out["viz"] = {"presets": _viz_presets(vz["presets"], f"{fname}: viz.presets")}
+    if data.get("lossy") is not None:      # #88: extra lossy-transform call names / globs for `cg roundtrip`
+        out["lossy"] = _strings(data["lossy"], f"{fname}: lossy")
     ignored = sorted(str(k) for k in set(data) - KNOWN_KEYS)
     if ignored:
         out["ignored_keys"] = ignored

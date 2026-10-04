@@ -2,7 +2,7 @@
 
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
-Tools: reaches, impact, callers, siblings, writers, routes, node, search, stats, starters, index, downstream, path,
+Tools: reaches, impact, callers, siblings, writers, readers, roundtrip, lint_async_state, routes, node, search, stats, starters, index, downstream, path,
 api_calls, resolutions, channels, bridges, protocol_links, llm_tools, external_systems, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
@@ -590,6 +590,28 @@ def _prop_text(st, spec: str, what: str, rows: list, limit: int) -> str:
     if len(rows) > limit:
         out.append(f"  … +{len(rows) - limit} more")
     return "\n".join(out)
+
+
+@tool
+def roundtrip(prop: str, include_tests: bool = False) -> str:
+    """Heuristic (#88): does a stored property `Type.prop` round-trip through a lossy transform? Each write site with
+    the lossy call it passes through (clamp, min/max, round, truncating casts, `fit*`, `.cg.yaml` `lossy:` names,
+    `@cg-lossy` functions; within the function plus one hop through direct callers), each read site that seeds UI
+    state (init, onAppear, remember, useState(initial), mounted), and un-narrowed ranges drawn next to such a read.
+    Findings are heuristic evidence with file:line, not proof."""
+    from . import roundtrip as RT
+    return RT.render(RT.roundtrip(_st(), prop, include_tests=include_tests))
+
+
+@tool
+def lint_async_state(include_tests: bool = False, limit: int = 80) -> str:
+    """Heuristic (#88 phase 3, rule stale-async-result): a write of stored / UI state inside Task / launch / useEffect /
+    async function / async def code after an await, using the awaited result, with no cancellation check and no
+    comparison against a token / ID / generation captured before the await. file:line evidence; not proof."""
+    from . import lint_async as LA
+    res = LA.lint(_st(), include_tests=include_tests)
+    lines = LA.render(res).split("\n")
+    return "\n".join(lines[:1 + 3 * limit]) + (f"\n… +{len(res['findings']) - limit} more" if len(res["findings"]) > limit else "")
 
 
 @tool

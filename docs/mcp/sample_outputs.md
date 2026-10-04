@@ -9,6 +9,8 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `callers`: Direct callers of a function / method / class (one level: CALLS, INSTANTIATES, dispatch and framework edges
 - `siblings`: Code parallel to a symbol that often needs the same change: classes sharing its parent/interface/trait,
 - `resolutions`: Every place a concept (e.g. 'timezone', 'locale') is resolved, deterministically: assignment/return sites
+- `roundtrip`: Heuristic (#88): does a stored property `Type.prop` round-trip through a lossy transform? Each write site with
+- `lint_async_state`: Heuristic (#88 phase 3, rule stale-async-result): a write of stored / UI state inside Task / launch / useEffect /
 - `readers`: Who reads a stored property `Type.prop` (READS_PROP edges: Swift, Kotlin, Python, TypeScript): each site with its receiver (`self`, a
 - `writers`: Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
 - `channels`: Broadcast channels (Laravel Broadcast::channel, events' broadcastOn, Echo / pusher-js subscriptions on a combined

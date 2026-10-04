@@ -1202,6 +1202,21 @@ class KotlinPlugin(LanguagePlugin):
         return bool(re.search(rf"(?:\b(?:val|var)\s+(?:\([^)]*)?|[(,]\s*|\{{\s*(?:[\w\s,]*,\s*)?){re.escape(nm)}\b\s*(?:[:=),]|->|in\b)",
                               "\n".join(lines)))
 
+    def _shadowed_local(self, decl: Decl | None, nm: str, kf: KFile) -> bool:
+        """`_shadowed` for stored-property refs (#88), without its argument-shaped false positives: `{ x = …` (an
+        assignment opening a body) and `f(x)` (an argument) do not declare `x`. A parameter / local / lambda parameter
+        / destructured name / `for (x in …)` does."""
+        if decl is None or decl.kind == "class":
+            return False
+        if nm in decl.types:
+            return True
+        body = "\n".join(kf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:decl.end])
+        n = re.escape(nm)
+        return bool(re.search(rf"\b(?:val|var)\s+(?:\([^)]*?)?\b{n}\b\s*[:=),]"            # val x = / val (a, x) =
+                              rf"|\bfor\s*\(\s*(?:\([^)]*?)?\b{n}\b[^)]*?\bin\b"               # for (x in / for ((a, x) in
+                              rf"|[(,]\s*{n}\s*:"                                         # (x: T  a parameter
+                              rf"|\{{\s*(?:\(?\s*[\w\s,:<>?]*,\s*)?{n}\b\s*(?:,[\w\s,:<>?]*)?\)?\s*->", body))  # { a, x -> / { (a, x) ->
+
     def _class_of(self, short: str, kf: KFile) -> Decl | None:
         fq = kf.imports.get(short)
         if fq and fq in self.classes:
@@ -1327,7 +1342,7 @@ class KotlinPlugin(LanguagePlugin):
             fid = None
             rt = recv[1] if recv is not None else None
             if recv is None or rt == "this":
-                if recv is None and self._shadowed(decl, name, kf, line):
+                if recv is None and self._shadowed_local(decl, name, kf):
                     continue
                 fid = self._field_member(cls, name)
             elif recv[0] in ("identifier", "this_expression") or re.fullmatch(r"[\w.]+", rt or ""):

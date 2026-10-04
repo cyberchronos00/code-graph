@@ -63,6 +63,7 @@ def test_data_class_copy_writes():
     ld = "method:app.Screen.load"
     assert e[(ld, "field:app.UiState.loading", "WRITES_PROP", 39)] == {"receiver": "s", "via": "copy"}
     assert e[(ld, "field:app.UiState.title", "WRITES_PROP", 40)] == {"receiver": "it", "via": "copy", "binding": "name"}
+    assert (ld, "field:app.Screen.ui", "WRITES_PROP", 39) in e        # `ui = …` opening the body is not a local
 
 
 def test_call_edges_never_reach_fields():
@@ -87,3 +88,18 @@ def test_compose_construction_branches():
     assert e[(h, "class:app.Banner", "INSTANTIATES", 21)] == {"branch": "when 1", "branch_line": 21}
     assert e[(h, "function:app.Feed", "CALLS", 22)]["branch"] == "else of when (tab)"
     assert "branch" not in e[(h, "function:app.Spinner", "CALLS", 24)]
+
+
+def test_copy_guesses_are_heuristic_in_db_and_viz():
+    """A name-bound `copy()` write is `heuristic` (never exact) in the edge confidence and in the web view's graph
+    data, which the legend counts and styles (dotted) by `confidence`; a known receiver is `resolved`."""
+    from codegraph.core.store import GraphStore
+    from codegraph.viz import graph as G
+    rows = sqlite3.connect(db()).execute(
+        "select line, confidence, attrs from edges where kind='WRITES_PROP' and attrs like '%\"via\": \"copy\"%'").fetchall()
+    conf = {ln: c for ln, c, a in rows}
+    assert conf == {39: "resolved", 40: "heuristic"}
+    assert all(("binding" in json.loads(a)) == (c == "heuristic") for _, c, a in rows)
+    d = G.build(GraphStore(db()), "reaches", ["field:app.UiState.title"])
+    (e,) = [x for x in d["edges"] if x["kind"] == "WRITES_PROP"]
+    assert e["confidence"] == "heuristic"

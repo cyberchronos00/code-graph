@@ -190,6 +190,14 @@ def main(argv=None):
     p.add_argument("--no-learn", action="store_true", help="with --structure: no learned rename rules")
     p.add_argument("--write-map", help="with --structure: write the inferred pairs as a --map JSON file to review")
     p.add_argument("--json", action="store_true"); p.add_argument("--max-items", type=int, default=200)
+    p = sub.add_parser("lint", help="heuristic lints (#88): `lint async-state` flags async results written to state "
+                                    "after an await with no cancellation / token check")
+    p.add_argument("check", choices=["async-state"]); p.add_argument("--db", required=True)
+    p.add_argument("--json", action="store_true"); p.add_argument("--tests", action="store_true", help="include test code")
+    p = sub.add_parser("roundtrip", help="heuristic: writes of a stored property `Type.prop` through a lossy transform, "
+                                         "read back to seed UI state (#88)")
+    p.add_argument("spec"); p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("--tests", action="store_true", help="include test code's reads and writes")
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
@@ -481,6 +489,14 @@ def main(argv=None):
                 print(f"  {h['method']} {h['path']} -> {h['route'].split(':', 1)[1]}  @ {ev}"
                       + (f"  sends {', '.join(h['sends'])}" if h["sends"] else "") + f"  [{h['snapshot']}]")
         _note(_completeness(st, list(res["targets"]) + [c["id"] for c in res["callers"]]), False)
+    elif a.cmd == "lint":
+        from . import lint_async as LA
+        res = LA.lint(st, include_tests=a.tests)
+        print(json.dumps(res, indent=1) if a.json else LA.render(res))
+    elif a.cmd == "roundtrip":
+        from . import roundtrip as RT
+        res = RT.roundtrip(st, a.spec, include_tests=a.tests)
+        print(RT.to_json(res) if a.json else RT.render(res))
     elif a.cmd in ("writers", "readers"):
         rows = Q.writers(st, a.spec) if a.cmd == "writers" else Q.readers(st, a.spec)
         if a.json:

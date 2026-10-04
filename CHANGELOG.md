@@ -36,6 +36,28 @@ commands, output and the graph schema; such changes are listed under **Changed**
   A key path `\Type.x` is a READS_PROP with `via: keypath`. `@AppStorage("k")` and `@SceneStorage` fields carry `key`.
   An in-place mutation of an observed property also calls its `didSet`, and on a lazy var it still calls the initializer.
   IceCubesApp: 136 mutating, 239 binding and 2 inout writes, 14 key paths, 54 storage keys.
+- `cg roundtrip Type.prop` (#88 phase 2): a heuristic check for state that round-trips through a lossy transform.
+  - It lists each write through a lossy call and each read that seeds UI state, and pairs them with any wider range
+    drawn next to the read.
+  - Lossy calls are the built-in clamp / min / max / round / truncating casts / `fit*` names, `.cg.yaml` `lossy:`
+    names, and `@cg-lossy` functions. Data flow covers the statement, an earlier local, and one hop through callers.
+  - Seeds are init / constructor, onAppear / .task, remember, useState(initial), mounted and State(initialValue:).
+  - It has text, `--json` and MCP `roundtrip` output; findings are labelled heuristic and nothing is added to the
+    graph.
+  - Fixtures cover Swift, Kotlin, React and Python. On outline, Element X, Bitwarden, social-app, isowords,
+    Alamofire, IceCubesApp and elk it finds 14 lossy writes and 1 round trip.
+- `cg lint async-state` (#88 phase 3), rule `stale-async-result` only. It flags an awaited result written to stored
+  or UI state with no cancellation check and no token / ID / generation comparison between the await and the write.
+  - The async blocks covered are Swift `Task` and async funcs, Kotlin `launch` / `async`, React `useEffect`, JS / TS
+    `async` functions and `.then`, and Python `async def`.
+  - It has text, `--json` and MCP `lint_async_state` output; findings are heuristic.
+  - Fixtures cover Swift, Kotlin, React and Python. Hand-checked precision is below the 50% target overall:
+    IceCubesApp 4 of 5, outline 3 of 8, social-app 2 of 9.
+  - Incomplete cache key, two writers and echo suppression are not implemented yet.
+- Kotlin stored-property refs no longer treat `{ x = …` (an assignment opening a body) or `f(x)` (an argument) as a
+  local `x`. Element X gains 1,149 field refs and Bitwarden 418; all other edges are unchanged.
+- Kotlin `copy()` guesses (`binding: name`) are `heuristic` in the edge confidence and in the web view (dotted
+  edges, legend counts); a known receiver is `resolved`. A test covers both.
 - #88 phase 1, remaining items:
   - JSX `RENDERS` and `new X` `INSTANTIATES` edges carry `branch` / `branch_line` (switch case, if / else, ternary,
     `&&`). Kotlin composable calls and constructor calls do the same inside `if` / `else` / `when` entries.

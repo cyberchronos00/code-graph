@@ -69,7 +69,13 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `search NAME [--kind K]`: nodes by name / FQN substring (with their root-relative `file:line`), plus the routes whose
   middleware, guard or auth names match.
 - `writers TABLE`, `writers Type.prop` / `readers Type.prop`, `siblings SYMBOL`, `node SPEC`, `stats`: writers of a
-  table, writers / readers of a stored property (Swift, #88), similar code, node details, counts.
+  table, writers / readers of a stored property (Swift, Kotlin, Python, TypeScript, PHP; #88), similar code, node
+  details, counts.
+- `roundtrip Type.prop [--json] [--tests]`: heuristic. It reports each write of the property that passes through a
+  lossy transform and each read that seeds UI state, and pairs them with any wider range drawn next to the read
+  (see [`roundtrip`](#roundtrip)).
+- `lint async-state [--json] [--tests]`: heuristic, rule `stale-async-result`. It flags an awaited result written to
+  stored / UI state with no cancellation or token check (see [`lint`](#lint)).
   `node` prints the node (location, fqn, platforms, attrs) and its outgoing / incoming edges, the same edge from one
   site once with a count; `stats` prints the project, its languages, the coverage summary line and the node / edge
   counts. With `--json` each prints one JSON document (`node`: a list of `{node, out, in}`; `stats`: `{project, root,
@@ -467,6 +473,82 @@ options:
   --max-depth MAX_DEPTH
   --gate GATE           gate scenario for live/gated split (default: the one
                                indexed; 'none' to disable)
+```
+
+### `roundtrip`
+
+A heuristic check for state that round-trips through a lossy transform (#88 phase 2).
+
+For each write site of a stored property, `roundtrip` reports whether the written expression passes through a lossy
+call. Lossy calls are:
+- clamp, `coerceIn`, min / max, round / floor / ceil / trunc, truncating casts (`Int(...)`, `toInt()`), quantize,
+  and `fit*` / `gamut*` / `snap*` / `limit*` style names;
+- names from `.cg.yaml` `lossy: [...]`;
+- functions whose doc comment contains `@cg-lossy`.
+
+Data flow is followed through the statement, a local assigned earlier in the same function, and one hop through
+the direct callers when the written value is a parameter.
+
+For each read site, it reports whether the read seeds UI state. Seeds are:
+- an initializer, constructor, `init` block or property initializer;
+- `onAppear` / `.task`;
+- `remember` / `mutableStateOf`;
+- `useState(initial)` / `useRef`;
+- `mounted` / `onMounted`;
+- `State(initialValue:)`;
+- a view constructed on the same line.
+
+A finding is a lossy write plus a seeding read, as a path: write → lossy call → property → read → seed, each with
+`file:line`. A read inside the write statement itself is not paired with it. When the lossy bounds are known
+(`clamp(v, 0, 10)`, or the numbers in a project `fitToGamut` body), wider ranges in the reader's file are listed as
+"un-narrowed range", for example `Slider(in: 0...100)`, `valueRange = 0f..100f` or `min={0} max={100}`.
+
+Everything is labelled `heuristic`, in text and in JSON (`confidence`), and nothing is added to the graph. The MCP
+tool is `roundtrip(prop)`.
+
+```
+usage: cg roundtrip [-h] --db DB [--json] [--tests] spec
+
+positional arguments:
+  spec
+
+options:
+  -h, --help  show this help message and exit
+  --db DB
+  --json
+  --tests     include test code's reads and writes
+```
+
+### `lint`
+
+`lint async-state` is #88 phase 3. Only the rule `stale-async-result` is implemented.
+
+It flags a write of stored or UI state (a WRITES_PROP edge) that meets all of these:
+- it is inside an async block: Swift `Task { }` or an `async` func, Kotlin `launch { }` / `async { }`, a React
+  `useEffect` callback, a JS / TS `async` function or `.then(...)`, or a Python `async def` / `create_task`;
+- it comes after an `await` (Kotlin: `withContext`, `delay`, `.await()`, `.first()`);
+- it writes the awaited result: a name bound on the await line or derived from one;
+- between the await and the write there is no cancellation check (`Task.isCancelled`, `checkCancellation`,
+  `isActive`, `ensureActive`, a `cancelled` / `ignore` / `stale` / `mounted` flag, `signal.aborted`);
+- there is also no comparison against a token, ID or generation captured before the await.
+
+Writes are skipped when they go to an object the function just fetched (`doc.x = …` with a local receiver) and when
+they are in test paths (unless `--tests` is given).
+
+Findings are labelled `heuristic` and nothing is added to the graph. The MCP tool is `lint_async_state`. The rules
+incomplete cache key, two writers and echo suppression are not implemented yet.
+
+```
+usage: cg lint [-h] --db DB [--json] [--tests] {async-state}
+
+positional arguments:
+  {async-state}
+
+options:
+  -h, --help     show this help message and exit
+  --db DB
+  --json
+  --tests        include test code
 ```
 
 ### `siblings`
