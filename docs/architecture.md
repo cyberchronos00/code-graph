@@ -158,7 +158,10 @@ the interface (a typed variable, an argument, a return value) without `implement
 a value in place of a constructor of the interface (`register(Following)` with `register(c: new () => FeedAPI)`).
 An object literal where the interface is expected (`const api: FeedAPI = { fetch() {..} }`, a factory returning
 one, an argument, `satisfies`) links its function members (`exact`, `via: object_literal`); a union of interfaces
-does not. A method-to-method container
+does not. Mixins (`class Client extends mix(Base).with(Users, Posts)` or `Users(Posts(Base))` with
+`const Users = (b) => class extends b {..}`, merged with `interface Client extends UsersMix, PostsMix`): the mixin
+class members implement the merged interface's members (`resolved`, `via: mixin`, `at` the class). A
+method-to-method container
 binding (Nest `{ provide: Abstract, useClass: Impl }`, Laravel `bind`) is a dispatch hop like IMPLEMENTED_BY: the
 abstract method is shown under `overrides:`, not as a caller of the implementation.
 

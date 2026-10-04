@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- TypeScript mixins (#96): in `class Client extends mix(Base).with(Users, Posts)` (or `Users(Posts(Base))`) merged
+  with `interface Client extends UsersMix, PostsMix`, the members of the mixin class expressions
+  (`const Users = (b) => class extends b {..}`) implement the merged interface's members (`IMPLEMENTED_BY`,
+  `resolved`, `via: mixin`), and those interfaces' function-typed properties become member nodes, so calls on the
+  client get a target. mattermost-mobile: 317 mixin implementations (all 215 REST client members, plus the database
+  operator handlers), +307 members, +419 calls, +1,258 test calls; other repos unchanged.
 - TypeScript object literals as interface implementations (#96): an object literal where a project interface or
   object type alias is expected (a typed variable, a factory's return value, an argument, `satisfies`) links its
   function members to the interface's with `IMPLEMENTED_BY` (`exact`, `via: object_literal`), and the interface's

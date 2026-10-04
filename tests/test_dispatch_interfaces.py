@@ -489,3 +489,54 @@ def test_ts_object_literals_and_class_values_implement_interfaces(tmp_path):
     imp = Q.impact(st, "makeFeed.fetch")
     assert [o["fqn"] for o in imp["overrides"]] == ["FeedAPI.fetch"]
     assert [c["id"] for c in imp["callers"]] == [f"function:{A}load"]
+
+
+TS_MIX = {
+    "tsconfig.json": '{"compilerOptions": {"strict": true, "target": "es2020"}, "include": ["src"]}',
+    "package.json": '{"name": "client", "devDependencies": {"typescript": "5"}}',
+    "src/client.ts": '''
+        type Constructor<T = {}> = new (...args: any[]) => T
+        export class ClientBase {
+          doFetch(url: string) { return url }
+        }
+        function mix<B extends Constructor>(base: B) {
+          return { with: (...ms: Array<(b: any) => any>) => ms.reduce((c, m) => m(c), base) as B }
+        }
+        export interface UsersMix {
+          getMe: () => string
+          patchMe(name: string): string
+        }
+        const Users = <T extends Constructor<ClientBase>>(superclass: T) => class extends superclass {
+          getMe = () => this.doFetch('/me')
+          patchMe(name: string) { return this.doFetch(`/me/${name}`) }
+        }
+        export interface PostsMix {
+          getPost: (id: string) => string
+        }
+        function Posts<T extends Constructor<ClientBase>>(superclass: T) {
+          return class extends superclass {
+            getPost = (id: string) => this.doFetch(`/posts/${id}`)
+            helper() { return 1 }
+          }
+        }
+        interface Client extends ClientBase, UsersMix, PostsMix {}
+        class Client extends mix(ClientBase).with(Users, Posts) {}
+        export function load(c: Client) { return c.getMe() + c.patchMe('x') + c.getPost('1') }
+    ''',
+}
+
+
+@needs_ts
+def test_ts_mixin_members_implement_the_merged_interface(tmp_path):
+    st, _ = build(tmp_path, TS_MIX, "mix")
+    A = "src/client.ts#"
+    impl = edges(st, "IMPLEMENTED_BY")
+    # `interface Client extends UsersMix, PostsMix` + `class Client extends mix(ClientBase).with(Users, Posts)`:
+    # the mixin class members (arrow and block-bodied mixins) implement the interfaces' members
+    for i, m in (("UsersMix.getMe", "Users.getMe"), ("UsersMix.patchMe", "Users.patchMe"), ("PostsMix.getPost", "Posts.getPost")):
+        assert impl[(f"method:{A}{i}", f"method:{A}{m}")] == ("resolved", {"via": ["mixin"], "at": "src/client.ts:26"})
+    assert not [k for k in impl if k[1].endswith(".helper")]
+    calls = edges(st, "CALLS")
+    assert (f"function:{A}load", f"method:{A}UsersMix.getMe") in calls
+    imp = Q.impact(st, "Users.getMe")
+    assert [c["id"] for c in imp["callers"]] == [f"function:{A}load"]

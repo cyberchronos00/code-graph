@@ -803,6 +803,36 @@ const classOfValue = n => {
   sym = aliasTarget(sym)
   return ((sym && sym.declarations) || []).find(x => ts.isClassDeclaration(x) && projectSf(x.getSourceFile())) || null
 }
+// mixins: `class Client extends mix(Base).with(Users, Posts)` (or `Users(Posts(Base))`) where `const Users = (b) =>
+// class extends b {..}`, merged with `interface Client extends Base, UsersMix, PostsMix`: the merged interfaces, and
+// the mixin class expressions applied in the `extends` call
+const mergedIfaces = cls => {
+  let sym = null
+  try { sym = cls.name && checker.getSymbolAtLocation(cls.name) } catch { }
+  return ((sym && sym.declarations) || []).filter(d => ts.isInterfaceDeclaration(d) && projectSf(d.getSourceFile()))
+}
+const mixinClasses = cls => {
+  const h = (cls.heritageClauses || []).find(h => h.token === ts.SyntaxKind.ExtendsKeyword)
+  const e = h && h.types[0] && unwrap(h.types[0].expression)
+  if (!e || !ts.isCallExpression(e)) return []
+  const out = []
+  const walk = n => {
+    if (ts.isIdentifier(n) && n.parent && ts.isCallExpression(n.parent) && n.parent.arguments.includes(n)) {
+      let sym = null
+      try { sym = aliasTarget(checker.getSymbolAtLocation(n)) } catch { }
+      for (const d of (sym && sym.declarations) || []) {
+        const f = ts.isVariableDeclaration(d) && d.initializer ? unwrap(d.initializer) : ts.isFunctionDeclaration(d) ? d : null
+        if (!f || !(isFn(f) || ts.isFunctionDeclaration(f)) || !f.body) continue
+        let ce = ts.isBlock(f.body) ? null : unwrap(f.body)
+        if (ts.isBlock(f.body)) for (const st of f.body.statements) if (ts.isReturnStatement(st) && st.expression) ce = unwrap(st.expression)
+        if (ce && ts.isClassExpression(ce) && projectSf(ce.getSourceFile()) && !out.includes(ce)) out.push(ce)
+      }
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(e)
+  return out
+}
 const implementedIfaces = new Set()
 {
   const addIface = (d, depth = 0) => {
@@ -821,6 +851,7 @@ const implementedIfaces = new Set()
         try { sym = aliasTarget(checker.getSymbolAtLocation(t.expression)) } catch { }
         for (const d of ifaceDecls(sym)) addIface(d)
       }
+      if (ts.isClassDeclaration(n) && mixinClasses(n).length) for (const d of mergedIfaces(n)) addIface(d)
     } else if (ts.isObjectLiteralExpression(n) && fnMembers(n).length) for (const d of ctxIfaces(n)) addIface(d)   // `const api: FeedAPI = { fetch() {..} }`
     else if (classOfValue(n)) for (const d of ctorIfaces(n)) addIface(d)
     ts.forEachChild(n, walk)
@@ -1691,6 +1722,30 @@ const callSites = []
     }
     walk(sf)
   }
+  // mixin members implement the merged interface's members (`interface Client extends UsersMix` + `class Client
+  // extends mix(Base).with(Users)`)
+  let nmx = 0
+  for (const [decl, id] of declId) {
+    if (!ts.isClassDeclaration(decl) || !id.startsWith('class:') || !projectSf(decl.getSourceFile())) continue
+    const mix = mixinClasses(decl)
+    if (!mix.length) continue
+    const ifs = mergedIfaces(decl)
+    if (!ifs.length) continue
+    const at = `${rel(realFile(decl.getSourceFile()))}:${lineOf(decl, decl.getSourceFile())}`
+    for (const ce of mix) {
+      const csf = ce.getSourceFile(), cr = rel(realFile(csf))
+      for (const m of ce.members || []) {
+        if (!declId.has(m) || !declId.get(m).startsWith('method:') || (m.modifiers && m.modifiers.some(x => x.kind === ts.SyntaxKind.StaticKeyword))) continue
+        const nm = memberName(m)
+        if (!nm) continue
+        for (const d of ifs) {
+          const im = ifaceMember(d, nm)
+          if (im && im !== declId.get(m)) { addEdge(im, declId.get(m), 'IMPLEMENTED_BY', cr, lineOf(m, csf), 'resolved', { via: ['mixin'], at }); nmx++; break }
+        }
+      }
+    }
+  }
+  if (nmx) { stats.mixin_impl_edges = nmx; no += nmx }
   if (nol) { stats.object_literal_impl_edges = nol; no += nol }
   if (nh) stats.class_heritage_edges = nh
   if (no) stats.override_edges = no
