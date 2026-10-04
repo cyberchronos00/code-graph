@@ -839,7 +839,7 @@ shown; "paired" endpoints have both a server and a client in the graph):
 
 | Project | Services / methods | Paired | Edges | Notes |
 |---|---|---|---|---|
-| grpc `examples/` 724b3cc | 11 / 32 | 16 | 77 RECEIVED_BY, 92 SENDS_TO | C++ and Python; 17 C++ servers whose class the C/C++ parser loses after a file-level `ABSL_FLAG(..);` line (#131) are counted as `server_class_without_methods`; the PHP, Node and other trees are not indexed from this root. The released code stopped on this tree with an IndexError in the socket scan (fixed) |
+| grpc `examples/` 724b3cc | 11 / 32 | 16 | 77 RECEIVED_BY, 92 SENDS_TO | C++ and Python; 17 C++ servers whose class the C/C++ parser lost after a file-level `ABSL_FLAG(..);` line were counted as `server_class_without_methods` until #131 (now 94 RECEIVED_BY); the PHP, Node and other trees are not indexed from this root. The released code stopped on this tree with an IndexError in the socket scan (fixed) |
 | grpc `examples/php` with `examples/protos` | 6 / 18 | 5 | 5 RECEIVED_BY, 5 SENDS_TO | `Greeter` / `RouteGuideService extends ..Stub`, clients `new ..Client(..)`; `echo/client.php` calls at file level, outside any function |
 | grpc-node `examples/` e742b11 | 6 / 13 | 10 | 30 RECEIVED_BY, 34 SENDS_TO | plain-JS programs (not indexed before): `addService` handler maps, proto-loader `new pkg.Svc(..)` and static-codegen clients |
 | tonic `examples/` 2681a7e | 7 / 15 | 7 | 34 RECEIVED_BY, 36 SENDS_TO | trait impls and `XClient::connect`; reflection / health services have no client in the tree |
@@ -873,3 +873,24 @@ clients changed (6 SENDS_TO, 1 TEST_CALLS from module nodes). A random 20 of the
 / JSON-RPC edges were checked by hand: 20 correct. `tests/test_rpc.py` covers Thrift (Python, Node, C++), tRPC
 (inline, nested, imported, procedure-variable mounts and clients) and JSON-RPC (jayson, jsonrpcserver, payloads,
 jsonrpsee) on the same fixtures.
+
+## C/C++: file-level macro statements and lock annotations (#131)
+
+A file-level `ABSL_FLAG(..);` made tree-sitter-cpp read a function definition that ran to the next `}`, swallowing
+the class after it. Thread-safety annotations after a declarator (`void Write() ABSL_EXCLUSIVE_LOCKS_REQUIRED(&mu_)
+{`) became the declarator. Both are now blanked before parsing. Heuristic types and unique-name member calls stay
+within the files a caller can see, and the classes of separate programs (a `main()` per file) are not variants.
+Before -> after on the C/C++ corpora (heuristic mode):
+
+| Project | Edges | Nodes | Notes |
+|---|---|---|---|
+| grpc `examples/` 724b3cc | 2,425 -> 2,088 | 1,331 -> 1,397 | 28 classes, 48 methods and 32 fields recovered; gRPC RECEIVED_BY 77 -> 94 (`server_class_without_methods` 17 -> 0). 382 USES_TYPE edges from each `RunServer` to the `GreeterServiceImpl` of every other example are gone. 25 functions named `ABSL_FLAG`, a stray `Run` / `HandleRpcs` (now `ServerImpl::` methods) and 14 locals read as globals are gone |
+| leveldb 7ee830d | 8,107 -> 8,260 | 3,036 -> 3,075 | 21 methods and 28 fields recovered (`GUARDED_BY`, `LOCKS_EXCLUDED`, `SCOPED_LOCKABLE MutexLock`); +71 CALLS (`mutex_.Lock()` and the like). 22 correct calls to `CondVar::Wait` / `HandleTable::Remove` became ambiguous with a recovered `TestState::Wait` / `PosixLockTable::Remove` and are dropped |
+| googletest 988ea2c | 4,609 -> 4,529 | 2,692 -> 2,692 | 19 functions `GTEST_LOCK_EXCLUDED_` are now their `Mock::..` methods. 111 cross-file guesses are gone (`.str()` -> a test mock's `str` 57, `.size()` 25) and 52 calls to the recovered methods are added |
+| libuv 49b1c06 | 48,893 -> 48,188 | unchanged | 702 USES_VALUE edges mirrored between the `loop` globals of the separate `docs/code/*` programs are gone |
+| thrift `tutorial/` 50bbda1 | 183 -> 178 | unchanged | `client.ping()` in the C++ client no longer binds to the server program's `CalculatorHandler` |
+| redis b540ca4, flutter/samples a05867d | unchanged | unchanged | |
+
+A random 20 of the added edges were checked by hand against the source: 20 correct. The removed edges were
+spot-checked by group (the cross-program USES_TYPE / USES_VALUE mirrors and the `.str()` / `.size()` / handler
+guesses were all wrong before), except the 22 leveldb calls above.

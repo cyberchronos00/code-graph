@@ -153,7 +153,17 @@ class Extractor:
         self.f = CFile(path, lang)
 
     def run(self) -> CFile:
-        tree = parser(self.f.lang).parse(mask_annotations(self.src, self.blank) if self.blank is not None else self.src)
+        src = mask_lock_annotations(mask_annotations(self.src, self.blank) if self.blank is not None else self.src)
+        tree = parser(self.f.lang).parse(src)
+        if tree.root_node.has_error:
+            # `ABSL_FLAG(uint16_t, port, 50051, "..");` at file level parses as a broken function definition that
+            # runs to the next `}` and swallows the class after it (#131): blank such macro statements and keep
+            # the parse that loses fewer lines
+            masked = mask_macro_statements(src)
+            if masked != src:
+                t2 = parser(self.f.lang).parse(masked)
+                if _error_lines(t2.root_node) < _error_lines(tree.root_node):
+                    tree = t2
         self.f.lines = self.src.decode("utf-8", "replace").split("\n")
         if tree.root_node.has_error:
             from ...core.syntax_errors import tree_spans
@@ -200,7 +210,8 @@ class Extractor:
             sub = Extractor(self.path, chunk.encode("utf-8"), self.f.lang, self.module, self.blank)
             sub.f = self.f
             n0 = len(self.f.items)
-            t = parser(self.f.lang).parse(mask_annotations(sub.src, self.blank) if self.blank is not None else sub.src)
+            t = parser(self.f.lang).parse(mask_lock_annotations(
+                mask_annotations(sub.src, self.blank) if self.blank is not None else sub.src))
             if not t.root_node.has_error:
                 sub.container(t.root_node, {"ns": [], "cls": None, "access": None, "anon": False, "extern_c": False})
             if len(self.f.items) == n0:
@@ -879,3 +890,94 @@ def mask_annotations(src: bytes, rx: re.Pattern) -> bytes:
         cont = directive and line.rstrip().endswith(b"\\")
         out.append(line if directive else rx.sub(lambda m: b" " * (m.end() - m.start()), line))
     return b"\n".join(out)
+
+
+MACRO_STMT = re.compile(rb"^[A-Z][A-Z0-9_]*[ \t]*\(", re.M)
+
+
+def mask_macro_statements(src: bytes) -> bytes:
+    """File-level `NAME(...);` statements of an upper-case macro starting in column 0 blanked (same length, newlines
+    kept). Strings and comments in the arguments are skipped while matching the parentheses."""
+    out = bytearray(src)
+    for m in MACRO_STMT.finditer(src):
+        i, depth, n = m.end() - 1, 0, len(src)
+        while i < n:
+            ch = src[i:i + 1]
+            if ch in (b'"', b"'"):
+                j = i + 1
+                while j < n and src[j:j + 1] not in (ch, b"\n"):
+                    j += 2 if src[j:j + 1] == b"\\" else 1
+                i = j + 1
+                continue
+            if src[i:i + 2] == b"/*":
+                j = src.find(b"*/", i + 2)
+                i = n if j < 0 else j + 2
+                continue
+            if src[i:i + 2] == b"//":
+                j = src.find(b"\n", i)
+                i = n if j < 0 else j
+                continue
+            if ch == b"(":
+                depth += 1
+            elif ch == b")":
+                depth -= 1
+                if depth == 0:
+                    break
+            elif ch in (b"{", b"}", b";"):
+                i = n
+                break
+            i += 1
+        if i >= n:
+            continue
+        rest = re.match(rb"[ \t]*;", src[i + 1:i + 40])
+        if not rest:
+            continue
+        end = i + 1 + rest.end()
+        for k in range(m.start(), end):
+            if out[k] != 10:
+                out[k] = 32
+    return bytes(out)
+
+
+def _error_lines(root) -> int:
+    from ...core.syntax_errors import tree_spans
+    return sum(b - a + 1 for a, b in tree_spans(root))
+
+
+# Clang thread-safety annotations after a declarator: `void Write() ABSL_EXCLUSIVE_LOCKS_REQUIRED(&mu_) {`,
+# `bool done_ GUARDED_BY(mu_) = false;`, `GTEST_LOCK_EXCLUDED_(mutex_)`. tree-sitter reads them as the declarator
+# (a method `mu_`), so they are blanked (same length) like the name-only annotation macros.
+LOCK_ANNOT = re.compile(
+    rb"\b(?:(?:[A-Z][A-Z0-9]*_)*(?:EXCLUSIVE_LOCKS_REQUIRED|SHARED_LOCKS_REQUIRED|LOCKS_EXCLUDED|LOCK_EXCLUDED|"
+    rb"LOCK_RETURNED|PT_GUARDED_BY|GUARDED_BY|ACQUIRED_BEFORE|ACQUIRED_AFTER|EXCLUSIVE_LOCK_FUNCTION|SHARED_LOCK_FUNCTION|"
+    rb"UNLOCK_FUNCTION|EXCLUSIVE_TRYLOCK_FUNCTION|SHARED_TRYLOCK_FUNCTION|ASSERT_EXCLUSIVE_LOCK|ASSERT_SHARED_LOCK|"
+    rb"CAPABILITY)|"
+    rb"[A-Z][A-Z0-9]*_(?:REQUIRES_SHARED|REQUIRES|EXCLUDES|ACQUIRE_SHARED|ACQUIRE|RELEASE_SHARED|RELEASE|TRY_ACQUIRE|"
+    rb"RETURN_CAPABILITY|ASSERT_CAPABILITY))_?[ \t]*\((?:[^()\n]|\([^()\n]*\))*\)")
+
+
+LOCK_NAME = re.compile(rb"\b(?:[A-Z][A-Z0-9]*_)*(?:SCOPED_LOCKABLE|LOCKABLE|SCOPED_CAPABILITY|NO_THREAD_SAFETY_ANALYSIS)_?\b(?![ \t]*\()")
+
+
+def mask_lock_annotations(src: bytes) -> bytes:
+    if b"LOCK" not in src and b"GUARDED_BY" not in src and b"_REQUIRES" not in src and b"_EXCLUDES" not in src \
+            and b"_ACQUIRE" not in src and b"_RELEASE" not in src and b"CAPABILITY" not in src:
+        return src
+    out = bytearray(src)
+    for m in LOCK_ANNOT.finditer(src):
+        ls = src.rfind(b"\n", 0, m.start()) + 1
+        before = src[ls:m.start()].rstrip()
+        if not before.strip() and ls > 0:
+            # on a line of its own after the declarator: `void Mock::Allow(uintptr_t obj)\n    GTEST_LOCK_EXCLUDED_(mu) {`
+            pl = src[src.rfind(b"\n", 0, ls - 1) + 1:ls - 1].rstrip()
+            before = pl if re.search(rb"(?:\)|\bconst|\boverride|\bnoexcept)$", pl) and not pl.lstrip().startswith(b"#") else b""
+        if before.lstrip().startswith(b"#") or not before or not re.search(rb"[\w)&*\]]$", before):
+            continue        # a directive, or not after a declarator (a statement / call of its own)
+        if re.search(rb"\b(?:return|if|while|case)\b[^;{}]*$", before):
+            continue
+        out[m.start():m.end()] = b" " * (m.end() - m.start())
+    for m in LOCK_NAME.finditer(src):       # `class SCOPED_LOCKABLE MutexLock {`, `void f() NO_THREAD_SAFETY_ANALYSIS {`
+        ls = src.rfind(b"\n", 0, m.start()) + 1
+        if not src[ls:m.start()].lstrip().startswith(b"#"):
+            out[m.start():m.end()] = b" " * (m.end() - m.start())
+    return bytes(out)

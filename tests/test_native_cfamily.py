@@ -161,3 +161,80 @@ def test_c_static_inline_in_header(tmp_path):
     assert g.has("CALLS", "function:run", tgt) and g.has("CALLS", "function:deep", tgt)
     assert g.has("CALLS", "function:own", "function:other.c#toolbar_show") and not g.has("CALLS", "function:own", tgt)
     assert not g.edges("CALLS", "function:lone")
+
+
+def test_cpp_file_level_macro_call_keeps_next_class(tmp_path):
+    """#131: `ABSL_FLAG(uint16_t, port, 50051, "..");` at file level parsed as a broken function definition that ran
+    to the next `}` and swallowed the class after it. The statement is blanked before parsing (same positions); its
+    call is still a file-level call, and a macro call inside a function is untouched."""
+    (tmp_path / "server.cc").write_text(
+        '#include "absl/flags/flag.h"\n'
+        "\n"
+        'ABSL_FLAG(uint16_t, port, 50051, "Server port for the service");\n'
+        "\n"
+        "// Logic and data behind the server's behavior.\n"
+        "class GreeterImpl final : public Greeter::Service {\n"
+        "  Status SayHello(ServerContext* context, const HelloRequest* request,\n"
+        "                  HelloReply* reply) override {\n"
+        "    return Helper(reply);\n"
+        "  }\n"
+        "  Status Helper(HelloReply* reply) { return Status::OK; }\n"
+        "};\n"
+        "\n"
+        "void RunServer(uint16_t port) {\n"
+        "  GreeterImpl service;\n"
+        "  LOG_EVERY(port);\n"
+        "}\n")
+    db, _ = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    g = DB(db)
+    assert g.node("class:GreeterImpl") and g.node("method:GreeterImpl::SayHello")
+    assert g.node("function:RunServer")["line"] == 14
+    assert g.has("CALLS", "method:GreeterImpl::SayHello", "method:GreeterImpl::Helper")
+    assert not g.node("function:ABSL_FLAG")
+
+
+def test_cpp_member_call_does_not_reach_a_class_of_another_source_file(tmp_path):
+    """A member call with an unknown receiver used to bind to the only project method of that name. A class defined
+    only in another .cc (not a header, not included) is out of reach: `client.ping()` in the client program is not
+    the server program's handler. A class from an included header still is."""
+    (tmp_path / "server.cc").write_text("class Handler {\n public:\n  void ping() {}\n};\nstruct Reply { int n; };\n")
+    (tmp_path / "shared.h").write_text("class Shared {\n public:\n  void touch() {}\n};\n")
+    (tmp_path / "client.cc").write_text('#include "shared.h"\n'
+                                        "void run(Client& client, Shared& s) {\n  Reply r;\n  Shared t;\n  client.ping();\n  s.touch();\n}\n")
+    db, res = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    g = DB(db)
+    assert g.node("method:Handler::ping") and not g.edges("CALLS", "function:run", "method:Handler::ping")
+    assert g.has("CALLS", "function:run", "method:Shared::touch") and g.has("USES_TYPE", "function:run", "class:Shared")
+    assert g.node("struct:Reply") and not g.edges("USES_TYPE", "function:run", "struct:Reply")
+
+
+def test_cpp_thread_safety_annotations_are_not_declarators(tmp_path):
+    """`void Write() ABSL_EXCLUSIVE_LOCKS_REQUIRED(&mu_) {` was a method `mu_`, and `bool done_ GUARDED_BY(mu_)` a
+    second field `mu_`; the annotations are blanked before parsing."""
+    (tmp_path / "reactor.cc").write_text(
+        "class Reactor {\n"
+        " public:\n"
+        "  void Start() { Write(); }\n"
+        "\n"
+        " private:\n"
+        "  void Write() ABSL_EXCLUSIVE_LOCKS_REQUIRED(&mu_) { Flush(); }\n"
+        "  void Flush() GTEST_LOCK_EXCLUDED_(mutex_) {}\n"
+        "  Mutex mu_;\n"
+        "  bool done_ GUARDED_BY(mu_) = false;\n"
+        "};\n"
+        "\n"
+        "class SCOPED_LOCKABLE MutexLock {\n"
+        " public:\n"
+        "  explicit MutexLock(Mutex* mu) EXCLUSIVE_LOCK_FUNCTION(mu) : mu_(mu) {}\n"
+        "  ~MutexLock() UNLOCK_FUNCTION() {}\n"
+        "\n"
+        " private:\n"
+        "  Mutex* const mu_;\n"
+        "};\n")
+    db, _ = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    g = DB(db)
+    assert g.has("CALLS", "method:Reactor::Start", "method:Reactor::Write")
+    assert g.has("CALLS", "method:Reactor::Write", "method:Reactor::Flush")
+    assert not g.node("method:Reactor::mu_") and g.node("field:Reactor::done_") and g.node("field:Reactor::mu_")
+    assert g.q("select count(*) from nodes where id like 'field:Reactor::mu_%'")[0][0] == 1
+    assert g.node("class:MutexLock") and g.node("method:MutexLock::~MutexLock")

@@ -655,6 +655,20 @@ class CFamilyPlugin(LanguagePlugin):
             if it.kind in TYPES:
                 types[it.name].append(it)
 
+        cls_files = defaultdict(set)
+        for it in self.items:
+            if it.kind in TYPES:
+                cls_files[it.qual].add(it.file)
+
+        def _visible(m, rel) -> bool:
+            """A method's class defined only in other source files (not headers) that `rel` does not include is
+            out of reach of a member call there (`writer->Write(..)` on a library type is not `HelloReactor::Write`
+            of another program's .cc)."""
+            files = cls_files.get(m.qual.rsplit("::", 1)[0]) if "::" in m.qual else None
+            if not files:
+                return True
+            return any(f == rel or os.path.splitext(f)[1] in HDR_EXT for f in files) or bool(files & self._included(rel))
+
         def pick(cands, rel):
             if not cands:
                 return []
@@ -685,7 +699,8 @@ class CFamilyPlugin(LanguagePlugin):
                     if name in macros and macros[name].attrs.get("function_like"):
                         targets = [macros[name]]
                     else:
-                        targets = pick(funcs.get(name), rel) or (pick(methods.get(name), rel) if owner.kind == "method" else [])
+                        targets = pick(funcs.get(name), rel) or (
+                            [m for m in pick(methods.get(name), rel) if _visible(m, rel)] if owner.kind == "method" else [])
                 elif form == "qualified":
                     q = quals.get(txt) or next((v for k, v in quals.items() if k.endswith("::" + txt)), None)
                     targets = [q] if q else []
@@ -696,6 +711,12 @@ class CFamilyPlugin(LanguagePlugin):
                         roots = [m for m in c if self._is_virtual(m) and not self._is_override(m)]
                         c = roots if len(roots) == 1 else c
                     targets = c if len(c) == 1 else []
+                    # the only method of that name, but its class is defined only in another source file: not the
+                    # receiver here. (Dropping such candidates before the uniqueness test would turn `s.data()` on a
+                    # std::string into leveldb's `Slice::data`, so it only removes.)
+                    if targets and not _visible(targets[0], rel):
+                        stats["heuristic_member_call_class_not_visible"] += 1
+                        targets = []
                 if not targets:
                     stats["heuristic_unresolved_calls"] += 1
                     continue
@@ -720,6 +741,10 @@ class CFamilyPlugin(LanguagePlugin):
                 if owner is None:
                     continue
                 for x in pick(types.get(name), rel):
+                    # a type is not linked across files: one defined only in another source file is not this one
+                    if x.file != rel and os.path.splitext(x.file)[1] not in HDR_EXT and x.file not in self._included(rel):
+                        stats["heuristic_type_ref_not_visible"] += 1
+                        continue
                     self._ref_edge(self.nid(owner), self.nid(x), rel, line, HEURISTIC, "", stats)
 
     def _is_virtual(self, it) -> bool:

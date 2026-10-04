@@ -96,6 +96,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- C/C++ heuristic parse (#131): a file-level macro statement such as `ABSL_FLAG(uint16_t, port, 50051, "..");` no
+  longer swallows the class after it. Statements like this are blanked before parsing when the file has syntax
+  errors, and the parse that loses fewer lines is kept. Clang thread-safety annotations (`ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_)`,
+  `GUARDED_BY(mu_)`, `GTEST_LOCK_EXCLUDED_(..)`, `SCOPED_LOCKABLE`) are blanked too, so they no longer become a
+  method `mu_` or a function `GTEST_LOCK_EXCLUDED_`. Classes and structs of separate programs (one `main()` per
+  file) no longer form one variant group. A type or a unique-name member call no longer binds to a class that is
+  defined only in another source file the caller does not include. On grpc's `examples/cpp`, the 17 lost gRPC
+  servers are back (RECEIVED_BY 77 -> 94) and 382 USES_TYPE edges between the example programs are gone. On
+  leveldb, 21 methods and 28 fields are recovered. On googletest, 57 `.str()` callers no longer bind to a test mock's
+  `str`. libuv drops 702 USES_VALUE edges that mirrored `loop` globals between its `docs/code` programs.
 - Sockets (#39): `asyncio.start_server(client_connected_cb=.., port=..)` with keyword arguments only no longer stops
   the index with an IndexError, and an unexpected source shape in one file is counted under `sockets.scan_errors`
   (with samples) instead of failing the scan.

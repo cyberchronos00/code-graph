@@ -944,11 +944,12 @@ def _alt_groups(builder, nvals: dict) -> dict[str, list[str]]:
         if g in alts and any(builder.nodes[i].file == file or builder.nodes[i].kind == "macro" for i in alts[g]):
             alts[g] += alts.pop(k)
     # same-named functions of separate programs (libuv docs/code/*/main.c `alloc_buffer`, each file with its own
-    # main()) are not one symbol: members in two or more files that define main() leave the group (#63)
+    # main()) are not one symbol: members in two or more files that define main() leave the group (#63); the same
+    # holds for the classes and structs of those programs (grpc's examples/cpp: a `GreeterServiceImpl` per server, #131)
     mains = {n.file for n in builder.nodes.values() if n.lang in ("c", "cpp") and n.kind == "function" and n.name == "main"}
     if mains:
         for k, ids in list(alts.items()):
-            if not k.startswith("c-fn:"):
+            if not k.startswith("c-fn:") and not all(builder.nodes[i].lang in ("c", "cpp") for i in ids):
                 continue
             prog = [i for i in ids if builder.nodes[i].file in mains]
             if len({builder.nodes[i].file for i in prog}) >= 2:
