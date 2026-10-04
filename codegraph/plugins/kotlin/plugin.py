@@ -244,6 +244,25 @@ def _keyword_calls(src: bytes) -> tuple[bytes, int]:
     return _DYNAMIC_CALL.subn(rb"\1C", src)
 
 
+def _route_type(text: str) -> str | None:
+    """Destination class a typed navigation names: `VaultRoute`, `route = SetupUnlockRoute.AsRoot`,
+    `VaultItemListingRoute.Folder(id)`, `com.x.FooRoute` -> `VaultRoute`, `SetupUnlockRoute.AsRoot`,
+    `VaultItemListingRoute.Folder`, `FooRoute` (package segments and generic arguments dropped)."""
+    m = re.match(r"\s*(?:route\s*=\s*)?([A-Za-z_][\w.]*)", text or "")
+    if not m:
+        return None
+    segs = m.group(1).split(".")
+    i = next((k for k, x in enumerate(segs) if x[:1].isupper()), None)
+    if i is None:
+        return None
+    out = []
+    for x in segs[i:]:
+        if not x[:1].isupper():
+            break                                   # `Screen.Home.route`: a property of the destination
+        out.append(x)
+    return ".".join(out)
+
+
 class KFile:
     def __init__(self, rel: str, src: bytes, tree):
         self.rel, self.src, self.tree = rel, src, tree
@@ -344,6 +363,7 @@ class KotlinPlugin(LanguagePlugin):
                 self.st["files_with_syntax_errors"] += 1
                 errs[rel] = merge(tree_spans(tree.root_node) + [list(x) for x in dropped])
             kfiles.append(kf)
+        self._kf_by_rel = {kf.rel: kf for kf in kfiles}
         for kf in kfiles:            # pass 1: declarations
             self.cur = kf
             self._header(kf)
@@ -351,6 +371,7 @@ class KotlinPlugin(LanguagePlugin):
                 self.test_fw[kf.rel] = self._test_framework(kf)
             self._decls(kf.tree.root_node, kf, None, None)
         self._data_models(kfiles)
+        self.nav_wrappers = self._nav_wrappers(kfiles)
         for kf in kfiles:            # pass 2: references and framework facts
             self.cur = kf
             fid = self._file_node(kf)
@@ -891,8 +912,11 @@ class KotlinPlugin(LanguagePlugin):
                 if self._call(c, kf, owner, decl, ctx):
                     continue
             elif ty == "binary_expression":
-                m = re.match(r"(composable|entry|dialog|(?:get|post|put|delete|patch|head|options))\s*<\s*([\w.]+)\s*>",
+                m = re.match(r"(composable|entry|dialog|(?:get|post|put|delete|patch|head|options)|[a-z]\w*)\s*<\s*([\w.]+)\s*>",
                              self.t(c))
+                if m and m.group(1) not in ("composable", "entry", "dialog", "get", "post", "put", "delete", "patch",
+                                            "head", "options") and m.group(1) not in getattr(self, "nav_wrappers", {}):
+                    m = None
                 lam = next((x for x in c.children if x.type in ("lambda_literal", "annotated_lambda")), None)
                 if m and lam is not None and self._typed_block(m.group(1), m.group(2), c, lam, kf, owner, decl, ctx):
                     continue
@@ -947,22 +971,47 @@ class KotlinPlugin(LanguagePlugin):
             # composable<Route>(deepLinks = ...) { }, Navigation 3 entry<Key>(metadata = ...) { }, Ktor get<Res>(...) { }
             if targs is not None and self._typed_block(name, self.t(targs).strip("<> "), c, lam, kf, owner, decl, ctx):
                 return True
+        # a project navigation wrapper called without a trailing lambda: `destination<Route.Sub>(onBack = ..)` (#99)
+        if lam is None and recv is None and name in getattr(self, "nav_wrappers", {}):
+            ta = next((x for x in c.children if x.type == "type_arguments"), None)
+            if ta is None and callee.parent is not None:
+                ta = next((x for x in callee.parent.children if x.type == "type_arguments"), None)
+            short = _route_type(self.t(ta).strip("<> ")) if ta is not None else ""
+            if re.fullmatch(r"[A-Z][\w.]*", short or "") and not (decl is not None and decl.name in self.nav_wrappers
+                                                          and short in self._wrapper_tparams):
+                pid = self._page(kf, short, c, typed=True)
+                self.b.nodes[pid].attrs["wrapper"] = name
+                self.st["compose_pages_via_wrapper"] += 1
         # ---- HTTP clients
         if (name in VERBS or name == "request") and recv is not None and re.search(r"(?i)client|http", rtext or ""):
             first = self._first_arg(args)
-            if first is not None and first.type == "string_literal":
+            hu = self._helper_url(self.t(first), kf) if first is not None and first.type == "call_expression" else None
+            if first is not None and (first.type == "string_literal" or hu):
                 self.http.append({"src": owner, "method": "GET" if name == "request" else name.upper(),
-                                  "url": template(self.t(first)), "client": "ktor", "file": kf.rel, "line": line})
+                                  "url": template(hu or self.t(first)), "client": "ktor", "file": kf.rel, "line": line,
+                                  **({"via": "url helper"} if hu else {})})
+                if hu:
+                    self.st["http_ktor_url_helper"] += 1
             elif first is None and lam is not None:
                 # builder block: client.get { url("...") } / client.request { method = HttpMethod.Post; url { path("...") } }
                 body = self.t(lam)
                 mu = re.search(r'\burl\s*\(\s*("(?:[^"\\]|\\.)*")', body) or \
                     re.search(r'\b(?:path|encodedPath\s*=|appendPathSegments)\s*\(?\s*("(?:[^"\\]|\\.)*")', body)
                 mm = re.search(r"\bmethod\s*=\s*HttpMethod\.(\w+)", body)
-                if mu:
+                hu = None
+                if not mu:
+                    # a request-builder helper: client.get { dogs("api/breeds") } with
+                    # `fun HttpRequestBuilder.dogs(path: String) { url { takeFrom(BASE); encodedPath = path } }` (#99)
+                    for hm in re.finditer(r'\b([a-z]\w*)\s*\(\s*"(?:[^"\\]|\\.)*"\s*\)', body):
+                        hu = self._helper_url(hm.group(0), kf, builder=True)
+                        if hu:
+                            break
+                if mu or hu:
                     verb = mm.group(1).upper() if mm else ("GET" if name == "request" else name.upper())
-                    self.http.append({"src": owner, "method": verb, "url": template(mu.group(1)), "client": "ktor",
-                                      "file": kf.rel, "line": line})
+                    self.http.append({"src": owner, "method": verb, "url": template(hu or mu.group(1)), "client": "ktor",
+                                      "file": kf.rel, "line": line, **({"via": "url helper"} if hu else {})})
+                    if hu:
+                        self.st["http_ktor_url_helper"] += 1
         if name == "url" and rtext and "Request.Builder" in rtext and sarg is not None:
             whole = c
             while whole.parent is not None and whole.parent.type in ("navigation_expression", "call_expression"):
@@ -995,9 +1044,15 @@ class KotlinPlugin(LanguagePlugin):
                 if route is not None:
                     self.navs.append((owner, route, None, kf.rel, line))
                 else:
-                    m = re.match(r"([A-Z]\w*)", self.t(first))
-                    if m:
-                        self.navs.append((owner, None, m.group(1), kf.rel, line))
+                    # typed: navigate(VaultRoute) / navigate(route = Route.Folder(id), navOptions) (#99): the last
+                    # capitalised segment names the destination class, as typed pages are named
+                    va = first.parent
+                    if va is not None and va.type == "value_argument" and any(k.type == "=" for k in va.children):
+                        kids = [k for k in va.children if k.is_named]
+                        first = kids[-1] if self.t(kids[0]) == "route" else first
+                    typ = _route_type(self.t(first))
+                    if typ:
+                        self.navs.append((owner, None, typ, kf.rel, line))
         self.calls.append((owner, name, rtext, line, kf, decl, self._accessor(c) if owner in self.props else None))
         if name[:1].isupper():                      # a constructor or a composable: its branch (#88)
             br = self._branch(c)
@@ -1105,6 +1160,56 @@ class KotlinPlugin(LanguagePlugin):
                         and gp.type == "assignment" and gp.children and gp.children[0] == p):
                     w = "value"                      # `_state.value = x` on a MutableStateFlow / LiveData field
             self.frefs.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, w))
+
+    def _helper_url(self, call_text: str, kf: KFile, builder: bool = False) -> str | None:
+        """URL a project helper builds from a literal argument (#99), as a quoted string for `template`:
+        `endpoint("items")` with `fun endpoint(p: String) = "$BASE/$p"` (a string result), or with `builder`, a
+        request-builder extension `fun HttpRequestBuilder.dogs(path: String) { url { takeFrom("https://x/");
+        encodedPath = path } }`. Constants in the helper are expanded; anything else is not followed."""
+        m = re.fullmatch(r'\s*([a-z]\w*)\s*\(\s*("(?:[^"\\]|\\.)*")\s*\)\s*', call_text or "")
+        if not m:
+            return None
+        fns = [d for d in self.by_name.get(m.group(1), []) if d.kind in ("function", "method")]
+        if builder:
+            fns = [d for d in fns if (d.receiver or "").split(".")[-1].startswith("HttpRequestBuilder")]
+        if len(fns) != 1:
+            return None
+        d = fns[0]
+        hk = getattr(self, "_kf_by_rel", {}).get(d.file)
+        if hk is None:
+            return None
+        txt = "\n".join(hk.src.decode("utf-8", "replace").split("\n")[d.line - 1:d.end])
+        pm = re.search(r"\bfun\b[^(]*\(\s*(?:\w+\s+)?(\w+)\s*:\s*String\b", txt)
+        if not pm:
+            return None
+        par, arg = pm.group(1), m.group(2)[1:-1]
+        cls = self.classes.get(d.cls) if d.cls else None
+        if builder:
+            bm = re.search(r'\b(?:takeFrom|url)\s*\(\s*("(?:[^"\\]|\\.)*"|[A-Z_][\w.]*)\s*\)', txt)
+            pth = re.search(r"\b(?:encodedPath\s*=|path\s*\(|appendPathSegments\s*\(|appendEncodedPathSegments\s*\()\s*"
+                            + re.escape(par) + r"\b", txt)
+            if not pth:
+                return None
+            base = ""
+            if bm:
+                raw = bm.group(1)
+                if not raw.startswith('"'):
+                    vid = self._const_id(raw, hk, cls)
+                    got = self.const_str.get(vid) if vid else None
+                    raw = self._expand(got[0], got[1], got[2]) if got else None
+                else:
+                    raw = self._expand(raw, hk, cls)
+                if raw is None:
+                    return None
+                base = raw.strip('"')
+            return '"' + (base.rstrip("/") + "/" + arg.lstrip("/") if base else arg) + '"'
+        rm = re.search(r'(?:\)\s*(?::\s*String\s*)?=|\breturn)\s*("(?:[^"\\]|\\.)*")', txt)
+        if not rm:
+            return None
+        body = re.sub(r"\$\{\s*" + re.escape(par) + r"\s*\}|\$" + re.escape(par) + r"\b", lambda _m: arg, rm.group(1))
+        if re.search(r"\$\{?" + re.escape(par) + r"\b", body):
+            return None
+        return self._expand(body, hk, cls)
 
     def _first_arg(self, args):
         if args is None:
@@ -1563,6 +1668,13 @@ class KotlinPlugin(LanguagePlugin):
                         return r
             if name[:1].isupper():
                 c = self._class_of(name, kf)
+                if c is not None and c.cls and kf.imports.get(name) != c.fqn and c.fqn != f"{kf.package}.{name}" \
+                        and not (decl is not None and (decl.cls or "").startswith(c.cls)):
+                    # a nested class (`AppResumeScreenData.SendScreen`) is not visible by its bare name outside its
+                    # outer class unless imported: `SendScreen(..)` is then a composable function of that name (#99)
+                    fn = [d for d in self.by_name.get(name, []) if d.kind == "function"]
+                    if fn:
+                        c = None
                 if c is not None:
                     return [c]
             fq = kf.imports.get(name)
@@ -1669,14 +1781,54 @@ class KotlinPlugin(LanguagePlugin):
         self.st[f"entries_{kind}"] += 1
 
     # ------------------------------------------------------------------ typed navigation / resources
+    _NAV_WRAPPER = re.compile(r"\bfun\s*<\s*reified\s+(\w+)\b[^>]*>\s*NavGraphBuilder\s*\.\s*(\w+)\s*\(")
+
+    def _nav_wrappers(self, kfiles: list[KFile]) -> dict:
+        """Project wrappers around typed Compose Navigation destinations (#99): `inline fun <reified T : Any>
+        NavGraphBuilder.composableWithPushTransitions(...) { this.composable<T>(...) { .. } }`. A call
+        `composableWithPushTransitions<VaultRoute> { }` is then a typed page like `composable<VaultRoute> { }`."""
+        out = {}
+        self._wrapper_tparams = set()
+        cands = []                                   # (wrapper name, type parameter, body text)
+        for kf in kfiles:
+            if b"NavGraphBuilder" not in kf.src:
+                continue
+            txt = kf.src.decode("utf-8", "replace")
+            for m in self._NAV_WRAPPER.finditer(txt):
+                nxt = self._NAV_WRAPPER.search(txt, m.end())
+                if m.group(2) not in ("composable", "dialog", "entry"):
+                    cands.append((m.group(2), m.group(1), txt[m.end():nxt.start() if nxt else len(txt)]))
+        changed = True
+        while changed:                               # wrappers of wrappers (`internalDestination<T>` -> `composableWithX<T>`)
+            changed = False
+            for name, tp, body in cands:
+                if name in out:
+                    continue
+                for k in re.finditer(r"\b(\w+)\s*<\s*" + re.escape(tp) + r"\s*>", body):
+                    kind = k.group(1) if k.group(1) in ("composable", "dialog") else out.get(k.group(1))
+                    if kind:
+                        out[name] = kind
+                        self._wrapper_tparams.add(tp)
+                        changed = True
+                        break
+        if out:
+            self.st["compose_nav_wrappers"] = len(out)
+        return out
+
     def _typed_block(self, name: str, typ: str, c, lam, kf: KFile, owner: str, decl: Decl | None, ctx: dict) -> bool:
         """`composable<Route>(...) { }` / Navigation 3 `entry<Key> { }` as typed pages; Ktor type-safe resources
         `get<Articles> { }` inside routing as routes (path from the @Resource class)."""
         short = typ.split(".")[-1].split("<")[0].strip()
         if not re.fullmatch(r"[A-Z]\w*", short or ""):
             return False
-        if name in ("composable", "entry", "dialog"):
+        if name in ("composable", "entry", "dialog") or name in getattr(self, "nav_wrappers", {}):
+            short = _route_type(typ) or short       # nested destinations keep their outer class: `VaultUnlockRoute.Standard`
+            if decl is not None and decl.name in self.nav_wrappers and short in getattr(self, "_wrapper_tparams", ()):
+                return False                     # composable<T> inside the wrapper itself
             pid = self._page(kf, short, c, typed=True)
+            if name not in ("composable", "entry", "dialog"):
+                self.b.nodes[pid].attrs["wrapper"] = name
+                self.st["compose_pages_via_wrapper"] += 1
             self._refs(lam, kf, pid, decl, ctx)
             return True
         if name in VERBS and ctx.get("routing"):
@@ -1796,40 +1948,95 @@ class KotlinPlugin(LanguagePlugin):
     # ------------------------------------------------------------------ Spring Security
     def _security_rules(self, kfiles: list[KFile]):
         """URL rules of SecurityFilterChain beans (`requestMatchers("/admin/**").hasRole("ADMIN")`, Kotlin DSL
-        `authorize("/admin/**", hasRole("ADMIN"))`), first match wins, as guards on the Spring routes they cover."""
-        rules = []
+        `authorize("/admin/**", hasRole("ADMIN"))`), first match wins, as guards on the Spring routes they cover.
+        With several chains (#99), a request goes to the first chain, by `@Order` then declaration order, whose
+        `securityMatcher(...)` matches it (a chain without one matches every request); only that chain's rules apply.
+        A chain whose matcher is not a literal pattern (a `RequestMatcher` bean) is not applied to any route."""
         rx_chain = re.compile(r"\b(?:requestMatchers|antMatchers|mvcMatchers|pathMatchers)\s*\(([^()]*)\)\s*\.\s*"
                               + SEC_AUTH + r"\s*\(([^()]*)\)")
         rx_dsl = re.compile(r"\bauthorize\s*\(\s*(?:HttpMethod\.(\w+)\s*,\s*)?(\"[^\"]*\"|anyRequest)\s*,\s*"
                             + SEC_AUTH + r"\b(?:\s*\(([^()]*)\))?")
         rx_any = re.compile(r"\banyRequest\s*\(\s*\)\s*\.\s*" + SEC_AUTH + r"\s*\(([^()]*)\)")
+        rx_fun = re.compile(r"\bfun\s+(\w+)\s*\([^()]*\)\s*:\s*Security(?:Web)?FilterChain\b\s*([{=])")
+        rx_matcher = re.compile(r"\bsecurityMatchers?\s*(?:\(([^()]*(?:\([^()]*\)[^()]*)*)\)|\{([^{}]*)\})")
+        rx_order = re.compile(r"@Order\s*\(\s*(?:value\s*=\s*)?(-?\d+|Ordered\.(HIGHEST|LOWEST)_PRECEDENCE)(?:\s*([+-])\s*(\d+))?\s*\)")
+        lowest = 2 ** 31 - 1
+        chains = []
         for kf in kfiles:
             txt = kf.src.decode("utf-8", "replace")
             if "SecurityFilterChain" not in txt and "SecurityWebFilterChain" not in txt:
                 continue
-            found = []
-            for m in rx_chain.finditer(txt):
-                meth = re.search(r"HttpMethod\.(\w+)", m.group(1))
-                pats = re.findall(r'"([^"]*)"', m.group(1))
-                found.append((m.start(), meth.group(1).upper() if meth else None, pats, m.group(2), m.group(3)))
-            for m in rx_dsl.finditer(txt):
-                pats = ["/**"] if m.group(2) == "anyRequest" else [m.group(2).strip('"')]
-                found.append((m.start(), (m.group(1) or "").upper() or None, pats, m.group(3), m.group(4) or ""))
-            for m in rx_any.finditer(txt):
-                found.append((m.start(), None, ["/**"], m.group(1), m.group(2)))
-            for _, meth, pats, auth, arg in sorted(found, key=lambda x: x[0]):
-                roles = ",".join(re.findall(r'"([^"]*)"', arg))
-                g = None if auth == "permitAll" else (f"{auth}({roles})" if roles else auth)
-                rules.append((meth, [self._ant(p) for p in pats if p], g, kf.rel))
-        if not rules:
+            spans = []
+            for m in rx_fun.finditer(txt):
+                if m.group(2) == "{":
+                    depth, i = 0, m.end() - 1
+                    while i < len(txt):
+                        if txt[i] == "{":
+                            depth += 1
+                        elif txt[i] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                break
+                        i += 1
+                    end = i
+                else:
+                    nxt = re.compile(r"\n\s*(?:@\w+[^\n]*\n\s*)*(?:(?:private|public|internal|open|override)\s+)*fun\b").search(txt, m.end())
+                    end = nxt.start() if nxt else len(txt)
+                head = txt[max(0, m.start() - 300):m.start()]
+                head = head[head.rfind("}") + 1:]                  # annotations of this function only
+                om = None
+                for om in rx_order.finditer(head):
+                    pass
+                order = lowest
+                if om:
+                    base = (-2 ** 31 if om.group(2) == "HIGHEST" else lowest) if om.group(2) else int(om.group(1))
+                    if om.group(3):
+                        base = base + int(om.group(4)) if om.group(3) == "+" else base - int(om.group(4))
+                    order = base
+                spans.append((m.start(), end, order))
+            if not spans:
+                spans = [(0, len(txt), lowest)]                   # rules outside a recognisable bean function
+            for start, end, order in spans:
+                body = txt[start:end]
+                matchers = None
+                mm = rx_matcher.search(body)
+                if mm:
+                    lits = re.findall(r'"([^"]*)"', mm.group(1) or mm.group(2) or "")
+                    matchers = [self._ant(x) for x in lits] if lits else []
+                found = []
+                for m in rx_chain.finditer(body):
+                    meth = re.search(r"HttpMethod\.(\w+)", m.group(1))
+                    pats = re.findall(r'"([^"]*)"', m.group(1))
+                    found.append((m.start(), meth.group(1).upper() if meth else None, pats, m.group(2), m.group(3)))
+                for m in rx_dsl.finditer(body):
+                    pats = ["/**"] if m.group(2) == "anyRequest" else [m.group(2).strip('"')]
+                    found.append((m.start(), (m.group(1) or "").upper() or None, pats, m.group(3), m.group(4) or ""))
+                for m in rx_any.finditer(body):
+                    found.append((m.start(), None, ["/**"], m.group(1), m.group(2)))
+                rules = []
+                for _, meth, pats, auth, arg in sorted(found, key=lambda x: x[0]):
+                    roles = ",".join(re.findall(r'"([^"]*)"', arg))
+                    g = None if auth == "permitAll" else (f"{auth}({roles})" if roles else auth)
+                    rules.append((meth, [self._ant(p) for p in pats if p], g))
+                if rules or matchers is not None:
+                    chains.append((order, kf.rel, start, matchers, rules))
+        if not chains:
             return
-        self.st["security_rules"] = len(rules)
+        chains.sort(key=lambda c: (c[0], c[1], c[2]))
+        self.st["security_rules"] = sum(len(c[4]) for c in chains)
+        if len(chains) > 1:
+            self.st["security_chains"] = len(chains)
+        if any(c[3] == [] for c in chains):
+            self.st["security_chains_unknown_matcher"] = sum(1 for c in chains if c[3] == [])
         for nid, n in self.b.nodes.items():
             if n.kind != "route" or n.lang != "kotlin" or n.attrs.get("framework") != "spring":
                 continue
             uri, meth = n.attrs.get("uri", ""), n.attrs.get("method")
             probe = re.sub(r"\{\w+\}", "x", uri)
-            for rm, rxs, g, rel in rules:
+            chain = next((c for c in chains if c[3] is None or any(r.fullmatch(probe) for r in c[3])), None)
+            if chain is None:
+                continue
+            for rm, rxs, g in chain[4]:
                 if rm and rm != meth:
                     continue
                 if any(r.fullmatch(probe) for r in rxs):
@@ -1837,7 +2044,7 @@ class KotlinPlugin(LanguagePlugin):
                         mw = n.attrs.setdefault("middleware", [])
                         if g not in mw:
                             mw.append(g)
-                        n.attrs.setdefault("security", f"SecurityFilterChain ({rel})")
+                        n.attrs.setdefault("security", f"SecurityFilterChain ({chain[1]})")
                         self.st["routes_guarded_by_security_chain"] += 1
                     break
 
@@ -1883,7 +2090,7 @@ class KotlinPlugin(LanguagePlugin):
                                   attrs={"method": r["method"], "path": path, "client": r["client"], "origin": origin,
                                          "origin_kind": okind})
             self.b.add_edge(r["src"], nid, "HTTP_CALLS", r["file"], r["line"], HEURISTIC if okind != "api" else EXACT,
-                            client=r["client"], url=url, origin=origin)
+                            client=r["client"], url=url, origin=origin, **({"via": r["via"]} if r.get("via") else {}))
             self.st[f"http_{r['client']}"] += 1
 
     def _link_navs(self):
@@ -1891,6 +2098,7 @@ class KotlinPlugin(LanguagePlugin):
         pages = [(nid, n.attrs.get("route")) for nid, n in self.b.nodes.items() if n.kind == "page" and n.lang == "kotlin"]
         for owner, route, typ, file, line in self.navs:
             hits = []
+            loose = False
             for nid, pr in pages:
                 if typ is not None:
                     if pr == typ:
@@ -1899,8 +2107,15 @@ class KotlinPlugin(LanguagePlugin):
                     ok, _ = match_path("/" + route.split("?")[0].lstrip("/"), "/" + pr.split("?")[0].lstrip("/"))
                     if ok:
                         hits.append(nid)
+            if not hits and typ is not None:
+                # `navigate(Standard)` with the nested class imported, or the page written that way: the one page
+                # whose last segment matches
+                last = typ.split(".")[-1]
+                cand = [nid for nid, pr in pages if pr and pr.split(".")[-1] == last and
+                        ("." not in typ or "." not in pr)]
+                hits, loose = (cand, True) if len(cand) == 1 else ([], False)
             for h in hits[:2]:
-                self.b.add_edge(owner, h, "NAVIGATES_TO", file, line, EXACT if len(hits) == 1 else HEURISTIC)
+                self.b.add_edge(owner, h, "NAVIGATES_TO", file, line, EXACT if len(hits) == 1 and not loose else HEURISTIC)
                 self.st["navigations"] += 1
 
     # ------------------------------------------------------------------ AndroidManifest.xml

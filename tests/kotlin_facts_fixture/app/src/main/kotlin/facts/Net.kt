@@ -52,3 +52,20 @@ fun Application.resources() {
         post<Articles.New> { call.respondText("new") }
     }
 }
+
+// URLs built by project helpers (#99)
+const val CAT_BASE = "https://cat.example.com"
+
+class CatApi(private val client: HttpClient) {
+    suspend fun facts() = client.get { cats("api/facts") }
+    suspend fun breed() = client.get(catUrl("breeds/1"))
+
+    private fun HttpRequestBuilder.cats(path: String) {
+        url {
+            takeFrom("https://cat.example.com/")
+            encodedPath = path
+        }
+    }
+}
+
+fun catUrl(path: String): String = "$CAT_BASE/v1/$path"

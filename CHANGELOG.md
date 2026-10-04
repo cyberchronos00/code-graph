@@ -36,9 +36,23 @@ commands, output and the graph schema; such changes are listed under **Changed**
   make that script a TypeScript / JavaScript source file, so the test links to its module node instead of counting
   `script_without_node`. No change on commander.js, eslint, electron-fiddle, capacitor, mcp-servers or
   nestjs-boilerplate (none of their tests run such a script).
+- Kotlin Compose Navigation through project wrappers (#99): `inline fun <reified T> NavGraphBuilder.composableWith..
+  Transitions(..) { composable<T>(..) }` (and wrappers of those) make `composableWithPushTransitions<VaultRoute> { }`
+  a typed page; `navigate(route = X, navOptions)` links to it. bitwarden-android: 10 → 111 Compose pages and 1 → 90
+  navigations (plus 35 from tests).
+- Kotlin Ktor client URLs built by project helpers (#99): a `HttpRequestBuilder` extension that sets
+  `takeFrom(base)` / `encodedPath = path`, or a function returning `"$BASE/$path"`, called with a literal. KaMPKit:
+  its one API call (`GET https://dog.ceo/api/breeds/list/all`) is found (none before).
+- Spring Security with several `SecurityFilterChain` beans (#99): a route takes the rules of the first chain, by
+  `@Order`, whose `securityMatcher(..)` matches it, instead of the rules of every chain.
 
 ### Changed
 
+- Kotlin typed Compose pages of nested destinations keep the outer class (#99): `page:kotlin:SettingsRoute.Standard`
+  instead of one `page:kotlin:Standard` shared by every `*.Standard` route.
+- Kotlin: a bare capitalised call matching only a nested class elsewhere (`AppResumeScreenData.SendScreen`) and a
+  function of that name is the function call, not a constructor (#99). element-x-android: 128 composable calls are
+  now CALLS instead of INSTANTIATES of an unrelated nested class.
 - `cg coverage` for TypeScript / JavaScript counts files per file (#106): a `.ts` / `.js` file outside the source dirs,
   scripts and test trees the program reads is `unmapped` (not indexed) with a `.cg.yaml include` hint, instead of the
   whole language reading "exact". eslint: 1490 discovered, 780 indexed, 56 unmapped (`docs/src/`, `tools/`);

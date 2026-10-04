@@ -155,6 +155,18 @@ def test_spring_security_filter_chain_guards():
     assert _attrs("route:GET /admin/users/{id}")["security"].startswith("SecurityFilterChain")
 
 
+
+def test_spring_security_several_chains_by_order_and_matcher():
+    # /v2/** goes to the @Order(1) chain only: its rules, not the default chain's anyRequest().authenticated()
+    assert _attrs("route:GET /v2/ops/stats")["middleware"] == ["hasRole(OPS)"]
+    assert _attrs("route:GET /v2/items")["middleware"] == ["hasAuthority(SCOPE_api)"]
+    assert _attrs("route:GET /v2/items")["security"] == "SecurityFilterChain (app/src/main/kotlin/facts/ApiSecurity.kt)"
+    # the RequestMatcher-bean chain has no literal scope: not applied; the default chain covers /hooks/ping
+    assert _attrs("route:GET /hooks/ping")["middleware"] == ["authenticated"]
+    assert _attrs("route:POST /api/orders")["middleware"] == ["authenticated"]
+    assert _S["facts_stats"]["plugins"]["kotlin"]["security_chains"] == 3
+
+
 def test_typed_navigation_and_navigation3_entries():
     for key in ("TopicRoute", "SearchKey", "ForYouKey"):
         assert _attrs(f"page:kotlin:{key}")["via"] == "compose-navigation (typed)"
@@ -164,6 +176,21 @@ def test_typed_navigation_and_navigation3_entries():
                            "and dst='function:facts.TopicScreen'").fetchone()[0] == 1
 
 
+def test_navigation_wrappers_and_nested_destinations():
+    # composableWithPushTransitions<VaultRoute> { } and a wrapper of that wrapper are typed pages (#99)
+    for key in ("VaultRoute", "SettingsRoute.Standard", "SettingsRoute.PreAuth", "UnlockRoute.Standard"):
+        assert _attrs(f"page:kotlin:{key}")["via"] == "compose-navigation (typed)", key
+    assert _attrs("page:kotlin:VaultRoute")["wrapper"] == "composableWithPushTransitions"
+    assert facts().execute("select count(*) from nodes where id in ('page:kotlin:T', 'page:kotlin:Standard')").fetchone()[0] == 0
+    # navigate(route = X, navOptions) and nested destinations
+    assert _edge("function:facts.navigateToVault", "page:kotlin:VaultRoute", "NAVIGATES_TO")[0] == "exact"
+    assert _edge("function:facts.navigateToSettings", "page:kotlin:SettingsRoute.PreAuth", "NAVIGATES_TO")[0] == "exact"
+    # the wrapper's lambda belongs to the page; VaultScreen() is the composable, not ScreenData.VaultScreen
+    assert _edge("page:kotlin:VaultRoute", "function:facts.VaultScreen", "CALLS") is not None
+    assert facts().execute("select count(*) from edges where dst='class:facts.ScreenData.VaultScreen' "
+                           "and kind='INSTANTIATES'").fetchone()[0] == 0
+
+
 def test_retrofit_base_urls_and_ktor_client_builders():
     # baseUrl(BuildConfig.API_URL) resolves through buildConfigField; each interface keeps its own Retrofit base URL
     assert _attrs("http:GET /v2/topics")["origin"] == "https://api.example.com"
@@ -171,6 +198,10 @@ def test_retrofit_base_urls_and_ktor_client_builders():
     # client.get { url("...") } and client.request { method = HttpMethod.Post; url("...") }
     assert _edge("method:facts.DogApi.breeds", "http:GET https://dog.example.com/api/breeds/list/all", "HTTP_CALLS")
     assert _edge("method:facts.DogApi.vote", "http:POST https://dog.example.com/api/votes", "HTTP_CALLS")
+    # URLs from project helpers: a request-builder extension and a function returning a template (#99)
+    e = _edge("method:facts.CatApi.facts", "http:GET https://cat.example.com/api/facts", "HTTP_CALLS")
+    assert e is not None
+    assert _edge("method:facts.CatApi.breed", "http:GET https://cat.example.com/v1/breeds/1", "HTTP_CALLS") is not None
 
 
 def test_ktor_type_safe_resources():
