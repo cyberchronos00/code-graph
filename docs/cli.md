@@ -66,6 +66,10 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `routes [--writes [TABLE]] [--reaches SPEC...] [--missing NAME] [--unguarded] [--auth-pattern RE]`: routes with their
   middleware / guards / auth, scoped to what they write or reach, with one evidence chain each and the frontend
   callers on a combined graph (see [Routes and guards](#routes-and-guards)).
+- `snippet SPEC [--context N] [--max-lines N] [--json]`: print one symbol's source, read from the index's line
+  range: a `path:start-end` header then the body with line numbers. `--context` adds lines around the span,
+  `--max-lines` (default 200) caps the body and notes how many lines were cut. `SPEC` is a name, FQN,
+  `Class.method` or a node id (as `node`); an ambiguous name lists the candidates and exits nonzero.
 - `search NAME [--kind K]`: nodes by name / FQN substring (with their root-relative `file:line`), plus the routes whose
   middleware, guard or auth names match.
 - `writers TABLE`, `writers Type.prop` / `readers Type.prop`, `siblings SYMBOL`, `node SPEC`, `stats`: writers of a

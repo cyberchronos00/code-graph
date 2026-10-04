@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- `cg snippet <symbol>` (CLI and the `snippet` MCP tool) prints one symbol's source from the index's line
+  range: a `path:start-end` header then the body with line numbers. `--context N` adds surrounding lines,
+  `--max-lines N` (default 200) caps the body with a truncation note, and an ambiguous name lists the
+  candidates and exits nonzero. Added `AGENTS.md` describing how to read this codebase with cg (single
+  source in `codegraph/agent_rules.py`).
 - Kotlin callable references (`recv::fn`, `::fn`, `Type::fn`, `::Foo`) are `REFERENCES_FN` edges (`how: callback`) (#125), so `impact` lists Compose callbacks and ViewModel wiring. The receiver type comes from a parameter, property, constructor, local, `hiltViewModel<T>()` or a `viewModel()` / `viewModels()` delegate; extensions on that type count. Overloads use the arity of a function-typed parameter when the reference is passed as an argument. scip-java maps the same occurrences when an index is present.
 - Nuxt auto-imports from `imports.dirs` / `imports.imports` without a `.nuxt/` directory (#116): on a clean
   checkout the stand-in reads `nuxt.config` (and each layer's) and scans the configured directories the way

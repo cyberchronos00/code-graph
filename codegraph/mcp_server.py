@@ -796,6 +796,14 @@ def node(id_or_symbol: str) -> str:
 
 
 @tool
+def snippet(id_or_symbol: str, context: int = 0, max_lines: int = 200) -> str:
+    """Source of one symbol: a `path:start-end` header then the body with line numbers. Resolves a
+    node id or a symbol / FQN (as node() and search() do); an ambiguous name lists the candidates
+    instead of guessing. context adds lines around the span; max_lines caps the body (truncation noted)."""
+    return Q.render_snippet(Q.snippet(_st(), id_or_symbol, context=context, max_lines=max_lines))
+
+
+@tool
 def search(name: str, kind: str | None = None, limit: int = 20, platform: str | None = None) -> str:
     """Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
     (class, method, route, command, table, column, connection, config, env, job, admin...). Also matches route

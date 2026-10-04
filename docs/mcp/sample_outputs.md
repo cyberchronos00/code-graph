@@ -20,6 +20,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `llm_tools`: LLM tools and MCP primitives (#66): tools offered to a model (OpenAI / Anthropic schema literals, LangChain @tool /
 - `tests_covering`: Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
 - `node`: Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
+- `snippet`: Source of one symbol: a `path:start-end` header then the body with line numbers. Resolves a
 - `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
 - `routes`: Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
 - `doctor`: What this cg installation can index: versions of cg and the tools it uses, whether the Node / PHP / Dart

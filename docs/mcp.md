@@ -13,7 +13,7 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
 ## Tools
 
 - `reaches`, `impact`, `siblings`, `writers` (a table, or `Type.prop` for a stored property), `readers(prop)`, `roundtrip(prop)` (heuristic: a lossy write read back to seed UI state, #88), `lint_async_state(rules?)` (heuristic, #88: stale async results, two writers, incomplete cache keys, unsuppressed echoes)
-  (who reads a stored property `Type.prop`, Swift), `node`, `stats`;
+  (who reads a stored property `Type.prop`, Swift), `node`, `snippet`, `stats`;
 - `callers(symbol, min_confidence?, limit?)`: direct callers of a function, method or class (one level, with the call
   site and confidence; `ref@file:line` for code that takes the function as a value, such as a dispatch table or a
   callback); `impact` follows them up to the entry points and lists those references in a `by reference` line;
@@ -21,6 +21,8 @@ code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.i
   from the callers, and the structured content carries it as `overrides: {overrides, overridden_by}`; `tests_covering`
   and `reaches` follow a base method's overrides the same way (`via override`), and `Sub.method` for an inherited
   method resolves to the inherited definition (`inherited from` line);
+- `snippet(id_or_symbol, context?, max_lines?)`: one symbol's source, a `path:start-end` header then the body
+  with line numbers; an ambiguous name lists the candidates.
 - `search(name, kind?, limit?)`: nodes by name / FQN substring, plus route middleware, guard, auth and access names
   with the routes that carry them (`search("auth")` finds `auth:api`, `ApiKeyGuard`, `IsAuthenticated`, …);
 - `routes(writes?, reaches?, missing?, unguarded?, auth_pattern?, max_items?, paths?, min_confidence?)`: routes with

@@ -183,7 +183,7 @@ The 7 plan gaps are the admin update path, `UpdateBookRequest`, `Book::$fillable
 
 ### 1. A CLI for impact questions
 
-`reaches`, `impact`, `downstream`, `path`, `writers`, `siblings`, `routes`, `search`, `api-calls`, `channels`, `tests`
+`reaches`, `impact`, `downstream`, `path`, `writers`, `siblings`, `routes`, `search`, `snippet`, `api-calls`, `channels`, `tests`
 and `platforms` all work on one SQLite graph, and across repos once the frontend and backend are linked. Every hop shows its evidence:
 
 ```text
@@ -291,7 +291,7 @@ Full reference: [docs/cli.md](docs/cli.md) · value facts: [docs/value-facts.md]
 
 ### 2. An MCP server for AI agents
 
-The same queries as MCP tools (`reaches`, `impact`, `callers`, `siblings`, `path`, `downstream`, `routes`, `search`, `api_calls`,
+The same queries as MCP tools (`reaches`, `impact`, `callers`, `siblings`, `path`, `downstream`, `routes`, `search`, `snippet`, `api_calls`,
 `channels`, `tests_covering`, `resolutions`, `plan_check`, `index`, `coverage`, `starters`, `platform_divergence`, …), so an agent can check the blast radius before it edits. Replies are compact,
 use repo-relative paths, and `plan_check` starts with a summary (`details=true` for the full report). Every reply also
 carries a machine-readable `completeness` object, so the agent knows when an answer covers the whole repository and

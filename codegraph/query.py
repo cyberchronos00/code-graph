@@ -40,6 +40,81 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
     return [i["method"] for i in inherited_targets(st, spec)]
 
 
+
+def snippet(st: GraphStore, spec: str, context: int = 0, max_lines: int = 200) -> dict:
+    """Source of one symbol, read from disk via the node file / line / end_line. Returns a dict
+    whose "status" is one of: ok (id, kind, file, start, end, shown_start, shown_end,
+    lines [[no, text], ...], truncated, note), ambiguous (candidates [{id, kind, file, line}] up to
+    20, count), none (no match), no_source (node has no file / line), or missing (source file not on
+    disk, with the paths tried). context adds lines around the span; max_lines caps the body."""
+    ids = list(dict.fromkeys(resolve_targets(st, spec)))
+    if not ids:
+        return {"status": "none", "spec": spec}
+    if len(ids) > 1:
+        cands = []
+        for nid in ids[:20]:
+            n = st.node(nid)
+            cands.append({"id": nid, "kind": n["kind"] if n else "?",
+                          "file": n["file"] if n else None, "line": n["line"] if n else None})
+        return {"status": "ambiguous", "spec": spec, "count": len(ids), "candidates": cands}
+    nid = ids[0]
+    n = st.node(nid)
+    if not n or not n["file"] or not n["line"]:
+        return {"status": "no_source", "id": nid, "spec": spec}
+    start = n["line"]
+    end = n["end_line"] if (n["end_line"] and n["end_line"] >= start) else None
+    note = None
+    if end is None:
+        end, note = start, "no end line in the index; showing the start line only (widen with --context)"
+    f = n["file"]
+    root = st.meta().get("root")
+    tried = [f] if os.path.isabs(f) else ([os.path.join(str(root), f)] if root else []) + [f]
+    path = next((q for q in tried if os.path.isfile(q)), None)
+    if path is None:
+        return {"status": "missing", "id": nid, "file": f, "root": root, "tried": tried}
+    try:
+        src = open(path, encoding="utf-8", errors="replace").read().split("\n")
+    except OSError as ex:
+        return {"status": "missing", "id": nid, "file": f, "root": root, "tried": tried, "error": str(ex)}
+    total = len(src)
+    lo, hi = max(1, start - context), min(total, end + context)
+    body = [[i, src[i - 1]] for i in range(lo, hi + 1)]
+    truncated = 0
+    if len(body) > max_lines:
+        truncated, body = len(body) - max_lines, body[:max_lines]
+    return {"status": "ok", "id": nid, "kind": n["kind"], "file": f, "start": start, "end": end,
+            "shown_start": lo, "shown_end": (body[-1][0] if body else lo), "lines": body,
+            "truncated": truncated, "note": note, "context": context, "max_lines": max_lines}
+
+
+def render_snippet(res: dict) -> str:
+    """Text for `cg snippet`: a `file:start-end` header then line-numbered body, or the candidate /
+    error line for a non-ok status."""
+    status = res.get("status")
+    if status == "none":
+        return f"no node matches {res['spec']!r}; try `search` with part of the name"
+    if status == "no_source":
+        return f"{res['id']}: no source location recorded (nothing to show)"
+    if status == "missing":
+        why = res.get("error") or ("tried " + ", ".join(res.get("tried") or []))
+        return f"{res['id']}: source file {res.get('file')!r} not found (indexed root {res.get('root')!r}); {why}"
+    if status == "ambiguous":
+        out = [f"{res['count']} nodes match {res['spec']!r}; name one (showing up to 20):"]
+        for c in res["candidates"]:
+            loc = f"{c['file']}:{c['line']}" if c.get("file") else "(no source location)"
+            out.append(f"  {c['id']}  [{c['kind']}]  {loc}")
+        return "\n".join(out)
+    lines = res["lines"]
+    out = [f"{res['file']}:{res['start']}-{res['end']}"]
+    if res.get("note"):
+        out.append(f"note: {res['note']}")
+    w = max((len(str(no)) for no, _ in lines), default=1)
+    out += [f"{no:>{w}}| {text}" for no, text in lines]
+    if res["truncated"]:
+        out.append(f"... (truncated, {res['truncated']} more lines; use --max-lines)")
+    return "\n".join(out)
+
+
 INHERIT_KINDS = ("EXTENDS", "IMPLEMENTS", "USES_TRAIT")
 _INHERITED: dict = {}
 

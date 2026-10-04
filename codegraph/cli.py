@@ -205,6 +205,12 @@ def main(argv=None):
     p.add_argument("--tests", action="store_true", help="include test code's reads and writes")
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
+    p = sub.add_parser("snippet", help="print the source of one symbol: a path:start-end header then the numbered body")
+    p.add_argument("spec", help="a node id or a symbol / FQN (as `node`); an ambiguous name lists candidates and exits nonzero")
+    p.add_argument("--db", required=True)
+    p.add_argument("--context", type=int, default=0, help="extra lines of context around the symbol (default 0)")
+    p.add_argument("--max-lines", type=int, default=200, help="cap the printed body (default 200); extra lines are noted")
+    p.add_argument("--json", action="store_true")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
              "siblings": "code related to a symbol: class hierarchy, the same method in sibling classes, shared resources, co-callers",
              "writers": "code that writes a table (or column), or a stored property `Type.prop`",
@@ -339,6 +345,10 @@ def main(argv=None):
         rows = for_graph(GraphStore(a.db))
         print(json.dumps(rows, indent=1) if a.json else render_starters(rows))
         return
+    if a.cmd == "snippet":
+        res = Q.snippet(GraphStore(a.db), a.spec, context=a.context, max_lines=a.max_lines)
+        print(json.dumps(res, indent=1, default=str) if a.json else Q.render_snippet(res))
+        return 0 if res.get("status") == "ok" else 1
     if getattr(a, "plans_dir", None) is None and a.cmd in ("plan", "serve", "viz-plan", "impact") and getattr(a, "db", None):
         from .plans import resolve_plans_dir
         a.plans_dir = resolve_plans_dir(None, a.db)     # plans.dir of the indexed project's .cg.yaml
