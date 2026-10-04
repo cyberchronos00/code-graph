@@ -10,6 +10,8 @@
      opts.flat             no clusters (expand all)
      opts.threshold        a layer with more nodes than this is folded into clusters (default 12)
      opts.budget           at most this many units in a folded layer (default 7)
+     opts.maxItems         at most this many top-level units over all layers (default 30): the largest layers get
+                           smaller budgets (at least MIN_BUDGET each) until the total fits
      opts.heightOf         unit -> row height (node + its wrapped label); rows are at least ROW / ROW_CLUSTER */
 (function (root) {
   'use strict'
@@ -23,6 +25,8 @@
   const ROW = 64         // leaf row pitch (node + up to three label lines)
   const ROW_CLUSTER = 90  // cluster box + up to three label lines
   const LANE_ROW = 66
+  const MAX_ITEMS = 30   // top-level units in one view (#82 test plan: IceCubesApp `impact MastodonClient.get` <= 30)
+  const MIN_BUDGET = 3
 
   function folderKey (n) {
     const segs = String(n.file || '').split('/').slice(0, -1)
@@ -106,10 +110,13 @@
       if (!byLayer.has(l)) byLayer.set(l, []); byLayer.get(l).push(n)
     }
     const units = []; const rep = new Map()
+    const budgets = layerBudgets(byLayer, threshold, opts)
     for (const l of [...byLayer.keys()].sort((a, b) => a - b)) {
       const ns = byLayer.get(l)
-      const folded = !opts.flat && ns.length > threshold && !ns.some((n) => n.is_target && ns.length === 1)
-      const { buckets, singles } = folded ? clusterLayer(l, ns.filter((n) => !n.is_target), opts) : { buckets: [], singles: ns }
+      const nt = ns.filter((n) => n.is_target).length
+      const folded = !opts.flat && ns.length > budgets.get(l) && ns.length - nt > 1
+      const { buckets, singles } = folded ? clusterLayer(l, ns.filter((n) => !n.is_target), { ...opts, budget: Math.max(1, budgets.get(l) - nt) })
+        : { buckets: [], singles: ns }
       const tgt = folded ? ns.filter((n) => n.is_target) : []
       for (const n of tgt.concat(singles)) { units.push({ id: n.id, type: 'node', layer: l, node: n }); rep.set(n.id, n.id) }
       for (const b of buckets) {
@@ -131,6 +138,24 @@
       gap = Math.max(MIN_GAP_X, Math.min(GAP_X, Math.floor((opts.fitWidth - 140) / (nl - 1))))
     }
     return { units, rep, pos: positions(units, data.edges, rep, opts.heightOf, gap), layers: lay, gap }
+  }
+
+  // units allowed per layer: a layer up to `threshold` nodes is drawn whole, a larger one folds into `budget` units;
+  // while the total is above maxItems, the layer with the most units gives one up (not below MIN_BUDGET, and a
+  // layer whose nodes all fit stays whole once nothing else can shrink)
+  function layerBudgets (byLayer, threshold, opts) {
+    const budget = opts.budget || 7; const max = opts.maxItems || MAX_ITEMS
+    const b = new Map()
+    for (const [l, ns] of byLayer) b.set(l, ns.length <= threshold ? ns.length : budget)
+    if (opts.flat) return new Map([...byLayer].map(([l, ns]) => [l, ns.length]))
+    let total = [...b.values()].reduce((a, c) => a + c, 0)
+    while (total > max) {
+      let best = null
+      for (const [l, v] of b) if (v > MIN_BUDGET && (best === null || v > b.get(best) || (v === b.get(best) && l > best))) best = l
+      if (best === null) break
+      b.set(best, b.get(best) - 1); total--
+    }
+    return b
   }
 
   function gatedNode (n) { return (n.gate_status && n.gate_status !== 'live') || n.live === false }
@@ -203,7 +228,7 @@
 
   function weight (u) { return u.type === 'cluster' ? u.count : 1 }
 
-  const api = { folderKey, layers, build, clusterLayer, GENERIC, GAP_X, MIN_GAP_X, LANE_DX }
+  const api = { folderKey, layers, build, clusterLayer, layerBudgets, GENERIC, GAP_X, MIN_GAP_X, LANE_DX, MAX_ITEMS }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.CGLayered = api
 })(typeof window !== 'undefined' ? window : this)

@@ -21,7 +21,9 @@ stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/vi
   right in layers (impact: entry points left, target right, one column per depth; downstream: source left, sinks
   right; path: the specs in order); reaches and plan overviews use the force-directed fcose layout with module boxes.
   In the layered layout a layer with more than 12 nodes folds into counted clusters (`Account · 16 callers in 10
-  modules (2 entry)`, `+15 callers in 11 modules`) by module, then by top-level folder; click a cluster to show its
+  modules (2 entry)`, `+15 callers in 11 modules`) by module, then by top-level folder, and the whole view keeps to
+  30 top-level items: when the layers together would show more, the widest ones fold further (at least 3 items each)
+  and the smaller layers fold too; click a cluster to show its
   first 20 members in a lane next to it (again for the next 20), Esc or Backspace folds it; nothing outside the
   cluster moves. In fcose views nodes are grouped into boxes by module (`repo · module`, a common prefix stripped;
   columns by table; HTTP calls, settings and request keys by kind), one-node modules get no box, big modules start

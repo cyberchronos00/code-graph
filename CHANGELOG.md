@@ -65,6 +65,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Visual view: a deep impact view no longer grows past 30 top-level items. The layers share one budget, and the
+  widest fold further (IceCubesApp `impact MastodonClient.get`: 44 → 28 items, `post` 32 → 29; #82 item 6 / 15).
 - `cg parity` (#107): symbols tagged with the source app's own platform (one that tags at least half of the compared
   symbols) are no longer `platform_only` when the target graph does not build it. Element X iOS → Android:
   platform-only 3,551 → 0, missing 209 → 3,760 of 4,184. Bitwarden output unchanged in both directions.

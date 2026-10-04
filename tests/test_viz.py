@@ -175,3 +175,33 @@ def test_edge_and_border_contrast():
     assert not bad, bad
     assert len({v[2] for v in meta["conf"].values()}) == 3                        # solid / dashed / dotted
     assert float(meta["conf"]["exact"][1]) > float(meta["conf"]["heuristic"][1])   # and width
+
+
+NODE_BUDGET = r"""
+const L = require(process.argv[1])
+// nine layers (depth 0..8), six of them wide: unbounded per-layer folding gave 46 top-level items
+const nodes = [{ id: 'T', kind: 'method', depth: 0, is_target: true, group: 'net', file: 'Net/Client.swift' }]
+const edges = []
+const widths = [1, 6, 9, 19, 59, 93, 79, 1]
+widths.forEach((w, i) => { for (let j = 0; j < w; j++) {
+  const id = `d${i + 1}_${j}`
+  nodes.push({ id, kind: 'method', depth: i + 1, group: 'm' + (j % 31), file: `Pkg${j % 9}/m${j % 31}/x.swift` })
+  edges.push({ src: id, dst: i ? `d${i}_0` : 'T' })
+} })
+const data = { meta: { mode: 'impact' }, nodes, edges }
+const top = (o) => L.build(data, o).units.filter((u) => !u.lane)
+const b = L.build(data, {})
+console.log(JSON.stringify({ top: top({}).length, unbounded: top({ maxItems: 1e9 }).length, flat: top({ flat: true }).length,
+  covered: nodes.every((n) => b.rep.has(n.id)), single: top({}).filter((u) => u.type === 'cluster' && u.count === 1).length,
+  target: top({}).some((u) => u.id === 'T') }))
+"""
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="node is not installed")
+def test_layered_total_item_budget():
+    """#82 item 6 / 15: the folded layers share one budget of top-level items (30), so a deep impact view stays
+    readable; every node is still represented and the target stays a node of its own."""
+    out = subprocess.run(["node", "-e", NODE_BUDGET, str(LAYERED)], capture_output=True, text=True, check=True).stdout
+    r = json.loads(out)
+    assert r["unbounded"] > 40 and r["top"] <= 30, r
+    assert r["covered"] and r["single"] == 0 and r["target"] and r["flat"] == 268, r
