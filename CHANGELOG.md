@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Visual view: edge confidence by dash pattern and width as well as colour (exact solid 2 px, resolved dashed,
+  heuristic dotted), with every edge and border colour at least 3:1 on the canvas (checked by a unit test), and
+  legend chips that hide / show resolved and heuristic edges client-side with the status counts updated (#82 item 7).
+  The legend lists only the kinds (with counts), shapes and edge styles present in the view, and a click on a kind
+  dims everything else (#82 item 8).
+
 - Swift stored properties and construction branches (#88, phase 1): a stored instance property is a
   `field:<Type>.<name>` node (`binding`, property `wrapper`), with `READS_PROP` / `WRITES_PROP` edges from `self.x`,
   bare `x` and `v.x` with a known type of `v` (`storage: wrapper` for `_x = State(...)`); new `cg readers Type.prop`

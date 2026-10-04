@@ -132,3 +132,46 @@ def test_layered_clusters_and_lanes():
     assert r["layers"] == 3 and r["targetRight"], r                   # one column per depth, target on the right
     assert r["moved"] < 40 and r["lane"] == min(20, r["opened"]), r   # expanding keeps everything else in place
     assert r["again"], r                                              # deterministic
+
+
+APP_JS = ROOT / "codegraph" / "viz" / "static" / "app.js"
+
+
+def _lum(h: str) -> float:
+    h = h.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    rgb = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    rgb = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    hi, lo = sorted((_lum(a), _lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _style_colours() -> tuple[dict, list]:
+    """The constants and every edge / border colour of the Cytoscape style table in app.js."""
+    import re
+    src = APP_JS.read_text()
+    const = dict(re.findall(r"const (CANVAS|MODULE_FILL|GATED|PARTGATED) = '(#[0-9a-fA-F]{3,6})'", src))
+    conf = {c: (col, w, st) for c, col, w, st in re.findall(
+        r"(exact|resolved|heuristic): \{ color: '(#[0-9a-fA-F]{6})', width: ([\d.]+), style: '(\w+)' \}", src)}
+    style = src[src.index("const STYLE = ["):]
+    style = style[:style.index("\n  ]\n")]
+    cols = re.findall(r"'((?:mid-)?(?:target-arrow|line|border)-color)': '(#[0-9a-fA-F]{3,6})'", style)
+    cols += [("conf " + c, v[0]) for c, v in conf.items()] + [(k, const[k]) for k in ("GATED", "PARTGATED")]
+    return {"const": const, "conf": conf}, cols
+
+
+def test_edge_and_border_contrast():
+    """#82 item 7: every edge and border colour is >= 3:1 (WCAG 1.4.11) on the canvas and on a module box's fill,
+    and the three confidences differ by dash pattern (greyscale-distinguishable), not only by colour."""
+    meta, cols = _style_colours()
+    assert set(meta["conf"]) == {"exact", "resolved", "heuristic"} and len(cols) > 20
+    bad = [(k, c, round(_contrast(c, bg), 2)) for k, c in cols for bg in (meta["const"]["CANVAS"], meta["const"]["MODULE_FILL"])
+           if _contrast(c, bg) < 3]
+    assert not bad, bad
+    assert len({v[2] for v in meta["conf"].values()}) == 3                        # solid / dashed / dotted
+    assert float(meta["conf"]["exact"][1]) > float(meta["conf"]["heuristic"][1])   # and width

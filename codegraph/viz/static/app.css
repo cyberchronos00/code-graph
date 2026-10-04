@@ -78,3 +78,7 @@ main { position: absolute; top: var(--hdr); bottom: 0; left: 0; right: 0; }
 #panel .planbox.p-added { border-color: #2e9d57; background: #eefaf2; } #panel .planbox.p-forbidden { border-color: #d62828; background: #fff0f0; }
 #panel .planbox.p-review { border-color: #b06ab3; } #panel .planbox.p-covered { border-color: #2e9d57; }
 #panel pre.report { font-size: 10.5px; white-space: pre-wrap; }
+#legend .chip { font: inherit; color: #1d2330; background: #fff; border: 1px solid #7d889c; border-radius: 10px; padding: 0 7px; cursor: pointer; }
+#legend .chip[data-conf][aria-pressed="false"] { opacity: .5; text-decoration: line-through; }
+#legend .kchip[aria-pressed="true"] { border: 2px solid #1d4ed8; font-weight: 600; }
+#legend .chip:focus-visible { outline: 2px solid #1d4ed8; outline-offset: 1px; }

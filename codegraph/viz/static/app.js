@@ -18,6 +18,13 @@
     covered: 'covered by plan', forbidden: 'forbidden target', context: 'context' }
   const PLAN_PRI = { forbidden: 4, added: 3, gap: 2, touches: 1 }
   const CONF_RANK = { heuristic: 1, resolved: 2, exact: 3 }
+  // confidence by dash pattern and width as well as colour (#82 item 7); every colour >= 3:1 on the canvas
+  // (tests/test_viz.py reads these tables)
+  const CANVAS = '#ffffff'; const MODULE_FILL = '#f5f7fa'   // a module box's fill (#eef1f6 at 0.6) on the canvas
+  const CONF_EDGE = { exact: { color: '#4a5368', width: 2, style: 'solid' }, resolved: { color: '#767e90', width: 1.5, style: 'dashed' },
+    heuristic: { color: '#848c9e', width: 1.5, style: 'dotted' } }
+  const GATED = '#d64545'; const PARTGATED = '#b26b00'
+  const hiddenConf = new Set()   // confidences hidden by the legend chips (client-side, no refetch)
   const ENTRY_LABEL = { http_route: 'HTTP route', websocket: 'websocket', artisan_command: 'artisan', management_command: 'manage.py', scheduled: 'schedule', queue_job: 'queue job',
     listener: 'listener', admin_panel: 'admin', observer: 'observer', ui_page: 'UI page', ui_layout: 'UI layout', ui_app: 'UI app',
     message_handler: 'message handler', cli_command: 'CLI command', main: 'main', ffi_export: 'FFI export', public_api: 'public API',
@@ -148,7 +155,7 @@
       const top = Object.entries(u.kinds).sort((a, b) => b[1] - a[1])
       const n = u.count; const label = clusterLabel(u)
       const w = 30 + Math.min(46, Math.sqrt(n) * 7)
-      els.push({ group: 'nodes', data: { id: u.id, cid: u.id, label, color: KIND_COLOR[top[0][0]] || '#888', w, h: Math.max(20, w * 0.5) },
+      els.push({ group: 'nodes', data: { id: u.id, cid: u.id, label, color: KIND_COLOR[top[0][0]] || '#888', w, h: Math.max(20, w * 0.5), kinds: u.kinds },
         position: { x: p.x, y: p.y }, classes: 'cluster' + (u.open ? ' open' : '') + (u.gated === n ? ' allgated' : '') })
     }
     return els.concat(edgeEls((id) => lay.rep.get(id), ' lay'))
@@ -169,7 +176,7 @@
       if (collapsed.has(g.id)) {
         els.push({ group: 'nodes', data: { id: 'G:' + g.id, gid: g.id, label: `${modLabel(g.id)}\n${g.count} node${g.count > 1 ? 's' : ''}` +
           (ne ? ` · ${ne} entry` : '') + (ng ? ` · ${ng} gated` : ''), color: KIND_COLOR[top[0][0]] || '#888', size: 26 + Math.min(40, Math.sqrt(g.count) * 7),
-          repo: g.repo, gatedFrac: ng / g.count }, classes: 'collapsed' + (ng === g.count ? ' allgated' : '') })
+          repo: g.repo, gatedFrac: ng / g.count, kinds: g.kinds }, classes: 'collapsed' + (ng === g.count ? ' allgated' : '') })
         for (const n of gn) rep[n.id] = 'G:' + g.id
       } else {
         els.push({ group: 'nodes', data: { id: 'G:' + g.id, gid: g.id, label: modLabel(g.id) + `  (${g.count})`, repo: g.repo }, classes: 'module ' + (g.side === 'fe' ? 'fe' : 'be') })
@@ -206,7 +213,7 @@
         else if (a.plan === 'added') label = '+ ' + Object.keys(a.kinds)[0]
         else if (a.plan === 'gap') label = Object.keys(a.kinds)[0].replace(/^PLAN_/, '').toLowerCase()
       }
-      els.push({ group: 'edges', data: { id: 'E:' + k, source: a.s, target: a.d, n: a.n, label, w: Math.min(7, 1 + Math.log2(a.n + 1)), agg: a }, classes: cls })
+      els.push({ group: 'edges', data: { id: 'E:' + k, source: a.s, target: a.d, n: a.n, label, w: CONF_EDGE[conf].width + Math.min(5, Math.log2(a.n)), conf, agg: a }, classes: cls })
     }
     return els
   }
@@ -221,8 +228,8 @@
     { selector: 'node.target', style: { shape: 'star', width: 30, height: 30, 'border-width': 3, 'border-color': '#000', 'font-size': 14, 'font-weight': 'bold' } },
     { selector: 'node.gatedn', style: { 'border-width': 3, 'border-style': 'dashed', 'border-color': '#d64545', 'background-opacity': 0.55 } },
     { selector: 'node.module', style: { label: 'data(label)', 'text-valign': 'top', 'text-halign': 'center', 'font-size': 13, 'font-weight': 'bold', color: '#384156',
-      'background-color': '#eef1f6', 'background-opacity': 0.6, 'border-width': 1, 'border-color': '#b9c2d3', shape: 'round-rectangle', padding: 10 } },
-    { selector: 'node.module.fe', style: { 'background-color': '#eaf6ec', 'border-color': '#9fd0ad' } },
+      'background-color': '#eef1f6', 'background-opacity': 0.6, 'border-width': 1, 'border-color': '#7d889c', shape: 'round-rectangle', padding: 10 } },
+    { selector: 'node.module.fe', style: { 'background-color': '#eaf6ec', 'border-color': '#4f9a66' } },
     { selector: 'node.collapsed', style: { shape: 'round-rectangle', 'background-color': 'data(color)', 'background-opacity': 0.85, label: 'data(label)', 'text-wrap': 'wrap',
       'text-max-width': 190, 'font-size': 13, 'font-weight': 'bold', 'text-valign': 'bottom', 'text-margin-y': 4, width: 'data(size)', height: 'data(size)',
       'border-width': 2, 'border-color': '#384156', color: '#1d2330', 'text-background-color': '#fff', 'text-background-opacity': 0.8, 'text-background-padding': 2 } },
@@ -232,19 +239,22 @@
       'text-valign': 'bottom', 'text-margin-y': 4, color: '#1d2330', 'text-background-color': '#fff', 'text-background-opacity': 0.85, 'text-background-padding': 2 } },
     { selector: 'node.cluster.open', style: { 'border-style': 'dashed', 'background-opacity': 0.12 } },
     { selector: 'node.cluster.allgated', style: { 'border-color': '#d64545', 'border-style': 'dashed', 'border-width': 3 } },
-    { selector: 'edge', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, width: 'data(w)', 'line-color': '#8a93a6', 'target-arrow-color': '#8a93a6',
+    { selector: 'edge', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'arrow-scale': 0.8, width: 'data(w)', 'line-color': '#7d889c', 'target-arrow-color': '#7d889c',
       label: 'data(label)', 'font-size': 12, 'min-zoomed-font-size': MIN_PX, 'font-weight': 'bold', color: '#384156', 'text-background-color': '#fff',
       'text-background-opacity': 0.9, 'text-background-padding': 1 } },
     { selector: 'edge.lay', style: { 'curve-style': 'taxi', 'taxi-direction': 'rightward', 'taxi-turn': '60%', 'taxi-turn-min-distance': 12 } },
-    { selector: 'edge.c-exact', style: { 'line-style': 'solid', 'line-color': '#4a5368', 'target-arrow-color': '#4a5368' } },
-    { selector: 'edge.c-resolved', style: { 'line-style': 'dashed', 'line-dash-pattern': [7, 3] } },
-    { selector: 'edge.c-heuristic', style: { 'line-style': 'dotted', 'line-color': '#b3b9c6', 'target-arrow-color': '#b3b9c6' } },
-    { selector: 'edge.gated', style: { 'line-color': '#d64545', 'target-arrow-color': '#d64545', 'line-style': 'dashed', 'line-dash-pattern': [3, 3] } },
-    { selector: 'edge.partgated', style: { 'line-color': '#e8a33d', 'target-arrow-color': '#e8a33d' } },
+    { selector: 'edge.c-exact', style: { 'line-style': 'solid', 'line-color': CONF_EDGE.exact.color, 'target-arrow-color': CONF_EDGE.exact.color } },
+    { selector: 'edge.c-resolved', style: { 'line-style': 'dashed', 'line-dash-pattern': [7, 3], 'line-color': CONF_EDGE.resolved.color,
+      'target-arrow-color': CONF_EDGE.resolved.color } },
+    { selector: 'edge.c-heuristic', style: { 'line-style': 'dotted', 'line-dash-pattern': [1.5, 3], 'line-color': CONF_EDGE.heuristic.color,
+      'target-arrow-color': CONF_EDGE.heuristic.color } },
+    { selector: 'edge.gated', style: { 'line-color': GATED, 'target-arrow-color': GATED, 'line-style': 'dashed', 'line-dash-pattern': [3, 3] } },
+    { selector: 'edge.partgated', style: { 'line-color': PARTGATED, 'target-arrow-color': PARTGATED } },
+    { selector: 'edge.confhide', style: { display: 'none' } },
     // ---- plan overlay
     { selector: 'node.p-added', style: { 'background-color': '#2e9d57', 'border-width': 3, 'border-style': 'dashed', 'border-color': '#1b7a3d', shape: 'round-rectangle',
       width: 26, height: 18, color: '#145c2e', 'font-weight': 'bold' } },
-    { selector: 'node.p-modified', style: { 'border-width': 5, 'border-color': '#f59f00', 'border-style': 'solid', width: 22, height: 22, 'font-weight': 'bold', color: '#8a5300' } },
+    { selector: 'node.p-modified', style: { 'border-width': 5, 'border-color': '#c77c00', 'border-style': 'solid', width: 22, height: 22, 'font-weight': 'bold', color: '#8a5300' } },
     { selector: 'node.p-guard', style: { shape: 'hexagon', width: 28, height: 28 } },
     { selector: 'node.p-missing', style: { 'underlay-color': '#ff2e88', 'underlay-opacity': 0.32, 'underlay-padding': 9, 'underlay-shape': 'ellipse',
       'border-width': 3, 'border-color': '#d6006b', color: '#a3004f', 'font-weight': 'bold' } },
@@ -295,8 +305,17 @@
     l.one('layoutstop', () => { if (!keepView) initialFit(); lod(); document.body.dataset.ready = '1' })
     document.body.dataset.ready = '0'
     l.run()
-    status()
+    applyConf()
+    if (data.meta.mode !== 'plan') legend()
   }
+
+  // legend chips: hide / show the edges whose strongest evidence is resolved or heuristic, without a refetch
+  function applyConf () {
+    if (cy) cy.edges().forEach((e) => { e.toggleClass('confhide', hiddenConf.has(e.data('conf'))) })
+    status()
+    for (const b of document.querySelectorAll('#legend .chip')) b.setAttribute('aria-pressed', String(!hiddenConf.has(b.dataset.conf)))
+  }
+  function toggleConf (c) { if (hiddenConf.has(c)) hiddenConf.delete(c); else hiddenConf.add(c); applyConf() }
 
   function initialFit () {
     // fit everything when leaf labels stay legible; otherwise the target and the layer next to it at >= 11 px, and a
@@ -368,17 +387,24 @@
       return
     }
     $('status').innerHTML = `<b>${esc(m.mode)}</b> ${esc((m.specs || []).join(', '))}` + (m.sinks ? ` · sinks ${esc(m.sinks.join(','))}` : '') +
-      ` · ${nodes.length} nodes, ${data.edges.length} evidence edges, ` + (lay ? `${lay.units.filter((u) => !u.lane).length} items (${lay.units.filter((u) => u.type === 'cluster').length} clusters, ${open.size} open)`
+      ` · ${nodes.length} nodes, ${evidenceCount()}, ` + (lay ? `${lay.units.filter((u) => !u.lane).length} items (${lay.units.filter((u) => u.type === 'cluster').length} clusters, ${open.size} open)`
         : `${data.groups.length} modules (${collapsed.size} folded)`) +
       ` · entry points ${ent}` + (ent ? ' (' + Object.entries(byk).map(([k, v]) => `${ENTRY_LABEL[k] || k} ${v}`).join(', ') + ')' : '') +
       (m.gate ? ` · gate <b>${esc(m.gate)}</b>: ${g} gated` : '') + (m.truncated ? ' · <b>truncated</b>' : '') +
       (data.title ? ` · <i>${esc(data.title)}</i>` : '')
   }
 
+  function evidenceCount () {
+    const n = data.edges.length
+    if (!hiddenConf.size) return `${n} evidence edges`
+    const shown = data.edges.filter((e) => !hiddenConf.has(e.confidence)).length
+    return `${shown} of ${n} evidence edges shown (${[...hiddenConf].join(', ')} hidden)`
+  }
+
   function legend () {
     if (data.meta.mode === 'plan') {
       $('legend').innerHTML = '<span><span class="sw" style="background:#2e9d57;border:2px dashed #1b7a3d"></span>+ planned new</span>' +
-        '<span><span class="sw" style="border:3px solid #f59f00;background:#fff"></span>~ planned modification (hexagon = guard)</span>' +
+        '<span><span class="sw" style="border:3px solid #c77c00;background:#fff"></span>~ planned modification (hexagon = guard)</span>' +
         '<span><span class="sw" style="background:#ff2e88;opacity:.6;border-radius:6px"></span>! uncovered: missing from plan</span>' +
         '<span><span class="sw" style="border:2px dotted #b06ab3;background:#fff"></span>review</span>' +
         '<span><span class="sw" style="border:2px solid #2e9d57;background:#fff"></span>covered</span>' +
@@ -390,17 +416,53 @@
         '<span>grey edges = real indexed evidence (file:line)</span>'
       return
     }
-    const used = new Set(data.nodes.map((n) => n.kind))
-    let h = Object.entries(KIND_COLOR).filter(([k]) => used.has(k)).map(([k, c]) => `<span><span class="sw" style="background:${c}"></span>${k}</span>`).join('')
-    h += '<span>◆ entry point</span><span>★ target</span><span><span class="sw" style="border:2px dashed #d64545;background:#fff"></span>gated node</span>'
-    h += '<span><span class="ln" style="border-top:2px solid #4a5368"></span>exact</span><span><span class="ln" style="border-top:2px dashed #8a93a6"></span>resolved</span>' +
-      '<span><span class="ln" style="border-top:2px dotted #b3b9c6"></span>heuristic</span><span><span class="ln" style="border-top:2px dashed #d64545"></span>gated edge</span>' +
-      '<span>' + (lay ? 'boxes = caller clusters (click to open, again for 20 more, Esc folds); a node\'s second line is its module'
-        : 'boxes = modules (click folded box to open, double-click open box to fold)') + '; numbers on edges = folded evidence edges</span>'
+    // only the encodings present in this view, kinds with counts (#82 item 8); a kind chip dims everything else
+    const used = {}; for (const n of data.nodes) used[n.kind] = (used[n.kind] || 0) + 1
+    let h = Object.entries(used).sort((a, b) => b[1] - a[1]).map(([k, c]) =>
+      `<button type="button" class="chip kchip" data-kind="${esc(k)}" aria-pressed="${kindHl === k}" title="highlight ${esc(k)} nodes">` +
+      `<span class="sw" style="background:${KIND_COLOR[k] || '#888'}"></span>${esc(k)} ${c}</button>`).join('')
+    const has = (sel) => cy && cy.elements(sel).length > 0
+    if (data.nodes.some((n) => n.entry_kind)) h += '<span>◆ entry point</span>'
+    if (data.nodes.some((n) => n.is_target)) h += '<span>★ target</span>'
+    if (data.nodes.some(gated)) h += `<span><span class="sw" style="border:2px dashed ${GATED};background:#fff"></span>gated node</span>`
+    const cnt = {}; for (const e of data.edges) cnt[e.confidence] = (cnt[e.confidence] || 0) + 1
+    h += Object.entries(CONF_EDGE).filter(([c]) => cnt[c]).map(([c, v]) => {
+      const sample = `<span class="ln" style="border-top:${v.width + 0.5}px ${v.style} ${v.color}"></span>${c} ${cnt[c] || 0}`
+      return c === 'exact' ? `<span>${sample}</span>`
+        : `<button type="button" class="chip" data-conf="${c}" aria-pressed="${!hiddenConf.has(c)}" title="show / hide ${c} edges">${sample}</button>`
+    }).join('')
+    if (has('edge.gated')) h += `<span><span class="ln" style="border-top:2px dashed ${GATED}"></span>gated edge</span>`
+    if (has('edge.partgated')) h += `<span><span class="ln" style="border-top:2px solid ${PARTGATED}"></span>partly gated</span>`
+    const boxes = []
+    if (has('node.cluster')) boxes.push('rounded box = caller cluster with its count (click to open, again for 20 more, Esc folds); a node\'s second line is its module')
+    if (has('node.module')) boxes.push('framed box = module (double-click to fold)')
+    if (has('node.collapsed')) boxes.push('filled box = folded module (click to open)')
+    if (has('edge.multi')) boxes.push('numbers on edges = folded evidence edges')
+    if (boxes.length) h += '<span>' + boxes.join('; ') + '</span>'
     $('legend').innerHTML = h
+    for (const b of document.querySelectorAll('#legend .chip[data-conf]')) b.addEventListener('click', () => toggleConf(b.dataset.conf))
+    for (const b of document.querySelectorAll('#legend .kchip')) b.addEventListener('click', () => highlightKind(b.dataset.kind))
   }
 
-  function clearHl () { if (cy) cy.elements().removeClass('dim hl') }
+  // a kind chip: that kind's nodes (and the clusters / folded modules holding one) stay, the rest dims
+  let kindHl = null
+  function highlightKind (k) {
+    const again = kindHl === k
+    clearHl()
+    if (!again && cy) {
+      kindHl = k
+      const keep = cy.nodes().filter((n) => n.data('kind') === k || (n.data('kinds') && n.data('kinds')[k]))
+      cy.elements().not(keep).not(keep.ancestors()).addClass('dim')
+      keep.addClass('hl')
+    }
+    for (const b of document.querySelectorAll('#legend .kchip')) b.setAttribute('aria-pressed', String(b.dataset.kind === kindHl))
+  }
+
+  function clearHl () {
+    kindHl = null
+    for (const b of document.querySelectorAll('#legend .kchip')) b.setAttribute('aria-pressed', 'false')
+    if (cy) cy.elements().removeClass('dim hl')
+  }
   function highlightFrom (id) {
     clearHl()
     // evidence paths go from dependents towards targets/sinks: follow outgoing edges

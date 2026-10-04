@@ -30,8 +30,14 @@ stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/vi
   module, target, entry-point and hovered / selected labels stay readable). Hover a node for its full name, kind,
   file:line and confidence.
 - Colour = node kind; ◆ entry points with their kind (`[HTTP route]`, `[artisan]`, `[UI page]` …); ★ query targets;
-  dashed red border = gated for the indexed gate scenario. Edges: solid = exact, dashed = resolved, dotted = heuristic,
-  red dashed = gated.
+  dashed red border = gated for the indexed gate scenario. Edges encode confidence by pattern and width as well as
+  colour: solid 2 px = exact, dashed 1.5 px = resolved, dotted 1.5 px = heuristic (an edge folding several shows its
+  strongest), red dashed = gated, amber = partly gated. Every edge and border colour is at least 3:1 against the
+  canvas and a module box (WCAG 1.4.11; `tests/test_viz.py` checks the style table). The legend's `resolved` /
+  `heuristic` chips hide and show those edges without a refetch, and the status line counts the evidence edges shown.
+- The legend (bottom-left, collapsible) lists only what the view contains: the node kinds with counts, the shapes
+  and edge styles present, and what the boxes mean. Click a kind to dim everything else (again, or a click on the
+  canvas, to clear).
 - Click a node: docblock, file:line, source snippet (read from the indexed roots), entry kinds (and those still live
   under the gate), gate evidence, evidence edges in the view, and its first 25 in/out DB edges with attributes.
 - `codegraph.cli viz-export MODE SPEC… --db … -o file.html [--sinks table,column]`: the same view as one
