@@ -8,6 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- C / C++ heuristic mode (#92): a call binds to a `static` (usually `static inline`) function or static variable
+  defined in a header the calling file includes, directly or through other headers. Before, only the calling file's
+  own statics were candidates. libuv: `uv__queue_insert_tail` 0 → 35 incoming CALLS; CALLS 26,016 → 26,378.
+  Three Windows calls of `uv__stream_init` now bind to the `src/win/stream-inl.h` inline instead of the Unix
+  definition, and divergence missing_callee goes 35 → 32. No other edge is lost. Exact (clang) mode is unchanged.
+
 ## [0.10.0] - 2026-10-04
 
 Stored properties as `field` nodes with `READS_PROP` / `WRITES_PROP` edges in Swift, Kotlin, Python, TypeScript /

@@ -126,7 +126,9 @@ can be live.
 
 **Node keys:**
 - functions and methods use their qualified name (`ns::Class::method`, `rb_create`);
-- file-local items get the file prefix (`src/ringbuf.c#rb_lock` for `static`, anonymous namespaces);
+- file-local items get the file prefix (`src/ringbuf.c#rb_lock` for `static`, anonymous namespaces). In heuristic
+  mode a call binds to a `static` function in the calling file first, then to one in a header the file includes,
+  directly or through other headers (`static inline` helpers in `queue.h`);
 - overloads get the parameter types (`format(format_string<T...>)`);
 - same-named functions in different programs get the file prefix (`tools/a.c#main`).
 

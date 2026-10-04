@@ -191,6 +191,7 @@ class CFamilyPlugin(LanguagePlugin):
             else:
                 scip_info = {"status": "no compile_commands.json found; heuristic mode. Generate one with "
                                        "`cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON` or `bear -- make` (docs/native.md)"}
+        self._inc = self._resolve_includes(stats)
         if mode == "heuristic":
             self._heuristic_refs(stats)
             self._heuristic_dispatch(stats)
@@ -660,6 +661,11 @@ class CFamilyPlugin(LanguagePlugin):
             same = [c for c in cands if c.file == rel]
             if same:
                 return _alternatives(same) or same[:1]
+            # a static (inline) function defined in a header is compiled into every file that includes it (#92)
+            inc = self._included(rel) if any(c.static for c in cands) else ()
+            hdr = [c for c in cands if c.static and c.file in inc]
+            if hdr:
+                return _alternatives(hdr) or (hdr if len(hdr) == 1 else [])
             nonstatic = [c for c in cands if not c.static]
             if len(nonstatic) == 1:
                 return nonstatic
@@ -757,6 +763,25 @@ class CFamilyPlugin(LanguagePlugin):
 
     # ------------------------------------------------------------------ includes, env, gates
     def _includes(self, stats):
+        for rel, hits in self._inc.items():
+            for hit, line, conf in hits:
+                self.b.add_edge(f"file:{rel}", f"file:{hit}", "INCLUDES", rel, line, conf)
+
+    def _included(self, rel: str) -> set:
+        """Files `rel` includes, directly or through other project headers."""
+        memo = self.__dict__.setdefault("_inc_closure", {})
+        if rel not in memo:
+            seen, todo = set(), [rel]
+            while todo and len(seen) < 2000:
+                for hit, _l, _c in self._inc.get(todo.pop(), ()):
+                    if hit not in seen and hit != rel:
+                        seen.add(hit)
+                        todo.append(hit)
+            memo[rel] = seen
+        return memo[rel]
+
+    def _resolve_includes(self, stats) -> dict:
+        out = defaultdict(list)
         by_base = defaultdict(list)
         for rel in self.files:
             by_base[os.path.basename(rel)].append(rel)
@@ -785,8 +810,9 @@ class CFamilyPlugin(LanguagePlugin):
                     if not system:
                         stats["includes_unresolved"] += 1
                     continue
-                self.b.add_edge(f"file:{rel}", f"file:{hit}", "INCLUDES", rel, line, conf)
+                out[rel].append((hit, line, conf))
                 stats["includes_resolved"] += 1
+        return out
 
     def _facts(self, stats):
         b = self.b

@@ -141,3 +141,23 @@ def test_mcp_tools_on_native_graph():
         assert "env:BUS_VERBOSE" in down and "define:BUS_WITH_METRICS" in down
     finally:
         M.STATE["db"] = old
+
+
+def test_c_static_inline_in_header(tmp_path):
+    """#92: a header's static (inline) function is compiled into every file that includes it, directly or through
+    another header, so those files' calls bind to it. A file with its own static of that name binds to its own, and a
+    file that includes neither gets no edge."""
+    (tmp_path / "tb.h").write_text("static inline void toolbar_show(int *t) { (void)t; }\n")
+    (tmp_path / "wrap.h").write_text('#include "tb.h"\n')
+    (tmp_path / "main.c").write_text('#include "tb.h"\nvoid run(void) { int t; toolbar_show(&t); }\n')
+    (tmp_path / "deep.c").write_text('#include "wrap.h"\nvoid deep(void) { int t; toolbar_show(&t); }\n')
+    (tmp_path / "other.c").write_text("static void toolbar_show(int *t) { (void)t; }\n"
+                                      "void own(void) { int t; toolbar_show(&t); }\n")
+    (tmp_path / "lone.c").write_text("void lone(void) { int t; toolbar_show(&t); }\n")
+    db, _ = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    g = DB(db)
+    tgt = "function:tb.h#toolbar_show"
+    assert g.node(tgt)
+    assert g.has("CALLS", "function:run", tgt) and g.has("CALLS", "function:deep", tgt)
+    assert g.has("CALLS", "function:own", "function:other.c#toolbar_show") and not g.has("CALLS", "function:own", tgt)
+    assert not g.edges("CALLS", "function:lone")
