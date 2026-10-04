@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- `ws` `noServer` upgrade handlers also take a path from `case '/x':` in a `switch` on the pathname (a variable
+  from `new URL(..).pathname` / `url.parse(..).pathname`), and from a same-file object or `Map` of path keys indexed
+  by that pathname before `handleUpgrade` (#147).
 - Nest `@WebSocketGateway` on `@nestjs/platform-ws` (or `useWebSocketAdapter(new WsAdapter(..))`) is a `route:WS`
   (`path`, literal `ports`, `any_path` when there is no path, `handleConnection` or `handler_unresolved`), so a
   browser WebSocket client can match it. `@SubscribeMessage` nodes stay, and Socket.IO gateways get no `route:WS`; a

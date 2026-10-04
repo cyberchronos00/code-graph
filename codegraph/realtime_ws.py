@@ -113,19 +113,47 @@ class WS(BrokerScan):
         return self.fn_at(f, body + 1 if 0 <= body < m.end() + 400 else m.start())
 
     def upgrade(self, f, src, var, after):
-        """`noServer` servers: the function calling `wss.handleUpgrade(..)` and the path it checks first
-        (`pathname === '/x'`, `req.url.startsWith(path)`: a prefix, heuristic) -> (handler, path, conf)."""
+        """`noServer` servers: the function calling `handleUpgrade` and the path it checks
+        (`pathname` / a `new URL` or `url.parse` pathname, `===` or `case`, `startsWith` as a prefix,
+        or a same-file object / `Map` keyed by that path) -> (handler, path, conf)."""
         m = re.compile(rf"\b(?:this\.)?{re.escape(var)}\s*\.\s*handleUpgrade\s*\(").search(src, after)
-        if not m:
-            return None
-        fn, lo, _hi = self.s.fn_bounds(f, m.start())
-        seg = src[lo:m.start()]
+        if m:
+            return self._upgrade_call(f, src, m.start())
+        return self._upgrade_table(f, src, var)
+
+    def _url_path_vars(self, src, lo, hi):
+        """Locals in ``src[lo:hi]`` assigned from ``new URL(..).pathname`` or ``url.parse(..).pathname``."""
+        seg = src[lo:hi]
+        names = set()
+        rx = re.compile(
+            r"(?:const|let|var)\s+(\w+)\s*=\s*(?:new\s+URL|url\.parse)\s*\((?:[^()]|\([^()]*\))*\)\s*\.\s*pathname\b")
+        names.update(m.group(1) for m in rx.finditer(seg))
+        for m in re.finditer(r"(?:const|let|var)\s*\{\s*pathname\s*:\s*(\w+)\s*\}", seg):
+            names.add(m.group(1))
+        return names
+
+    def _upgrade_call(self, f, src, call):
+        """Path checked in the enclosing function before ``handleUpgrade`` at ``call``."""
+        fn, lo, _hi = self.s.fn_bounds(f, call)
+        seg = src[lo:call]
+        names = self._url_path_vars(src, lo, call) | {"pathname"}
+        alt = "(?:" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r"|\.url)"
         ex = r"([\w$.]+|'[^'\n]*'|\"[^\"\n]*\")"
-        hit = None
-        for c in re.finditer(rf"(?:pathname|\.url)\s*(?:\?\.\s*)?(?:===?\s*{ex}|\.?\s*startsWith\s*\(\s*{ex}\s*\))|{ex}\s*===?\s*[\w$.?]*(?:pathname|\.url)\b", seg):
-            hit = c
+        best = None  # (pos, kind, match) — last check wins; kind is 'cmp' or 'case'
+        for c in re.finditer(
+                rf"(?:{alt})\s*(?:\?\.\s*)?(?:===?\s*{ex}|\.?\s*startsWith\s*\(\s*{ex}\s*\))|{ex}\s*===?\s*[\w$.?]*(?:{alt})\b",
+                seg):
+            best = (c.start(), "cmp", c)
+        for c in re.finditer(r"""case\s+('(?:[^'\\\n]*)'|"(?:[^"\\\n]*)")\s*:""", seg):
+            if (best is None or c.start() > best[0]) and self._switch_on_path(seg, c.start(), names):
+                best = (c.start(), "case", c)
         path, conf = None, HEURISTIC
-        if hit:
+        if best and best[1] == "case":
+            v = _strlit(best[2].group(1))
+            if v and v.startswith("/") and not v.startswith("{"):
+                path, conf = v.rstrip("/") or "/", EXACT
+        elif best:
+            hit = best[2]
             e = hit.group(1) or hit.group(2) or hit.group(3)
             v, _c = self.value(f, lo + hit.start(), e)
             if v and v.startswith("/") and not v.startswith("{"):
@@ -136,6 +164,95 @@ class WS(BrokerScan):
                 if _strlit(e) is None:
                     conf = HEURISTIC if hit.group(2) else conf
         return fn, path, conf
+
+    @staticmethod
+    def _switch_on_path(seg, pos, names):
+        """The `case` at `pos` belongs to a `switch` on the pathname: a name in `names`, `<expr>.pathname` or `<expr>.url`."""
+        inner = None
+        for m in re.finditer(r"\bswitch\s*\(", seg[:pos]):
+            a = _args(seg, m.end() - 1)
+            body = seg.find("{", m.end() + len(a[0]) if a else m.end())
+            if body < 0 or body > pos:
+                continue
+            depth = 0
+            for k in range(body, pos):                   # still open at `pos`: this switch encloses the case
+                depth += {"{": 1, "}": -1}.get(seg[k], 0)
+            if depth > 0:
+                inner = re.sub(r"\s+", "", a[0]) if a else ""
+        return bool(inner) and (inner in names or inner.endswith((".pathname", ".url")))
+
+    def _path_tables(self, src):
+        """``(table, path key, server var)`` from same-file object and ``new Map([[path, server]])`` literals."""
+        from .sockets import split_args
+        out = []
+        for m in re.finditer(r"(?:const|let|var)\s+(\w+)\s*(?::[^=;\n]+)?=\s*", src):
+            tname, j = m.group(1), m.end()
+            if src.startswith("{", j):
+                for a in _args(src, j):          # the object literal's top-level entries
+                    km = re.match(r"""\s*(['"])(/[^'"\n]*)\1\s*:\s*(\w+)\s*$""", a.strip())
+                    if km:
+                        out.append((tname, km.group(2), km.group(3)))
+            else:
+                mm = re.match(r"new\s+Map\s*\(", src[j:])
+                if not mm:
+                    continue
+                args = _args(src, j + mm.end() - 1)
+                arr = (args[0] if args else "").strip()
+                if not (arr.startswith("[") and arr.endswith("]")):
+                    continue
+                for pair in split_args(arr[1:-1]):
+                    pair = pair.strip()
+                    if not (pair.startswith("[") and pair.endswith("]")):
+                        continue
+                    bits = split_args(pair[1:-1])
+                    if len(bits) < 2:
+                        continue
+                    key = _strlit(bits[0].strip())
+                    val = bits[1].strip()
+                    if key and key.startswith("/") and re.fullmatch(r"\w+", val):
+                        out.append((tname, key, val))
+        return out
+
+    def _index_is_pathname(self, f, src, pos, expr):
+        e = re.sub(r"\s+|!", "", expr or "")
+        if e == "pathname":
+            return True
+        _fn, lo, _hi = self.s.fn_bounds(f, pos)
+        return e in self._url_path_vars(src, lo, pos)
+
+    def _upgrade_table(self, f, src, var):
+        """Server stored under a path key, table indexed by the pathname, then ``.handleUpgrade``."""
+        rows = [(t, k) for t, k, v in self._path_tables(src) if v == var]
+        if not rows:
+            return None
+        for tname, key in rows:
+            rx = re.compile(
+                rf"\b{re.escape(tname)}\s*(?:\[\s*([^\]\n]+)\]|\.\s*get\s*\(\s*([^)\n]+)\s*\))")
+            for m in rx.finditer(src):
+                idx = m.group(1) if m.group(1) is not None else m.group(2)
+                if not self._index_is_pathname(f, src, m.start(), idx):
+                    continue
+                window = src[m.start():m.end() + 500]
+                direct = re.match(
+                    rf"\b{re.escape(tname)}\s*(?:\[\s*[^\]\n]+\]|\.\s*get\s*\([^)\n]*\))\s*\??\.\s*handleUpgrade\s*\(",
+                    window)
+                call = None
+                if direct:
+                    call = m.start() + window.find("handleUpgrade")
+                else:
+                    pre = src[max(0, m.start() - 80):m.start()]
+                    vm = re.search(r"(?:const|let|var)\s+(\w+)\s*=\s*$", pre)
+                    if vm:
+                        hm = re.compile(
+                            rf"\b{re.escape(vm.group(1))}\s*\??\.\s*handleUpgrade\s*\(").search(src, m.end(), m.end() + 500)
+                        if hm:
+                            call = hm.start()
+                if call is None:
+                    continue
+                fn, _path, _conf = self._upgrade_call(f, src, call)
+                path = key.rstrip("/") or "/"
+                return fn, path, EXACT
+        return None
 
     # ------------------------------------------------------------ websockets (Python)
     def py_file(self, f, src):

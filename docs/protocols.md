@@ -184,7 +184,10 @@ and calls, marked `stream: sse`; `cg protocols --protocol sse` lists them (and `
 
 - A `ws` server without a `path` option takes any path: it is `route:WS /` with `any_path` (and `ports` when the port
   is a literal) and is not matched by path. A `noServer` server takes the path its upgrade handler checks before
-  `handleUpgrade` (`pathname === '/x'`, or `req.url.startsWith(p)` as `p/{rest*}`, heuristic). Servers started by tests
+  `handleUpgrade` (`pathname === '/x'`, a variable assigned from `new URL(..).pathname` or `url.parse(..).pathname`,
+  `case '/x':` in a switch on that path, or `req.url.startsWith(p)` as `p/{rest*}`, heuristic). A server stored under
+  a path key in a same-file object or `Map` (`{ '/x': wss }`, `new Map([['/x', wss]])`) takes that key when the table
+  is indexed by the pathname immediately before `handleUpgrade`. Servers started by tests
   are not entry points. An inline connection callback without its own node leaves
   `handler_unresolved` rather than routing to the module.
 - Nest `@WebSocketGateway` is `route:WS <path>` (`framework: nest`, entry kind websocket) when the project depends on

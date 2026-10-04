@@ -22,7 +22,7 @@ FX = ROOT / "tests" / "ws_fixture"
 def dbs(tmp_path_factory):
     d = tmp_path_factory.mktemp("ws")
     out = {}
-    for r in ("live-server", "live-web", "py-live", "nest-ws", "nest-ws-web", "nest-ws-adapter"):
+    for r in ("live-server", "live-web", "py-live", "nest-ws", "nest-ws-web", "nest-ws-adapter", "ws-switch-other"):
         out[r + "-stats"] = index_project(FX / r, d / f"{r}.db", r)
         out[r] = d / f"{r}.db"
     out["link"] = d / "link.db"
@@ -59,6 +59,18 @@ def test_ws_servers(dbs):
     assert routes["route:GET /health"][0] == "http_route"
     # noServer + handleUpgrade behind `req.url.startsWith(path)`: a prefix (heuristic), the upgrade function handles it
     assert rt[("route:WS /collab/{rest*}", "function:src/collab.ts#attachCollab")] == "heuristic"
+    # noServer: switch on a URL pathname variable, object lookup, Map lookup
+    for path, fn in (("/gamma", "onSwitch"), ("/delta", "onTable"), ("/eps", "onTable"), ("/map", "onMap")):
+        assert "any_path" not in routes[f"route:WS {path}"][1]
+        assert rt[(f"route:WS {path}", f"function:src/upgrade-forms.ts#attachForms.{fn}")] == "exact"
+
+
+def test_switch_on_other_value(dbs):
+    # a `case '/x':` in a switch on another value (a header) is not a path check: the server keeps taking any path
+    db = dbs["ws-switch-other"]
+    routes = _nodes(db, "route")
+    assert "route:WS /legacy" not in routes and routes["route:WS /"][1]["any_path"]
+    assert ("route:WS /", "function:src/modes.ts#attachModes.onMode") in _edges(db, "ROUTES_TO")
 
 
 def test_sse_routes(dbs):
