@@ -96,6 +96,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Swift: `tree-sitter-swift` is pinned below 0.7.4. 0.7.4 came out on 2026-10-04 and parses two recovered shapes
+  differently: `!Type.method(..)` call sites lose their binding, and members after an unknown attribute macro are
+  not recovered into their type. A fresh install would have picked it up (#133).
 - C/C++ heuristic parse (#131): a file-level macro statement such as `ABSL_FLAG(uint16_t, port, 50051, "..");` no
   longer swallows the class after it. Statements like this are blanked before parsing when the file has syntax
   errors, and the parse that loses fewer lines is kept. Clang thread-safety annotations (`ABSL_EXCLUSIVE_LOCKS_REQUIRED(mu_)`,
