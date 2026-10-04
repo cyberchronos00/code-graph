@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- React Native native events through a Kotlin / Java helper (#95): `reactContext.emitDeviceEvent("evt", ..)` is a
+  send, and a function that passes its own parameter on as the event name (`fun sendJSEvent(eventName: String, ..)`)
+  makes each call of it (`RNUtilsModuleImpl.sendJSEvent(Events.SPLIT_VIEW_CHANGED.event, map)`, in any Kotlin / Java
+  file) a send from the caller. mattermost-mobile: +3 Android senders (SplitViewChanged, DimensionsChanged,
+  mmHardwareKeyboardEvent), all 3 correct in the source.
+- Flutter channel calls with a dynamic name (#95): `channel.invokeMethod(method)` where `method` is not a
+  string cg can evaluate, or a `MethodChannel(name)` / `EventChannel(name)` built from a parameter, are listed
+  as `unresolved` in `cg bridges` (they were only counted before).
 - Bridge event names from string enums (#95): a native event sent as `Event.keyPressed.rawValue` (Swift
   `enum Event: String`, the case name or its `= "raw"` value) or `Events.SAVED.event` (Kotlin
   `enum class Events(val event: String)`) has a name now. mattermost-mobile: the 3 hardware-keyboard

@@ -107,6 +107,16 @@ def _channel_name(ev, creation, ctx) -> tuple[str | None, str]:
     return t.text, (EXACT if t.conf == EXACT else RESOLVED)
 
 
+_CH = {"method": "MethodChannel", "event": "EventChannel"}
+
+
+def _dynamic(builder, fn, f, kind, what) -> None:
+    """A channel call whose channel or method name does not evaluate to a string -> the bridges `unresolved` list
+    (`cg bridges --unmatched`), like a dynamic React Native / Capacitor / Cordova name."""
+    builder.__dict__.setdefault("bridge_dynamic", []).append(
+        {"file": fn.file, "line": f.get("l"), "protocol": "flutter" if kind == "method" else "flutter-event", "what": what})
+
+
 def emit(prog: DartProgram, ev, builder) -> dict:
     from ...bridges import protocol_send
     n = {"flutter": 0, "flutter-event": 0, "unresolved_channel": 0}
@@ -128,12 +138,14 @@ def emit(prog: DartProgram, ev, builder) -> dict:
             name, conf = _channel_name(ev, creation, cctx)
             if not name:
                 n["unresolved_channel"] += 1
+                _dynamic(builder, fn, f, kind, f"{_CH[kind]}(<dynamic>).{f['n']}")
                 continue
             if kind == "method" and f["n"] in INVOKE:
                 a = f.get("a") or []
                 m = ev.eval(a[0], ctx) if a else None
                 if m is None or m.unknown or not m.text or "{" in m.text:
                     n["unresolved_channel"] += 1
+                    _dynamic(builder, fn, f, kind, f"{name}.{f['n']}(<dynamic>)")
                     continue
                 protocol_send(builder, "flutter", name, m.text, fn.id, fn.file, f.get("l"),
                               conf if m.conf == EXACT else RESOLVED, via=f["n"])

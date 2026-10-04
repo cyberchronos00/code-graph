@@ -263,7 +263,7 @@ class NativeFile:
 TRIGGER = re.compile(r"CapacitorPlugin|CAPPlugin|CAP_PLUGIN|ReactMethod|RCT_(?:EXPORT|EXTERN|REMAP)|ReactContextBaseJavaModule|"
                      r"BaseJavaModule|Native\w+Spec\b|ModuleDefinition|MethodChannel|EventChannel|MethodCallHandler|"
                      r"StreamHandler|isEqualToString:\s*call\.method|call\.method|@objc\s*\(|"
-                     r"RCTEventEmitter|RCTDeviceEventEmitter|DeviceEventManagerModule|sendEventWithName|sendEvent\s*\(|"
+                     r"RCTEventEmitter|RCTDeviceEventEmitter|DeviceEventManagerModule|sendEventWithName|sendEvent\s*\(|emitDeviceEvent|"
                      r"notifyListeners|CordovaPlugin|CDVPlugin|CDVInvokedUrlCommand")
 
 
@@ -642,6 +642,8 @@ def flutter_native_sends(builder, by_file, nfs: list) -> int:
 # ------------------------------------------------------------------ native -> JS events (#61)
 RN_EMIT = re.compile(r"\.\s*emit\s*\(\s*")
 RN_SEND_EVENT = re.compile(r"\bsendEvent\s*\(\s*(?:withName:\s*)?")
+RN_EMIT_DEVICE = re.compile(r"\.\s*emitDeviceEvent\s*\(\s*")
+JVM_FUN = re.compile(r"\bfun\s+(?:<[^>]*>\s*)?(\w+)\s*\(|\b(\w+)\s*\([^()]*\)\s*(?:throws\s+[\w.,\s]+)?\{")
 OBJC_SEND_EVENT = re.compile(r"\[\s*(?:self|_?\w+)\s+sendEventWithName:\s*")
 CAP_NOTIFY = re.compile(r"\bnotifyListeners\s*\(\s*")
 OBJC_CAP_NOTIFY = re.compile(r"\[\s*(?:self|_?\w+)\s+notifyListeners:\s*")
@@ -669,7 +671,7 @@ def _first_value(nf: NativeFile, text: str, after: int, args: bool) -> tuple[str
     return _str_value(nf, m.group(1), _GLOBAL_CONSTS), m.group(1)
 
 
-def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list) -> dict:
+def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list, jvm_other: list = ()) -> dict:
     """Native code emitting an event to JS -> SENDS_TO endpoint (direction to_app) from the enclosing method:
     React Native `RCTDeviceEventEmitter.emit("evt", ...)`, `sendEvent(ctx, "evt", ...)`, ObjC `sendEventWithName:`,
     Swift `sendEvent(withName:)`, Expo `sendEvent("evt", ...)`; Capacitor `notifyListeners("evt", data)` in a plugin
@@ -679,9 +681,11 @@ def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list) -
         if r.protocol == "capacitor":
             cap_ns[r.file.rel].add(r.namespace)
     n = defaultdict(int)
+    helpers: dict = {}                   # Kotlin / Java helper forwarding its parameter as the event name: name -> (arg, via)
+    found_by: dict = {}
     for nf in nfs:
         t = nf.t
-        found = []                       # (protocol, namespace, method, pos, via)
+        found = found_by.setdefault(nf.rel, [])      # (protocol, namespace, method, pos, via)
         if "notifyListeners" in t.code:
             ns = cap_ns.get(nf.rel)
             rx = OBJC_CAP_NOTIFY if nf.lang == "objc" else CAP_NOTIFY
@@ -705,6 +709,8 @@ def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list) -
                          if hint or "withName" in m.group(0) or re.match(r"name\s*:", t.code[m.end():])]
                 if re.search(r"RCTDeviceEventEmitter|RCTNativeAppEventEmitter", t.code):
                     sites += [(m, True, "RCTDeviceEventEmitter.emit") for m in RN_EMIT.finditer(t.code)]
+                if nf.lang in ("kotlin", "java"):
+                    sites += [(m, True, "emitDeviceEvent") for m in RN_EMIT_DEVICE.finditer(t.code)]
             for m, is_args, via in sites:
                 # `fun sendEvent(name: String, ...)` / `private void sendEvent(...)`: the helper's own declaration
                 if re.search(r"\b(?:fun|void|func)\s+$", t.code[max(0, m.start() - 12):m.start() + 1]) or \
@@ -712,12 +718,55 @@ def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list) -
                     continue
                 v, raw = _first_value(nf, t.code, m.end(), is_args)
                 if v is None:
+                    h = _jvm_helper(nf, m.start(), raw) if nf.lang in ("kotlin", "java") else None
+                    if h:                                           # `fun sendJSEvent(eventName: String, ..)`
+                        helpers.setdefault(h[0], (h[1], via))
+                        continue
                     if raw and not re.match(r"^[a-z]\w*$", raw):     # a parameter (`eventName`) is the helper itself
                         dynamic.append({"file": nf.rel, "line": t.line(m.start()), "protocol": "react-native-event",
                                         "what": f"{via}({raw[:40]})"})
                     continue
                 found.append(("react-native-event", v, None, m.start(), via))
-        for proto, ns, meth, pos, via in found:
+    extra = []
+    if helpers and jvm_other:            # Kotlin / Java files without bridge code calling a helper
+        hx = re.compile(r"(?<![\w$])(?:" + "|".join(map(re.escape, sorted(helpers))) + r")\s*\(")
+        for rel, path in jvm_other:
+            try:
+                src = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if hx.search(src):
+                extra.append(NativeFile(rel, src))
+    for nf in list(nfs) + extra:         # calls of the helpers: `RNUtilsModuleImpl.sendJSEvent(Events.X.event, map)`
+        if not helpers or nf.lang not in ("kotlin", "java"):
+            continue
+        t = nf.t
+        for name, (idx, via) in helpers.items():
+            if name not in t.code:
+                continue
+            for m in re.finditer(r"(?<![\w$])" + re.escape(name) + r"\s*\(", t.code):
+                pre = t.code[t.code.rfind("\n", 0, m.start()) + 1:m.start()]
+                if re.search(r"\bfun\s+(?:<[^>]*>\s*)?(?:[\w.]+\.)?$", pre) or (
+                        re.match(r"^\s*(?:@\w+\s+)*(?:(?:public|private|protected|static|final|synchronized)\s+)*[\w.<>\[\]]+\s+$", pre)
+                        and not re.search(r"\b(?:return|else|throw|new)\s+$", pre)):
+                    continue                 # the declaration (`fun sendJSEvent(` / `void sendJSEvent(`)
+                a = t.args(m.end() - 1)
+                if len(a) <= idx:
+                    continue
+                raw = a[idx][1].strip()
+                v = _str_value(nf, raw, _GLOBAL_CONSTS)
+                if v is None:
+                    if raw and not re.match(r"^[a-z]\w*$", raw) and not any(
+                            d["file"] == nf.rel and d["line"] == t.line(m.start()) for d in dynamic):
+                        dynamic.append({"file": nf.rel, "line": t.line(m.start()), "protocol": "react-native-event",
+                                        "what": f"{name}({raw[:40]})"})
+                    continue
+                if any(f[3] == m.start() for f in found_by.get(nf.rel, ())):
+                    continue                 # already a send site (`sendEvent(..)` itself)
+                found_by.setdefault(nf.rel, []).append(("react-native-event", v, None, m.start(), f"{name} -> {via}"))
+    for nf in list(nfs) + extra:
+        t = nf.t
+        for proto, ns, meth, pos, via in found_by.get(nf.rel, ()):
             line = t.line(pos)
             fn = None
             if nf.lang == "objc":            # inside RCT_EXPORT_METHOD(start:(NSString *)url) { ... }
@@ -733,6 +782,31 @@ def event_native_sends(builder, by_file, nfs: list, recs: list, dynamic: list) -
                           direction="to_app")
             n[proto] += 1
     return dict(n)
+
+
+def _jvm_helper(nf: NativeFile, pos: int, raw: str):
+    """The Kotlin / Java function enclosing `pos` when `raw` is one of its parameters: (name, parameter index)."""
+    if not re.match(r"^[a-z]\w*$", raw or ""):
+        return None
+    t = nf.t
+    best = None
+    for m in JVM_FUN.finditer(t.code, 0, pos):
+        name = m.group(1) or m.group(2)
+        if name in ("if", "for", "while", "when", "switch", "catch", "synchronized", "return"):
+            continue
+        op = t.code.find("(", m.start())
+        cl = t.match(op, "(", ")")
+        ob = t.code.find("{", cl) if cl > 0 else -1
+        if ob < 0 or not (ob < pos <= t.match(ob)):
+            continue
+        best = (name, t.src[op + 1:cl])
+    if not best:
+        return None
+    for i, prm in enumerate(x for x in best[1].split(",")):
+        if re.match(r"^\s*(?:@\w+\s+)*(?:final\s+)?" + re.escape(raw) + r"\s*:", prm) or \
+                re.search(r"\bString\s+" + re.escape(raw) + r"\s*$", prm):
+            return best[0], i
+    return None
 
 
 # ------------------------------------------------------------------ Cordova: native side (#61)
@@ -1044,6 +1118,7 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
     pigeon_rx = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(apis))) + r")") if apis else None
     nfs: list[NativeFile] = []
     other_consts: dict[str, str] = {}
+    jvm_other: list = []
     _GLOBAL_CONSTS.clear()
     for rel in files:
         if clf is not None and clf.excludes(rel):
@@ -1057,6 +1132,8 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
         for k, v in _enum_consts(rel, src).items():
             other_consts.setdefault(k, v)
         if not (TRIGGER.search(src) or (pigeon_rx and pigeon_rx.search(src))):
+            if rel.endswith((".kt", ".java")):
+                jvm_other.append((rel, root / rel))   # may call an event helper of a scanned file
             # not scanned, but its class constants name modules elsewhere (`getName() = FooImpl.NAME`): qualified only
             if "String" in src and (cm := CLASS_RE.search(src)):
                 for m in CONST_RE.finditer(src):
@@ -1153,7 +1230,7 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
     pigeon_sends = pigeon_native_sends(builder, by_file, nfs, apis) if apis else 0
     flutter_sends = flutter_native_sends(builder, by_file, nfs)
     dynamic = list(getattr(builder, "bridge_dynamic", None) or [])
-    event_sends = event_native_sends(builder, by_file, nfs, recs, dynamic)
+    event_sends = event_native_sends(builder, by_file, nfs, recs, dynamic, jvm_other)
     n_recv, n_stub, marked = 0, 0, set()
     stats = defaultdict(lambda: defaultdict(int))
     seen = set()

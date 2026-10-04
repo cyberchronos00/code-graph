@@ -411,3 +411,60 @@ def test_event_names_from_string_enums():
     assert _str_value(nf, "name: Event.keyReleased.rawValue", c) == "released"
     assert _str_value(nf, "Events.SPLIT.event", c) == "SplitViewChanged"
     assert _enum_consts("ios/E.swift", "enum Mode: Int { case a, b }\n") == {}
+
+
+@needs_dart
+def test_flutter_dynamic_method_names_are_listed(tmp_path):
+    # #95: `invokeMethod(name)` with a name cg cannot evaluate, or a channel built from a parameter -> `unresolved`
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "pubspec.yaml").write_text("name: dyn_app\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n")
+    (tmp_path / "lib" / "dyn.dart").write_text(
+        "import 'package:flutter/services.dart';\n\n"
+        "class Native {\n"
+        "  static const _ch = MethodChannel('acme/native');\n"
+        "  Future<void> ping() => _ch.invokeMethod('ping');\n"
+        "  Future<T?> call<T>(String method) => _ch.invokeMethod<T>(method);\n"
+        "  Future<void> other(String name) => MethodChannel(name).invokeMethod('x');\n"
+        "}\n")
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "dyn_app")
+    out = B.bridges(GraphStore(str(db)))
+    assert "flutter:acme/native#ping" in {e["id"].split(":", 1)[1] for e in out["endpoints"]}
+    got = sorted((d["protocol"], d["what"], d["line"]) for d in out["unresolved"])
+    assert got == [("flutter", "MethodChannel(<dynamic>).invokeMethod", 7),
+                   ("flutter", "acme/native.invokeMethod(<dynamic>)", 6)]
+
+
+@needs_ts
+def test_kotlin_event_helper_forwarding_its_parameter(tmp_path):
+    # #95: `fun sendJSEvent(eventName: String, ..) { context?.emitDeviceEvent(eventName, data) }` called as
+    # `RNUtilsModuleImpl.sendJSEvent(Events.SPLIT.event, map)` -> a send of SplitViewChanged from the caller
+    and_ = tmp_path / "android" / "src" / "main" / "java" / "com" / "x"
+    and_.mkdir(parents=True)
+    (tmp_path / "package.json").write_text('{"name": "helper-app", "dependencies": {"react-native": "0.76.0"}}\n')
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions": {"strict": true}, "include": ["src"]}\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "split.ts").write_text(
+        "import {DeviceEventEmitter} from 'react-native';\n"
+        "export function watchSplit(cb: (v: unknown) => void) {\n"
+        "  return DeviceEventEmitter.addListener('SplitViewChanged', cb);\n}\n")
+    (and_ / "Events.kt").write_text('package com.x\n\nenum class Events(val event: String) {\n    SPLIT("SplitViewChanged")\n}\n')
+    (and_ / "RNUtilsModuleImpl.kt").write_text(
+        "package com.x\n\nimport com.facebook.react.bridge.ReactApplicationContext\n\n"
+        "class RNUtilsModuleImpl(reactContext: ReactApplicationContext) {\n"
+        "    companion object {\n"
+        "        private var context: ReactApplicationContext? = null\n"
+        "        fun sendJSEvent(eventName: String, data: Any?) {\n"
+        "            context?.emitDeviceEvent(eventName, data)\n"
+        "        }\n    }\n}\n")
+    (and_ / "SplitView.kt").write_text(
+        "package com.x\n\nobject SplitView {\n"
+        "    fun changed(map: Any?) {\n"
+        "        RNUtilsModuleImpl.sendJSEvent(Events.SPLIT.event, map)\n"
+        "    }\n}\n")
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "helper-app")
+    st = GraphStore(str(db))
+    ep = endpoints(st)["react-native-event:SplitViewChanged"]
+    assert senders(ep) == {"method:com.x.SplitView.changed"} and ep["receivers"] and not ep["checks"]
+    assert not B.bridges(st)["unresolved"]
