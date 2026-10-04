@@ -99,6 +99,7 @@ registration) or a caller chain that runs through it (an entry point is missing 
 | `python_decorator_routes` | route | a function with a route decorator (`@app.route`, `@router.get`) that no plugin turned into a route | [Python / Django](limitations.md) (frameworks without a plugin) |
 | `python_decorator_registration` | handler | a function registered through a decorator (`@registry.register`, `@app.task`) with no entry point and no caller besides the decorator's own reference (click / typer / MCP registrations are entry points) | [Python / Django](limitations.md) (registries) |
 | `python_registry_assignment` | handler | `registry[key] = fn` where `fn` has no caller in the graph (a call through the registry, `registry[key](...)`, counts) | [Python / Django](limitations.md) (registries) |
+| `nuxt_unevaluable_import_dirs` | handler | a `nuxt.config` `imports.dirs` entry that is not a literal path or glob, when `.nuxt/` is absent | [TS/Vue/Nuxt](limitations.md) |
 
 Detectors look at what the graph already models: a decorated Python function that a plugin made an entry point (a
 django-ninja operation, a Celery task the Django plugin knows) or that has callers is not reported. Each detector has a

@@ -186,7 +186,8 @@ similarity of their callee sets.
   `nuxi prepare`), so `paths` aliases (`~`, `@`, `#imports`) and Nuxt auto-imports (`.nuxt/types/imports.d.ts`: composables,
   utils, stores, Vue/Nuxt APIs) resolve through the real type checker. Global components come from `.nuxt/types/components.d.ts`.
   Without `.nuxt` (a clean checkout) it writes stand-ins to a temp directory: a `tsconfig.app.json` with the Nuxt aliases,
-  `types/imports.d.ts` declaring the exports of `composables/`, `utils/` and `stores/` (plus Vue / Nuxt / Pinia built-ins
+  auto-imports from `composables/` `utils/` `stores/` plus `imports.dirs` / `imports.imports` in `nuxt.config` (and local layers),
+  `types/imports.d.ts` declaring those exports (plus Vue / Nuxt / Pinia built-ins
   when `node_modules` has them) and `types/components.d.ts` with Nuxt's path-prefixed component names, and warns that
   `npx nuxi prepare` gives the full picture. The source directory is `srcDir`, else `app/` or `src/` when they hold Nuxt
   directories, else the root.

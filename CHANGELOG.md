@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Nuxt auto-imports from `imports.dirs` / `imports.imports` without a `.nuxt/` directory (#116): on a clean
+  checkout the stand-in reads `nuxt.config` (and each layer's) and scans the configured directories the way
+  unimport does — a path with an extension is one file, `dir` becomes `dir/*.{ts,js,…}`, a trailing slash or
+  `**` the whole tree, with brace expansion — following barrel re-exports and `export default` naming. Named
+  `imports.imports` entries bind under their `as` alias from the given module. `scan: false` keeps only the
+  named imports, `.nuxt/` (when present) still wins, and a directory that cannot be evaluated statically is
+  recorded as a `nuxt_unevaluable_import_dirs` blind spot rather than dropped silently.
 - Laravel resource routes follow `ResourceRegistrar` (#118): `Route::resource` / `apiResource` and the plural
   `resources` / `apiResources` expand dotted names (`playlists.songs` → `/playlists/{playlist}/songs` and
   `.../songs/{song}`), use the singular resource parameter (`Str::singular`, then `-` → `_`, so `playlist-folders`
