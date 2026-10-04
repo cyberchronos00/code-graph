@@ -11,7 +11,15 @@ newer request with other inputs), and the block must not be wrapped in a single-
 `dedupe`, `debounce`, `throttle`, `once`). A result that lands after the user moved on overwrites newer state.
 
 Findings are heuristic, read from the indexed source text with file:line evidence; they add no edges and change no
-counts. The other phase-3 rules (incomplete cache key, two writers, echo suppression) are not implemented yet."""
+counts.
+
+Rule `two-writers`: the same state is written with a real value both by lifecycle code (an initializer / `init`
+block, `onAppear`, `.task` before its first await, `useEffect`, `onMounted`, `LaunchedEffect`, `viewDidLoad`) and
+by async code after an await or by a completion / subscription callback (`.sink`, `.then`, `.collect`,
+`completion: {`). Defaults and flag resets (`= []`, `setLoading(true)`, `setError(null)`) and in-place mutations are
+not competing values and are skipped.
+
+Not implemented yet: incomplete cache key, echo suppression."""
 from __future__ import annotations
 
 import json
@@ -169,10 +177,88 @@ def stale_async(st: GraphStore, include_tests: bool = False, limit: int = 500) -
     return out
 
 
+LIFECYCLE_RE = re.compile(r"\.onAppear\b|\bonAppear\s*\(|\.task\s*[({]|\bonMounted\s*\(|\bmounted\s*\(|\bLaunchedEffect\s*\(|"
+                          r"\buse(?:Layout)?Effect\s*\(|\bviewDidLoad\b|\bviewWillAppear\b|\bonCreate\b|\bonStart\b|\binitState\b")
+CALLBACK_RE = re.compile(r"\.sink\s*\{|\.onReceive\s*\(|\.subscribe\s*[({]|\.collect(?:Latest)?\s*\{|\.observe\w*\s*\(|"
+                         r"\bcompletion(?:Handler)?\s*:\s*\{|\{\s*\[?\s*(?:weak|unowned)\s+self\s*\]?|\.then\s*\(|\.on\s*\(\s*['\"]")
+LITERAL_RHS_RE = re.compile(r"(?<![=!<>])=\s*(?:\[\s*\]|\[:\]|\{\s*\}|nil|null|None|undefined|0(?:\.0+)?[fFdDL]?|false|False|true|True|"
+                            r"''|\"\"|emptyList\(\)|emptyMap\(\)|mutableListOf\(\)|\.init\(\)|\w+\(\)|\.\w+)\s*;?\s*$")
+LITERAL_ARG_RE = re.compile(r"\(\s*(?:nil|null|None|undefined|true|false|True|False|-?\d+(?:\.\d+)?|'[^']*'|\"[^\"]*\"|\[\s*\]|\{\s*\})\s*\)\s*;?\s*$")
+INIT_NAMES = {"init", "__init__", "constructor", "<init>", "viewDidLoad", "onCreate", "initState", "mounted", "created", "setup"}
+
+
+def _lifecycle(st, ls, r, node) -> str | None:
+    """Is this write lifecycle code: an initializer with a real (non-default) value, or code directly inside
+    onAppear / .task (before any await) / onMounted / LaunchedEffect / useEffect / viewDidLoad?"""
+    t = ls[r["line"] - 1]
+    if AWAIT_RE.search(t):
+        return None
+    nm = ((node["name"] if node is not None else "") or "").split(".")[-1]
+    if nm in INIT_NAMES or (node is not None and node["kind"] == "class"):
+        return f"initializer ({nm or 'class'})"
+    lo = max(1, r["line"] - 6)
+    for i in range(r["line"], lo - 1, -1):
+        x = ls[i - 1]
+        if i < r["line"] and AWAIT_RE.search(x):
+            return None
+        m = LIFECYCLE_RE.search(x)
+        if m:
+            return m.group(0).strip(" .({")
+    return None
+
+
+def _async_callback(ls, r, lo) -> str | None:
+    """Is this write inside async code after an await, or inside a completion / subscription callback?"""
+    op = _opener(ls, r["line"], lo)
+    if op is not None:
+        body = ls[op[1] - 1:r["line"] - 1]
+        if any(AWAIT_RE.search(x) for x in body[1:]) or AWAIT_RE.search(body[0][body[0].find("{") + 1:] if body else ""):
+            return f"after await in {op[0]}"
+    for i in range(r["line"] - 1, max(lo, r["line"] - 8) - 1, -1):
+        m = CALLBACK_RE.search(ls[i - 1]) if i >= 1 else None
+        if m:
+            return f"callback {m.group(0).strip()[:24]}"
+    return None
+
+
+def two_writers(st: GraphStore, include_tests: bool = False) -> list[dict]:
+    root = st.meta().get("root")
+    cache: dict = {}
+    rows = st.q("""SELECT e.src, e.dst, e.file, e.line, e.attrs, n.line AS fl FROM edges e JOIN nodes n ON n.id = e.src
+                   WHERE e.kind = 'WRITES_PROP' ORDER BY e.dst, e.file, e.line""")
+    by: dict = {}
+    for r in rows:
+        if not r["file"] or not root or (not include_tests and TEST_PATH_RE.search(f"{r['file']}:")):
+            continue
+        ls = _lines(root, r["file"], cache)
+        if not ls or r["line"] > len(ls):
+            continue
+        # a default / flag reset (`= []`, `setLoading(true)`, `setError(null)`) or an in-place mutation is not a
+        # competing value: only real values written from both sides can make the UI jump
+        t = ls[r["line"] - 1]
+        if LITERAL_RHS_RE.search(t) or LITERAL_ARG_RE.search(t) or json.loads(r["attrs"] or "{}").get("via") in ("mutating", "item"):
+            continue
+        node = st.node(r["src"])
+        d = by.setdefault(r["dst"], {"life": [], "async": []})
+        lc = _lifecycle(st, ls, r, node)
+        if lc:
+            d["life"].append({"at": f"{r['file']}:{r['line']}", "how": lc, "code": ls[r["line"] - 1].strip()[:110]})
+            continue
+        ac = _async_callback(ls, r, r["fl"] or 1)
+        if ac:
+            d["async"].append({"at": f"{r['file']}:{r['line']}", "how": ac, "code": ls[r["line"] - 1].strip()[:110]})
+    out = []
+    for fid, d in by.items():
+        if d["life"] and d["async"]:
+            out.append({"rule": "two-writers", "confidence": "heuristic", "state": fid,
+                        "lifecycle_writes": d["life"][:5], "async_writes": d["async"][:5]})
+    return out
+
+
 def lint(st: GraphStore, include_tests: bool = False) -> dict:
-    f = stale_async(st, include_tests)
-    return {"lint": "async-state", "confidence": "heuristic", "rules": ["stale-async-result"],
-            "not_implemented": ["incomplete-cache-key", "two-writers", "echo-suppression"], "findings": f}
+    f = stale_async(st, include_tests) + two_writers(st, include_tests)
+    return {"lint": "async-state", "confidence": "heuristic", "rules": ["stale-async-result", "two-writers"],
+            "not_implemented": ["incomplete-cache-key", "echo-suppression"], "findings": f}
 
 
 def render(res: dict) -> str:
@@ -180,6 +266,13 @@ def render(res: dict) -> str:
     out = [f"lint async-state — heuristic; rules: {', '.join(res['rules'])} "
            f"(not yet: {', '.join(res['not_implemented'])}); {len(fs)} findings"]
     for f in fs:
+        if f["rule"] == "two-writers":
+            out.append(f"  [two-writers] {f['state']}: written by lifecycle code and by an async callback")
+            for w in f["lifecycle_writes"]:
+                out.append(f"      lifecycle {w['how']} @{w['at']}: {w['code']}")
+            for w in f["async_writes"]:
+                out.append(f"      async {w['how']} @{w['at']}: {w['code']}")
+            continue
         out.append(f"  [stale-async-result{' ui' if f['ui_state'] else ''}] {f['writer']} writes {f['state']} @{f['write_at']} "
                    f"after await @{f['await_at']} in {f['async']} @{f['async_at']}; no cancellation / token check")
         out.append(f"      await: {f['await_code']}")

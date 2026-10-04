@@ -29,7 +29,14 @@ def db(lang):
 
 
 def found(lang):
-    return [(f["write_at"], f["async"], f["confidence"]) for f in LA.lint(GraphStore(db(lang)))["findings"]]
+    """stale-async-result findings in the Search files (Detail files carry the two-writers cases)."""
+    return [(f["write_at"], f["async"], f["confidence"]) for f in LA.lint(GraphStore(db(lang)))["findings"]
+            if f["rule"] == "stale-async-result" and "Detail" not in f["write_at"] and "detail" not in f["write_at"]]
+
+
+def two(lang):
+    return [(f["state"], [w["at"] for w in f["lifecycle_writes"]], [w["at"] for w in f["async_writes"]], f["confidence"])
+            for f in LA.lint(GraphStore(db(lang)))["findings"] if f["rule"] == "two-writers"]
 
 
 def test_swift():
@@ -53,7 +60,23 @@ def test_python_and_cli_json():
                          capture_output=True, text=True, check=True, cwd=ROOT).stdout
     j = json.loads(out)
     assert j["confidence"] == "heuristic" and j["findings"][0]["rule"] == "stale-async-result"
-    assert "incomplete-cache-key" in j["not_implemented"]
+    assert "incomplete-cache-key" in j["not_implemented"] and "two-writers" in j["rules"]
+
+
+@pytest.mark.parametrize("lang,state,life,late", [
+    ("swift", "field:DetailView.title", "Sources/App/Detail.swift:9", "Sources/App/Detail.swift:13"),        # .onAppear / Task
+    ("kotlin", "field:app.DetailViewModel.title", "src/main/kotlin/app/Detail.kt:7", "src/main/kotlin/app/Detail.kt:13"),
+    ("react", "field:src/Detail.tsx#Detail.title", "src/Detail.tsx:7", "src/Detail.tsx:10"),                 # useEffect / async
+    ("python", "field:app.detail.Detail.title", "app/detail.py:6", "app/detail.py:10"),                      # __init__ / async def
+])
+def test_two_writers(lang, state, life, late):
+    """The same state written with a real value by lifecycle code and by async code after an await. A default in the
+    initializer (`results = []`) or a flag reset is not a competing writer, so the Search fixtures have none."""
+    if lang == "swift":
+        pytest.importorskip("tree_sitter_swift")
+    if lang == "react" and not shutil.which("node"):
+        pytest.skip("node not installed")
+    assert two(lang) == [(state, [life], [late], "heuristic")]
 
 
 def test_mcp_tool(monkeypatch):

@@ -74,8 +74,9 @@ All commands: `python -m codegraph.cli <command> …` (the README defines a `cg`
 - `roundtrip Type.prop [--json] [--tests]`: heuristic. It reports each write of the property that passes through a
   lossy transform and each read that seeds UI state, and pairs them with any wider range drawn next to the read
   (see [`roundtrip`](#roundtrip)).
-- `lint async-state [--json] [--tests]`: heuristic, rule `stale-async-result`. It flags an awaited result written to
-  stored / UI state with no cancellation or token check (see [`lint`](#lint)).
+- `lint async-state [--json] [--tests]`: heuristic, rules `stale-async-result` (an awaited result written to state
+  with no cancellation or token check) and `two-writers` (state written by lifecycle code and by an async
+  callback). See [`lint`](#lint).
   `node` prints the node (location, fqn, platforms, attrs) and its outgoing / incoming edges, the same edge from one
   site once with a count; `stats` prints the project, its languages, the coverage summary line and the node / edge
   counts. With `--json` each prints one JSON document (`node`: a list of `{node, out, in}`; `stats`: `{project, root,
@@ -521,7 +522,7 @@ options:
 
 ### `lint`
 
-`lint async-state` is #88 phase 3. Only the rule `stale-async-result` is implemented.
+`lint async-state` is #88 phase 3. Two rules are implemented: `stale-async-result` and `two-writers`.
 
 It flags a write of stored or UI state (a WRITES_PROP edge) that meets all of these:
 - it is inside an async block: Swift `Task { }` or an `async` func, Kotlin `launch { }` / `async { }`, a React
@@ -538,8 +539,17 @@ It flags a write of stored or UI state (a WRITES_PROP edge) that meets all of th
 Writes are skipped when they go to an object the function just fetched (`doc.x = …` with a local receiver) and when
 they are in test paths (unless `--tests` is given).
 
+`two-writers` flags state that is written with a real value from both sides:
+- by lifecycle code: an initializer or `init` block, `onAppear`, `.task` before its first await, `useEffect`,
+  `onMounted`, `LaunchedEffect` or `viewDidLoad`;
+- by async code after an await, or by a completion or subscription callback (`.sink`, `.then`, `.collect`,
+  `completion: {`).
+
+Defaults and flag resets (`= []`, `setLoading(true)`, `setError(null)`) and in-place mutations are not competing
+values, so they are skipped.
+
 Findings are labelled `heuristic` and nothing is added to the graph. The MCP tool is `lint_async_state`. The rules
-incomplete cache key, two writers and echo suppression are not implemented yet.
+incomplete cache key and echo suppression are not implemented yet.
 
 ```
 usage: cg lint [-h] --db DB [--json] [--tests] {async-state}

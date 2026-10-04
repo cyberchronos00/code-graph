@@ -55,7 +55,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
     single-flight helper (`bundleAsync`, `dedupe`, `debounce`, `throttle`, `once`) is skipped.
   - Fixtures cover Swift, Kotlin, React and Python. Hand-checked precision is 8 of 12 (67%): IceCubesApp 4 of 5,
     outline 2 of 3, social-app 2 of 4. Element X, Bitwarden and isowords have no findings.
-  - Incomplete cache key, two writers and echo suppression are not implemented yet.
+  - Rule `two-writers`: state written with real values both by lifecycle code (init, onAppear, `.task`,
+    useEffect, LaunchedEffect) and by async code after an await or a completion callback. Defaults and flag resets
+    are skipped. Hand check: IceCubesApp 3 findings (1 clear true positive, plus 2 like / bookmark flags re-seeded
+    on appear); social-app 2 (1 true positive); outline 1 (1 true positive). That is 3 of 7 strictly, 5 of 7
+    counting the flags.
+  - Incomplete cache key and echo suppression are not implemented yet.
 - Kotlin stored-property refs no longer treat `{ x = …` (an assignment opening a body) or `f(x)` (an argument) as a
   local `x`. Element X gains 1,149 field refs and Bitwarden 418; all other edges are unchanged.
 - Kotlin `copy()` guesses (`binding: name`) are `heuristic` in the edge confidence and in the web view (dotted

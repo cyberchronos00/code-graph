@@ -605,9 +605,11 @@ def roundtrip(prop: str, include_tests: bool = False) -> str:
 
 @tool
 def lint_async_state(include_tests: bool = False, limit: int = 80) -> str:
-    """Heuristic (#88 phase 3, rule stale-async-result): a write of stored / UI state inside Task / launch / useEffect /
-    async function / async def code after an await, using the awaited result, with no cancellation check and no
-    comparison against a token / ID / generation captured before the await. file:line evidence; not proof."""
+    """Heuristic (#88 phase 3). stale-async-result: a write of stored / UI state inside Task / launch / useEffect /
+    async function / async def code after an await, using the awaited result of an input-dependent request, with no
+    cancellation check and no comparison against a token / ID / generation captured before the await. two-writers:
+    state written with real values by lifecycle code (init, onAppear, useEffect, LaunchedEffect) and by async code
+    after an await or a completion callback. file:line evidence; not proof."""
     from . import lint_async as LA
     res = LA.lint(_st(), include_tests=include_tests)
     lines = LA.render(res).split("\n")
