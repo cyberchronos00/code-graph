@@ -270,3 +270,35 @@ def test_socketio_direction(tmp_path):
     assert by["/#ping"]["linked"] and "no_receiver" not in by["/#ping"]["checks"]
     assert not by["/#chat"]["linked"] and {"no_receiver", "no_sender"} <= set(by["/#chat"]["checks"])
     assert by["/#hello"]["checks"][:1] == ["no_sender"]
+
+
+def test_nest_custom_on_event_object_name(tmp_path):
+    # #101: a custom `@OnEvent({ name: 'ConfigInit', ... })` (SetMetadata-based, immich) names its event; the
+    # repository `emit('ConfigInit')` and the listener meet on event:ConfigInit instead of a shared event:?
+    (tmp_path / "package.json").write_text('{"name": "ev", "dependencies": {"@nestjs/core": "10.0.0", "@nestjs/common": "10.0.0"}}\n')
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions": {"experimentalDecorators": true, "strict": true}, "include": ["src"]}\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "decorators.ts").write_text(
+        "import {SetMetadata} from '@nestjs/common';\n"
+        "export const OnEvent = (config: {name: string; priority?: number}) => SetMetadata('event', config);\n")
+    (tmp_path / "src" / "event.repository.ts").write_text(
+        "import {Injectable} from '@nestjs/common';\n"
+        "@Injectable()\nexport class EventRepository {\n  emit(name: string, payload: unknown) { return [name, payload]; }\n}\n")
+    (tmp_path / "src" / "config.service.ts").write_text(
+        "import {Injectable} from '@nestjs/common';\nimport {OnEvent} from './decorators';\n"
+        "import {EventRepository} from './event.repository';\n\n"
+        "@Injectable()\nexport class ConfigService {\n"
+        "  constructor(private eventRepository: EventRepository) {}\n\n"
+        "  @OnEvent({ name: 'ConfigInit', priority: -100 })\n  onConfigInit() { return 1; }\n\n"
+        "  @OnEvent({ name: 'AppShutdown' })\n  onShutdown() { return 2; }\n\n"
+        "  init() { return this.eventRepository.emit('ConfigInit', {}); }\n}\n")
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "ev")
+    import sqlite3
+    rows = sqlite3.connect(str(db)).execute(
+        "select src, dst, kind from edges where kind in ('LISTENED_BY', 'DISPATCHES')").fetchall()
+    got = {(r[0], r[1], r[2]) for r in rows}
+    assert ("event:ConfigInit", "method:src/config.service.ts#ConfigService.onConfigInit", "LISTENED_BY") in got
+    assert ("event:AppShutdown", "method:src/config.service.ts#ConfigService.onShutdown", "LISTENED_BY") in got
+    assert not any(r[0] == "event:?" or r[1] == "event:?" for r in rows)
+    assert any(k == "DISPATCHES" and "event:ConfigInit" in (s, d) for s, d, k in got)

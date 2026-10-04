@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Nest `@OnEvent({ name: 'X', ... })` names its event (#101), including a project's own `SetMetadata`-based
+  `@OnEvent` (immich). immich server: 86 listeners move from one `event:?` endpoint to 44 named events; all 35 events
+  emitted through `EventRepository.emit` now have listeners (0 before). 20 sampled listener links correct.
 - Tauri commands with the same name in several plugins (#97): each command takes the `generate_handler!`
   registration closest to its file instead of the first one seen. tauri examples: `get` (examples/state, invoked as
   `invoke('get')`) was `plugin:menu|get` and is now `get`; `popup` is `plugin:app-menu|popup` (was `plugin:menu|`),

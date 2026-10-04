@@ -639,8 +639,8 @@ What the findings are, from spot checks:
   A side is only judged when the graph holds the other side of that protocol, so a server indexed alone reports no
   `no_sender` for its HTTP routes.
 - **immich:** the 35 events are emitted through immich's own `EventRepository` and received with its own
-  `@OnEvent({ name })` decorator (built on `SetMetadata`, a documented blind spot); the handlers land on one `event:?`
-  endpoint. Its WebSocket gateway only emits (the web client listens through `socket.io-client`) and its jobs use the
+  `@OnEvent({ name })` decorator (built on `SetMetadata`). Since #101 the object's `name` is read: 44 named events,
+  all 35 emitted ones meet their 86 listeners (before: one `event:?` endpoint; 20 sampled listener links correct). Its WebSocket gateway only emits (the web client listens through `socket.io-client`) and its jobs use the
   same `SetMetadata` system, so there are no gateway messages or BullMQ jobs to show yet (#32).
 - **bookstore-nest:** `order.placed` is emitted by `ClientProxy.emit` and the microservice handler listens to
   `order.shipped`; both ends are reported.

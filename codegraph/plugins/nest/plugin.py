@@ -587,7 +587,9 @@ class NestPlugin(FrameworkPlugin):
                     lid = b.add_node("listener", m["id"].split(":", 1)[1], name=f"{c.get('name')}.{m['name']}", file=c["file"], line=d.get("line") or line,
                                      module=module_of(c["file"]), lang="ts", entry_kind="listener", attrs={"framework": "nest-event-emitter"})
                     b.add_edge(lid, m["id"], "HANDLED_BY", file=c["file"], line=d.get("line") or line, confidence="exact")
-                    for ev in svals((d.get("args") or [None])[0]) or [((d.get("args") or [{}])[0] or {}).get("ref") or "?"]:
+                    a0 = (d.get("args") or [None])[0]
+                    # `@OnEvent('a.b')`, `@OnEvent(['a', 'b'])`, a custom `@OnEvent({ name: 'X', ... })` (SetMetadata)
+                    for ev in svals(a0) or svals(obj(a0).get("name")) or [(a0 or {}).get("ref") or "?"]:
                         eid = b.add_node("event", ev, name=ev, lang="ts", attrs={"framework": "nest-event-emitter"})
                         b.add_edge(eid, m["id"], "LISTENED_BY", file=c["file"], line=d.get("line") or line, confidence="exact")
                         events.setdefault(ev, eid)
