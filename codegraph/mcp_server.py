@@ -594,7 +594,7 @@ def _prop_text(st, spec: str, what: str, rows: list, limit: int) -> str:
 
 @tool
 def readers(prop: str, limit: int = 60) -> str:
-    """Who reads a stored property `Type.prop` (READS_PROP edges, Swift and Kotlin): each site with its receiver (`self`, a
+    """Who reads a stored property `Type.prop` (READS_PROP edges: Swift, Kotlin, Python, TypeScript): each site with its receiver (`self`, a
     typed variable), accessor and the entry-point kinds that reach it; test code's reads come last."""
     st = _st()
     return _prop_text(st, prop, "readers", Q.readers(st, prop), limit)
@@ -604,7 +604,7 @@ def readers(prop: str, limit: int = 60) -> str:
 def writers(table: str, limit: int = 60) -> str:
     """Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
     evidence lines and the entry-point kinds that reach each writer. `Type.prop` instead of a table: who writes
-    that stored property (WRITES_PROP edges, Swift and Kotlin)."""
+    that stored property (WRITES_PROP edges: Swift, Kotlin, Python, TypeScript)."""
     st = _st()
     if Q.prop_fields(st, table):
         return _prop_text(st, table, "writers", Q.writers(st, table), limit)

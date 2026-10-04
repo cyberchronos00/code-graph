@@ -9,7 +9,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `callers`: Direct callers of a function / method / class (one level: CALLS, INSTANTIATES, dispatch and framework edges
 - `siblings`: Code parallel to a symbol that often needs the same change: classes sharing its parent/interface/trait,
 - `resolutions`: Every place a concept (e.g. 'timezone', 'locale') is resolved, deterministically: assignment/return sites
-- `readers`: Who reads a stored property `Type.prop` (READS_PROP edges, Swift and Kotlin): each site with its receiver (`self`, a
+- `readers`: Who reads a stored property `Type.prop` (READS_PROP edges: Swift, Kotlin, Python, TypeScript): each site with its receiver (`self`, a
 - `writers`: Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
 - `channels`: Broadcast channels (Laravel Broadcast::channel, events' broadcastOn, Echo / pusher-js subscriptions on a combined
 - `bridges`: Web / native bridge calls: Capacitor plugins (registerPlugin / Plugins.X -> @CapacitorPlugin @PluginMethod,
@@ -36,12 +36,12 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `plan_baseline`: Fingerprint (sha1 of source lines) every modified target of a plan before implementing it, so
 - `index`: Re-index after editing (static analysis only: never boots the app or touches a database).
 
-## `stats {}`  (1091 chars)
+## `stats {}`  (1129 chars)
 
 ```
 project=bookstore-api+bookstore-web root=None indexed_at=<indexed_at> index_seconds=None
-nodes: method×32, column×29, class×19, config×13, property×10, route×9, request_key×7, env×6, external_class×6, function×6, http×6, module×5, table×5, composable×4, resolution×4, script×4, setting×3, connection×2, external×2, i18n×2, page×2, admin×1, command×1, component×1, layout×1, store×1, type×1
-edges: CONTAINS×83, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, CONNECTS_TO×2, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
+nodes: method×32, column×29, class×19, config×13, property×10, route×9, request_key×7, env×6, external_class×6, function×6, http×6, module×5, table×5, composable×4, resolution×4, script×4, setting×3, connection×2, external×2, i18n×2, page×2, admin×1, command×1, component×1, field×1, layout×1, store×1, type×1
+edges: CONTAINS×84, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, READS_PROP×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, CONNECTS_TO×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
 coverage bookstore-api: php 22 exact
 coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
 ```
@@ -323,7 +323,7 @@ structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php"
 ## `downstream {'target': 'page:/reports/:id', 'max_per_kind': 10}`  (570 chars)
 
 ```
-targets: page:app/pages/reports/[id].vue | reached 31 nodes | gate=new_inventory
+targets: page:app/pages/reports/[id].vue | reached 32 nodes | gate=new_inventory
 tables touched (2): orders, stores
 
 ## route (2)

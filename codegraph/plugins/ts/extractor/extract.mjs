@@ -569,6 +569,85 @@ function constInit(e) {
   if (ts.isObjectLiteralExpression(e)) return !e.properties.some(p => ts.isMethodDeclaration(p) || ts.isGetAccessor(p) || ts.isSetAccessor(p) || (ts.isPropertyAssignment(p) && isFn(unwrap(p.initializer))))
   return false
 }
+// stored class fields (#88): `count = 0`, `private items: Item[]`, constructor parameter properties; accesses that the
+// checker resolves to one are READS_PROP / WRITES_PROP
+const fieldIds = new Map()        // declaration -> field node id
+const fieldNames = new Set()
+const TS_MUTATING = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin',
+  'set', 'delete', 'clear', 'add'])
+function addField(cls, q, m, sf, r, parentId, how) {
+  const nm = m.name.text
+  const id = `field:${r}#${q}.${nm}`
+  if (usedIds.has(id)) return
+  usedIds.add(id)
+  const fl = ts.getCombinedModifierFlags(m)
+  nodes.push({ id, kind: 'field', name: `${q}.${nm}`, file: r, line: lineOf(m, sf), end_line: sf.getLineAndCharacterOfPosition(m.end).line + 1,
+    doc: null, parent: parentId, attrs: { property: 'stored', declared: how, ...((fl & ts.ModifierFlags.Readonly) ? { readonly: true } : {}) } })
+  fieldIds.set(m, id)
+  fieldNames.add(nm)
+  stats.stored_field_nodes = (stats.stored_field_nodes || 0) + 1
+}
+// component / composable state (#88): React `const [x, setX] = useState()` and Vue `const x = ref()` /
+// `shallowRef()` / `reactive()` are field nodes (`property: state`, `hook`); a reference the checker resolves to the
+// variable is READS_PROP, `setX(...)` / `x.value = ...` / `x.value++` / `state.p = ...` WRITES_PROP
+const stateIds = new Map()        // declaration (VariableDeclaration / BindingElement) -> [field id, 'value' | 'setter' | 'reactive']
+const stateNames = new Set()
+const STATE_HOOKS = new Set(['useState', 'useReducer', 'ref', 'shallowRef', 'reactive', 'shallowReactive'])
+function stateDecl(d, cur, sf, r) {
+  const init = unwrap(d.initializer)
+  if (!init || !ts.isCallExpression(init)) return
+  const callee = unwrap(init.expression)
+  const hook = ts.isIdentifier(callee) ? callee.text : (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'React' ? callee.name.text : null)
+  if (!hook || !STATE_HOOKS.has(hook)) return
+  const react = hook.startsWith('use')
+  const owner = cur.split(':').slice(1).join(':')
+  const add = (nameNode, decl, mode) => {
+    const nm = nameNode.text
+    const id = `field:${owner.includes('#') ? owner : owner + '#'}${owner.includes('#') ? '.' : ''}${nm}`
+    if (!usedIds.has(id)) {
+      usedIds.add(id)
+      nodes.push({ id, kind: 'field', name: id.split('#').pop(), file: r, line: lineOf(decl, sf), end_line: lineOf(decl, sf), doc: null,
+        parent: cur, attrs: { property: 'state', hook } })
+      stats.state_field_nodes = (stats.state_field_nodes || 0) + 1
+    }
+    stateIds.set(decl, [id, mode])
+    stateNames.add(nm)
+  }
+  if (react && ts.isArrayBindingPattern(d.name)) {
+    const [v, set] = d.name.elements
+    if (v && ts.isBindingElement(v) && ts.isIdentifier(v.name)) {
+      add(v.name, v, 'read')
+      if (set && ts.isBindingElement(set) && ts.isIdentifier(set.name)) {
+        stateIds.set(set, [stateIds.get(v)[0], 'setter']); stateNames.add(set.name.text)
+      }
+    }
+  } else if (!react && ts.isIdentifier(d.name)) add(d.name, d, hook.endsWith('eactive') ? 'reactive' : 'value')
+}
+function stateRef(node, cur, sf, r) {
+  const p = node.parent
+  if (p && (ts.isVariableDeclaration(p) || ts.isBindingElement(p)) && p.name === node) return
+  let s = null
+  try { s = checker.getSymbolAtLocation(node) } catch { }
+  if (s && !s.valueDeclaration && (s.flags & ts.SymbolFlags.Alias)) { try { s = checker.getAliasedSymbol(s) } catch { s = null } }
+  const hit = s && stateIds.get(s.valueDeclaration || (s.declarations || [])[0])
+  if (!hit || hit[0] === cur) return
+  const [fid, mode] = hit
+  const isAssign = (e) => e.parent && ts.isBinaryExpression(e.parent) && e.parent.left === e && e.parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && e.parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+  const isIncr = (e) => e.parent && (ts.isPrefixUnaryExpression(e.parent) || ts.isPostfixUnaryExpression(e.parent)) && (e.parent.operator === ts.SyntaxKind.PlusPlusToken || e.parent.operator === ts.SyntaxKind.MinusMinusToken)
+  let write = false, via
+  if (mode === 'setter') {
+    if (!(ts.isCallExpression(p) && p.expression === node)) return     // `onChange={setX}`: handed out, not a write here
+    write = true; via = 'setter'
+  } else if (p && ts.isPropertyAccessExpression(p) && p.expression === node && (isAssign(p) || isIncr(p) || ts.isDeleteExpression(p.parent))
+      && (mode === 'reactive' || p.name.text === 'value')) { write = true; via = mode === 'reactive' ? 'property' : 'value' }
+  else if (isAssign(node) || isIncr(node)) { write = true }
+  else if (mode === 'reactive' && p && ts.isPropertyAccessExpression(p) && p.expression === node) {
+    const q = p.parent      // `state.items.push(x)` / `state.items[0] = x`
+    if (q && ts.isPropertyAccessExpression(q) && q.expression === p && TS_MUTATING.has(q.name.text) && q.parent && ts.isCallExpression(q.parent) && q.parent.expression === q) { write = true; via = 'mutating' }
+  }
+  addEdge(cur, fid, write ? 'WRITES_PROP' : 'READS_PROP', r, lineOf(node, sf), 'exact', via ? { via } : undefined)
+  stats[write ? 'state_field_writes' : 'state_field_reads'] = (stats[write ? 'state_field_writes' : 'state_field_reads'] || 0) + 1
+}
 function addValue(kind, key, name, d, sf, r, parentId) {
   const id = `${kind}:${key}`
   if (usedIds.has(id)) return
@@ -810,6 +889,13 @@ for (const sf of sourceFiles) {
         const fl = ts.getCombinedModifierFlags(m)
         if (ts.isPropertyDeclaration(m) && ts.isIdentifier(m.name) && (fl & ts.ModifierFlags.Static) && (fl & ts.ModifierFlags.Readonly) && constInit(m.initializer))
           addValue('constant', `${r}#${q}.${m.name.text}`, `${q}.${m.name.text}`, m, sf, r, id)
+        else if (ts.isPropertyDeclaration(m) && m.name && (ts.isIdentifier(m.name) || ts.isPrivateIdentifier(m.name)) && !(fl & ts.ModifierFlags.Static)
+            && !(fl & ts.ModifierFlags.Abstract) && !(m.initializer && (isFn(unwrap(m.initializer)) || wrappedFn(unwrap(m.initializer)))))
+          addField(node, q, m, sf, r, id, 'class')
+        else if (ts.isConstructorDeclaration(m)) for (const p of m.parameters) {     // constructor(private api: Api)
+          if (ts.isIdentifier(p.name) && (ts.getCombinedModifierFlags(p) & (ts.ModifierFlags.ParameterPropertyModifier)))
+            addField(node, q, p, sf, r, id, 'constructor')
+        }
       }
       if (kind === 'type') return
       ts.forEachChild(node, c => visit(c, q, id))
@@ -1933,6 +2019,8 @@ for (const sf of sourceFiles) {
     const isFnNode = ts.isFunctionLike(node)
     if (isFnNode) fnStack.push(node)
     const cur = stack[stack.length - 1]
+    if (ts.isVariableDeclaration(node) && node.initializer && cur) stateDecl(node, cur, sf, r)
+    if (ts.isIdentifier(node) && stateNames.has(node.text) && cur) stateRef(node, cur, sf, r)
     // imports
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       const ms = checker.getSymbolAtLocation(node.moduleSpecifier)
@@ -2008,6 +2096,24 @@ for (const sf of sourceFiles) {
             else if (!['component', 'page', 'layout'].includes(k)) addEdge(cur, t.id, edgeKindFor(t.id), r, lineOf(node, sf), t.conf, { ref: true, via: t.via.length ? t.via : undefined, template: isVue && isTemplateLine(node, sf) || undefined })
           }
         }
+      }
+    }
+    // stored class fields (#88): `this.count`, `cart.items`, `this.#secret`, resolved by the checker
+    if (ts.isPropertyAccessExpression(node) && fieldNames.has(node.name.text)) {
+      let s = null
+      try { s = checker.getSymbolAtLocation(node.name) } catch { }
+      const fid = s && fieldIds.get(s.valueDeclaration || (s.declarations || [])[0])
+      if (fid && fid !== cur && cur) {
+        const p = node.parent; let via
+        let write = (ts.isBinaryExpression(p) && p.left === node && p.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && p.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+          || ((ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) && (p.operator === ts.SyntaxKind.PlusPlusToken || p.operator === ts.SyntaxKind.MinusMinusToken))
+          || ts.isDeleteExpression(p)
+        if (!write && ts.isElementAccessExpression(p) && p.expression === node && p.parent && ((ts.isBinaryExpression(p.parent) && p.parent.left === p
+            && p.parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && p.parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) || ts.isDeleteExpression(p.parent))) { write = true; via = 'item' }
+        if (!write && ts.isPropertyAccessExpression(p) && p.expression === node && TS_MUTATING.has(p.name.text) && p.parent && ts.isCallExpression(p.parent) && p.parent.expression === p) { write = true; via = 'mutating' }
+        const recv = node.expression.kind === ts.SyntaxKind.ThisKeyword ? 'this' : node.expression.getText(sf).slice(0, 40)
+        addEdge(cur, fid, write ? 'WRITES_PROP' : 'READS_PROP', r, lineOf(node, sf), 'exact', { receiver: recv, ...(via ? { via } : {}) })
+        stats[write ? 'stored_field_writes' : 'stored_field_reads'] = (stats[write ? 'stored_field_writes' : 'stored_field_reads'] || 0) + 1
       }
     }
     // enum members and constants (#84): `Color.Red`, `MAX`, an imported `MAX`, `ns.MAX`; resolved by the checker

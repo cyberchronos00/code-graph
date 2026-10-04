@@ -99,6 +99,38 @@ Shallow clones, indexed with `CODEGRAPH_NO_CACHE=1` on an 8-core box. Index time
 Spot-checks were done by hand against the source (decorators, router files, file-system routes). The "found" counts
 come from the graph (`SELECT count(*) FROM nodes WHERE kind='route'` etc.).
 
+## Stored class fields (`cg readers` / `cg writers`)
+
+These are `field:<file>#<Class>.<name>` nodes (#88), with attrs `property: stored`, `declared: class |
+constructor` and `readonly`:
+- a non-static, non-abstract class property whose initializer is not a function (`items: Item[] = []`, `#secret`);
+- a constructor parameter property (`constructor(private api: Api)`).
+
+An arrow-function property is a method node, and a static readonly literal is a constant (#84).
+
+Every property access that the TypeScript checker resolves to a field is a `READS_PROP` / `WRITES_PROP` edge
+(`exact`, attr `receiver`). Writes are:
+- an assignment or compound assignment, `++` / `--` or `delete` target;
+- an item assignment, as in `this.cache[k] = v` (`via: item`);
+- an in-place array / Map / Set method, as in `this.items.push(x)` (`via: mutating`).
+
+A plain JavaScript class that assigns `this.x = ...` in its constructor without declaring the field has no field
+node yet.
+
+Component and composable state uses the same edges. The state variable is a `field:<file>#<Component>.<name>` node
+(`property: state`, `hook`). This covers React `const [count, setCount] = useState(0)` / `useReducer`, and Vue
+`const total = ref(0)` / `shallowRef` / `reactive({...})` / `shallowReactive` in a component, composable or store
+setup function.
+
+A checker-resolved reference to the variable, including JSX or template expressions, is a `READS_PROP`. Writes
+are `WRITES_PROP` edges:
+- `setCount(...)` (`via: setter`);
+- `total.value = x` / `total.value++` (`via: value`);
+- `state.open = true` (`via: property`);
+- `state.items.push(x)` (`via: mutating`).
+
+Passing the setter on (`onChange={setCount}`) is not a write at that site.
+
 ## Limitations
 
 - **Static only.** Routes registered in loops, from config files, or with computed paths become `{param}` / `{regex}`

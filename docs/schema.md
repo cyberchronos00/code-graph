@@ -101,7 +101,7 @@ Python/Django: REFERENCES_FN✓ (function taken as a value; `attrs.how` = collec
 entry point), CALLS through a dispatch table or plugin list (`attrs.via` = collection) and decorator applications
 (`attrs.via` = decorator), USES_SCHEMA (handler → ninja Schema / DRF serializer, attrs.role request|response).
 Swift: READS_PROP✓ / WRITES_PROP✓ (→ `field:<Type>.<name>`, a stored instance property; attrs `receiver`, `accessor`,
-`storage`, `via` = mutating / inout / binding / keypath; field attrs `wrapper`, `key` for `@AppStorage`; #88; Kotlin: the same for class / enum stored properties and constructor `val`s, `via` = mutating / value), INSTANTIATES `attrs.branch` / `branch_line` (the enclosing switch case / if / else / guard / ternary).
+`storage`, `via` = mutating / inout / binding / keypath; field attrs `wrapper`, `key` for `@AppStorage`; #88; Kotlin: the same for class / enum stored properties and constructor `val`s, `via` = mutating / value; Python: `self.x` attributes and annotated class attributes, TypeScript: class fields and parameter properties, `via` = mutating / item), INSTANTIATES `attrs.branch` / `branch_line` (the enclosing switch case / if / else / guard / ternary).
 Dart/Flutter: EMITS_STATE (bloc → state), HANDLES_STATE (UI → state check), NAVIGATES_TO (UI → page), PARSES_JSON (→ model).
 Broadcasting: AUTHORIZES_CHANNEL✓ (auth route → channel), BROADCASTS_ON (event → channel; attrs `name`, `visibility`,
 `site`), SUBSCRIBES_CHANNEL✓ (client code → channel_sub), MATCHES_CHANNEL✓ (channel_sub → channel; attrs

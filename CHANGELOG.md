@@ -15,6 +15,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   - Accesses through an inferred receiver type are READS_PROP / WRITES_PROP.
   - `self.items.append(x)` is a write with `via: mutating`; `self.cache[k] = v` is a write with `via: item`.
   - All other edges are unchanged on flask, httpie, beets, netbox and openai-agents-python.
+- TypeScript stored class fields (#88): class properties and constructor parameter properties are `field:` nodes,
+  with checker-resolved READS_PROP / WRITES_PROP edges. `via` is `mutating` or `item`, as for Python.
+- React / Vue state (#88): `useState` / `useReducer` and Vue `ref` / `shallowRef` / `reactive` variables are
+  `property: state` field nodes of their component / composable.
+  - References are READS_PROP.
+  - `setX(...)`, `x.value = ...` and `state.p = ...` are WRITES_PROP, with `via` = setter / value / property /
+    mutating.
 - Kotlin stored properties (#88): a class / enum body `val` / `var` without accessors and a constructor `val` /
   `var` are `field:<Type>.<name>` nodes.
   - `x` / `this.x` and `v.x` with a known type of `v` are READS_PROP / WRITES_PROP edges.
