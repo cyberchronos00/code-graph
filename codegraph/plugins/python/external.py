@@ -5,7 +5,9 @@ Module-level settings dicts (Django `DATABASES` / `CACHES`, NetBox-style `DATABA
 `REDIS_URL`, `CACHE_URL`, `EMAIL_HOST`): literal values, `os.environ.get("K", default)` / `os.getenv` / `env("K")`
 reads and names of other module dicts. Client constructors with an address in their arguments (#77):
 `psycopg.connect(host=...)`, `redis.Redis(host=)` / `redis.from_url(url)`, `smtplib.SMTP(host, port)`,
-`pymongo.MongoClient(url)`, `ldap3.Server(host)`, `boto3.client("s3", endpoint_url=)` ... Only facts are recorded
+`pymongo.MongoClient(url)`, `ldap3.Server(host)`, `boto3.client("s3", endpoint_url=)`, and a client built bare and
+connected afterwards (`c = paramiko.SSHClient(); c.connect(host)`, `ftp = ftplib.FTP(); ftp.connect(host)`, #103) ...
+Only facts are recorded
 (builder.external_facts); passwords are kept as the env key or the location of a literal, never the value."""
 from __future__ import annotations
 
@@ -144,7 +146,10 @@ CLIENTS = {
     "elasticsearch": ("elasticsearch", {"Elasticsearch", "AsyncElasticsearch"}),
     "pymemcache": ("memcached", {"Client", "PooledClient"}),
     "boto3": ("s3", {"client", "resource"}),
+    "paramiko": ("ssh", {"SSHClient", "Transport"}),
 }
+# a client built without an address and connected afterwards (`c = paramiko.SSHClient(); c.connect(host)`, #103)
+CONNECT_METHODS = {"connect"}
 TLS_CTORS = {"SMTP_SSL": "465", "FTP_TLS": None}
 URL_KW = ("dsn", "url", "conninfo", "host_url", "endpoint_url", "hosts")
 HOST_KW = ("host", "hostname", "server")
@@ -179,17 +184,41 @@ def client_facts(prog, b, walk_body) -> list:
         if not any(isinstance(v, tuple) and len(v) > 1 and isinstance(v[1], str) and v[1].split(".")[0] in tops
                    for v in m.imports.values()):
             continue
-        scopes = [(f.id, walk_body(f.node)) for f in m.funcs.values()]
-        scopes += [(f.id, walk_body(f.node)) for c in m.classes.values() for f in c.methods.values()]
+        def bare_of(nodes, self_only=False):
+            """var / self.attr -> dotted constructor of a client built without arguments"""
+            out = {}
+            for a in nodes:
+                if isinstance(a, ast.Assign) and len(a.targets) == 1 and isinstance(a.value, ast.Call) \
+                        and not a.value.args and not a.value.keywords:
+                    t, dv = a.targets[0], _dotted(m, a.value.func)
+                    k = t.id if isinstance(t, ast.Name) and not self_only else f"self.{t.attr}" if isinstance(t, ast.Attribute) \
+                        and isinstance(t.value, ast.Name) and t.value.id == "self" else None
+                    if k and dv and dv.split(".")[0] in CLIENTS:
+                        out[k] = dv
+            return out
+
+        scopes = [(f.id, walk_body(f.node), {}) for f in m.funcs.values()]
+        for c in m.classes.values():
+            own = {}                         # `self.smtp = smtplib.SMTP()` in __init__, `self.smtp.connect(..)` elsewhere
+            for f in c.methods.values():
+                own.update(bare_of(list(walk_body(f.node)), self_only=True))
+            scopes += [(f.id, walk_body(f.node), own) for f in c.methods.values()]
         scopes.append((f"module:{m.name}", (n for st in m.tree.body if not isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                                            for n in ast.walk(st))))
-        for src, nodes in scopes:
+                                            for n in ast.walk(st)), {}))
+        for src, nodes, cls_bare in scopes:
             if src not in b.nodes:
                 continue
+            nodes = list(nodes)
+            bare = {**cls_bare, **bare_of(nodes)}
             for c in nodes:
                 if not isinstance(c, ast.Call):
                     continue
                 dn = _dotted(m, c.func)
+                fv = c.func.value if isinstance(c.func, ast.Attribute) and c.func.attr in CONNECT_METHODS else None
+                bk = fv.id if isinstance(fv, ast.Name) else f"self.{fv.attr}" if isinstance(fv, ast.Attribute) \
+                    and isinstance(fv.value, ast.Name) and fv.value.id == "self" else None
+                if bk in bare:
+                    dn = bare[bk]          # c.connect(host, port): the address of the client built above
                 if not dn:
                     continue
                 top, last = dn.split(".")[0], dn.rsplit(".", 1)[-1]
@@ -208,9 +237,9 @@ def client_facts(prog, b, walk_body) -> list:
                     pv = _value(prog, m, pos)
                     if pv and pv[0] == "lit" and "://" in pv[1] or last in ("from_url", "URLParameters") or top in ("pymongo", "motor", "asyncpg", "aio_pika") and pv and pv[0] == "env":
                         url = pos
-                    elif proto in ("smtp", "ftp", "ldap", "elasticsearch", "memcached", "amqp") or (top == "redis" and last != "from_url"):
+                    elif proto in ("smtp", "ftp", "ldap", "elasticsearch", "memcached", "amqp", "ssh") or (top == "redis" and last != "from_url"):
                         host = pos
-                port = _kwarg(c, ("port",)) or (c.args[1] if len(c.args) > 1 and proto in ("smtp", "ftp", "redis") else None)
+                port = _kwarg(c, ("port",)) or (c.args[1] if len(c.args) > 1 and proto in ("smtp", "ftp", "redis", "ssh") else None)
                 f = {"var": f"{dn}()", "module": m.name, "protocol": proto, "src": src, "file": m.file, "line": c.lineno,
                      "client": top, "resource": None}
                 if url is not None:

@@ -24,6 +24,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
   (`env.X` / `environment.X`) and through values parsed from `process.env` (zod `safeParse(process.env)`, Joi
   `validate(process.env)`). outline: Redis found (none before), 427 env reads through its `env` wrapper; immich
   server: `DB_*` / `REDIS_*` read through its zod env schema now connect to Postgres / Redis, with their passwords.
+- Python clients built without an address and connected afterwards (#103): `c = paramiko.SSHClient();
+  c.connect(hostname=..)`, `ftplib.FTP()` / `smtplib.SMTP()` then `.connect(host, port)`, also through `self.x` set in
+  another method.
 
 ### Changed
 

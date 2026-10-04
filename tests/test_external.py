@@ -377,3 +377,25 @@ def test_impact_on_table_includes_column_users(tmp_path):
     callers = {c["name"]: c["depth"] for c in impact(st, "table:orders")["callers"]}
     assert callers == {"repo": 1, "report": 1, "handler": 2}           # not mail: another table's column
     assert {c["name"] for c in impact(st, "column:orders.total")["callers"]} == {"report", "handler"}
+
+
+def test_python_clients_connected_after_construction(tmp_path):
+    """#103: `c = paramiko.SSHClient(); c.connect(host)` / `ftp = ftplib.FTP(); ftp.connect(host, port)` /
+    `self.smtp = smtplib.SMTP(); self.smtp.connect(host)`: the connect call carries the address."""
+    (tmp_path / "jobs.py").write_text(
+        "import os, ftplib, smtplib\nimport paramiko\n\n\n"
+        "def backup():\n    c = paramiko.SSHClient()\n    c.connect(hostname='backup.internal.example', port=2222,"
+        " password=os.environ['BACKUP_PW'])\n\n\n"
+        "def mirror():\n    ftp = ftplib.FTP()\n    ftp.connect(os.environ.get('FTP_HOST'), 21)\n\n\n"
+        "class Mailer:\n    def __init__(self):\n        self.smtp = smtplib.SMTP()\n\n"
+        "    def open(self):\n        self.smtp.connect('relay.internal.example', 25)\n\n\n"
+        "def local():\n    c = paramiko.SSHClient()\n    c.connect('localhost')\n")
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "jobs")
+    st = GraphStore(db)
+    e, ct = ext(st), edges(st, "CONNECTS_TO")
+    assert ("function:jobs.backup", "external:ssh:backup.internal.example:2222") in ct
+    assert e["external:ssh:backup.internal.example:2222"]["credential_at"] == "env:BACKUP_PW"
+    assert ("function:jobs.mirror", "external:ftp:env:FTP_HOST") in ct
+    assert ("method:jobs.Mailer.open", "external:smtp:relay.internal.example:25") in ct
+    assert not any(s == "function:jobs.local" for s, _ in ct)
