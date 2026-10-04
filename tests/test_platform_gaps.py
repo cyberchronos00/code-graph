@@ -147,7 +147,8 @@ def test_swift_availability(tmp_path):
     db, res = index(write(tmp_path, SWIFT), CODEGRAPH_SWIFT_INDEX="0")
     assert attrs(db, "function:newApi")["available"] == {"iOS": "17", "macOS": "14"}
     leg = attrs(db, "function:legacy")
-    assert leg["available"] == {"iOS": "15.0"} and leg["deprecated"] == "use newApi"
+    # the package deploys iOS 16 / macOS 13 (#100): iOS 15.0 always holds, so only the declared form is kept
+    assert "available" not in leg and leg["available_declared"] == {"iOS": "15.0"} and leg["deprecated"] == "use newApi"
     assert attrs(db, "method:Box.open")["available"] == {"iOS": "16.4"}          # inherited from the struct
     assert attrs(db, "method:Box.peek")["available"] == {"iOS": "17"}            # the newer of the two
     assert attrs(db, "function:gone")["platforms"] == []                         # @available(*, unavailable)
@@ -155,7 +156,11 @@ def test_swift_availability(tmp_path):
     e = dict(rows(db, "select dst, attrs from edges where src='function:f' and kind='CALLS'"))
     assert json.loads(e["function:newApi"])["available"] == {"iOS": "17"}
     assert "available" not in json.loads(e["function:old"] or "{}")
-    assert json.loads(e["function:later"])["available"] == {"iOS": "16"}
+    assert "available" not in json.loads(e["function:later"] or "{}")             # guard #available(iOS 16): met
+    sw = json.loads(rows(db, "select value from meta where key='stats'")[0][0])["plugins"]["swift"]
+    assert sw["deployment_targets"] == {"iOS": "16", "macOS": "13"}
+    assert [(x["check"], x["requires"]) for x in sw["availability_always_true"]] == [
+        ("@available", "iOS 15.0"), ("#available", "iOS 16")]
     assert PF.label({"available": {"iOS": "17"}}) == "  [iOS 17+]"
 
 

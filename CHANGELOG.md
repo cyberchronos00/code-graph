@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Swift availability against the deployment target (#100): the lowest deployment target per OS is read from
+  Xcode build settings (`.pbxproj`, `.xcconfig`, XcodeGen YAML), XcodeGen `deploymentTarget:` and `Package.swift`
+  `platforms:` (index stats `deployment_targets`). An `@available` / `#available` requirement it already meets always
+  holds, so the declaration or branch gets no `attrs.available` (declarations keep `available_declared`), and a check
+  met on every OS it names is listed as `availability_always_true` (file, line, requirement, target).
+  IceCubesApp (iOS 18): 6 `#available(iOS 17.4, *)` checks always true. element-x-ios: lowest iOS target 16.0 (a
+  bundled package), nothing met.
 - Generated Swift (#100): files with a Sourcery, SwiftGen, swift-openapi-generator or Mockolo banner, and R.swift's
   `R.generated.swift`, are classified as generated. element-x-ios: 9 files (6 Sourcery, 3 SwiftGen); the other
   Swift repos surveyed have none.

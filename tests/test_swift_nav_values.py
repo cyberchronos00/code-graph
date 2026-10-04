@@ -63,3 +63,30 @@ def test_previews_run_as_tests(tmp_path):
     gen = [json.loads(r["attrs"])["generated"] for r in st.q(
         "SELECT attrs FROM nodes WHERE file = 'PreviewTests/GeneratedPreviewTests.swift' AND attrs LIKE '%generated%'")]
     assert gen and all(g["test"] is True and g["reason"] == "Sourcery banner" for g in gen)
+
+
+def test_availability_checks_met_by_the_deployment_target(tmp_path):
+    """#100: with `platforms: [.iOS(.v17)]` an `@available(iOS 16, *)` / `if #available(iOS 15, *)` always holds:
+    no attrs.available, listed as availability_always_true; a higher requirement keeps its attrs.available."""
+    import json
+    from codegraph.plugins.swift.plugin import deployment_targets
+    root = tmp_path / "pkg"
+    (root / "Sources" / "App").mkdir(parents=True)
+    (root / "Package.swift").write_text(
+        "// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(\n    name: \"App\",\n"
+        "    platforms: [.iOS(.v17), .macOS(\"14.2\")],\n    targets: [.target(name: \"App\")]\n)\n")
+    (root / "Sources" / "App" / "A.swift").write_text(
+        "@available(iOS 16, *)\nfunc old() {}\n\n@available(iOS 18, *)\nfunc new() {}\n\nfunc run() {\n"
+        "    if #available(iOS 15, *) {\n        old()\n    }\n    if #available(iOS 18, macOS 15, *) {\n        new()\n    }\n}\n")
+    assert deployment_targets(root) == {"iOS": "17", "macOS": "14.2"}
+    stats = index_project(root, tmp_path / "g.db", "dep")
+    sw = stats["plugins"]["swift"]
+    assert sw["deployment_targets"] == {"iOS": "17", "macOS": "14.2"}
+    assert [(x["line"], x["check"]) for x in sw["availability_always_true"]] == [(1, "@available"), (8, "#available")]
+    c = sqlite3.connect(tmp_path / "g.db")
+    at = {i: json.loads(a or "{}") for i, a in c.execute("SELECT id, attrs FROM nodes WHERE id LIKE 'function:%'")}
+    assert "available" not in at["function:old"] and at["function:old"]["available_declared"] == {"iOS": "16"}
+    assert at["function:new"]["available"] == {"iOS": "18"}
+    ed = {(d, ln): json.loads(a or "{}").get("available") for d, ln, a in c.execute(
+        "SELECT dst, line, attrs FROM edges WHERE src = 'function:run' AND kind = 'CALLS'")}
+    assert ed[("function:old", 9)] is None and ed[("function:new", 12)] == {"iOS": "18", "macOS": "15"}

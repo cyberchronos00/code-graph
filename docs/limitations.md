@@ -301,7 +301,7 @@ Issues and pull requests that extend it are welcome.
 - **Per-target indexes:** one graph holds every target; `--platform` filters it by the conditions. Rust exact mode
   runs rust-analyzer once more per target the `cfg` conditions name (up to 3), so references under another target's
   `cfg` are exact; C / C++ (one compile database per platform), Swift and Kotlin builds per target are not merged
-  yet. Swift `@available` / `#available` versions are recorded (`attrs.available`), not used as filters. Swift
+  yet. Swift `@available` / `#available` versions are recorded (`attrs.available`, minus what the deployment target already meets), not used as filters. Swift
   `#if os(...)` / `canImport` / `targetEnvironment` blocks come from the Swift plugin ([swift.md](swift.md)); Kotlin
   Multiplatform source sets and `expect` / `actual` from the Kotlin plugin ([kotlin.md](kotlin.md)); Electron / Tauri
   process boundaries from the bridges pass ([bridges.md](bridges.md#desktop-process-boundaries-electron-and-tauri)).

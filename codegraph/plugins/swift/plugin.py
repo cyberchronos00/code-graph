@@ -403,6 +403,45 @@ def _preprocess(src: bytes, blocks: list | None = None) -> tuple[bytes, list[str
     return out, what
 
 
+_DEPLOY_SETTING = re.compile(r"\b(IPHONEOS|MACOSX|TVOS|WATCHOS|XROS)_DEPLOYMENT_TARGET\s*[=:]\s*[\"']?(\d+(?:\.\d+)*)")
+_DEPLOY_SPM = re.compile(r"\.(iOS|macOS|tvOS|watchOS|visionOS|macCatalyst)\s*\(\s*(?:\.v(\d+(?:_\d+)*)|\"(\d+(?:\.\d+)*)\")")
+_DEPLOY_YML = re.compile(r"(?m)^(\s*)deploymentTarget\s*:\s*\n((?:\1\s+\w+\s*:\s*[\"']?[\d.]+[\"']?\s*\n?)+)")
+_SETTING_OS = {"IPHONEOS": "iOS", "MACOSX": "macOS", "TVOS": "tvOS", "WATCHOS": "watchOS", "XROS": "visionOS"}
+
+
+def deployment_targets(root) -> dict:
+    """Lowest deployment target per OS (#100) from Xcode build settings (`IPHONEOS_DEPLOYMENT_TARGET` in .pbxproj /
+    .xcconfig / XcodeGen YAML), XcodeGen `deploymentTarget:` and SwiftPM `platforms: [.iOS(.v16)]`."""
+    import os
+    from ... import presets
+    skip = set(presets.values("swift", "skip_dirs", default=[]) or []) | {"build"}
+    out: dict = {}
+
+    def add(os_, v):
+        if os_ and v and (os_ not in out or tuple(int(x) for x in v.split(".")) < tuple(int(x) for x in out[os_].split("."))):
+            out[os_] = v
+    for dp, dns, fns in os.walk(root):
+        dns[:] = [d for d in dns if d not in skip and not d.startswith(".")]
+        for fn in fns:
+            if not (fn.endswith((".pbxproj", ".xcconfig", ".yml", ".yaml")) or fn == "Package.swift"):
+                continue
+            try:
+                txt = open(os.path.join(dp, fn), encoding="utf-8", errors="replace").read(2_000_000)
+            except OSError:
+                continue
+            if fn == "Package.swift":
+                for m in _DEPLOY_SPM.finditer(txt.split("targets:", 1)[0]):
+                    add(m.group(1), (m.group(2) or "").replace("_", ".") or m.group(3))
+                continue
+            for m in _DEPLOY_SETTING.finditer(txt):
+                add(_SETTING_OS[m.group(1)], m.group(2))
+            if fn.endswith((".yml", ".yaml")):
+                for m in _DEPLOY_YML.finditer(txt):
+                    for k, v in re.findall(r"(\w+)\s*:\s*[\"']?([\d.]+)", m.group(2)):
+                        add(k if k in ("iOS", "macOS", "tvOS", "watchOS", "visionOS") else None, v.strip("."))
+    return out
+
+
 class SFile:
     def __init__(self, rel: str, src: bytes, tree):
         self.rel, self.src, self.tree = rel, src, tree
@@ -494,6 +533,9 @@ class SwiftPlugin(LanguagePlugin):
             sfiles[-1].attr_blocks = blocks
         self._fd: dict[str, list[Decl]] = defaultdict(list)
         self._avail_regions: dict[str, list] = {}
+        self.deploy = deployment_targets(project.root)
+        if self.deploy:
+            self.st["deployment_targets"] = dict(self.deploy)
         for sf in sfiles:            # pass 1: declarations
             self.cur = sf
             for c in sf.tree.root_node.children:
@@ -1765,12 +1807,15 @@ class SwiftPlugin(LanguagePlugin):
                     av = self._vmax(pav, av)
             if av:
                 decl_av.append((d.line, d.end, av))
+            declared, av = av, self._unmet(av, sf.rel, d.line, "@available")
             n = self.b.nodes.get(d.id)
-            if n is not None and (av or dep):
+            if n is not None and (av or dep or declared):
                 n.attrs = dict(n.attrs or {})
                 if av:
                     n.attrs["available"] = av
                     self.st["available_declarations"] += 1
+                if declared and declared != av:
+                    n.attrs["available_declared"] = declared
                 if dep:
                     n.attrs["deprecated"] = dep
         if b"#available" not in sf.src and b"#unavailable" not in sf.src:
@@ -1815,9 +1860,30 @@ class SwiftPlugin(LanguagePlugin):
             a, z = p.end_point[0] + 2, (stmts.end_point[0] + 1 if stmts is not None else p.end_point[0] + 1)
         else:
             return
-        if z >= a:
+        av = self._unmet(av, self.cur.rel if self.cur is not None else "", c.start_point[0] + 1,
+                         "#unavailable" if neg else "#available")
+        if z >= a and av:
             regions.append((a, z, av))
             self.st["available_branches"] += 1
+
+    def _unmet(self, av: dict, rel: str, line: int, what: str) -> dict:
+        """The part of an availability requirement the deployment target does not already meet (#100): with iOS
+        18.5 deployed, `@available(iOS 17, *)` / `if #available(iOS 17, *)` always hold, so the declaration or branch
+        gets no attrs.available and the check is listed as `availability_always_true` in the index stats."""
+        if not av or not self.deploy:
+            return av
+        def ver(v):
+            return tuple(int(x) for x in v.split("."))
+        out = {k: v for k, v in av.items() if k not in self.deploy or ver(v) > ver(self.deploy[k])}
+        if len(out) < len(av):
+            self.st["availability_checks_met_by_deployment"] += 1
+            if not out:
+                lst = self.st.setdefault("availability_always_true", [])
+                if len(lst) < 50:
+                    lst.append({"file": rel, "line": line, "check": what,
+                                "requires": ", ".join(f"{k} {v}" for k, v in av.items()),
+                                "deployment": ", ".join(f"{k} {self.deploy[k]}" for k in av if k in self.deploy)})
+        return out
 
     def _apply_available(self):
         """References inside `if #available(...)` / after `guard #available(...)`: edge attrs.available."""
