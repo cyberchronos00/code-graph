@@ -394,3 +394,20 @@ def test_scanner_cordova_and_event_helpers():
     out = []
     scan_cordova(nf, out, {"CDVPay": "Pay"})
     assert [(r.namespace, r.method, r.conf) for r in out] == [("Pay", "pay", "resolved")]
+
+
+def test_event_names_from_string_enums():
+    # #95: `sendEvent(name: Event.keyPressed.rawValue)` (Swift String enum) and `Events.SAVED.event` (Kotlin enum class
+    # with a String property) evaluate to the case's value
+    from codegraph.bridges import NativeFile, _enum_consts, _str_value
+    sw = ('enum Event: String, CaseIterable {\n    case keyPressed, keyReleased = "released"\n'
+          '    case other // note\n    var x: Int { 1 }\n}\n')
+    kt = 'enum class Events(val event: String) {\n    SAVE_ERROR("SaveError"),\n    SPLIT("SplitViewChanged")\n}\n'
+    c = {**_enum_consts("ios/Events.swift", sw), **_enum_consts("android/Events.kt", kt)}
+    assert c == {"Event.keyPressed.rawValue": "keyPressed", "Event.keyReleased.rawValue": "released",
+                 "Event.other.rawValue": "other", "Events.SAVE_ERROR.event": "SaveError",
+                 "Events.SPLIT.event": "SplitViewChanged"}
+    nf = NativeFile("ios/W.swift", "class W {}\n")
+    assert _str_value(nf, "name: Event.keyReleased.rawValue", c) == "released"
+    assert _str_value(nf, "Events.SPLIT.event", c) == "SplitViewChanged"
+    assert _enum_consts("ios/E.swift", "enum Mode: Int { case a, b }\n") == {}

@@ -46,7 +46,7 @@ git-ignored. Calls inside the definition files are not senders.
   `sendEvent("evt", ...)`) to a JS `addListener('evt', cb)` on `new NativeEventEmitter(Module)`,
   `DeviceEventEmitter` / `NativeAppEventEmitter`, `new EventEmitter(ExpoModule)` or an Expo module handle; and
   `endpoint:capacitor-event:<Plugin>#<event>` from `notifyListeners("evt", data)` in a Capacitor plugin class to
-  `Plugin.addListener('evt', cb)`. Event names may be constants (`const val EVT = "..."`). React Native's own events
+  `Plugin.addListener('evt', cb)`. Event names may be constants (`const val EVT = "..."`) or string-valued enum cases (Swift `Event.keyPressed.rawValue` with `enum Event: String`, Kotlin `Events.SAVED.event` with `enum class Events(val event: String)`). React Native's own events
   (`keyboardDidShow`, `hardwareBackPress`, ...) and events the JS side emits itself (`DeviceEventEmitter.emit('x')`,
   an in-app event bus) are not endpoints.
 
@@ -191,7 +191,8 @@ capacitor:Echo#vibrate  received on: android  ! MISSING ON ios
 
 - `BasicMessageChannel`; Pigeon `@EventChannelApi`; native UI components (`requireNativeComponent`, view managers,
   Expo views); React Native new-architecture codegen events (`emitOnX` from a spec's `EventEmitter<T>` member) and
-  events emitted through an enum value or a wrapper taking the name from elsewhere; Cordova `exec` calls whose service
+  events emitted through a wrapper taking the name from elsewhere (`sendJSEvent(Events.X.event, map)` calling
+  `emitDeviceEvent(eventName, ..)`); Cordova `exec` calls whose service
   / action come from a variable, and Cordova's `PluginResult` keep-alive callbacks as events.
 - A native `invokeMethod` on a channel passed in from elsewhere (a constructor parameter, a channel created in another
   file) is skipped unless the file creates exactly one channel.

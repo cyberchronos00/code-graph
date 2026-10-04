@@ -551,6 +551,32 @@ def scan_flutter(nf: NativeFile, out: list, handler_classes: dict, pending_sites
 
 
 _GLOBAL_CONSTS: dict[str, str] = {}
+# string-valued enum cases (#95): Swift `enum Event: String { case a, b = "x" }` -> `Event.a.rawValue`, Kotlin
+# `enum class Events(val event: String) { SAVED("Saved") }` -> `Events.SAVED.event`
+SWIFT_STR_ENUM = re.compile(r"\benum\s+(\w+)\s*:\s*String\b[^{]*\{")
+KT_STR_ENUM = re.compile(r"\benum\s+class\s+(\w+)\s*\(\s*(?:(?:private|internal|public)\s+)?val\s+(\w+)\s*:\s*String\s*\)[^{]*\{")
+
+
+def _enum_consts(rel: str, src: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if rel.endswith(".swift") and "enum" in src:
+        for m in SWIFT_STR_ENUM.finditer(src):
+            depth, i = 1, m.end()
+            while i < len(src) and depth:
+                depth += {"{": 1, "}": -1}.get(src[i], 0)
+                i += 1
+            body = src[m.end():i - 1]
+            for cm in re.finditer(r"^\s*case\s+([^\n{(]+)$", body, re.M):
+                for part in cm.group(1).split(","):
+                    pm = re.fullmatch(r'\s*(\w+)\s*(?:=\s*"([^"\\\n]*)")?\s*(?://.*)?', part)
+                    if pm:
+                        out[f"{m.group(1)}.{pm.group(1)}.rawValue"] = pm.group(2) if pm.group(2) is not None else pm.group(1)
+    elif rel.endswith(".kt") and "enum" in src:
+        for m in KT_STR_ENUM.finditer(src):
+            body = src[m.end():src.find("}", m.end())]
+            for em in re.finditer(r'\b([A-Z_][A-Z0-9_]*)\s*\(\s*"([^"\\\n]*)"\s*\)', body):
+                out[f"{m.group(1)}.{em.group(1)}.{m.group(2)}"] = em.group(2)
+    return out
 
 # ------------------------------------------------------------------ Flutter MethodChannel: native -> Dart
 NATIVE_INVOKE = re.compile(r"(?:\b(?:self|this)\s*\.\s*)?(\w+)\s*[?!]*\s*\.\s*invokeMethod\s*(?:<[^>]*>)?\s*\(\s*")
@@ -1028,6 +1054,8 @@ def _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom) -
             continue
         if len(src) > 2_000_000:
             continue
+        for k, v in _enum_consts(rel, src).items():
+            other_consts.setdefault(k, v)
         if not (TRIGGER.search(src) or (pigeon_rx and pigeon_rx.search(src))):
             # not scanned, but its class constants name modules elsewhere (`getName() = FooImpl.NAME`): qualified only
             if "String" in src and (cm := CLASS_RE.search(src)):

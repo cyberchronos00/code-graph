@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Bridge event names from string enums (#95): a native event sent as `Event.keyPressed.rawValue` (Swift
+  `enum Event: String`, the case name or its `= "raw"` value) or `Events.SAVED.event` (Kotlin
+  `enum class Events(val event: String)`) has a name now. mattermost-mobile: the 3 hardware-keyboard
+  `sendEvent(name: Event.mmHardwareKeyboardEvent.rawValue)` sends leave the unresolved list and become the
+  `mmHardwareKeyboardEvent` endpoint (its JS listener lives in `libraries/@mattermost/hardware-keyboard/src`,
+  outside the default sources). capacitor-plugins, flutter-samples and social-app bridges unchanged.
 - Kotlin receiver types (#96): a function's locals (`val repo = OrderRepo()`, `val api: OrdersApi = ..`),
   `by lazy { OrderRepo() }` properties and test doubles (`mockk<AuthSdkSource> { .. }`, `spyk<..>`, `mock<..>()`)
   type their receivers, and an initializer is read only after its own `=` (`val same = a == Foo()` and a `= X(..)`
