@@ -130,8 +130,16 @@ def load(db: str) -> dict:
     for owner in [o for o in members if o not in types]:
         for nm, sym in members.pop(owner).items():
             top.setdefault(f"{owner}.{nm}", sym)
+    # the app's own platform: one that tags at least half of the compared symbols (Element X iOS tags nearly every
+    # symbol `ios` from its Xcode targets). Code tagged with it is the app itself, not platform-only code (#107)
+    tags = defaultdict(int)
+    compared = list(types.values()) + list(top.values()) + [m for ms in members.values() for m in ms.values()]
+    for sym in compared:
+        for pl in set(sym.get("platforms") or ()):
+            tags[pl] += 1
+    primary = {pl for pl, n in tags.items() if n * 2 >= len(compared)}
     return {"types": types, "members": members, "top": top, "err_files": err_files, "platforms": platforms, "db": db,
-            "support": support, "root": root, "lines_of": lines_of}
+            "support": support, "primary_platforms": primary, "root": root, "lines_of": lines_of}
 
 
 def _first_word(name: str) -> str:
@@ -253,7 +261,7 @@ def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool, s
         if sym["file"] in S["err_files"]:
             return "unknown"
         pl = set(sym.get("platforms") or ())
-        if pl and T["platforms"] and not (pl & T["platforms"]):
+        if pl and T["platforms"] and not (pl & T["platforms"]) and not (pl & S["primary_platforms"]):
             return "platform_only"
         return "missing"
 

@@ -93,3 +93,37 @@ def test_member_verbs_and_prefixes(dbs):
     assert P.norm_member("getDefaultUriMatchType") == P.norm_member("defaultUriMatchType")
     assert P._near(["item", "list", "state"], ["item", "listing", "state"])
     assert not P._near(["login", "totp", "state"], ["login", "state"])
+
+
+def _retag(db, tag_of, targets):
+    """Set `attrs.platforms` per node (tag_of(name) -> list | None) and the graph's platform targets."""
+    import shutil
+    import sqlite3
+    out = db.replace(".db", f"-{'-'.join(targets)}.db")
+    shutil.copy(db, out)
+    c = sqlite3.connect(out)
+    for nid, name, attrs in c.execute("SELECT id, name, attrs FROM nodes").fetchall():
+        a = json.loads(attrs or "{}")
+        tags = tag_of(name or "")
+        if tags is not None:
+            a["platforms"] = tags
+            c.execute("UPDATE nodes SET attrs=? WHERE id=?", (json.dumps(a), nid))
+    st = json.loads(dict(c.execute("SELECT key, value FROM meta"))["stats"])
+    st["platforms"] = {"targets": targets}
+    c.execute("UPDATE meta SET value=? WHERE key='stats'", (json.dumps(st),))
+    c.commit()
+    c.close()
+    return out
+
+
+def test_app_platform_is_not_platform_only(dbs):
+    """#107: an iOS app whose symbols are all tagged `ios` (Xcode target membership) compared with an Android
+    graph: only code for a side platform (`watchos`) is platform_only, the app itself is compared."""
+    src = _retag(dbs[0], lambda n: ["watchos"] if n.startswith("WidgetTimeline") or n == "entries" else ["ios"],
+                 ["ios", "watchos"])
+    tgt = _retag(dbs[1], lambda n: None, ["android"])
+    res = P.parity(src, tgt)
+    assert {r["symbol"] for r in res["platform_only"]} == {"WidgetTimeline"}, res["platform_only"]
+    missing = {r["symbol"] for r in res["missing"]}
+    assert {"OrderService.cancel", "OrderStatus.archived"} <= missing, missing
+    assert by_symbol(res)["OrderService"]["confidence"] == "exact"

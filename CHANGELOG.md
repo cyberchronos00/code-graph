@@ -50,6 +50,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- `cg parity` (#107): symbols tagged with the source app's own platform (one that tags at least half of the compared
+  symbols) are no longer `platform_only` when the target graph does not build it. Element X iOS → Android:
+  platform-only 3,551 → 0, missing 209 → 3,760 of 4,184. Bitwarden output unchanged in both directions.
+
 - Kotlin (#81): a suspend lambda used as an expression (`val b = suspend { 1 }`, `X to suspend { ... }`) no longer
   breaks the parse and drops the enclosing class's functions; ktor-samples: 34 more `@Test` functions (162 → 196),
   files with syntax errors 6 → 3. No change on nowinandroid, KaMPKit, spring-petclinic-kotlin.

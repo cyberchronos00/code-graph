@@ -97,7 +97,9 @@ never read as name matches. `--write-map FILE` writes them as a `--map` file to 
 - **unknown:** the symbol is in a file that parsed with syntax errors ([completeness.md](completeness.md)), so it
   stays out of "missing".
 - **platform_only:** the symbol is tagged only for platforms the target graph does not build
-  ([platforms.md](platforms.md)).
+  ([platforms.md](platforms.md)), other than the source app's own platform. A platform that tags at least half of the
+  compared source symbols is the app itself (Element X iOS tags nearly every symbol `ios` from its Xcode targets), so
+  code tagged with it is compared like untagged code; a `watchos`-only widget is still platform-only (#107).
 
 ## How far to trust "missing"
 
@@ -138,7 +140,7 @@ Read the list as "no counterpart with a related name". Use `--map` and `--strip-
 | Bitwarden iOS → Android | 101 (of 3,048 missing) | 13 right, 2 wrong (15 of the 20 sampled are still inferred after tightening) | 0 / 20 |
 | Bitwarden Android → iOS | 124 (of 7,661) | 7 right, 4 wrong (11 of 20 still inferred) | 0 / 20 (1 wrong match) |
 | Element X Android → iOS | 91 (of 7,910) | about 16 / 20 | 0 / 20 |
-| Element X iOS → Android | 1 | — | — |
+| Element X iOS → Android | 83 (78 structure, 5 learned; after #107) | not sampled yet | — |
 
 The inferred matches are mostly right where the two apps share localization keys or accessibility ids (SwiftUI
 subviews ↔ composables, display-label helpers, request ↔ API types). The wrong ones share generic keys
@@ -146,8 +148,9 @@ subviews ↔ composables, display-label helpers, request ↔ API types). The wro
 per direction had no match before or after, so the false "missing" rate is unchanged. In those samples the false
 ones are counterparts with different names that use nothing the other side uses in a way the graph sees
 (`ViewItemState` ↔ `VaultItemState`, `IdentityTokenResponseModel` ↔ `GetTokenResponseJson`,
-`LoginFormState` ↔ `LoginScreenViewStateBindings`). Element X iOS → Android puts 3,551 of 4,184 source symbols in
-`platform_only`, because the iOS symbols are tagged `ios` and the Android graph builds only `android`.
+`LoginFormState` ↔ `LoginScreenViewStateBindings`). Element X iOS → Android had put 3,551 of 4,184 source symbols in
+`platform_only`, because the iOS symbols are tagged `ios` and the Android graph does not build `ios` (fixed in #107:
+0 platform-only, 3,760 missing).
 
 `--json` returns `matched`, `missing`, `unknown` and `platform_only` lists (symbol, kind, file:line, folder group,
 target and confidence for a match, and `owner_matched` for a member of a matched type), plus `summary`.
