@@ -1108,6 +1108,33 @@ above and the fixture's 4 sends plus the `cg link` pairing of `hooks-ts` `order.
 covers svix, spatie/laravel-webhook-server and hand-signed `fetch` / `requests` senders, event names from a caller's
 argument, and the pairing.
 
+## Local IPC in JS / TS (#38 part 1)
+
+| Project | Edges | Notes |
+|---|---|---|
+| darkreader (shallow clone, `.cg.yaml` `include: [src]`, see #153) | 34 SENDS_TO, 45 RECEIVED_BY, 20 MATCHES_ENDPOINT (`extension`) | `chrome.runtime.sendMessage` / `tabs.sendMessage` with `{type: MessageTypeUItoBG.X}` enum members (resolved to `ui-bg-*` / `cs-bg-*` / `bg-cs-*` names); listeners that `switch` on enum members, also one call down (`Messenger.messageListener` -> `onUIMessage`, `via` the listener); `runtime.connect({name: type})` as `port:*`. Catch-all listeners (`makeChromiumHappy`) receive `*` and match every typed sender |
+| open-webui | 20 SENDS_TO, 13 RECEIVED_BY | Kokoro and Pyodide workers (`this.worker.postMessage` <-> `self.onmessage`, `self.postMessage` back to `worker.onmessage` / `addEventListener('message')`); the Pyodide sandbox iframe (`parent.postMessage(.., '*')`, a listener checking `event.source` per `fs:*` type); the OneDrive picker's window listener (`initialize`) |
+| koel | 12 SENDS_TO, 3 RECEIVED_BY | Service worker: `sw.postMessage` through `const getSW = () => navigator.serviceWorker?.controller`, `self.addEventListener('message')`, `client.postMessage` back to `navigator.serviceWorker.addEventListener('message')`; the SSO popup listener (`*`) |
+| saleor-dashboard | 1 SENDS_TO, 12 RECEIVED_BY | App iframes: `contentWindow.postMessage(event, appOrigin)` (type unknown: `*`); the app-actions listener receives 11 action types from `handleAction(event.data)`'s `switch` (`via` the listener) |
+| excalidraw | 9 SENDS_TO, 3 RECEIVED_BY | Embeddable iframes (`contentWindow.postMessage({type: 'command'})`, `event.source.postMessage`), the diagram-to-code `srcdoc` listener |
+| electron-fiddle | 5 SENDS_TO, 4 RECEIVED_BY | The isolated run-button iframe both ways, with origin and source checks; types as string constants (`RESIZE_MESSAGE`) |
+| cal.com | 6 SENDS_TO, 2 RECEIVED_BY | OAuth setup popups (`window.opener.postMessage({type: 'alby:oauth:success'})`), embed preview instructions, `CAL:${name}` events to the opener (`*`, `target_origin: "*"`) |
+| immich, librenms | 4 + 2, 2 + 2 | Workers (`new URL('$lib/workers/hash-file.ts', import.meta.url)` by suffix; librenms through `getWorker().postMessage`) |
+| social-app | 4 SENDS_TO, 2 RECEIVED_BY | `BroadcastChannel('BSKY_BROADCAST_CHANNEL')` / `NOTIFS_BROADCAST_CHANNEL` |
+| elk, outline, eslint | 3, 1, 2 (test only) | elk's service worker files are not indexed, so only the page side shows |
+
+No edge was removed anywhere. Unchanged: tauri, mattermost-mobile, socket.io, authentik, mkdocs, invoiceninja, vito,
+pixelfed, panel and express. In tauri and mattermost-mobile the postMessage calls are `window.__TAURI_INTERNALS__` /
+`window.ipc` / React Native WebView bridges (`cg bridges`); authentik's `web/` is a separate project from its Python
+root. Two errors found in the hand-check were fixed before landing: a `port:*` connection matched a `*` message
+listener (ports now match only `port:` listeners), and a type guard (`isWidgetResizeAction(event.data)`) was taken as
+a handler (callees named `is*` / `has*` / `can*` / `should*` / `check*` / `validate*` are skipped). Also fixed:
+`this.#onmessage = h` fields and `typeof data.type !== 'string'` are not listeners or types. A random 20 of the 210 new edges
+in the batch were checked by hand against the source: 18 correct and the 2 above wrong. `tests/test_local_ipc.py` covers
+`tests/local_ipc_fixture`: workers both ways (and through a getter), comlink, a service worker, BroadcastChannel,
+postMessage with and without an origin check, extension messages with literal and enum types, ports and a
+native-messaging host manifest.
+
 ## Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32 part 3)
 
 | Project | New | Notes |

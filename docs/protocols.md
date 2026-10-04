@@ -275,6 +275,29 @@ signature scheme (`hmac`, `svix`, `standard-webhooks`) and the same event name (
 and spatie/laravel-webhook-client conventions, Kotlin `when` / Rust `match` dispatch, event names held in a stored
 subscription (`webhook.event_type`), and pairing through subscriber URLs in seed data or config.
 
+## Local IPC in JS / TS: workers, BroadcastChannel, postMessage, extensions (#38 part 1)
+
+`codegraph/local_ipc.py` links messages between execution contexts of one web app or browser extension:
+
+| protocol | endpoint | senders | receivers |
+|---|---|---|---|
+| `worker` | `<script>` (repo path) | `w.postMessage(..)` on `w = new Worker(new URL('./w.ts', import.meta.url))` / `new Worker('w.js')` / `new SharedWorker(..)` / Vite `import W from './w?worker'; new W()` (also `this.w`, and a getter function that returns it); comlink `wrap(w)` | the script's `self.onmessage = h` / `addEventListener('message', h)`; comlink `expose(obj)` |
+| `worker` | `<script>:out` | the script's `self.postMessage(..)` | `w.onmessage = h` / `w.addEventListener('message', h)` |
+| `worker` | `service-worker` | `navigator.serviceWorker.controller.postMessage(..)`, `registration.active.postMessage(..)`, a variable taken from `navigator.serviceWorker.controller` / `.ready` | `self.addEventListener('message', h)` in a file that handles `install` / `activate` / `fetch` |
+| `worker` | `service-worker:out` | `client.postMessage(..)` in the service worker (heuristic) | `navigator.serviceWorker.addEventListener('message', h)` / `.onmessage` |
+| `broadcastchannel` | `<channel name>` (literal or constant) | `.postMessage` on a `new BroadcastChannel(name)` | `.onmessage` / `.addEventListener('message', h)` on any channel of that name |
+| `postmessage` | `<type>` or `*` | `window.parent / opener / top / frames[i] / iframe.contentWindow / event.source / window .postMessage(msg, origin)`; `<type>` is the payload's `type` / `action` / `event` / `kind` / `messageType` / `cmd` literal or constant, else `*` (heuristic); `target_origin: "*"` when posted to any origin | `window.addEventListener('message', h)` / `window.onmessage = h` outside workers: one endpoint per type the handler compares (`event.data.type === 'x'`, `case 'x':` under `switch (..type)`; heuristic), else `*` (all types). Guard: `origin check` when the handler reads `event.origin` or compares `event.source`, else `[]` (`unguarded`) |
+| `extension` | `<type>` or `*`; `port:<name>` | `chrome.runtime.sendMessage(msg)`, `chrome.tabs.sendMessage(tab, msg)` (and `browser.*`); `runtime.connect({ name })` / `tabs.connect(tab, { name })` | `runtime.onMessage.addListener(h)` (types as for postmessage); `runtime.onMessageExternal` records a `sender.id` / `.origin` / `.url` check as its guard; `runtime.onConnect.addListener(h)` per `port.name === 'x'` compared |
+| `native-messaging` | `<host name>` | `runtime.connectNative('com.app.host')` / `sendNativeMessage(..)` | the in-repo program named by the `path` of a host manifest (`"type": "stdio"`, `"name"`) |
+
+`postmessage` and `extension` match message types as globs, so a `*` listener receives every type; a sender whose
+type is unknown reaches only `*` listeners, and a `port:` connection only `port:` listeners. Types are read from
+string literals, constants and enum members (`case MessageType.SAVE:`), in the listener and in the functions it
+hands the message to (one level; the callee receives them, `via` the listener; type guards named `is*` / `has*` /
+... are skipped). Port messages (`port.postMessage`), `MessageChannel` ports, message
+types of worker messages, and manifest exposure facts (`externally_connectable`, `web_accessible_resources`) are not
+recorded yet. Electron / Tauri IPC and web-to-native bridges are `cg bridges` (codegraph/bridges.py).
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function
@@ -638,7 +661,7 @@ broker nodes (#40) on the endpoints, the repository's own wrapper classes (their
 
 ## Not covered yet
 
-- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (webhook senders in #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
+- Message brokers beyond #35 part 1 (see above) and the rest of local IPC (#38: Unix sockets, named pipes, D-Bus, Android intents, child processes, Dart isolates, XPC); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
   WebSocket clients (#147).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.

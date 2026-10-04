@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Local IPC in JS / TS (#38, part 1): Web Workers and SharedWorkers (both directions, comlink), service workers,
+  `BroadcastChannel`, `window.postMessage` between windows / iframes (by message type, with the listener's origin
+  check as a guard and `target_origin: "*"` on senders), browser-extension runtime / tabs messaging and ports,
+  and native messaging hosts, as `worker`, `broadcastchannel`, `postmessage`, `extension` and `native-messaging`
+  endpoints in `cg protocols`.
 - `ws` `noServer` upgrade handlers also take a path from `case '/x':` in a `switch` on the pathname (a variable
   from `new URL(..).pathname` / `url.parse(..).pathname`), and from a same-file object or `Map` of path keys indexed
   by that pathname before `handleUpgrade` (#147).

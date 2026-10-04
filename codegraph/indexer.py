@@ -288,6 +288,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (whst := apply_webhooks(project, builder)):
         whst["seconds"] = round(time.time() - t_wh, 2)
         stats["webhooks"] = whst
+    # local IPC in JS / TS: workers, service workers, BroadcastChannel, window.postMessage, extensions (#38)
+    from .local_ipc import apply as apply_local_ipc
+    t_ipc = time.time()
+    if (ipcst := apply_local_ipc(project, builder)):
+        ipcst["seconds"] = round(time.time() - t_ipc, 2)
+        stats["local_ipc"] = ipcst
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

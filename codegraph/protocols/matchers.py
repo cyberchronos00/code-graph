@@ -175,3 +175,11 @@ def webhook(send: str, recv: str) -> dict | None:
     if ra in GENERIC_WEBHOOK:
         return _info(lit=1, ph_into_lit=1)
     return None
+
+
+def extension(send: str, recv: str) -> dict | None:
+    """Browser-extension messages (codegraph/local_ipc.py): message types by glob (a `*` listener takes every type);
+    `port:<name>` connections only match `port:` listeners (runtime.connect never reaches runtime.onMessage)."""
+    if send.startswith("port:") != recv.startswith("port:"):
+        return None
+    return glob(send, recv)

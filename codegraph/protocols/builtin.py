@@ -85,6 +85,20 @@ register(Protocol("webhook", "tcp", "Webhook event <provider>:<event> (codegraph
                   "svix, Twilio, ...) posts it to a receiver route; receivers record their signature check as a guard",
                   matcher=M.webhook, fanout=True, guards=True, ports=(443,), schemes=("https",), framework_senders=("*",)))
 
+# ---- local IPC between execution contexts of a JS / TS app (#38 part 1, codegraph/local_ipc.py)
+register(Protocol("worker", "local", "Web Worker / SharedWorker / service worker messages: endpoint:worker:<script> "
+                  "(postMessage, comlink wrap -> the script's onmessage / expose) and <script>:out back to the page",
+                  entry=False))
+register(Protocol("broadcastchannel", "local", "BroadcastChannel by name: postMessage -> onmessage / message listeners "
+                  "of any channel of that name", fanout=True, entry=False))
+register(Protocol("postmessage", "local", "window.postMessage between windows / iframes by message type (`*`: any "
+                  "type; listeners record an origin check as a guard)", matcher=M.glob, fanout=True, guards=True))
+register(Protocol("extension", "local", "Browser-extension runtime messaging by message type (runtime / tabs "
+                  "sendMessage -> runtime.onMessage) and `port:<name>` (runtime.connect -> onConnect)",
+                  matcher=M.extension, fanout=True, guards=True))
+register(Protocol("native-messaging", "ipc", "Browser native messaging host: connectNative / sendNativeMessage -> the "
+                  "in-repo program its host manifest names"))
+
 # ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)
 register(Protocol("tcp", "tcp", "Raw TCP socket: connect -> listener on the same port (listen / bind vs connect; "
                   "bind address and exposure on the listener)"))

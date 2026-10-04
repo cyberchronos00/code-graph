@@ -1,0 +1,1 @@
+{"name": "com.acme.host", "description": "Acme native host", "type": "stdio", "path": "main.py", "allowed_origins": ["chrome-extension://abcdefghijklmnop/"]}
