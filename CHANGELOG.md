@@ -18,9 +18,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - Low-level Python MCP servers (#102): branches on `Enum.X.value` (mcp-server-time) and single-tool servers that do
   not branch on the name (mcp-server-fetch, from the one `Tool(name=)` in `list_tools`). Every reference server's
   tools now have a handler: mcp-time 2 and mcp-fetch 1 (none before), all 3 correct.
+- Node client constructors (#103) as external systems, like the Python ones: `pg`, `mysql2`, `ioredis` (also through a
+  project subclass and its `super()`), `redis`, `nodemailer`, `mongoose`, `mongodb`, `amqplib`, `kafkajs`, `sequelize`,
+  `knex`, `ldapjs`, `S3Client`, `ssh2` / `ssh2-sftp-client` / `basic-ftp`. TypeScript env reads through wrappers
+  (`env.X` / `environment.X`) and through values parsed from `process.env` (zod `safeParse(process.env)`, Joi
+  `validate(process.env)`). outline: Redis found (none before), 427 env reads through its `env` wrapper; immich
+  server: `DB_*` / `REDIS_*` read through its zod env schema now connect to Postgres / Redis, with their passwords.
 
 ### Fixed
 
+- TypeScript `process.env.X = ...` no longer counts as reading `X` (#103).
 - `publish.yml` skips files already on PyPI (`skip-existing`). Publishing a GitHub release for a version that a
   `workflow_dispatch` run had already uploaded failed with "400 File already exists" (v0.10.1); it now succeeds.
 

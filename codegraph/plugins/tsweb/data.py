@@ -123,7 +123,9 @@ def contribute_data(project: Project, b: GraphBuilder, ctx) -> dict:
                 b.add_edge(e["src"], cid, "READS_CONFIG", file=e["file"], line=e["line"], confidence="resolved", via=e["via"])
                 st["config_reads"] += 1
             continue
-        b.add_edge(e["src"], _env(b, key), "READS_ENV", file=e["file"], line=e["line"], confidence="exact", via=e["via"])
+        # `env.X` wrappers and values parsed from process.env (#103) name the key by convention: resolved
+        conf = "resolved" if e["via"].startswith(("env wrapper", "env schema")) else "exact"
+        b.add_edge(e["src"], _env(b, key), "READS_ENV", file=e["file"], line=e["line"], confidence=conf, via=e["via"])
         st["env_reads"] += 1
 
     # ---- entities -> tables

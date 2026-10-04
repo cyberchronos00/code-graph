@@ -475,6 +475,32 @@ export function collectFrameworkFacts(X) {
 
   // ---------- calls / member calls / env / modules ----------
   const isProcessEnv = e => { e = unwrap(e); return e && ((ts.isPropertyAccessExpression(e) && e.name.text === 'env' && /^(process|Bun)$/.test(text(e.expression))) || text(e) === 'import.meta.env') }
+  // env read through a wrapper (#103): `env.X` / `environment.X` (outline's Environment), or a value parsed from
+  // process.env (`EnvSchema.safeParse(process.env).data`, `plainToInstance(EnvDto, process.env)`, Joi `validate`)
+  const ENV_WRAP = /^(env|environment)$/i
+  const ENV_KEY = /^[A-Z][A-Z0-9_]*[A-Z0-9]$/
+  function envDerived(e, depth = 0) {
+    e = unwrap(e)
+    if (!e || depth > 5) return false
+    if (isProcessEnv(e)) return true
+    if (ts.isAwaitExpression(e)) return envDerived(e.expression, depth + 1)
+    if (ts.isCallExpression(e)) return e.arguments.some(a => isProcessEnv(a))
+    if (ts.isPropertyAccessExpression(e) && /^(data|value|env)$/.test(e.name.text)) return envDerived(e.expression, depth + 1)
+    if (ts.isIdentifier(e)) {
+      let d
+      try { const sym = checker.getSymbolAtLocation(e); d = sym && (sym.declarations || [])[0] } catch { return false }
+      if (!d) return false
+      if (ts.isVariableDeclaration(d) && d.initializer) return envDerived(d.initializer, depth + 1)
+      if (ts.isBindingElement(d)) { let p = d.parent; while (p && !ts.isVariableDeclaration(p)) p = p.parent; return !!(p && p.initializer && envDerived(p.initializer, depth + 1)) }
+    }
+    return false
+  }
+  const envVia = e => {
+    e = unwrap(e)
+    if (!e || isProcessEnv(e)) return null
+    if (ts.isIdentifier(e) && ENV_WRAP.test(e.text)) return 'env wrapper ' + e.text
+    return envDerived(e) ? 'env schema ' + text(e, 40) : null
+  }
   const thisProp = e => { e = unwrap(e); return e && ts.isPropertyAccessExpression(e) && unwrap(e.expression).kind === ts.SyntaxKind.ThisKeyword ? e.name.text : null }
   function chainOf(e) {
     // a.b.c -> ['a','b','c'] (identifiers / this only), else null
@@ -515,7 +541,12 @@ export function collectFrameworkFacts(X) {
         }
       }
       // env reads
-      if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) env.push({ src: cur, key: node.name.text, file: r, line: lineOf(node, sf), via: text(node.expression) })
+      // (`process.env.X = ...` writes the key: not a read, #103)
+      const assigned = node.parent && ts.isBinaryExpression(node.parent) && node.parent.left === node && node.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+      if (assigned && (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && isProcessEnv(node.expression)) { }
+      else if (ts.isPropertyAccessExpression(node) && isProcessEnv(node.expression)) env.push({ src: cur, key: node.name.text, file: r, line: lineOf(node, sf), via: text(node.expression) })
+      else if (ts.isPropertyAccessExpression(node) && !assigned && ENV_KEY.test(node.name.text) && envVia(node.expression))
+        env.push({ src: cur, key: node.name.text, file: r, line: lineOf(node, sf), via: envVia(node.expression) })
       else if (ts.isElementAccessExpression(node) && isProcessEnv(node.expression) && node.argumentExpression && ts.isStringLiteralLike(node.argumentExpression))
         env.push({ src: cur, key: node.argumentExpression.text, file: r, line: lineOf(node, sf), via: text(node.expression) })
       else if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer && isProcessEnv(node.initializer)) {
@@ -681,6 +712,236 @@ export function collectFrameworkFacts(X) {
       ts.forEachChild(sf, v)
     }
   }
+  // External-system clients (#103): `new Pool({ host })` (pg), `new Redis(url)` (ioredis), `createClient({ url })`
+  // (redis), `nodemailer.createTransport({ host, port })`, `mongoose.connect(url)`, `new MongoClient(url)`,
+  // `amqplib.connect(url)`, `new Kafka({ brokers })`, `new Sequelize(url)`, `knex({ client, connection })`,
+  // `ldap.createClient({ url })`, `new S3Client({ endpoint })`, and `connect({ host })` on an ssh2 / ssh2-sftp-client /
+  // basic-ftp client. Addresses are kept as a literal, an env key (`process.env.X`, `|| 'default'`, env wrappers
+  // `env.X` / `environment.X`) or a ConfigService key; passwords only as the env key or the literal's location.
+  const clients = []
+  const CLIENT_MODS = {
+    'pg': ['postgres', ['Pool', 'Client']], 'pg-pool': ['postgres', ['default']], 'postgres': ['postgres', ['default']],
+    'mysql': ['mysql', ['createPool', 'createConnection', 'createPoolCluster']],
+    'mysql2': ['mysql', ['createPool', 'createConnection', 'createPoolCluster']],
+    'mysql2/promise': ['mysql', ['createPool', 'createConnection', 'createPoolCluster']],
+    'ioredis': ['redis', ['default', 'Redis', 'Cluster']], 'redis': ['redis', ['createClient', 'createCluster']],
+    '@redis/client': ['redis', ['createClient']], 'nodemailer': ['smtp', ['createTransport']],
+    'mongoose': ['mongodb', ['connect', 'createConnection']], 'mongodb': ['mongodb', ['MongoClient', 'MongoClient.connect']],
+    'amqplib': ['amqp', ['connect']], 'amqplib/callback_api': ['amqp', ['connect']], 'amqp-connection-manager': ['amqp', ['connect']],
+    'kafkajs': ['kafka', ['Kafka']], 'sequelize': ['sql', ['Sequelize']], 'sequelize-typescript': ['sql', ['Sequelize']],
+    'knex': ['sql', ['default', 'knex']], 'ldapjs': ['ldap', ['createClient']], '@aws-sdk/client-s3': ['s3', ['S3Client']],
+    '@elastic/elasticsearch': ['elasticsearch', ['Client']], 'memjs': ['memcached', ['Client.create']],
+    'ssh2': ['ssh', ['Client#connect']], 'ssh2-sftp-client': ['ssh', ['default#connect']], 'basic-ftp': ['ftp', ['Client#access']],
+  }
+  const MOD_RE = new RegExp(`['"](${Object.keys(CLIENT_MODS).map(k => k.replace(/[/.@-]/g, '\\$&')).join('|')})['"]`)
+  const DIALECTS = { postgres: 'postgres', postgresql: 'postgres', pg: 'postgres', mysql: 'mysql', mysql2: 'mysql', mariadb: 'mysql', mssql: 'mssql', tedious: 'mssql', oracledb: 'oracle', sqlite: null, sqlite3: null, 'better-sqlite3': null }
+  // the imported name an expression refers to: {mod, name} ('default' for a default import / a require()d module)
+  function importedName(e) {
+    e = unwrap(e)
+    const path = []
+    while (e && ts.isPropertyAccessExpression(e)) { path.unshift(e.name.text); e = unwrap(e.expression) }
+    if (!e || !ts.isIdentifier(e)) return null
+    let sym
+    try { sym = checker.getSymbolAtLocation(e) } catch { return null }
+    const d = sym && (sym.declarations || [])[0]
+    if (!d) return null
+    const mod = importSource(e)
+    if (!mod || !CLIENT_MODS[mod]) return null
+    let base
+    if (ts.isImportSpecifier(d)) base = [(d.propertyName || d.name).text]
+    else if (ts.isImportClause(d)) base = ['default']
+    else if (ts.isNamespaceImport(d) || ts.isImportEqualsDeclaration(d)) base = []
+    else if (ts.isBindingElement(d)) base = [text(d.propertyName || d.name, 60)]
+    else if (ts.isVariableDeclaration(d)) base = []              // const x = require('m')
+    else return null
+    const parts = [...base, ...path]
+    const name = parts.length ? parts.join('.') : 'default'
+    // `import ioredis from 'ioredis'; new ioredis.Redis()` / `mysql.createPool`: drop a leading 'default.'
+    return { mod, name: name.startsWith('default.') ? name.slice(8) : name }
+  }
+  // a project class extending a client class (`class RedisAdapter extends Redis`, outline): its `new`, `new this()`
+  // and `super()` calls construct that client
+  const subclassOf = new Map()
+  function clientClass(cls, depth = 0) {
+    if (!cls || depth > 4) return null
+    if (subclassOf.has(cls)) return subclassOf.get(cls)
+    subclassOf.set(cls, null)
+    let hit = null
+    for (const h of cls.heritageClauses || []) {
+      if (h.token !== ts.SyntaxKind.ExtendsKeyword || !h.types[0]) continue
+      const ex = h.types[0].expression
+      hit = importedName(ex)
+      if (!hit) { const sym = symOf(ex), d = sym && origDecl(sym); if (d && ts.isClassLike(d) && projectSf(d.getSourceFile())) hit = clientClass(d, depth + 1) }
+    }
+    subclassOf.set(cls, hit)
+    return hit
+  }
+  function ctorOf(e, node) {
+    e = unwrap(e)
+    if (!e) return null
+    if (e.kind === ts.SyntaxKind.SuperKeyword || e.kind === ts.SyntaxKind.ThisKeyword) {
+      let p = node.parent
+      while (p && !ts.isClassLike(p)) p = p.parent
+      return p ? clientClass(p) : null
+    }
+    const im = importedName(e)
+    if (im) return im
+    const sym = symOf(e), d = sym && origDecl(sym)
+    return d && ts.isClassLike(d) && projectSf(d.getSourceFile()) ? clientClass(d) : null
+  }
+  const UPPER = ENV_KEY
+  const CONV = /^(to\w*|parse\w*|Number|String|Boolean|parseInt|parseFloat|required|optional|must\w*)$/
+  // ['lit', s] | ['env', KEY, default] | ['config', key] | ['obj', ObjectLiteral] | ['arr', ArrayLiteral] | null
+  function valOf(e, depth = 0) {
+    e = unwrap(e)
+    if (!e || depth > 6) return null
+    if (ts.isStringLiteralLike(e)) return ['lit', e.text]
+    if (ts.isNumericLiteral(e)) return ['lit', e.text]
+    if (ts.isObjectLiteralExpression(e)) return ['obj', e]
+    if (ts.isArrayLiteralExpression(e)) return ['arr', e]
+    if (ts.isAwaitExpression(e)) return valOf(e.expression, depth + 1)
+    if (ts.isPropertyAccessExpression(e) && isProcessEnv(e.expression)) return ['env', e.name.text, null]
+    if (ts.isElementAccessExpression(e) && isProcessEnv(e.expression) && e.argumentExpression && ts.isStringLiteralLike(e.argumentExpression)) return ['env', e.argumentExpression.text, null]
+    if (ts.isPropertyAccessExpression(e) && ENV_KEY.test(e.name.text) && envVia(e.expression)) return ['env', e.name.text, null]
+    if (ts.isBinaryExpression(e) && [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(e.operatorToken.kind)) {
+      const l = valOf(e.left, depth + 1)
+      if (l && l[0] === 'env') { const r = valOf(e.right, depth + 1); return ['env', l[1], r && r[0] === 'lit' && r[1] ? r[1] : l[2]] }
+      if (l) return l
+      // `url || env.REDIS_URL`: an unknown first operand falls back to an env key, never to a bare literal default
+      const r = valOf(e.right, depth + 1)
+      return r && r[0] === 'env' ? r : null
+    }
+    if (ts.isCallExpression(e)) {
+      const c = unwrap(e.expression), m = ts.isPropertyAccessExpression(c) ? c.name.text : ts.isIdentifier(c) ? c.text : ''
+      const a0 = e.arguments[0] && unwrap(e.arguments[0])
+      if ((m === 'get' || m === 'getOrThrow') && a0 && ts.isStringLiteralLike(a0) && ts.isPropertyAccessExpression(c)) {
+        let rt = ''
+        try { rt = checker.typeToString(checker.getTypeAtLocation(c.expression)) } catch { }
+        if (/ConfigService/.test(rt) || /(^|\.)(config|configService|cfg)$/i.test(text(c.expression))) return UPPER.test(a0.text) ? ['env', a0.text, null] : ['config', a0.text]
+      }
+      if (CONV.test(m) && a0) return valOf(a0, depth + 1)
+      return null
+    }
+    if (ts.isIdentifier(e) || ts.isPropertyAccessExpression(e)) {
+      const sym = symOf(e), d = sym && origDecl(sym)
+      if (!d || !projectSf(d.getSourceFile())) return null
+      if ((ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d) || ts.isPropertyAssignment(d)) && d.initializer) return valOf(d.initializer, depth + 1)
+      if (ts.isBindingElement(d)) {          // const { DB_URL } = process.env
+        let p = d.parent
+        while (p && !ts.isVariableDeclaration(p)) p = p.parent
+        if (p && p.initializer && isProcessEnv(p.initializer)) return ['env', text(d.propertyName || d.name, 60), null]
+      }
+    }
+    return null
+  }
+  // the expression of `key` in an object literal (also through spreads / shorthand), or undefined
+  function prop(o, names, depth = 0) {
+    if (!o || depth > 4) return undefined
+    let hit
+    for (const p of o.properties) {
+      if ((ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name && names.includes(text(p.name, 60).replace(/['"]/g, '')))
+        hit = ts.isPropertyAssignment(p) ? p.initializer : p.name
+      else if (ts.isSpreadAssignment(p)) { const v = valOf(p.expression); if (v && v[0] === 'obj') { const h = prop(v[1], names, depth + 1); if (h !== undefined) hit = h } }
+    }
+    return hit
+  }
+  const URL_KEYS = ['url', 'uri', 'connectionString', 'connection_string', 'dsn', 'node', 'endpoint']
+  const pack = v => v && (v[0] === 'lit' || v[0] === 'env' || v[0] === 'config') ? v : null
+  function clientFact(proto, mod, name, call, src, r, sf) {
+    const args = (call.arguments || []).map(unwrap)
+    const f = { var: `${mod}${name === 'default' ? '' : '.' + name.replace(/^default\./, '')}()`, client: mod, protocol: proto, src, file: r, line: lineOf(call, sf), resource: null }
+    let a0 = args[0] ? valOf(args[0]) : null
+    // knex({ client: 'pg', connection: url | { host } }), new Sequelize(url | db, user, pw, { host, dialect })
+    if (mod === 'knex' && a0 && a0[0] === 'obj') {
+      const cl = valOf(prop(a0[1], ['client', 'dialect'])), cn = valOf(prop(a0[1], ['connection']))
+      if (cl && cl[0] === 'lit') { if (!(cl[1] in DIALECTS) || DIALECTS[cl[1]] === null) return null; f.protocol = DIALECTS[cl[1]] }
+      a0 = cn
+    }
+    if (mod.startsWith('sequelize')) {
+      const opts = [...args].reverse().map(a => valOf(a)).find(v => v && v[0] === 'obj')
+      const dl = opts && valOf(prop(opts[1], ['dialect']))
+      if (dl && dl[0] === 'lit') { if (!(dl[1] in DIALECTS) || DIALECTS[dl[1]] === null) return null; f.protocol = DIALECTS[dl[1]] }
+      if (a0 && a0[0] !== 'obj' && args.length >= 3) { f.resource = a0[0] === 'lit' ? a0[1] : null; a0 = opts || null }
+    }
+    if (mod === 'ioredis' && a0 && a0[0] === 'lit' && /^\d+$/.test(a0[1])) {      // new Redis(6379, 'cache')
+      const h = args[1] ? pack(valOf(args[1])) : null
+      if (!h) return null
+      f.host = h; f.port = a0
+      return f
+    }
+    if (!a0) return null
+    if (a0[0] === 'obj') {
+      const o = a0[1]
+      let u = prop(o, URL_KEYS)
+      if (u === undefined && proto === 'kafka') { const b = valOf(prop(o, ['brokers'])); if (b && b[0] === 'arr' && b[1].elements.length) u = b[1].elements[0] }
+      if (u === undefined && proto === 'elasticsearch') { const b = valOf(prop(o, ['nodes'])); if (b && b[0] === 'arr' && b[1].elements.length) u = b[1].elements[0] }
+      if (u === undefined && proto === 'redis') { const so = valOf(prop(o, ['socket'])); if (so && so[0] === 'obj') { const h = prop(so[1], ['host']); if (h !== undefined) { f.host = pack(valOf(h)); f.port = pack(valOf(prop(so[1], ['port']))) } } }
+      if (u !== undefined) {
+        const v = pack(valOf(u))
+        if (!v) return null
+        if (v[0] === 'lit' && !v[1].includes('://')) { if (proto === 's3') return null; f.host = v; f.port = pack(valOf(prop(o, ['port']))) }
+        else f.url = v
+      } else if (!f.host) {
+        const h = prop(o, ['host', 'hostname', 'server'])
+        if (h === undefined) return null
+        f.host = pack(valOf(h))
+        if (!f.host) return null
+        if (f.host[0] === 'lit' && f.host[1].includes('://')) { f.url = f.host; delete f.host }
+        else {
+          f.port = pack(valOf(prop(o, ['port'])))
+          const sec = prop(o, ['secure'])         // nodemailer { secure: true } without a port: implicit TLS on 465
+          if (!f.port && proto === 'smtp' && sec && unwrap(sec).kind === ts.SyntaxKind.TrueKeyword) f.port = ['lit', '465']
+        }
+      }
+      const db = valOf(prop(o, ['database', 'db', 'dbName']))
+      if (db && db[0] === 'lit' && !f.resource) f.resource = db[1]
+      let pw = prop(o, ['password', 'pass', 'passwd'])
+      if (pw === undefined) { const au = valOf(prop(o, ['auth'])); if (au && au[0] === 'obj') pw = prop(au[1], ['pass', 'password']) }
+      if (pw !== undefined) {
+        const pv = valOf(pw)
+        f.password = pv && (pv[0] === 'env' || pv[0] === 'config') ? [pv[0], pv[1]] : pv && pv[0] === 'lit' && pv[1] ? ['literal', `${r}:${lineOf(pw, sf)}`] : null
+      }
+      return f.url || f.host ? f : null
+    }
+    if (a0[0] === 'arr') return null
+    if (proto === 's3' || proto === 'ssh' || proto === 'ftp') return null
+    if (a0[0] === 'lit' && !a0[1].includes('://')) return null
+    f.url = a0
+    return f
+  }
+  // files to scan: the ones importing a client module, and the ones importing a file that declares a client subclass
+  const stems = new Set()
+  for (const sf of sourceFiles) {
+    if (realFile(sf).endsWith('.vue') || !MOD_RE.test(sf.text)) continue
+    for (const st of sf.statements) if (ts.isClassDeclaration(st) && clientClass(st)) stems.add(nodePath.basename(realFile(sf)).replace(/\.[cm]?[jt]sx?$/, ''))
+  }
+  const SUB_RE = stems.size ? new RegExp(`['"][^'"]*\\b(${[...stems].map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(\\.[cm]?[jt]sx?)?['"]`) : null
+  for (const sf of sourceFiles) {
+    if (realFile(sf).endsWith('.vue') || !(MOD_RE.test(sf.text) || (SUB_RE && SUB_RE.test(sf.text)))) continue
+    const real = realFile(sf), r = rel(real), fid = fileNode.get(real)
+    const v = node => {
+      const isNew = ts.isNewExpression(node), isCall = ts.isCallExpression(node)
+      if ((isNew || isCall) && node.arguments && node.arguments.length) {
+        const c = unwrap(node.expression)
+        let im = (isNew || (isCall && c.kind === ts.SyntaxKind.SuperKeyword)) ? ctorOf(c, node) : importedName(c), memberOf = null
+        // client.connect({ host }) / client.access({ host }) on `new Client()` from ssh2 / ssh2-sftp-client / basic-ftp
+        if (!im && isCall && ts.isPropertyAccessExpression(c)) {
+          const sym = symOf(c.expression), d = sym && origDecl(sym)
+          const init = d && (ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d)) && d.initializer && unwrap(d.initializer)
+          if (init && ts.isNewExpression(init)) { const ci = importedName(init.expression); if (ci) { im = { mod: ci.mod, name: `${ci.name}#${c.name.text}` }; memberOf = ci } }
+        }
+        if (im) {
+          const [proto, names] = CLIENT_MODS[im.mod]
+          if (names.includes(im.name) && (!memberOf || isCall)) {
+            const f = clientFact(proto, im.mod, im.name.replace('#', '.'), node, enclosingFnNode(node) || fid, r, sf)
+            if (f && f.src) clients.push(f)
+          }
+        }
+      }
+      ts.forEachChild(node, v)
+    }
+    ts.forEachChild(sf, v)
+  }
   // MCP servers (#102): new McpServer({ name }) / new Server({ name }), and server.registerTool / tool / registerPrompt /
   // prompt / registerResource / resource(name, ..., handler) in files importing @modelcontextprotocol/sdk
   const mcp = [], mcpServers = []
@@ -732,5 +993,5 @@ export function collectFrameworkFacts(X) {
     ts.forEachChild(sf, v)
   }
   return { classes, calls, member_calls: memberCalls, instances, modules, env, config_defs: configDefs, provide_objs: provideObjs, bind_calls: bindCalls, budget_left: budget,
-    mcp, mcp_servers: mcpServers }
+    mcp, mcp_servers: mcpServers, clients }
 }

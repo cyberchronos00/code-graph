@@ -413,6 +413,8 @@ class TypeScriptPlugin(LanguagePlugin):
         # MCP servers in TypeScript (#102): server.registerTool / tool / registerPrompt / prompt / registerResource /
         # resource -> endpoint:mcp_<kind>:<server>/<name> RECEIVED_BY the handler
         n_mcp = _mcp_receivers(project.root, builder, (facts.get("fw") or {}))
+        # external-system clients (#103): facts for codegraph/external.py
+        n_clients = _client_facts(builder, (facts.get("fw") or {}))
         # browser tests opening pages: resolved to page nodes once the framework plugin has set page routes
         pv = getattr(builder, "pending_visits", None)
         if pv is None:
@@ -441,6 +443,8 @@ class TypeScriptPlugin(LanguagePlugin):
                   + ", ".join(facts["skipped_links"][:5]), file=sys.stderr)
         if n_mcp:
             st["mcp"] = n_mcp
+        if n_clients:
+            st["external_clients"] = n_clients
         st.update({"literal_fallbacks": n_fb, "channel_subscriptions": n_sub, "bridge_sends": n_br, "bridge_receivers": n_brr,
                    "config_base_urls": {k: f"{v['value']} ({v['from']})" for k, v in sorted(base_hits.items())},
                    "config_base_urls_unresolved": sorted(base_unresolved), "http_url_unknown": n_url_unknown})
@@ -526,3 +530,24 @@ def _mcp_receivers(root, builder, fw: dict) -> dict:
         st[r["kind"]] += 1
     return dict(st)
 
+
+
+def _client_facts(builder, fw: dict) -> int:
+    """Client constructors (`new Pool({ host })`, `new Redis(url)`, `createTransport(..)` ...) found by the extractor,
+    in the Python plugin's fact format; a ConfigService key resolves to the one env key its registerAs() entry reads."""
+    env_of = {d["key"]: d["env"][0] for d in fw.get("config_defs") or [] if len(d.get("env") or []) == 1}
+    facts = []
+    for f in fw.get("clients") or []:
+        if not builder.has(f["src"]):
+            continue
+        for k in ("url", "host", "port", "password"):
+            v = f.get(k)
+            if v and v[0] == "config":
+                f[k] = (["env", env_of[v[1]], None] if k != "password" else ["env", env_of[v[1]]]) if v[1] in env_of else None
+        if f.get("url") is None and f.get("host") is None:
+            continue
+        f.setdefault("module", f["file"])
+        facts.append(f)
+    if facts:
+        builder.external_facts = getattr(builder, "external_facts", []) + facts
+    return len(facts)

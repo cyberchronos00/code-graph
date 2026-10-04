@@ -286,3 +286,74 @@ def test_llm_providers_as_externals(tmp_path):
     assert ("function:bot.ask", "external:llm:openai") in ct and ("function:bot.ask_claude", "external:llm:anthropic") in ct
     assert ("function:bot.ask_gateway", "external:llm:llm-gateway.internal.example:443") in ct
     assert not any("fake.example.test" in k for k in e)                              # model calls from tests: none
+
+
+CLIENTS_TS = '''
+import { Pool } from 'pg'
+import Redis from 'ioredis'
+import * as nodemailer from 'nodemailer'
+import mongoose from 'mongoose'
+import knex from 'knex'
+import SftpClient from 'ssh2-sftp-client'
+import express from 'express'
+import env from './env'
+
+const DB_URL = process.env.DATABASE_URL || 'postgres://localhost/app'
+export const app = express()
+
+export function pool() {
+  return new Pool({ connectionString: DB_URL })
+}
+export class Cache extends Redis {
+  constructor() { super(env.REDIS_URL) }
+}
+export const side = new Redis(6379, 'cache.internal.example')
+export function mailer() {
+  return nodemailer.createTransport({ host: process.env.SMTP_HOST, port: 587, auth: { user: 'u', pass: process.env.SMTP_PASSWORD } })
+}
+export const tls = nodemailer.createTransport({ host: 'mail.example.org', secure: true })
+export async function mongo() { await mongoose.connect(process.env.MONGO_URL as string) }
+export const kx = knex({ client: 'pg', connection: { host: 'db.example.org', port: 5433, password: 'pg-fixture-literal' } })
+export const lite = knex({ client: 'sqlite3', connection: { filename: 'x.db' } })
+export const local = new Redis('redis://localhost:6379')
+export async function upload() {
+  const sftp = new SftpClient()
+  await sftp.connect({ host: process.env.SFTP_HOST, port: 22 })
+}
+export function setup() { process.env.FEATURE_FLAG = 'on' }
+'''
+
+
+@pytest.mark.skipif(not (ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules").exists(),
+                    reason="run `npm ci` in codegraph/plugins/ts/extractor")
+def test_node_client_constructors_and_env_wrappers(tmp_path):
+    """#103: Node client constructors (pg, ioredis incl. a subclass, nodemailer, mongoose, knex, ssh2-sftp-client)
+    are CONNECTS_TO from the constructing code; `env.X` wrappers and values parsed from process.env read the key;
+    `process.env.X = ..` is not a read."""
+    (tmp_path / "package.json").write_text(json.dumps({"name": "fx", "dependencies": {
+        "express": "4", "pg": "8", "ioredis": "5", "nodemailer": "6", "mongoose": "8", "knex": "3", "ssh2-sftp-client": "9"}}))
+    (tmp_path / "tsconfig.json").write_text(json.dumps({"compilerOptions": {"esModuleInterop": True}}))
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "db.ts").write_text(CLIENTS_TS)
+    (tmp_path / "src" / "env.ts").write_text("class Env { REDIS_URL = process.env.REDIS_URL }\nexport default new Env()\n")
+    (tmp_path / "src" / "config.ts").write_text(
+        "const parsed = Schema.safeParse(process.env)\nconst dto = parsed.data\nexport const queue = dto.QUEUE_URL\n")
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "fx")
+    st = GraphStore(db)
+    e, ct = ext(st), edges(st, "CONNECTS_TO")
+    assert ("function:src/db.ts#pool", "external:postgres:env:DATABASE_URL") in ct
+    assert e["external:postgres:env:DATABASE_URL"]["library"] == "pg"
+    assert ("class:src/db.ts#Cache", "external:redis:env:REDIS_URL") in ct              # super() of a client subclass
+    assert ("module:src/db.ts", "external:redis:cache.internal.example:6379") in ct
+    assert ("function:src/db.ts#mailer", "external:smtp:env:SMTP_HOST") in ct
+    assert e["external:smtp:mail.example.org:465"]["tls"] is True
+    assert ("function:src/db.ts#mongo", "external:mongodb:env:MONGO_URL") in ct
+    assert e["external:postgres:db.example.org:5433"]["credential_source"] == "literal"
+    assert ("function:src/db.ts#upload", "external:ssh:env:SFTP_HOST") in ct
+    assert not any("localhost" in k or "sqlite" in k for k in e)
+    assert ("external:smtp:env:SMTP_HOST", "env:SMTP_PASSWORD") in edges(st, "CREDENTIAL_FROM")
+    env = edges(st, "READS_ENV")
+    assert ("module:src/config.ts", "env:QUEUE_URL") in env
+    assert not any(d == "env:FEATURE_FLAG" for _, d in env)
+    assert b"pg-fixture-literal" not in db.read_bytes()

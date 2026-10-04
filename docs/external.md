@@ -27,6 +27,8 @@ service), `config:<module>.<setting>` for a settings dict that points at the loc
 | `.env.example`, `.env.sample`, `.env.dist`, `.env.template`, `example.env` | values of non-secret keys; secret keys keep only their location; a DSN password becomes `***` before anything else sees it | |
 | `docker-compose*.yml`, `compose*.yaml` | services with a known image (postgres, mysql / mariadb, redis / valkey, mongo, rabbitmq, elasticsearch / opensearch, memcached, minio, mailpit / mailhog, openldap, nats, kafka, mosquitto, clickhouse, cassandra): a host equal to the service name resolves to `service:port` with `deployment_name` and `image` | resolved |
 | Python client constructors | `psycopg` / `psycopg2` / `asyncpg` / `pg8000` `connect(host=, port=, dbname=)` or a DSN, `pymysql` / `MySQLdb` / `mysql.connector`, `redis.Redis(host=)` / `redis.from_url(url)`, `pymongo.MongoClient(url)`, `smtplib.SMTP(host, port)` / `SMTP_SSL` (TLS, 465), `ftplib.FTP` / `FTP_TLS`, `ldap3.Server(host)`, `pika` / `aio_pika` / `kombu`, `elasticsearch`, `pymemcache`, `boto3.client("s3", endpoint_url=)`: literal or env-read arguments; CONNECTS_TO from the calling function (op connect, `client` attr); a client left at its localhost default is no system | exact for a literal, otherwise as above |
+| Node client constructors (#103) | `pg` `new Pool({ connectionString | host, port, database })` / `new Client(..)`, `postgres(url)`, `mysql` / `mysql2` `createPool` / `createConnection`, `ioredis` `new Redis(url | port, host | { host })` (also a project subclass: `class RedisAdapter extends Redis` with its `super(..)`, `new this(..)` and `new RedisAdapter(..)`), `redis` `createClient({ url | socket: { host } })`, `nodemailer.createTransport({ host, port, secure, auth: { pass } })`, `mongoose.connect(url)`, `new MongoClient(url)`, `amqplib.connect(url)`, `new Kafka({ brokers })`, `new Sequelize(url | db, user, pw, { host, dialect })`, `knex({ client, connection })`, `ldapjs.createClient({ url })`, `new S3Client({ endpoint })`, `@elastic/elasticsearch`, `connect({ host })` on an `ssh2` / `ssh2-sftp-client` client and `access({ host })` on `basic-ftp`. Arguments are literals, `process.env.X` (`|| 'default'`), env wrappers and parsed env (below), `ConfigService.get('ns.key')` through its `registerAs()` env key, consts, object spreads and class fields; sqlite dialects and localhost defaults are no system | exact for a literal, otherwise as above |
+| TypeScript env wrappers (#103) | `env.X` / `environment.X` (UPPER_CASE keys, outline's `Environment`), and values parsed from `process.env` (`EnvSchema.safeParse(process.env).data`, `plainToInstance(EnvDto, process.env)`, Joi `validate(process.env)`): READS_ENV, `via` `env wrapper` / `env schema`. `process.env.X = ...` is a write, not a read | resolved |
 | Model calls (`attrs.llm_calls` from [AI tools](ai-tools.md)) | `external:llm:<provider>` (openai, anthropic, azure-openai, ollama ...) with the `models` called, or `external:llm:<host>:<port>` for a non-local `base_url`; CONNECTS_TO from the calling function, CREDENTIAL_FROM the provider's API-key env var when code reads it; calls from test code are left out | resolved / exact |
 | Third-party HTTP (`http` nodes with origin_kind other) | shown by `cg external` as `external:https:<host>:<port>` through an adapter, without extra nodes; origins only called from tests are left out | exact |
 
@@ -67,11 +69,10 @@ MAPS_TO_TABLE as the first hop, then callers) with the entry points above it.
 
 ## Not covered yet
 
-- Client constructors in Node (`new Pool({...})`, `new Redis(...)`, `nodemailer.createTransport`, `mongoose.connect`)
-  and PHP (`new PDO($dsn)`), and `paramiko.SSHClient().connect()` (a method on an instance): the address must come
-  from configuration.
-- Config schemas that read the environment indirectly (zod / class-validator env DTOs, `environment.X` wrappers)
-  give no env nodes, so their keys are not grouped; env writes (`process.env.X = ...`) count as reads.
+- PHP client constructors (`new PDO($dsn)`), and `paramiko.SSHClient().connect()` (a method on an instance): the
+  address must come from configuration. Node clients built from a parameter (`new Redis(options)` where the options
+  come from the caller) or from template strings are not resolved.
+- class-validator DTOs read through a separate validation step, and settings objects passed between functions.
 - Spring `application.yml`, Rails `database.yml`, Kubernetes / Helm / Terraform values, settings built with
   f-strings (NetBox's `CACHES` from `REDIS`), docker-compose files outside the indexed root.
 - Third-party HTTP hosts are an adapter in `cg external`, not graph nodes.
