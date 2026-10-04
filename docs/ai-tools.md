@@ -11,8 +11,9 @@ agent:<name> -OFFERS_TOOL-> tool endpoint;  agent -HANDS_OFF_TO-> agent
 ```
 
 A receiving tool endpoint is an entry point of kind `llm_tool` (runtime group), so `reaches` / `impact` report
-"reachable from tool X". Python only for now; only modules importing an AI SDK (mcp, fastmcp, openai, agents,
-anthropic, langchain*, langgraph, llama_index) are read, other code is unchanged.
+"reachable from tool X". Python, plus TypeScript MCP servers; only modules importing an AI SDK (Python: mcp,
+fastmcp, openai, agents, anthropic, langchain*, langgraph, llama_index; TypeScript: `@modelcontextprotocol/sdk`) are
+read, other code is unchanged.
 
 ## What is extracted
 
@@ -20,6 +21,7 @@ anthropic, langchain*, langgraph, llama_index) are read, other code is unchanged
 |---|---|---|---|
 | MCP servers (FastMCP, `MCPServer`, standalone fastmcp) | `@mcp.tool()` / `@mcp.tool(name=)`, `@mcp.resource("notes://{id}")`, `@mcp.prompt()`, `mcp.tool()(fn)`, `add_tool(fn)`, local decorators that register their argument; servers built inside a function (`def build(): mcp = MCPServer(...)` with nested `@mcp.tool()`, tools in test bodies): the enclosing function is the receiver (`nested_in`, `handler_name`; an unnamed local server is named after that function) | `mcp.run()` is the external entry | exact (resolved through a wrapper) |
 | MCP low-level `Server` | `@server.call_tool()` handlers branching on `if name == "x"` / `match name: case "x"`, or on enum members (`case GitTools.STATUS:` with `class GitTools(str, Enum): STATUS = "git_status"`), also when the server and handler are built inside a function (`async def serve(): server = Server("mcp-git")`) → the function the branch calls | | resolved |
+| MCP servers in TypeScript (`@modelcontextprotocol/sdk`) | `server.registerTool("x", config, handler)`, `server.tool("x", ...)`, `registerPrompt` / `prompt`, `registerResource(name, "uri" \| new ResourceTemplate("notes://{id}"), ...)`; names from string literals or consts; the handler is the inline arrow (a function node `server.registerTool('x')`) or the function passed. The server is the `new McpServer({ name })` the receiver holds, or, for a `server: McpServer` parameter of a register helper, the package's one named server | | exact / resolved (server from the package) |
 | MCP clients | | `session.call_tool("x")`, `read_resource("uri")`, `get_prompt("x")` → `*/<name>` (MATCHES_ENDPOINT pairs it with the server's tool, also across repos through `cg link`) | exact |
 | OpenAI / Anthropic SDK schema literals | | `{"type": "function", "function": {"name"}}`, Responses `{"type": "function", "name"}`, Anthropic `{"name", "input_schema"}` in a function, or a module constant passed as `tools=` | exact / resolved |
 | OpenAI Agents SDK | `@function_tool` (`name_override=`) | `Agent(name=, tools=[...], handoffs=[...])` → `agent:<name>` | exact |
@@ -61,8 +63,9 @@ MCP tool: `llm_tools(pattern?, framework?, unmatched?, agent?)`.
 
 ## Not covered yet
 
-- TypeScript: MCP `server.tool` / `registerTool` / resources / prompts and `callTool`, Vercel AI SDK `tool({...})`
-  objects, OpenAI / Anthropic Node SDK schema literals.
+- TypeScript: MCP clients (`client.callTool`, `readResource`, `getPrompt`), low-level `Server` with
+  `setRequestHandler(CallToolRequestSchema, ...)` and a `switch (name)`, resource URIs computed at runtime, Vercel AI
+  SDK `tool({...})` objects, OpenAI / Anthropic Node SDK schema literals.
 - LangGraph `StateGraph` nodes / edges / conditional path maps (`GRAPH_EDGE`), LlamaIndex `QueryEngineTool` and
   workflow `@step`s.
 - Agent runners (`Runner.run(agent)`), `agent.as_tool()`, MCP servers attached to agents (`mcp_servers=[...]`),

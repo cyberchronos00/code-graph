@@ -681,5 +681,56 @@ export function collectFrameworkFacts(X) {
       ts.forEachChild(sf, v)
     }
   }
-  return { classes, calls, member_calls: memberCalls, instances, modules, env, config_defs: configDefs, provide_objs: provideObjs, bind_calls: bindCalls, budget_left: budget }
+  // MCP servers (#102): new McpServer({ name }) / new Server({ name }), and server.registerTool / tool / registerPrompt /
+  // prompt / registerResource / resource(name, ..., handler) in files importing @modelcontextprotocol/sdk
+  const mcp = [], mcpServers = []
+  const MCP_REG = new Map([['registerTool', 'tool'], ['tool', 'tool'], ['registerPrompt', 'prompt'], ['prompt', 'prompt'],
+    ['registerResource', 'resource'], ['resource', 'resource']])
+  const strOf = e => { e = unwrap(e); if (!e) return null; try { const v = evalStr(e); return v.vals.length === 1 && v.conf !== 'heuristic' ? render(v.vals[0]) : null } catch { return null } }
+  const serverName = nw => {
+    const o = nw.arguments && unwrap(nw.arguments[0])
+    if (!o || !ts.isObjectLiteralExpression(o)) return null
+    const p = o.properties.find(x => ts.isPropertyAssignment(x) && x.name.getText() === 'name')
+    return p ? strOf(p.initializer) : null
+  }
+  const isServerNew = e => { e = unwrap(e); return e && ts.isNewExpression(e) && /^(McpServer|Server)$/.test(text(e.expression, 40).split('.').pop()) }
+  const serverOf = e => {
+    const sym = symOf(e), d = sym && origDecl(sym)
+    if (!d) return {}
+    if (ts.isVariableDeclaration(d) && d.initializer && isServerNew(d.initializer)) return { name: serverName(unwrap(d.initializer)) }
+    if (ts.isParameter(d)) return { param: true }
+    return {}
+  }
+  for (const sf of sourceFiles) {
+    if (realFile(sf).endsWith('.vue') || !sf.text.includes('@modelcontextprotocol/sdk')) continue
+    const r = rel(realFile(sf))
+    const v = node => {
+      if (ts.isNewExpression(node) && isServerNew(node)) mcpServers.push({ file: r, line: lineOf(node, sf), name: serverName(node) })
+      if (ts.isCallExpression(node) && node.arguments.length >= 2) {
+        const c = unwrap(node.expression)
+        if (ts.isPropertyAccessExpression(c) && MCP_REG.has(c.name.text)) {
+          const kind = MCP_REG.get(c.name.text), args = node.arguments.map(unwrap)
+          let name = strOf(args[0])
+          if (kind === 'resource') {          // registerResource(name, 'uri' | new ResourceTemplate('uri{x}', ..), ..)
+            const u = args[1]
+            name = ts.isNewExpression(u) && u.arguments && u.arguments[0] ? strOf(u.arguments[0]) : strOf(u)
+          }
+          const h = args[args.length - 1]
+          let handler = null
+          if (ts.isArrowFunction(h) || ts.isFunctionExpression(h)) handler = declToNode(h)
+          else if (ts.isIdentifier(h) || ts.isPropertyAccessExpression(h)) { const sym = symOf(h); const t = sym && resolveSymbol(sym); handler = t && t.id }
+          // `{x}` placeholders only from a literal URI template (`new ResourceTemplate('notes://{id}')`, also through
+          // consts); a computed name / uri (`registerResource(name, uri, ..)`, `'file://' + id`) folds runtime values
+          // into `{..}`: skipped
+          // (a placeholder must be written as `{id}` in the file, not only as a `${id}` substitution)
+          if (name && [...name.matchAll(/\{([^{}]+)\}/g)].some(m => !new RegExp('(^|[^$])\\{' + m[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\}').test(sf.text))) name = null
+          if (name && handler) mcp.push({ kind, method: c.name.text, name, handler, file: r, line: lineOf(node, sf), server: serverOf(c.expression) })
+        }
+      }
+      ts.forEachChild(node, v)
+    }
+    ts.forEachChild(sf, v)
+  }
+  return { classes, calls, member_calls: memberCalls, instances, modules, env, config_defs: configDefs, provide_objs: provideObjs, bind_calls: bindCalls, budget_left: budget,
+    mcp, mcp_servers: mcpServers }
 }

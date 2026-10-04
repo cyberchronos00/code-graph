@@ -341,3 +341,56 @@ def test_lowlevel_server_built_inside_function(tmp_path):
     db = tmp_path / "g.db"
     index_project(tmp_path, db, "git")
     assert ("endpoint:mcp_tool:mcp-git/git_status", "function:git_srv.git_status") in edges(GraphStore(db), "RECEIVED_BY")
+
+
+@pytest.mark.skipif(not (ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules").exists(),
+                    reason="run `npm ci` in codegraph/plugins/ts/extractor")
+def test_typescript_mcp_server_registrations(tmp_path):
+    # #102: @modelcontextprotocol/sdk McpServer registrations -> endpoint:mcp_<kind>:<server>/<name> RECEIVED_BY the
+    # handler (inline arrow = its own node, a function reference); a register helper taking `server: McpServer` uses
+    # the one server of its package (resolved); a runtime uri (`registerResource(name, uri, ..)`) is skipped
+    (tmp_path / "package.json").write_text('{"name": "srv", "dependencies": {"@modelcontextprotocol/sdk": "1.20.0"}}\n')
+    (tmp_path / "tsconfig.json").write_text('{"compilerOptions": {"strict": true}, "include": ["src"]}\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "index.ts").write_text(textwrap.dedent("""\
+        import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+        import { registerEcho } from "./echo";
+
+        const server = new McpServer({ name: "notes-server", version: "1.0.0" });
+
+        const readNote = async (args: { id: string }) => ({ content: [{ type: "text" as const, text: args.id }] });
+
+        server.registerTool("read_note", { description: "Read" }, readNote);
+        server.registerTool("delete_note", { description: "Delete" }, async (args: { id: string }) => {
+          return { content: [{ type: "text" as const, text: "deleted " + args.id }] };
+        });
+        server.registerResource("note", new ResourceTemplate("notes://{id}", { list: undefined }), {}, async (uri: URL) => ({
+          contents: [{ uri: uri.href, text: "x" }],
+        }));
+        server.registerPrompt("summarize", { description: "Sum" }, () => ({ messages: [] }));
+        registerEcho(server);
+        """))
+    (tmp_path / "src" / "echo.ts").write_text(textwrap.dedent("""\
+        import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+        const name = "echo";
+        export const registerEcho = (server: McpServer) => {
+          server.registerTool(name, { description: "Echo" }, async (args: { message: string }) => ({
+            content: [{ type: "text" as const, text: args.message }],
+          }));
+          const uri = "file://" + Math.random();
+          server.registerResource("dyn", uri, {}, async () => ({ contents: [] }));
+        };
+        """))
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "srv")
+    st = GraphStore(str(db))
+    got = {(r["src"], r["dst"], r["confidence"]) for r in st.q("SELECT src, dst, confidence FROM edges WHERE kind='RECEIVED_BY'")
+           if r["src"].startswith("endpoint:mcp_")}
+    assert got == {
+        ("endpoint:mcp_tool:notes-server/read_note", "function:src/index.ts#readNote", "exact"),
+        ("endpoint:mcp_tool:notes-server/delete_note", "function:src/index.ts#server.registerTool('delete_note')", "exact"),
+        ("endpoint:mcp_resource:notes-server/notes://{id}", "function:src/index.ts#server.registerResource('note')", "exact"),
+        ("endpoint:mcp_prompt:notes-server/summarize", "function:src/index.ts#server.registerPrompt('summarize')", "exact"),
+        ("endpoint:mcp_tool:notes-server/echo", "function:src/echo.ts#registerEcho.server.registerTool(name)", "resolved"),
+    }

@@ -485,6 +485,21 @@ function routeCallInfo(node) {
   while (ts.isCallExpression(base) && ts.isPropertyAccessExpression(unwrap(base.expression))) base = unwrap(unwrap(base.expression).expression)
   return { label: `${base.getText().replace(/\s+/g, ' ').slice(0, 40)}.${c.name.text}(${pathText})` }
 }
+// MCP registrations with an inline handler (files importing @modelcontextprotocol/sdk): label `server.registerTool('echo')`
+const MCP_REG_METHODS = new Set(['registerTool', 'tool', 'registerPrompt', 'prompt', 'registerResource', 'resource'])
+const mcpFiles = new Map()
+function mcpRegInfo(node, sf) {
+  if (!ts.isCallExpression(node) || node.arguments.length < 2) return null
+  const c = unwrap(node.expression)
+  if (!ts.isPropertyAccessExpression(c) || !MCP_REG_METHODS.has(c.name.text)) return null
+  if (!mcpFiles.has(sf)) mcpFiles.set(sf, sf.text.includes('@modelcontextprotocol/sdk'))
+  if (!mcpFiles.get(sf)) return null
+  const f = unwrap(node.arguments[node.arguments.length - 1])
+  if (!isFn(f)) return null
+  const a0 = unwrap(node.arguments[0])
+  const lab = a0 && ts.isStringLiteralLike(a0) ? `'${a0.text}'` : (a0 ? a0.getText().replace(/\s+/g, ' ').slice(0, 40) : '')
+  return { label: `${unwrap(c.expression).getText().replace(/\s+/g, ' ').slice(0, 40)}.${c.name.text}(${lab})` }
+}
 // Electron IPC / context bridge registrations whose inline handlers become function nodes:
 //   ipcMain.handle('ch', fn) / handleOnce / on / once, ipcRenderer.on('ch', fn) / once  -> label `ipcMain.handle('ch')`
 //   contextBridge.exposeInMainWorld('api', { ping: () => ... })                       -> one node per member `api.ping`
@@ -991,6 +1006,18 @@ for (const sf of sourceFiles) {
           ts.forEachChild(node, c => { if (!handled.has(c) && !handled.has(unwrap(c))) visit(c, qual, parentId) })
           return
         }
+      }
+      const mc = mcpRegInfo(node, sf)
+      if (mc) {                     // MCP server.registerTool('name', cfg, async (args) => ..): the inline handler is a node
+        const f = unwrap(node.arguments[node.arguments.length - 1])
+        const q = qual ? `${qual}.${mc.label}` : mc.label
+        const id = mkId('function', `${r}#${q}`)
+        nodes.push({ id, kind: 'function', name: q, file: r, line: lineOf(f, sf), end_line: sf.getLineAndCharacterOfPosition(f.end).line + 1,
+          doc: null, parent: parentId, attrs: { inline_handler: true } })
+        declId.set(f, id)
+        ts.forEachChild(f, c => visit(c, q, id))
+        ts.forEachChild(node, c => { if (c !== f && unwrap(c) !== f) visit(c, qual, parentId) })
+        return
       }
       const rc = routeCallInfo(node)
       if (rc) {

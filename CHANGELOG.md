@@ -8,6 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- TypeScript MCP servers (#102): `registerTool` / `tool`, `registerPrompt` / `prompt` and `registerResource` /
+  `resource` (literal URIs and `ResourceTemplate`s) on an `@modelcontextprotocol/sdk` server become
+  `endpoint:mcp_<kind>:<server>/<name>` RECEIVED_BY the handler; an inline handler gets its own function node, so its
+  calls no longer land on the register helper. modelcontextprotocol/servers: 49 TypeScript tools, prompts and
+  resources (none before), 20 sampled links correct.
+
 ## [0.10.1] - 2026-10-04
 
 First release on PyPI, as `cg-code-graph` (`pipx install cg-code-graph`, `uv tool install cg-code-graph`); the

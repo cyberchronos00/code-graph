@@ -410,6 +410,9 @@ class TypeScriptPlugin(LanguagePlugin):
         dyn = facts.get("bridge_dynamic") or []
         if dyn:
             builder.__dict__.setdefault("bridge_dynamic", []).extend(dyn)
+        # MCP servers in TypeScript (#102): server.registerTool / tool / registerPrompt / prompt / registerResource /
+        # resource -> endpoint:mcp_<kind>:<server>/<name> RECEIVED_BY the handler
+        n_mcp = _mcp_receivers(project.root, builder, (facts.get("fw") or {}))
         # browser tests opening pages: resolved to page nodes once the framework plugin has set page routes
         pv = getattr(builder, "pending_visits", None)
         if pv is None:
@@ -436,6 +439,8 @@ class TypeScriptPlugin(LanguagePlugin):
             st["skipped_dangling_symlinks"] = facts["skipped_links"]
             print(f"typescript: skipped {len(facts['skipped_links'])} dangling symlink(s): "
                   + ", ".join(facts["skipped_links"][:5]), file=sys.stderr)
+        if n_mcp:
+            st["mcp"] = n_mcp
         st.update({"literal_fallbacks": n_fb, "channel_subscriptions": n_sub, "bridge_sends": n_br, "bridge_receivers": n_brr,
                    "config_base_urls": {k: f"{v['value']} ({v['from']})" for k, v in sorted(base_hits.items())},
                    "config_base_urls_unresolved": sorted(base_unresolved), "http_url_unknown": n_url_unknown})
@@ -478,3 +483,46 @@ def module_of(path: str | None) -> str | None:
     if parts[0] in ("app", "src") and len(parts) > 2:
         return "/".join(parts[1:-1]) or parts[0]
     return "/".join(parts[:-1]) or None
+
+
+def _pkg_dir(root: Path, rel: str) -> str:
+    """The directory of the nearest package.json above `rel` (relative to root; "" for the root)."""
+    parts = rel.split("/")[:-1]
+    while parts:
+        if (root / "/".join(parts) / "package.json").is_file():
+            return "/".join(parts)
+        parts.pop()
+    return ""
+
+
+def _mcp_receivers(root, builder, fw: dict) -> dict:
+    """MCP registrations from the framework facts: the server is the `new McpServer({ name })` the receiver variable
+    holds, else (a `server: McpServer` parameter of a register helper) the one named server of the same package."""
+    from ...protocols import protocol_receive as p_receive
+    regs = fw.get("mcp") or []
+    if not regs:
+        return {}
+    root = Path(root)
+    by_pkg = defaultdict(set)
+    for sv in fw.get("mcp_servers") or []:
+        if sv.get("name"):
+            by_pkg[_pkg_dir(root, sv["file"])].add(sv["name"])
+    st: dict = defaultdict(int)
+    for r in regs:
+        srv, conf = (r.get("server") or {}).get("name"), "exact"
+        if not srv:
+            names = by_pkg.get(_pkg_dir(root, r["file"])) or set()
+            if len(names) != 1:
+                st["no_server"] += 1
+                continue
+            srv, conf = next(iter(names)), "resolved"
+        if not builder.has(r["handler"]):
+            st["no_handler"] += 1
+            continue
+        p_receive(builder, f"mcp_{r['kind']}", f"{srv}/{r['name']}", r["handler"], r["file"], r["line"], conf,
+                  framework="mcp", via=r.get("method"),
+                  node_attrs={"framework": "mcp", "declared_in": r["file"], "server": srv, "toolset": srv,
+                              "schema_source": r.get("method")})
+        st[r["kind"]] += 1
+    return dict(st)
+
