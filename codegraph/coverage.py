@@ -6,6 +6,7 @@ its normal search and file reading."""
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
 
 from . import presets
@@ -188,12 +189,27 @@ def scan(root: str | Path) -> Counter:
     return scan_tree(root).counts
 
 
+_TOOL_FILE = re.compile(r"(?:^|/)(?:[^/]*\.config\.[cm]?[jt]sx?|\.[^/]*rc\.[cm]?js|[Gg]runtfile\.js|[Gg]ulpfile\.[cm]?js)$")
+_TEST_NAME = re.compile(r"(?:\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|/)__tests__/|\.d\.[cm]?ts$)")    # + declarations
+
+
 def file_completeness(discovered: list[str], report: dict) -> dict:
     """Bucket every discovered file of one language from the plugin's per-file report
     ({seen, parse_failed, skipped_oversize, unmapped, excluded}). A discovered file the plugin never looked at
     (its own skip list) is `excluded`."""
     sets = {b: set(report.get(b) or ()) for b in BUCKETS}
     seen = set(report.get("seen") or ())
+    roots = report.get("roots")
+    if roots is not None:
+        # a plugin that reads only some directories (TypeScript: source dirs, bin / script files, test trees): a file
+        # outside all of them was never read, so it is unmapped (not indexed), not a deliberate exclusion. Tool
+        # configuration (`vite.config.ts`, `.eslintrc.js`) and test files by name stay excluded (#106)
+        dirs = tuple(r for r in roots if r.endswith("/"))
+        files = {r for r in roots if not r.endswith("/")}
+        for f in discovered:
+            if f in seen or f in files or f.startswith(dirs) or _TOOL_FILE.search(f) or _TEST_NAME.search(f):
+                continue
+            sets["unmapped"].add(f)
     out = {b: [] for b in BUCKETS}
     indexed = 0
     for f in sorted(discovered):
@@ -296,6 +312,9 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             e["files_complete"] = missing_files(e) == 0
             if not e["files_complete"] and lang == "python" and e.get("unmapped"):
                 e["hint"] = _python_unmapped_hint(st)
+            elif not e["files_complete"] and lang == "typescript" and e.get("unmapped"):
+                e["hint"] = ("files outside the source dirs and test trees were not read: list the directories that hold "
+                             "source in .cg.yaml `include` (or a tsconfig.json `include`) and re-index")
         se = (rep or {}).get("syntax_errors")
         if isinstance(se, list) and se and status not in ("skipped", "not_indexed"):
             # files parsed with syntax errors (#73): error spans and the declarations lost there

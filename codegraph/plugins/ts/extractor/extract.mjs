@@ -2730,5 +2730,10 @@ stats.config = { tsconfig: noConfig ? null : (parsed.packageConfigs ? null : rel
   ...(parsed.packageConfigs ? { package_tsconfigs: parsed.packageConfigs } : {}) }
 fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, fw: fwFacts,
   subscriptions, bridges, bridge_receivers: bridgeReceivers.filter(b => !(b.protocol === 'react-native-event' && jsEmitted.has(b.module))), bridge_dynamic: bridgeDynamic, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
-  skipped_links: [...new Set(skippedLinks)].sort(), stats }))
+  skipped_links: [...new Set(skippedLinks)].sort(),
+  // for `cg coverage` (#106): the files analysed, and the roots they come from (source dirs, source files, test trees);
+  // a discovered file outside every root was never read, so it is not indexed rather than exact
+  seen_files: [...new Set(sourceFiles.map(sf => rel(realFile(sf))))].sort(),
+  roots: [...srcDirs.map(d => rel(d) + '/'), ...[...srcFiles].map(rel), ...TEST_ROOTS.map(d => d + '/')].filter(r => r && r !== '/' && !r.startsWith('..')),
+  stats }))
 console.log(JSON.stringify(stats))

@@ -437,6 +437,10 @@ class TypeScriptPlugin(LanguagePlugin):
         st = dict(facts["stats"])
         # files the parser had to recover (#73): their error lines for coverage (no per-file buckets for TypeScript)
         self.file_report = {"syntax_errors": st.pop("syntax_errors", None) or {}}
+        if "seen_files" in facts:
+            # files analysed, and the source dirs / files / test trees they come from: a discovered file outside every
+            # root is `unmapped` in `cg coverage` (never read), one inside them that the program left out `excluded` (#106)
+            self.file_report.update(seen=facts["seen_files"] + (facts.get("test_files") or []), roots=facts.get("roots") or [])
         if facts.get("skipped_links"):
             st["skipped_dangling_symlinks"] = facts["skipped_links"]
             print(f"typescript: skipped {len(facts['skipped_links'])} dangling symlink(s): "

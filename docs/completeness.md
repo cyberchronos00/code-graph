@@ -42,8 +42,12 @@ coverage proj: not fully covered: python 4 discovered, 2 indexed (exact parser):
 ```
 
 The first five paths per bucket are shown; `cg coverage --all-files` (MCP: `coverage(all_files=true)`) lists every
-path, excluded files included. Per-file reports come from the Python, PHP, Dart, Rust and C/C++ plugins; TypeScript /
-JavaScript report the parser mode and file counts.
+path, excluded files included. Per-file reports come from the Python, PHP, Dart, Rust, C/C++ and TypeScript /
+JavaScript plugins. TypeScript reads only its source dirs (`src/`, `app/`, the tsconfig's or `package.json`'s), the
+`bin` and test-run scripts outside them, and the test trees: a `.ts` / `.js` file outside all of them was never read
+and is `unmapped` (eslint: `docs/src/`, `tools/`, `Makefile.js`; elk: `config/*.ts`), with a hint to list its
+directory in `.cg.yaml` `include`. Tool configs (`vite.config.ts`, `.eslintrc.js`), test-named files and files the
+program leaves out inside the source dirs (`.d.ts`, fixtures) are `excluded` (#106).
 
 ## Syntax errors
 

@@ -40,3 +40,30 @@ def test_ts_install_hint_only_when_skipped(tmp_path):
     assert e["status"] == "skipped" and "install Node.js" in e["hint"]
     e = _ts(tmp_path, {"typescript": {"program_files": 0, "nodes": 0}})
     assert e["status"] == "not_indexed" and "Node" not in e["hint"] and "include" in e["hint"]
+
+
+def test_ts_files_outside_the_source_dirs_are_not_indexed(tmp_path):
+    """Files the TypeScript program never read (outside the source dirs, bin / script files and test trees) are
+    `unmapped`, so coverage is not reported as complete; tool configs and test-named files stay excluded (#106)."""
+    import json
+    from codegraph.indexer import index_project
+    root = tmp_path / "app"
+    files = {
+        "package.json": '{"name": "app", "version": "1.0.0", "devDependencies": {"jest": "29"}}',
+        "tsconfig.json": '{"compilerOptions": {"allowJs": true}, "include": ["src", "test"]}',
+        "src/a.ts": "export function a() { return 1 }\n",
+        "test/a.test.ts": "import { a } from '../src/a'\ntest('a', () => { a() })\n",
+        "tools/gen.ts": "export function gen() { return 2 }\n",
+        "examples/demo.js": "console.log(1)\n",
+        "vite.config.ts": "export default {}\n",
+    }
+    for rel, txt in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(txt)
+    stats = index_project(root, tmp_path / "app.db", "app")
+    e = next(x for x in stats["coverage"]["languages"] if x["language"] == "typescript")
+    assert e["discovered"] == 5 and e["indexed"] == 2, json.dumps(e)
+    assert sorted(e["paths"]["unmapped"]) == ["examples/demo.js", "tools/gen.ts"], e["paths"]
+    assert e["paths"]["excluded"] == ["vite.config.ts"], e["paths"]
+    assert e["files_complete"] is False and ".cg.yaml `include`" in e["hint"]

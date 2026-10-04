@@ -39,6 +39,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- `cg coverage` for TypeScript / JavaScript counts files per file (#106): a `.ts` / `.js` file outside the source dirs,
+  scripts and test trees the program reads is `unmapped` (not indexed) with a `.cg.yaml include` hint, instead of the
+  whole language reading "exact". eslint: 1490 discovered, 780 indexed, 56 unmapped (`docs/src/`, `tools/`);
+  commander.js 37 unmapped (`examples/`); elk 46 (`config/`, `docs/`). Declarations (`.d.ts`) stay excluded.
 - `impact table:x` also follows READS_COLUMN / WRITES_COLUMN into code that touches only some of the table's columns,
   and `impact column:t.c` follows them too (it found no callers before) (#103). On a Laravel API with column
   edges, three busy tables go from 55 to 366, 20 to 301 and 21 to 137 callers. Every earlier caller is kept, and 20

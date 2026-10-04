@@ -105,7 +105,8 @@ class FrameworkPlugin(ABC):           # e.g. Laravel on PHP, Nuxt on TypeScript
 - After `index()`, a language plugin may leave a per-file report in `self.file_report`: `{"seen": [...], "parse_failed":
   [...], "skipped_oversize": [...], "unmapped": [...], "excluded": [...]}` (repo-relative paths). `coverage.py` buckets
   every discovered file of the language from it ([completeness.md](completeness.md)); a discovered file missing from
-  `seen` counts as excluded.
+  `seen` counts as excluded, or as unmapped when the report has `roots` (directories ending in `/` and files the
+  plugin reads, as TypeScript gives) and the file is under none of them.
 - `GraphBuilder.add_node(kind, key, name, fqn=, file=, line=, end_line=, module=, doc=, lang=, attrs=)` gives the stable
   id `kind:key`. `add_edge(src, dst, kind, file=, line=, confidence=)` records the edge with its evidence.
 - The PHP context (`PhpProgram`) offers hooks so frameworks can add language-level knowledge without forking the resolver:
