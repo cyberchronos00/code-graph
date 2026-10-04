@@ -967,6 +967,11 @@ def downstream(target: str, max_per_kind: int = 25, paths: bool = True, min_conf
     tt = r.get("tables_touched") or []
     if tt:
         out.append(f"tables touched ({len(tt)}): " + ", ".join(f"{t['table']}{'' if t['live'] else '[gated-only]'}" for t in tt))
+        groups = r.get("table_groups") or {}
+        if any(groups.get(g) for g in Q.TABLE_GROUPS if g != "direct"):
+            for g in Q.TABLE_GROUPS:
+                if groups.get(g):
+                    out.append(f"  {Q._TABLE_GROUP_LABEL[g]}: {', '.join(groups[g])}")
     for k in ("route", "table", "connection", "config", "env", "job", "column", "unsafe", "ffi", "feature", "cfg", "define"):
         items = r["sinks"].get(k) or []
         if not items:

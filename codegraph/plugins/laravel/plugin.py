@@ -41,6 +41,8 @@ WRITE_ARRAY1 = {"firstorcreate", "updateorcreate", "updateorinsert", "firstornew
 WRITE_TABLE = {"save", "update", "delete", "forcedelete", "insert", "insertgetid", "insertorignore", "upsert", "create",
                "forcecreate", "increment", "decrement", "truncate", "updateorcreate", "firstorcreate", "updateorinsert",
                "restore", "push", "touch", "savequietly", "updatequietly", "deletequietly"}
+# belongsToMany relation builders: these write the pivot, not the related model's table
+PIVOT_WRITES = {"attach", "detach", "sync", "syncwithoutdetaching", "toggle", "updateexistingpivot"}
 COLLECTION_KEEP = {"filter", "where", "wherein", "sortby", "sortbydesc", "values", "keyby", "unique", "reject", "take",
                    "slice", "merge", "concat", "reverse", "wherenotnull", "wherenotin", "groupby"}
 COLUMN_METHODS = set("""bigincrements biginteger binary boolean char date datetime datetimetz decimal double enum float
@@ -75,6 +77,12 @@ def plural(word: str) -> str:
     if re.search(r"[^aeiou]y$", w):
         return word[:-1] + "ies"
     return word + "s"
+
+
+def pivot_table_name(parent_fqcn: str, related_fqcn: str) -> str:
+    """Laravel's default belongsToMany pivot: the two class basenames, snake-cased, sorted, joined."""
+    segs = sorted([snake(parent_fqcn.split("\\")[-1]), snake(related_fqcn.split("\\")[-1])])
+    return "_".join(segs)
 
 
 def model_table_by_convention(fqcn: str) -> str:
@@ -264,18 +272,58 @@ class LaravelPlugin(FrameworkPlugin):
             self.models[c.fqcn] = {"table": table, "explicit": bool(explicit), "connection": conn, "relations": {}}
         for fq, info in self.models.items():
             c = prog.classes[fq]
-            for ln, m in c.methods.items():
+            info["relations"] = self._relations_of(fq, c.methods)
+            # relations declared on a trait the model uses (ownedPlaylists() on HasUserRelationships)
+            for anc in prog.ancestors(fq, include_self=False):
+                tc = prog.cls(anc)
+                if not tc or tc.kind != "trait":
+                    continue
+                for name, rel in self._relations_of(fq, tc.methods).items():
+                    info["relations"].setdefault(name, rel)
+        self.stats["models"] = len(self.models)
+
+    def _relations_of(self, parent_fq: str, methods: dict) -> dict:
+        """Relation methods on one type. A method that returns `$this->other()->wherePivot(...)` copies `other`."""
+        found: dict[str, dict] = {}
+        for ln, m in methods.items():
+            for f in m.facts:
+                if f["t"] != "return":
+                    continue
+                d = f["expr"]
+                while d and d.get("k") == "mcall" and not (
+                        d.get("of", {}).get("k") == "this" and (d.get("m") or "").lower() in RELATIONS):
+                    d = d.get("of")
+                if d and d.get("k") == "mcall" and (d.get("m") or "").lower() in RELATIONS:
+                    args = d.get("args") or []
+                    target = classconst(args[0]) if args else None
+                    kind = (d.get("m") or "").lower()
+                    explicit = args[1]["v"] if kind == "belongstomany" and len(args) > 1 and args[1].get("k") == "str" else None
+                    pivot = explicit or (pivot_table_name(parent_fq, target) if kind == "belongstomany" and target else None)
+                    found[ln] = {"kind": d["m"], "target": target, "method": m, "line": f["line"], "pivot": pivot,
+                                 "pivot_explicit": bool(explicit)}
+                    break
+        changed = True
+        while changed:
+            changed = False
+            for ln, m in methods.items():
+                if ln in found:
+                    continue
                 for f in m.facts:
                     if f["t"] != "return":
                         continue
                     d = f["expr"]
-                    while d and d.get("k") == "mcall" and not (d.get("of", {}).get("k") == "this" and (d.get("m") or "").lower() in RELATIONS):
-                        d = d.get("of")
-                    if d and d.get("k") == "mcall" and (d.get("m") or "").lower() in RELATIONS:
-                        target = classconst((d.get("args") or [None])[0]) if d.get("args") else None
-                        info["relations"][ln] = {"kind": d["m"], "target": target, "method": m, "line": f["line"]}
+                    while d and d.get("k") == "mcall":
+                        of = d.get("of") or {}
+                        name = (d.get("m") or "").lower()
+                        if of.get("k") == "this" and name in found:
+                            src = found[name]
+                            found[ln] = {**src, "method": m, "line": f["line"]}
+                            changed = True
+                            break
+                        d = of
+                    if ln in found:
                         break
-        self.stats["models"] = len(self.models)
+        return found
 
     def model_of(self, t: str) -> str | None:
         return t if t in self.models else None
@@ -376,6 +424,8 @@ class LaravelPlugin(FrameworkPlugin):
             if ml in COLLECTION_KEEP:
                 return {t}
             return None
+        if t.startswith("pivot:"):
+            return {t}
         if t.startswith("qb:"):
             if ml in ("get", "first", "value", "pluck", "count", "exists") or ml in SCALAR_TERMINALS:
                 return None
@@ -385,7 +435,10 @@ class LaravelPlugin(FrameworkPlugin):
         if t in self.models:
             rel = self.models[t]["relations"].get(ml)
             if rel and rel["target"]:
-                return {f"builder:{rel['target']}"}
+                out = {f"builder:{rel['target']}"}
+                if rel.get("pivot"):
+                    out.add(f"pivot:{rel['pivot']}")
+                return out
             if ml in ("newquery", "query", "newmodelquery"):
                 return {f"builder:{t}"}
             if ml in ("fresh", "replicate", "refresh"):
@@ -475,6 +528,43 @@ class LaravelPlugin(FrameworkPlugin):
     def _table_node(self, t):
         return self.b.add_node("table", t, lang="sql", attrs={} if t in self.tables else {"inferred": True})
 
+    def _pivot_attr_keys(self, ml: str, args: list) -> list[str]:
+        """Column names passed as pivot attributes (attach/toggle/updateExistingPivot second array, nested sync arrays)."""
+        if ml in ("attach", "toggle", "updateexistingpivot") and len(args) > 1:
+            src = [args[1]]
+        elif ml in ("sync", "syncwithoutdetaching") and args:
+            src = [args[0]]
+        else:
+            return []
+        keys = []
+
+        def walk(arg, nested: bool):
+            if not arg or arg.get("k") != "arr":
+                return
+            for it in arg.get("items") or []:
+                v = it.get("v") or {}
+                if v.get("k") == "arr":
+                    walk(v, True)
+                elif nested:
+                    k = it.get("key")
+                    if k and k.get("k") == "str" and re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", k["v"]):
+                        keys.append(k["v"])
+
+        # attach($id, ['role' => ..]) — the array itself is the attribute map (treat as nested)
+        # sync([$id => ['role' => ..]]) — only the inner maps are attributes
+        if ml in ("sync", "syncwithoutdetaching"):
+            walk(src[0], False)
+        else:
+            walk(src[0], True)
+        return keys
+
+    def _pivot_write(self, fn, table: str, f: dict, conf: str):
+        ml = (f.get("m") or "").lower()
+        line = f.get("line")
+        self.b.add_edge(fn.id, self._table_node(table), "WRITES_TABLE", fn.file, line, conf, via=f.get("m"))
+        for col in self._pivot_attr_keys(ml, f.get("args") or []):
+            self._col_edge(fn, table, col, "WRITES_COLUMN", line, conf, via=f.get("m"))
+
     def _conn_targets(self, ctx: ResolveCtx, arg) -> list[tuple[str, str, str]]:
         """-> [(connection node id, confidence, via)] for a connection-name argument."""
         out = []
@@ -558,7 +648,9 @@ class LaravelPlugin(FrameworkPlugin):
             recv = f.get("recv") or {}
             types = ctx.type_of(recv)
             for rt in types:
-                if rt.startswith("builder:"):
+                if rt.startswith("pivot:") and ml in PIVOT_WRITES:
+                    self._pivot_write(fn, rt.split(":", 1)[1], f, RESOLVED)
+                elif rt.startswith("builder:"):
                     self._col_args(fn, self.table_of(rt.split(":", 1)[1]), f, RESOLVED)
                 elif rt.startswith("qb:"):
                     tbl = rt.split(":", 1)[1]

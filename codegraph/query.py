@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextvars
+import functools
 import json
 import os
 import re
@@ -1427,6 +1428,112 @@ def siblings(st: GraphStore, spec: str, limit=40) -> dict:
 DOWNSTREAM_SINKS = ("table", "column", "connection", "config", "env", "route", "http", "job", "command",
                     "unsafe", "ffi", "feature", "cfg", "define", "endpoint")
 
+# How a route's tables are grouped. Lower is the core answer.
+TABLE_GROUPS = ("direct", "auth", "event", "override")
+_TABLE_GROUP_LABEL = {
+    "direct": "direct (route -> handler -> service)",
+    "auth": "through auth / access checks",
+    "event": "through events / listeners",
+    "override": "reached only through overrides",
+}
+# Access-check names, split into words (camelCase / snake_case): a check verb followed by an access noun
+# (requireAccess, checkOwnerAccess, validateUserPermissionInVault, has_object_permission, ensureCanManageRoles,
+# isAuthorized), or a gate / guard hook (can, cannot, canActivate). A bare `authorize` is left out: in an OAuth flow it is
+# the route's own work. Types: policy / guard / voter / authorizer classes.
+_AUTH_VERBS = {"require", "check", "assert", "ensure", "verify", "validate", "enforce", "authorize", "authorise", "can",
+               "has", "is"}
+_AUTH_NOUNS = {"access", "permission", "permissions", "perm", "perms", "authorized", "authorised", "authorization",
+               "authorisation", "ability", "abilities", "policy", "policies", "privilege", "privileges", "role", "roles",
+               "acl", "acls"}
+_AUTH_NAMES = {"can", "cannot", "canactivate", "usercan"}
+_AUTH_TYPE_LAST = {"policy", "guard", "voter", "authorizer", "authoriser"}
+_AUTH_TYPE_PAIR = {"access", "permission", "permissions", "acl", "authorization"}
+_AUTH_TYPE_ROLE = {"checker", "control", "guard", "policy", "gate"}
+_WORDS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+_ID_SEGS = re.compile(r"[\\/#:.$]+")
+_EVENT_KINDS = ("DISPATCHES", "LISTENED_BY")
+_OVERRIDE_FLAG = frozenset({"override"})
+
+
+def _words(name: str) -> list[str]:
+    return [w.lower() for w in _WORDS.findall(name)]
+
+
+def _auth_name(name: str) -> bool:
+    w = _words(name)
+    if not w:
+        return False
+    if "".join(w) in _AUTH_NAMES:
+        return True
+    return w[0] in _AUTH_VERBS and any(x in _AUTH_NOUNS for x in w[1:])
+
+
+def _auth_type(name: str) -> bool:
+    w = _words(name)
+    return bool(w) and (w[-1] in _AUTH_TYPE_LAST or (w[-1] in _AUTH_TYPE_ROLE and any(x in _AUTH_TYPE_PAIR for x in w[:-1])))
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _auth_node(nid: str) -> bool:
+    """A middleware, access check or policy: tables reached only through it are not the route's own writes."""
+    kind, _, rest = nid.partition(":")
+    if kind == "middleware":
+        return True
+    segs = [x for x in _ID_SEGS.split(rest) if x]
+    if not segs:
+        return False
+    if kind in ("class", "interface", "trait"):
+        return _auth_type(segs[-1])
+    if kind not in ("method", "function"):
+        return False
+    return _auth_name(segs[-1]) or (kind == "method" and len(segs) > 1 and _auth_type(segs[-2]))
+
+
+def _recv_constraint(e) -> frozenset | None:
+    """Class ids on a CALLS edge whose receiver type is known, or None when the receiver was not resolved."""
+    raw = e["attrs"]
+    if not raw or '"recv"' not in raw:
+        return None
+    try:
+        rc = json.loads(raw).get("recv")
+    except ValueError:
+        return None
+    return frozenset(rc) if rc else None
+
+
+class _OverrideScope:
+    """Which overrides a call may dispatch to: the receiver type's hierarchy, when that type is known."""
+
+    def __init__(self, st: GraphStore):
+        self.st = st
+        self.owners: dict[str, str | None] = {}
+        self.hier: dict[frozenset, set[str]] = {}
+
+    def allows(self, method: str, constraint: frozenset) -> bool:
+        if method not in self.owners:
+            r = self.st.q("SELECT src FROM edges WHERE dst=? AND kind='CONTAINS' LIMIT 1", (method,))
+            self.owners[method] = r[0]["src"] if r else None
+        owner = self.owners[method]
+        if owner is None:
+            return True
+        if constraint not in self.hier:
+            self.hier[constraint] = _descendants(self.st, list(constraint))
+        return owner in self.hier[constraint]
+
+
+def _channels(flagsets) -> list[str]:
+    """Group labels for a node reached by paths tagged with these flag sets. A path through an untyped override hop
+    only counts for the override group: the auth / event groups hold tables a known call chain reaches."""
+    if any(len(f) == 0 for f in flagsets):
+        return ["direct"]
+    sure = [f for f in flagsets if "override" not in f]
+    out = []
+    if any("auth" in f for f in sure):
+        out.append("auth")
+    if any("event" in f for f in sure):
+        out.append("event")
+    return out or ["override"]
+
 
 def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, kinds=None, sinks=DOWNSTREAM_SINKS,
                gate: str | None = "auto", platform: str | None = None) -> dict:
@@ -1441,27 +1548,82 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
     kset = set(kinds)
     rank = CONFIDENCE_RANK[min_conf]
     px = _px(st, platform)
-    prev, depth = {}, {t: 0 for t in targets}
-    frontier = list(targets)
+    scope = _OverrideScope(st)
+    # flags on a path: empty is the direct route -> handler -> service chain. A direct path wins the evidence
+    # path; auth / event / override are recorded as well so a table reached both ways stays in each group.
+    best: dict[str, tuple[frozenset, int]] = {t: (frozenset(), 0) for t in targets}
+    reached_flags: dict[str, set] = {t: {frozenset()} for t in targets}
+    prev: dict[str, dict] = {}
+    via_override: dict[str, bool] = {}
     live = set(targets)
+    none_flags = frozenset()
+    seen = {(t, none_flags, None) for t in targets}
+    frontier = [(t, 0, none_flags, None, True) for t in targets]
     while frontier:
         nxt = []
-        chunk_all = frontier
-        for i in range(0, len(chunk_all), 500):
-            chunk = chunk_all[i:i + 500]
+        by_src: dict[str, list] = defaultdict(list)
+        for item in frontier:
+            by_src[item[0]].append(item)
+        srcs = list(by_src)
+        edges: dict[str, list] = defaultdict(list)
+        for i in range(0, len(srcs), 500):
+            chunk = srcs[i:i + 500]
             q = ",".join("?" * len(chunk))
-            for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate FROM edges WHERE src IN ({q})", chunk):
+            # attrs only matter on calls (the receiver type, attrs.recv)
+            for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate,"
+                          f"CASE WHEN kind IN ('CALLS','TEST_CALLS') THEN attrs END AS attrs FROM edges WHERE src IN ({q})", chunk):
                 if e["kind"] not in kset or e["conf_rank"] < rank or (px and e["id"] in px):
                     continue
-                d = e["dst"]
-                if d not in depth and depth[e["src"]] < max_depth:
-                    depth[d] = depth[e["src"]] + 1
-                    prev[d] = dict(e)
-                    nxt.append(d)
-                if e["src"] in live and not (gate and e["gate"] == gate):
-                    live.add(d)
+                edges[e["src"]].append(e)
+        for src, states in by_src.items():
+            for e in edges.get(src, ()):
+                # per-edge facts, shared by every state at this source
+                dst, ekind = e["dst"], e["kind"]
+                dispatch = ekind in ("OVERRIDDEN_BY", "IMPLEMENTED_BY")
+                ecv = _recv_constraint(e) if ekind in ("CALLS", "TEST_CALLS") else None
+                add = set()
+                if not dispatch:
+                    if ekind == "USES_MIDDLEWARE" or _auth_node(dst):
+                        add.add("auth")
+                    if ekind in _EVENT_KINDS:
+                        add.add("event")
+                ungated = not (gate and e["gate"] == gate)
+                for _node, depth_s, flags, constraint, src_live in states:
+                    if depth_s >= max_depth:
+                        continue
+                    hop_override = False
+                    if dispatch:
+                        if constraint is None:
+                            hop_override = True
+                        elif not scope.allows(dst, constraint):
+                            continue
+                        nc = constraint
+                    else:
+                        nc = ecv
+                    if hop_override:
+                        ng = flags | add | _OVERRIDE_FLAG
+                    else:
+                        ng = flags | add if add else flags
+                    nd = depth_s + 1
+                    sig = (dst, ng, nc)
+                    dst_live = src_live and ungated
+                    if sig in seen:
+                        if dst_live:
+                            live.add(dst)
+                        continue
+                    seen.add(sig)
+                    reached_flags.setdefault(dst, set()).add(ng)
+                    cur = best.get(dst)
+                    if cur is None or (len(ng), nd) < (len(cur[0]), cur[1]):
+                        best[dst] = (ng, nd)
+                        prev[dst] = e
+                        via_override[dst] = hop_override
+                    if dst_live:
+                        live.add(dst)
+                    nxt.append((dst, nd, ng, nc, dst_live))
         frontier = nxt
-    # live set needs a fixpoint (edges seen before their src became live)
+    depth = {n: d for n, (_g, d) in best.items()}
+    # live set needs a fixpoint (a node can be reached by a gated edge before an ungated one)
     changed = True
     while changed and gate:
         changed = False
@@ -1487,25 +1649,46 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
         while x in prev:
             e = prev[x]
             path.append({"from": e["src"], "kind": e["kind"], "to": e["dst"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"],
-                         **({"gated": e["gate"]} if e["gate"] else {})})
+                         **({"gated": e["gate"]} if e["gate"] else {}),
+                         **({"via_override": True} if via_override.get(x) else {})})
             x = e["src"]
         path.reverse()
         n = nodes.get(nid, {"id": nid, "kind": nid.split(":", 1)[0], "name": nid})
-        out[n["kind"]].append({**n, "depth": depth[nid], "path": path, "path_confidence": path_confidence(path),
-                               "live": (nid in live) if gate else True})
+        groups = _channels(reached_flags.get(nid, {frozenset()}))
+        out[n["kind"]].append({**n, "depth": depth[nid], "group": groups[0], "groups": groups, "path": path,
+                               "path_confidence": path_confidence(path), "live": (nid in live) if gate else True})
     for k in out:
         out[k].sort(key=lambda x: (x["depth"], x["id"]))
     # tables touched directly (READS/WRITES_TABLE) or through any of their columns
     touched = {}
     for c in out.get("column", []) + out.get("table", []):
         t = c["id"].split(":", 1)[1].split(".")[0] if c["kind"] == "column" else c["id"].split(":", 1)[1]
+        gs = c.get("groups") or [c.get("group") or "direct"]
         cur = touched.get(t)
-        if cur is None or c["depth"] < cur["depth"]:
-            touched[t] = {"table": t, "depth": c["depth"], "via": c["id"], "live": c["live"], "path_confidence": c["path_confidence"]}
-        elif c["live"]:
-            cur["live"] = True
+        if cur is None:
+            touched[t] = {"table": t, "depth": c["depth"], "via": c["id"], "live": c["live"],
+                          "path_confidence": c["path_confidence"], "groups": set(gs)}
+        else:
+            if "direct" in gs:
+                cur["groups"] = {"direct"}
+            elif "direct" not in cur["groups"]:
+                cur["groups"].update(gs)
+            if c["depth"] < cur["depth"]:
+                cur["depth"], cur["via"], cur["path_confidence"] = c["depth"], c["id"], c["path_confidence"]
+            if c["live"]:
+                cur["live"] = True
+    tables = []
+    for t in touched.values():
+        ordered = [g for g in TABLE_GROUPS if g in t["groups"]] or ["direct"]
+        if "direct" in ordered:
+            ordered = ["direct"]
+        t["group"] = ordered[0]
+        t["groups"] = ordered
+        tables.append(t)
+    tables.sort(key=lambda x: (TABLE_GROUPS.index(x["group"]), x["depth"], x["table"]))
     res = {"targets": targets, "gate": gate, "reached": len(depth), "sinks": dict(out),
-           "tables_touched": sorted(touched.values(), key=lambda x: (x["depth"], x["table"]))}
+           "tables_touched": tables,
+           "table_groups": {g: [t["table"] for t in tables if g in t["groups"]] for g in TABLE_GROUPS}}
     if platform:
         from .platforms import filter_info
         res["platform"] = filter_info(st, platform)
@@ -1573,7 +1756,17 @@ def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=(
     if tt:
         out.append("")
         out.append(f"== TABLES TOUCHED (directly or via columns): {len(tt)}")
-        out.append("  " + ", ".join(f"{t['table']}{'' if t['live'] else '[GATED-ONLY]'}" for t in tt))
+        grouped = any(t.get("group", "direct") != "direct" or len(t.get("groups") or []) > 1 for t in tt)
+        if grouped:
+            by = {t["table"]: t for t in tt}
+            buckets = res.get("table_groups") or {g: [t["table"] for t in tt if g in (t.get("groups") or [t.get("group")])] for g in TABLE_GROUPS}
+            for g in TABLE_GROUPS:
+                names = buckets.get(g) or []
+                if names:
+                    out.append(f"  {_TABLE_GROUP_LABEL[g]}: " + ", ".join(
+                        f"{name}{'' if by.get(name, {}).get('live', True) else '[GATED-ONLY]'}" for name in names))
+        else:
+            out.append("  " + ", ".join(f"{t['table']}{'' if t['live'] else '[GATED-ONLY]'}" for t in tt))
     for k in kinds_order:
         items = res["sinks"].get(k) or []
         if not items:
@@ -1586,7 +1779,7 @@ def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=(
             if show_paths:
                 s = i["path"][0]["from"] if i["path"] else i["id"]
                 for p in i["path"]:
-                    s += f"\n          -{p['kind']}[{p['confidence']} @ {p['at']}{' GATED' if p.get('gated') else ''}]-> {p['to']}"
+                    s += f"\n          -{p['kind']}[{p['confidence']} @ {p['at']}{' GATED' if p.get('gated') else ''}{' via override' if p.get('via_override') else ''}]-> {p['to']}"
                 out.append(f"      path: {s}")
         if len(items) > max_per_kind:
             out.append(f"  ... {len(items) - max_per_kind} more")

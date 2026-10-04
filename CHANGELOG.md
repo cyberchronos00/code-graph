@@ -110,6 +110,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Route to tables (#120): a call on a typed receiver follows only the overrides in that
+  receiver's hierarchy, so a route no longer picks up tables that only a sibling repository
+  writes. Tables reached through an untyped override stay in the list, under `reached only
+  through overrides`. `belongsToMany` `attach` / `detach` / `sync` / `syncWithoutDetaching` /
+  `toggle` / `updateExistingPivot` write the pivot table (the explicit table argument, or
+  Laravel's alphabetical singular join) and the pivot columns passed as attributes.
+  `downstream` splits the tables into direct (route, handler, service), through auth / access
+  checks (middleware, policy / guard / voter / authorizer classes, and check-style names such as
+  `requireAccess`, `checkOwnerAccess`, `has_object_permission`, `canActivate`), and through events /
+  listeners.
 - JavaScript / TypeScript (#138): a variable that holds the result of a call taking a callback
   (`var server = http.createServer((req, res) => ..)`, `const schema = z.string().transform(fn)`,
   `const pieces = s.split(':').map(fn)`) is no longer a function node named after the variable, so its later uses
