@@ -8,6 +8,56 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-04
+
+Stored properties as `field` nodes with `READS_PROP` / `WRITES_PROP` edges in Swift, Kotlin, Python, TypeScript /
+JavaScript, React / Vue state and PHP, with `cg readers` / `cg writers Type.prop` (#88 phase 1). Two heuristic checks
+built on them: `cg roundtrip` (#88 phase 2) and `cg lint async-state` (#88 phase 3). Also: Swift value navigation
+and `URLComponents` endpoints (#68), Socket.IO direction and Nest guards in protocol links (#69), MCP servers built
+inside functions (#76), Python external-system clients and LLM providers (#77), the Kotlin suspend-lambda parse fix
+(#81), Kotlin property accessors as nodes (#89), plain JavaScript packages from `package.json` (#94), opt-in
+`cg parity --structure` (#93), `cg parity` own-platform symbols (#107), and web view work (#82).
+
+**Upgrade notes**
+
+- New field nodes. Re-index to get them; graphs grow noticeably. Examples: IceCubesApp 2,392 Swift fields, Element X
+  8,462 Kotlin fields, koel 1,218 PHP stored properties. In detail:
+  - Swift, Kotlin, Python and TypeScript stored properties, plain JS `this.x` fields (`declared: this`), React
+    `useState` / `useReducer` and Vue `ref` / `reactive` state (`property: state`), Pinia options state
+    (`hook: pinia`) and Vue `data()` keys (`hook: data`) are `field:<Type>.<name>` nodes.
+  - PHP declared and constructor-promoted properties are `property:Class::$x` nodes with `property: stored`.
+  - The `field` kind already existed for other languages. Kotlin properties with a custom `get()` / `set()`,
+    `by lazy` or a delegate are `method:` / `function:` nodes with `kotlin_kind: property` (#89).
+- New edge kinds `READS_PROP` and `WRITES_PROP`, from the accessing function to the field. Their attributes:
+  - `receiver` and `accessor` on reads and writes;
+  - `via` on writes: `mutating`, `inout`, `binding`, `item`, `value`, `setter`, `copy`, `compound`, `unset`;
+    `via: keypath` on a read;
+  - `storage` on Swift `_x = State(...)` writes, `binding: name` on heuristic binds;
+  - field attributes `wrapper` and `key` (`@AppStorage`).
+  On the corpora checked for each language, the edges that existed before are unchanged.
+- New or extended attributes on existing edges:
+  - `INSTANTIATES` and JSX `RENDERS` carry `branch` / `branch_line` (the enclosing switch case / if / else / guard /
+    ternary).
+  - Kotlin calls inside property accessors come from the accessor node (`accessor: get | set | lazy | delegate`), and
+    property reads / writes are `CALLS` with `property: read | write` (#89).
+  - MCP endpoints built inside a function carry `nested_in` / `handler_name` (#76).
+  - Python model calls go to new `external:llm:<provider>` nodes (#77).
+- New commands and MCP tools:
+  - `cg readers Type.prop` and `cg writers Type.prop` (MCP `readers`; `writers` also takes `Type.prop`);
+  - `cg roundtrip Type.prop` (MCP `roundtrip`);
+  - `cg lint async-state [--rules ...]` (MCP `lint_async_state`);
+  - `cg parity --structure` / `--write-map` (#93, off by default).
+  - `.cg.yaml` gains `lossy:`. Roundtrip and lint findings are labelled `heuristic`, and nothing they find is added
+    to the graph.
+- Output that changes for existing projects:
+  - Plain JS packages index the `package.json` entry dirs and `bin` scripts (#94); eslint nodes go from 4,929 to
+    8,995.
+  - Socket.IO links follow the emit direction, and the per-protocol link stats count `external` (#69).
+  - `cg parity` stops reporting the source app's own platform as `platform_only` (#107).
+  - `impact` and `cg tests` follow functions reached only through a Kotlin property (#89).
+- The cache version stays 3. The TypeScript and Dart fact caches include the extractor code, so the first index
+  after the upgrade re-extracts those projects anyway.
+
 ### Added
 
 - Python stored attributes (#88): `self.x = ...` and annotated class-level attributes (dataclass / pydantic) are
@@ -81,7 +131,6 @@ commands, output and the graph schema; such changes are listed under **Changed**
     an early return in an observer and set around writes of some state. It reports writes of that state from async
     code or a callback that do not set the guard. On the 14 corpora it found 1 guard pattern (a presence
     de-duplication) and 0 findings.
-  - Incomplete cache key and echo suppression are not implemented yet.
 - Kotlin stored-property refs no longer treat `{ x = …` (an assignment opening a body) or `f(x)` (an argument) as a
   local `x`. Element X gains 1,149 field refs and Bitwarden 418; all other edges are unchanged.
 - Kotlin `copy()` guesses (`binding: name`) are `heuristic` in the edge confidence and in the web view (dotted
@@ -848,7 +897,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/cyberchronos00/code-graph/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cyberchronos00/code-graph/compare/v0.8.2...v0.9.0
 [0.8.2]: https://github.com/cyberchronos00/code-graph/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/cyberchronos00/code-graph/compare/v0.8.0...v0.8.1
