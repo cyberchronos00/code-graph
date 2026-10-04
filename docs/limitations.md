@@ -30,9 +30,12 @@ Issues and pull requests that extend it are welcome.
   - auto-imports and global components resolve through `.nuxt` when it exists. A clean checkout without `.nuxt` gets
     generated stand-ins for the project's own composables, utils, stores and components (a warning suggests
     `npx nuxi prepare`); without `node_modules`, Vue / Nuxt built-ins (`ref`, `useFetch`, …) stay unresolved, and
-    module-provided auto-imports and `imports.dirs` beyond `composables/`, `utils/` and `stores/` need `.nuxt`;
+    module-provided auto-imports need `.nuxt`; `imports.dirs` and `imports.imports` are read from `nuxt.config`
+    (and local layers) when `.nuxt` is absent — a computed `imports.dirs` entry is a blind spot
+    (`nuxt_unevaluable_import_dirs`);
   - the source directory is `srcDir` from `nuxt.config`, else `app/` or `src/` when they hold Nuxt directories, else
-    the repo root; layers (`extends`) are not merged;
+    the repo root; layers (`extends`) are not merged for pages, components or layouts. A local layer is read for
+    `imports.dirs` and `imports.imports` when `.nuxt` is absent;
   - library components (Nuxt UI etc.) are not nodes; `<component :is>`, `Teleport`/`Transition` are not resolved;
   - functions declared inside a `.vue` `<script setup>` collapse into the component node;
   - parameter-dependent URLs are expanded one call level only; numeric literal args stay `{param}`;

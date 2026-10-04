@@ -31,6 +31,8 @@ KINDS = {
     "python_decorator_routes": ("route", "python", "route decorator of a framework cg has no plugin for"),
     "python_decorator_registration": ("handler", "python", "function registered through a decorator no plugin models"),
     "python_registry_assignment": ("handler", "python", "function stored in a registry (registry[key] = fn)"),
+    "nuxt_unevaluable_import_dirs": ("handler", "typescript",
+                                     "Nuxt imports.dirs entry that is not a literal path or glob"),
 }
 
 
@@ -392,6 +394,17 @@ def python_registry_assignments(prog, builder) -> dict | None:
     return _finding("python_registry_assignment", hits)
 
 
+# ------------------------------------------------------------------------------------------- Nuxt
+
+def nuxt_unevaluable_import_dirs(root: Path) -> dict | None:
+    """`imports.dirs` entries whose path is computed (a call, an identifier, a template with substitutions).
+    Literal paths, globs and single files are scanned when `.nuxt/` is absent; a prepared checkout keeps Nuxt's
+    own `imports.d.ts`, so those entries are not a blind spot."""
+    from .plugins.nuxt.plugin import unevaluable_import_dirs
+    hits = [(f, line) for f, line in unevaluable_import_dirs(root)]
+    return _finding("nuxt_unevaluable_import_dirs", hits)
+
+
 # ------------------------------------------------------------------------------------------- driver
 
 def detect(root: str | Path, files_by_ext: dict[str, list[str]], builder=None, programs: dict | None = None) -> list[dict]:
@@ -417,6 +430,7 @@ def detect(root: str | Path, files_by_ext: dict[str, list[str]], builder=None, p
 
     run(nest_wrapped_route_decorators, root, js)
     run(express_loop_routes, root, js)
+    run(nuxt_unevaluable_import_dirs, root)
     run(laravel_loop_routes, root, php)
     py = programs.get("python")
     if py is not None:
