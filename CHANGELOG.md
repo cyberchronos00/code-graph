@@ -10,6 +10,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- gRPC (#33): every `rpc` of a `service` in the project's `.proto` files becomes
+  `endpoint:grpc:<package>.<Service>/<Method>` (request / response types, streaming kind, declaring file), RECEIVED_BY
+  the implementing method and SENDS_TO from the calling function. Servers: Python servicers and
+  `add_*Servicer_to_server`, grpc-js `addService` handler maps and Connect `router.service`, tonic trait impls,
+  grpc-java / grpc-kotlin `ImplBase`, grpc++ `Service` classes (out-of-line definitions too), Dart `ServiceBase`,
+  grpc-swift providers and PHP `*Stub` / `*Interface`. Clients: generated stubs and clients in the same languages,
+  typed fields and parameters, and stubs handed to helpers. Generated code is skipped; services with the same short
+  name in two packages are told apart by the qualifier. Plain Node programs using `@grpc/grpc-js` / Connect, up to
+  three directories deep, are now indexed. grpc's, grpc-node's, tonic's, grpc-kotlin's, grpc-dart's, grpc-swift's and
+  connect-es's examples and the OpenTelemetry demo pair clients with servers; 20 sampled edges correct.
 - Raw TCP / UDP sockets (#39) as `endpoint:tcp:<port>` / `endpoint:udp:<port>`: listeners (RECEIVED_BY the handler or
   the listening function, with `bind_address`, `exposure` all / loopback / specific, multicast group and port env
   keys) and connects / sends (SENDS_TO) in Python, JS / TS, Rust, Kotlin, C (BSD sockets and libuv), Swift, Dart and
@@ -75,6 +85,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Sockets (#39): `asyncio.start_server(client_connected_cb=.., port=..)` with keyword arguments only no longer stops
+  the index with an IndexError, and an unexpected source shape in one file is counted under `sockets.scan_errors`
+  (with samples) instead of failing the scan.
 - Rust exact mode: older rust-analyzer releases (1.83) give function and closure parameters global SCIP symbols
   (`put().(e)`). Such a symbol no longer becomes a synthetic function node, or a link to a function of the same name,
   so node ids no longer depend on the rust-analyzer version. With 1.83 on mini-redis, 12 spurious function nodes and

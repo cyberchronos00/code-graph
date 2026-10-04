@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package fleet.v1;
+
+// A second package that reuses the short service name RouteGuide.
+service RouteGuide {
+  rpc GetFeature(Stop) returns (Stop);
+}
+
+service Dispatch {
+  rpc Assign(AssignRequest) returns (AssignReply);
+  /* rpc Retired(AssignRequest) returns (AssignReply); */
+}
+
+message Stop { string id = 1; }
+message AssignRequest { string ride = 1; }
+message AssignReply { string driver = 1; }

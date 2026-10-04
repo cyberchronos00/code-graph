@@ -78,7 +78,7 @@ Node ids are unchanged; `cg protocols` reads them through adapters (no extra nod
 | `route` | http, ws (`route:WS`), graphql (`route:GRAPHQL`) | (tests: TEST_HTTP) | ROUTES_TO | <- MATCHES_ROUTE |
 | `channel` | pusher | BROADCASTS_ON (events) | - | <- MATCHES_CHANNEL |
 | `channel_sub` | pusher | - | SUBSCRIBES_CHANNEL (client code) | MATCHES_CHANNEL -> channel |
-| `message` | nest-rpc, nest-event, nest-ws, grpc | DISPATCHES (ClientProxy.send / emit) | HANDLED_BY | - |
+| `message` | nest-rpc, nest-event, nest-ws, grpc (Nest `@GrpcMethod`) | DISPATCHES (ClientProxy.send / emit) | HANDLED_BY | - |
 | `job` | bull, laravel-queue, celery | DISPATCHES (Laravel: to the job's handler, `via` job), SCHEDULES | HANDLED_BY | - |
 | `event` | laravel-event, nest-event-emitter, django-signal | DISPATCHES | LISTENED_BY / HANDLED_BY | - |
 | `endpoint` | capacitor, react-native, flutter, flutter-event, pigeon, electron-ipc, electron-preload, tauri | SENDS_TO | RECEIVED_BY | - |
@@ -213,6 +213,37 @@ per-protocol counts are under `sockets.applications` in the index stats. On the 
 pair the `_http._tcp` registration with its browser; aiocoap's `server.py` resources `/time` and `/other/block`
 pair with `clientGET.py` and `clientPUT.py`.
 
+## gRPC (protobuf contracts)
+
+`endpoint:grpc:<package>.<Service>/<Method>` (codegraph/rpc.py), one per `rpc` of a `service` in the project's
+`.proto` files (`node_modules`, `vendor`, `third_party`, build and dot directories are skipped; comments are masked).
+The node records `service`, `package`, `method`, `request` / `response` message types, `streaming` (`unary`,
+`server`, `client`, `bidi`), `declared_in` (`file:line`), `declared_also` when the same service is declared again,
+and `contract: proto`. Servers and clients come from a source scan of the files with function nodes; generated
+code (`_pb2*.py`, `*_pb.js`, `*.pb.h` / `.cc`, `*.grpc.pb.*`, `.pb.swift`, `.pbgrpc.dart`, `*_grpc.pb.go`, ..) is
+skipped. A pair means both sides name the same contract method, so it holds across languages.
+
+| language | server (RECEIVED_BY the implementing method) | client (SENDS_TO from the calling function) |
+|---|---|---|
+| Python (grpcio) | `class X(pb2_grpc.SvcServicer)` (exact), `add_SvcServicer_to_server(X(), server)` or a variable assigned `X()` (resolved) | `stub = pb2_grpc.SvcStub(channel)`, then `stub.Method(..)` |
+| JS / TS (@grpc/grpc-js, Connect) | `server.addService(pkg.Svc.service \| SvcService, { method: handler, method, method(..) {} })`, an object or class named there; Connect `router.service(Svc, impl)` | `new pkg.Svc(addr, creds)` (proto-loader), `new SvcClient(..)` (generated / ts-proto), Connect `createClient(Svc, transport)`, typed fields `client: SvcClient` |
+| Rust (tonic) | `impl svc_server::Svc for X` (in a file that mentions tonic or `_server`) | `SvcClient::connect(..)` / `new` / `with_interceptor`, then `client.method(..)` |
+| Kotlin / Java | `class X : SvcGrpcKt.SvcCoroutineImplBase()`, `extends SvcGrpc.SvcImplBase` | `SvcGrpc.newStub` / `newBlockingStub` / `newFutureStub`, `SvcCoroutineStub(channel)` |
+| C++ (grpc++) | `class X : public Svc::Service` (also `AsyncService`, `CallbackService`, `WithAsyncMethod_*`); methods declared in the class and defined out of line (`X::Method`) in the same directory | `stub_ = Svc::NewStub(ch)` (also a member initializer), `stub_->Method(..)`, `stub_->async()->Method(..)`, `AsyncMethod` / `PrepareAsyncMethod` |
+| Dart | `class X extends SvcServiceBase` | `SvcClient(channel)` |
+| Swift (grpc-swift) | `Pkg_SvcAsyncProvider`, `Pkg_Svc.SimpleServiceProtocol` | `Pkg_SvcAsyncClient(..)`, `Pkg_Svc.Client(..)` |
+| PHP | `extends SvcStub`, `implements SvcInterface` | `new SvcClient(..)` |
+
+Method names match the contract without case and underscores (`get_feature`, `getFeature`, `GetFeature`). A method
+of a server class that is not in the contract gets no edge. A stub handed to a helper (`def get_one(stub, p):
+stub.GetFeature(p)`) is resolved when the file's own stubs belong to one service with that method, and is
+`heuristic` when only one service in the project has the method. When two packages declare a service of the same
+short name, the qualifier (`fleet_pb2_grpc`, `routeguide::`, the import) picks the package; otherwise no edge. The
+`rpc` index stats count services, methods, server classes and methods, registrations, stubs and client calls, with
+samples of `server_class_without_methods`, `stub_without_variable`, `handler_unresolved` and
+`client_call_outside_function`. NestJS `@GrpcMethod` / `ClientGrpc` handlers stay `message:grpc` nodes (protocol
+`grpc` in the same view).
+
 ## Not covered yet
 
 - Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
@@ -221,5 +252,8 @@ pair with `clientGET.py` and `clientPUT.py`.
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.
 - Broker / host nodes (#30 / #40) are not attached to endpoints yet.
+- gRPC (#33): Go servers and clients (no plugin); `.proto` files only outside the indexed root (`buf` remote modules,
+  a sibling repository: index both and `cg link`); Nest `@GrpcMethod` handlers are not merged with the contract
+  endpoints; DEFINES / USES_SCHEMA edges to message types; Thrift, tRPC, JSON-RPC and Java RMI.
 - Sockets (#39): QUIC / ALPN, WebRTC data channels, message-type framing on a port, Go (no plugin), servers whose port
   comes only from a config file, and `env:` endpoints across repositories in `cg link` (follow-up issue).

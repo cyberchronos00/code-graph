@@ -240,6 +240,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (so := apply_sockets(project, builder)):
         so["seconds"] = round(time.time() - t_so, 2)
         stats["sockets"] = so
+    # RPC contracts (#33): gRPC services of the .proto files, their implementations and stub calls
+    from .rpc import apply as apply_rpc
+    t_rpc = time.time()
+    if (rp := apply_rpc(project, builder)):
+        rp["seconds"] = round(time.time() - t_rpc, 2)
+        stats["rpc"] = rp
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

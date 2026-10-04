@@ -157,22 +157,29 @@ def cordova_www_dirs(root: Path) -> list[str]:
     return out[:50]
 
 
-NODE_NET = re.compile(r"""(?:require\(\s*|from\s+)['"](?:node:)?(?:net|dgram|tls)['"]""")
+NODE_NET = re.compile(r"""(?:require\(\s*|from\s+)['"](?:node:)?(?:net|dgram|tls|@grpc/grpc-js|grpc|@grpc/proto-loader|"""
+                      r"""@connectrpc/connect(?:-node)?)['"]""")
 
 
 def node_socket_dirs(root: Path, limit: int = 400) -> list[str]:
-    """Top-level directories (or `.`) of the plain-JS files of a Node program that use net / dgram / tls (#39)."""
+    """Top-level directories (or `.`) of the plain-JS files of a Node program that uses net / dgram / tls (#39) or
+    gRPC / Connect (#33), looked up three directory levels deep."""
     out, seen = [], 0
     skip = set(SKIP_DIRS) | {"test", "tests", "examples", "docs", "build", "vendor"}   # preset skip dirs + non-program dirs
-    cands = [p for p in root.glob("*.js")] + [p for d in sorted(root.iterdir()) if d.is_dir() and d.name not in skip
-                                              and not d.name.startswith(".") for p in d.glob("*.js")]
-    for p in cands:
+
+    def files(d: Path, depth: int):
+        yield from sorted(d.glob("*.js"))
+        if depth < 3:
+            for sub in sorted(x for x in d.iterdir() if x.is_dir() and x.name not in skip and not x.name.startswith(".")):
+                yield from files(sub, depth + 1)
+    for p in files(root, 0):
         seen += 1
         if seen > limit:
             break
         try:
             if NODE_NET.search(p.read_text(errors="replace")[:20000]):
-                d = "." if p.parent == root else p.parent.name
+                rel = p.relative_to(root).parts
+                d = "." if len(rel) == 1 else rel[0]
                 if d not in out:
                     out.append(d)
         except OSError:

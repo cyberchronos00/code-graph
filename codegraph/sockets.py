@@ -635,11 +635,13 @@ class Scan:
     # ------------------------------------------------------------ per language
     def scan(self, file, lang):
         src = self.text(file)
-        if self.apps is not None:
-            self.apps.run_file(file, lang, src)
-        if not any(h in src for h in HINTS[lang]):
-            return
-        getattr(self, "s_" + lang)(file, src)
+        try:      # a source shape the patterns did not expect never stops the index: counted, with a sample
+            if self.apps is not None:
+                self.apps.run_file(file, lang, src)
+            if any(h in src for h in HINTS[lang]):
+                getattr(self, "s_" + lang)(file, src)
+        except (IndexError, KeyError, ValueError, TypeError, AttributeError) as e:
+            self.miss("scan_errors", f"{file}: {type(e).__name__} {e}")
 
     def _calls(self, src, rx):
         for m in rx.finditer(src):
@@ -692,7 +694,8 @@ class Scan:
                     a["host"] = ""
             elif port:
                 a["host"] = ""
-            hdl = self.handler(pos[0], file) if "start_server" in m.group(0) else self.handler(pos[0], file, "data_received")
+            cb = pos[0] if pos else kw.get("client_connected_cb") or kw.get("protocol_factory")
+            hdl = self.handler(cb, file) if "start_server" in m.group(0) else self.handler(cb, file, "data_received")
             api = "asyncio.start_server" if "start_server" in m.group(0) else "loop.create_server"
             self.emit("tcp", "listen", file, m.start(), a, api, c, hdl)
         for m, args in self._calls(src, re.compile(r"\bsocket\.create_server\s*\(")):

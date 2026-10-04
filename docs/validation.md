@@ -831,3 +831,26 @@ alacritty, ktor-samples, django, netbox, immich, outline, saleor, element-x-ios,
 are not TCP ports). A random 20 of the new edges were checked by hand against the source: 20 correct (an earlier
 sample of 20 found a wrong `/` path for a concatenated CoAP URI, fixed before this one). `tests/test_sockets.py` covers
 each language on `tests/sockets_fixture` and the BSD / libuv C calls on `tests/sockets_c_fixture`.
+
+## gRPC services from `.proto` contracts (#33)
+
+gRPC edges on the example trees of the gRPC implementations and on the OpenTelemetry demo (indexed at the commits
+shown; "paired" endpoints have both a server and a client in the graph):
+
+| Project | Services / methods | Paired | Edges | Notes |
+|---|---|---|---|---|
+| grpc `examples/` 724b3cc | 11 / 32 | 16 | 77 RECEIVED_BY, 92 SENDS_TO | C++ and Python; 17 C++ servers whose class the C/C++ parser loses after an `ABSL_FLAG(..)` line without a semicolon are counted as `server_class_without_methods`; the PHP, Node and other trees are not indexed from this root. The released code stopped on this tree with an IndexError in the socket scan (fixed) |
+| grpc `examples/php` with `examples/protos` | 6 / 18 | 5 | 5 RECEIVED_BY, 5 SENDS_TO | `Greeter` / `RouteGuideService extends ..Stub`, clients `new ..Client(..)`; `echo/client.php` calls at file level, outside any function |
+| grpc-node `examples/` e742b11 | 6 / 13 | 10 | 30 RECEIVED_BY, 34 SENDS_TO | plain-JS programs (not indexed before): `addService` handler maps, proto-loader `new pkg.Svc(..)` and static-codegen clients |
+| tonic `examples/` 2681a7e | 7 / 15 | 7 | 34 RECEIVED_BY, 36 SENDS_TO | trait impls and `XClient::connect`; reflection / health services have no client in the tree |
+| grpc-kotlin `examples/` fffe032 | 5 / 8 | 8 | 8 RECEIVED_BY, 6 SENDS_TO, 5 TEST_CALLS | `CoroutineImplBase` servers, `CoroutineStub` clients and server tests |
+| grpc-dart `example/route_guide`, `helloworld` bdbcf3b | 1 / 4, 1 / 1 | 4, 1 | 6 RECEIVED_BY, 7 SENDS_TO | `ServiceBase` servers, `RouteGuideClient` fields |
+| grpc-swift `Examples/v1` + `Protos` 65d0084 | 15 / 42 | 9 | 13 RECEIVED_BY, 10 SENDS_TO | providers, `Echo_EchoAsyncClient` parameters and `Routeguide_RouteGuideAsyncClient` members (`makeRecordRouteCall`) |
+| connect-es examples 1be3b33 | 2 / 5 | 2 | 12 RECEIVED_BY, 32 SENDS_TO, 8 TEST_CALLS | `router.service(ElizaService, ..)` and `createClient(ElizaService, ..)` across the framework examples |
+| opentelemetry-demo 7ea09b8 | 11 / 21 | 1 | 2 RECEIVED_BY, 12 SENDS_TO | the TypeScript frontend's gateways and the Python recommendation service; the C++ currency, plain-JS payment and Rust shipping services sit in sub-projects that are not indexed from the repo root, and Go / C# / Java / Ruby / Elixir have no plugin |
+
+No edge or node changed on the 20 corpora checked for #39 (electron-fiddle, immich, saleor, django, flask, httpie,
+outline, eslint, mcp-servers, netbox, opentelemetry-python, python-sdk, python-zeroconf, tauri, alacritty, redis,
+aiocoap, ansible, ktor-samples, element-x-ios). A random 20 of the gRPC edges above were checked by hand against the
+source: 20 correct. `tests/test_rpc.py` covers Python, Node / TypeScript, Connect, tonic and Kotlin on
+`tests/rpc_fixture` (including two packages with a `RouteGuide` service each) and grpc++ on `tests/rpc_cpp_fixture`.

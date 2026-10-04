@@ -151,3 +151,19 @@ def test_osc_coap_ssdp(graph):
     assert _pairs(con, "endpoint:coap:/time") == ({"function:pyapp.apps.coap_client"}, {"method:pyapp.apps.TimeResource.render_get"})
     assert _pairs(con, "endpoint:ssdp:urn:schemas-upnp-org:device:BinaryLight:1") == (
         {"function:pyapp.apps.ssdp_search", "function:node/apps.ts#findLights"}, {"function:pyapp.apps.ssdp_advertise"})
+
+
+def test_keyword_only_start_server(tmp_path):
+    # asyncio.start_server(client_connected_cb=.., port=..) without positional arguments crashed the scan (#39 fix)
+    (tmp_path / "app").mkdir()
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "kw"\nversion = "0.1.0"\n')
+    (tmp_path / "app" / "__init__.py").write_text("")
+    (tmp_path / "app" / "serve.py").write_text(
+        "import asyncio\n\n\nasync def on_client(reader, writer):\n    writer.close()\n\n\nasync def main():\n"
+        "    server = await asyncio.start_server(client_connected_cb=on_client, host=\"127.0.0.1\", port=7123)\n"
+        "    await server.serve_forever()\n")
+    db = tmp_path / "g.db"
+    st = index_project(tmp_path, db, "kw")
+    assert st["sockets"]["tcp_listeners"] == 1 and "scan_errors" not in st["sockets"]
+    con = sqlite3.connect(db)
+    assert set(_edges(con, "RECEIVED_BY", "endpoint:tcp:7123")) == {"function:app.serve.on_client"}

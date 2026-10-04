@@ -21,7 +21,9 @@ register(Protocol("nest-event", "tcp", "NestJS microservice event (ClientProxy.e
                   kinds=("message",), guards=True))
 register(Protocol("nest-ws", "tcp", "NestJS WebSocket gateway message (@SubscribeMessage)", source=A, kinds=("message",),
                   guards=True))
-register(Protocol("grpc", "tcp", "gRPC method (NestJS @GrpcMethod)", source=A, kinds=("message",), guards=True))
+register(Protocol("grpc", "tcp", "gRPC method <package>.<Service>/<Method> from .proto files (codegraph/rpc.py): stub "
+                  "call -> generated base class implementation; NestJS @GrpcMethod messages are read as grpc too",
+                  kinds=("endpoint", "message"), guards=True, schemes=("grpc", "grpcs")))
 register(Protocol("bull", "tcp", "Bull / BullMQ job queue (Queue.add -> @Processor / @Process, WorkerHost.process)",
                   source=A, kinds=("job",)))
 register(Protocol("laravel-queue", "tcp", "Laravel queued job (dispatch / Bus / schedule -> Job::handle)", source=A,
