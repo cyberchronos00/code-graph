@@ -10,13 +10,15 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
-- Kotlin receiver types (#96): a function's locals (`val repo = OrderRepo()`, `val api: OrdersApi = ..`) and
-  `by lazy { OrderRepo() }` properties type their receivers, and an initializer is read only after its own `=`
-  (`val same = a == Foo()` and `= X(..)` inside a `mockk<T> { }` block no longer type the property). ktor-samples:
-  the postgres sample's `ArticleService` calls bind exactly (8 name / candidate edges replaced); KaMPKit: the
-  `BreedRepository.refreshBreeds` wrong candidates are gone; bitwarden-android: 211 `heuristic` name / candidate edges out (the
-  6 sampled were wrong: `Bundle.getString` matched to 5 project `getString`s, cross-module `toViewState`), 234 in
-  (the `AuthSdkSource` calls in AuthRepositoryTest checked correct), +35 `recv`; nowinandroid unchanged.
+- Kotlin receiver types (#96): a function's locals (`val repo = OrderRepo()`, `val api: OrdersApi = ..`),
+  `by lazy { OrderRepo() }` properties and test doubles (`mockk<AuthSdkSource> { .. }`, `spyk<..>`, `mock<..>()`)
+  type their receivers, and an initializer is read only after its own `=` (`val same = a == Foo()` and a `= X(..)`
+  inside a `mockk<T> { }` block no longer type the property). bitwarden-android: 1,729 `heuristic` name /
+  candidate edges out (mostly a mocked call fanned out to every class with that method name), 201 in, `recv`
+  3,407 -> 4,467; a random 20 of the edges added checked against the source, 20 correct. ktor-samples: 22 name /
+  candidate edges out, 2 in (the postgres `ArticleService` and kweet `DAOFacade` calls bind through their types); KaMPKit:
+  `viewModel by lazy { BreedViewModel(..) }` drops the wrong `BreedRepository.refreshBreeds` candidates;
+  nowinandroid unchanged.
 - Dispatch narrowing (#96): `impact` / `tests` / `reaches` on an override `Sub.method` leave out the calls into
   the base method it overrides whose receiver type is known and cannot be a `Sub`, as for an inherited spec (note
   `Sub.run overrides Base.run (its callers narrowed to Sub: ...)`, JSON `override_narrowed`). Python receivers

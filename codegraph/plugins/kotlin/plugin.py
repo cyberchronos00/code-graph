@@ -786,7 +786,8 @@ class KotlinPlugin(LanguagePlugin):
         # val api = Retrofit...create(OrdersApi::class.java) / val repo = OrderRepository(...)
         txt = self.t(d)
         m = re.search(r"create\(\s*(\w+)::class", txt) or re.match(r"[^=]*=(?!=)\s*([A-Z]\w*)\s*\(", txt) \
-            or re.search(r"\bby\s+lazy\s*(?:\([^)]*\))?\s*\{\s*([A-Z]\w*)\s*\(", txt)   # by lazy { Repo(..) }
+            or re.search(r"\bby\s+lazy\s*(?:\([^)]*\))?\s*\{\s*([A-Z]\w*)\s*\(", txt) \
+            or re.match(r"[^=]*=(?!=)\s*(?:mockk|spyk|mock|spy)\s*<\s*([A-Z]\w*)", txt)   # = mockk<Repo> { .. }
         if ids and m:
             return {self.t(ids[0]): m.group(1)}
         return {}
