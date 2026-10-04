@@ -194,6 +194,33 @@ and calls, marked `stream: sse`; `cg protocols --protocol sse` lists them (and `
   names, Nest `@nestjs/platform-ws` gateway paths and Python
   WebSocket clients.
 
+## Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32 part 3)
+
+`codegraph/realtime_native.py` adds the same `endpoint:socketio:<namespace>#<event>` endpoints as the JS / TS
+extractor, from a source scan of each language's function nodes:
+
+| language | library | receive (RECEIVED_BY) | send (SENDS_TO) |
+|---|---|---|---|
+| Rust | socketioxide (server) | `socket.on("e", h)` inside `io.ns("/ns", on_connect)` (the namespace's connect handler, and handlers it registers) | `socket.emit`, `.to("room").emit` / `.within(..)` (room recorded), an ack closure as last argument (request) |
+| Rust | rust_socketio (client) | `ClientBuilder::new(url).namespace("/ns").on("e", h)` | `client.emit("e", ..)` on the built client |
+| Dart | socket_io_client | `socket.on('e', h)` / `once` on `io.io(url)` / `io(url, opts)` (`'$base/ns'` gives the namespace) | `emit`, `emitWithAck` / ack callback (request) |
+| Kotlin / Java | socket.io-client-java | `socket.on("e") { }` / `on("e", listener)` on `IO.socket(url)` | `emit("e", ..)`, with an `Ack` as last argument (request) |
+| Swift | socket.io-client-swift | `socket.on("e") { }` on `manager.defaultSocket` / `socket(forNamespace:)` | `emit`, `emitWithAck(..)` (request) |
+
+Event names follow literals, string templates (`"$prefix:x"`, `"\(prefix):x"`) and `Owner.CONST` constants of the
+same file; a name that stays unknown is not an endpoint. A handler passed by name (`h`, `::onMessage`,
+`self.onMessage`) receives the event; a closure leaves the enclosing function as the receiver.
+
+WebSocket routes and clients outside JS / TS:
+
+| side | Kotlin | Swift | Rust |
+|---|---|---|---|
+| server (`route:WS`, entry kind `websocket`) | Ktor `webSocket("/x") { }` in `routing { route(..) { } }` | Vapor `app.webSocket("x") { req, ws in }` (and on route groups) | an axum route whose handler takes a `WebSocketUpgrade` argument |
+| client (`http:WS`) | Ktor `client.webSocket(url)` / `ws` / `wss`; OkHttp `newWebSocket(Request.Builder().url(u).build(), l)` | `URLSession.webSocketTask(with: url)` | (no Rust HTTP client model) |
+
+Rust routes now carry `uri` / `method` like the other plugins (`:id` / `<id>` → `{id}`, `*rest` / `{*rest}` /
+`<rest..>` → `{rest*}`), so `cg link` matches Rust servers with clients in other repos.
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function
@@ -557,8 +584,8 @@ broker nodes (#40) on the endpoints, the repository's own wrapper classes (their
 
 ## Not covered yet
 
-- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (#32, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in Dart / Swift / Kotlin and in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own
-  endpoints (#32).
+- Message brokers beyond #35 part 1 (see above) and the rest of the epic's children (#32, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
+  WebSocket clients (#32).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.
 - Broker / host nodes (#30 / #40) are not attached to endpoints yet.

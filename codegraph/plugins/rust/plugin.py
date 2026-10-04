@@ -914,14 +914,25 @@ class RustPlugin(LanguagePlugin):
                     t, c = self._resolve_path(rf, owner, handler)
                     hid = [self.nid(x) for x in t]
                     conf = c
+                if verb == "GET" and hid and self._ws_upgrade(hid[0]):
+                    verb = "WS"                     # axum handler taking `WebSocketUpgrade`: a WebSocket route (#32)
+                uri = _route_uri(path)
                 rid = b.add_node("route", f"{verb} {path}", name=f"{verb} {path}", file=rf.path, line=line, lang="rust",
-                                 module=rf.module, attrs={"framework": fw, "handler": handler})
-                b.nodes[rid].entry_kind = "http_route"
+                                 module=rf.module, attrs={"framework": fw, "handler": handler, "uri": uri, "method": verb})
+                b.nodes[rid].entry_kind = "websocket" if verb == "WS" else "http_route"
                 for h in hid[:1]:
                     b.add_edge(rid, h, "ROUTES_TO", rf.path, line, conf)
                 if owner is not None:
                     b.add_edge(self.nid(owner), rid, "REFERENCES_FN", rf.path, line, EXACT, how="router registration")
                 stats["routes"] += 1
+
+    def _ws_upgrade(self, nid: str) -> bool:
+        n = self.b.nodes.get(nid)
+        rf = self.files.get(n.file) if n is not None and n.file else None
+        if rf is None or not n.line:
+            return False
+        sig = "\n".join(rf.lines[n.line - 1:n.line + 8]).split("{", 1)[0]
+        return "WebSocketUpgrade" in sig
 
     def _attr_route(self, rf: RFile, it: RItem, attr: str):
         line_txt = "\n".join(rf.lines[max(0, it.start - 1 - 6):it.line])
@@ -933,7 +944,8 @@ class RustPlugin(LanguagePlugin):
             return
         verb = m.group(1).upper() if m.group(1) != "route" else "ANY"
         rid = self.b.add_node("route", f"{verb} {m.group(2)}", name=f"{verb} {m.group(2)}", file=rf.path, line=it.line, lang="rust",
-                              module=rf.module, attrs={"framework": "actix/rocket attribute", "handler": it.key})
+                              module=rf.module, attrs={"framework": "actix/rocket attribute", "handler": it.key,
+                                                       "uri": _route_uri(m.group(2)), "method": verb})
         self.b.nodes[rid].entry_kind = "http_route"
         self.b.add_edge(rid, self.nid(it), "ROUTES_TO", rf.path, it.line, EXACT)
 
@@ -1017,3 +1029,12 @@ class RustPlugin(LanguagePlugin):
                         n += 1
                         break
         stats["gated_edges"] = n
+
+
+def _route_uri(path: str) -> str:
+    """axum / actix / rocket path -> the route matcher's form: `:id` / `<id>` -> `{id}`, `*rest` / `<rest..>` /
+    `{*rest}` -> `{rest*}` (axum 0.8 `{id}` stays)."""
+    import re
+    u = re.sub(r"\{\*(\w+)\}|\*(\w+)|<(\w+)\.\.>", lambda m: "{" + (m.group(1) or m.group(2) or m.group(3)) + "*}", path or "/")
+    u = re.sub(r":(\w+)|<(\w+)>", lambda m: "{" + (m.group(1) or m.group(2)) + "}", u)
+    return u if u.startswith("/") else "/" + u

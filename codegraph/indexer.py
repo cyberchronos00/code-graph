@@ -276,6 +276,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (wsst := apply_ws(project, builder)):
         wsst["seconds"] = round(time.time() - t_ws, 2)
         stats["websockets"] = wsst
+    # Socket.IO in Dart, Kotlin / Java, Swift and Rust (#32 part 3)
+    from .realtime_native import apply as apply_native_sio
+    t_ns = time.time()
+    if (nsst := apply_native_sio(project, builder)):
+        nsst["seconds"] = round(time.time() - t_ns, 2)
+        stats["realtime_native"] = nsst
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

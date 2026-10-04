@@ -1071,6 +1071,26 @@ upgrade prefix check, express-ws on a mounted router, @fastify/websocket and Hon
 SSE routes (and two that only look like it), python `websockets.serve`, and a browser client using `WebSocket`,
 `ReconnectingWebSocket`, `EventSource` and `fetchEventSource`, linked with `cg link`.
 
+## Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32 part 3)
+
+| Project | New | Notes |
+|---|---|---|
+| immich c5e06dc | 13 RECEIVED_BY, 2 endpoints | The Flutter app's `socket.on('on_asset_update', _handleRemoteChange)` and the other listeners in `mobile/lib/providers/websocket.provider.dart` now receive the server's Socket.IO events. `AssetUploadReadyV1` / `AssetEditReadyV1` are new endpoints: the server emits only the V2 events |
+| ktor-samples 1c9df7c | 3 `route:WS`, 2 `http:WS`, 3 test clients | `webSocket("/ws")` in the chat sample and `webSocket("/websocket")` under `route("/opentelemetry")`, each with its handler lambda; the reverse proxy's `webSocket(path)` takes its path as a parameter and reads as the routing prefix `/` (which is what its one caller passes). Clients: `client.ws("/opentelemetry/websocket")`, `webSocketSession(.., path = "/ws")` and the chat tests' `client.webSocket("/ws")` / `ws("/ws")`. 9 calls and 2 property reads move from the routing function into the new handler lambdas |
+| tauri 30da1fd | `route:WS /__tauri_cli` | The CLI dev server's axum route, whose `ws_handler` takes `WebSocketUpgrade` (was `route:GET /__tauri_cli`) |
+| swift-IceCubesApp 9efcb16 | none | `urlSession.webSocketTask(with: url, ..)` takes a URL built by `makeURL(scheme:endpoint:)` from an endpoint enum, so there is no path |
+
+Rust routes now carry `uri` / `method`: tauri's 7 and authentik's 12 axum routes, with no edge change (authentik's
+`/outpost.goauthentik.io/auth/envoy{*rest}` becomes `.../envoy{rest*}`). Unchanged (same nodes and edges):
+swift-isowords, swift-Alamofire, flutter-samples, grpc-dart, http, nowinandroid, KaMPKit, element-x-android,
+grpc-kotlin, spring-petclinic-kotlin, element-x-ios, swift-template, bitwarden-ios, authentik, tokio, mini-redis,
+jsonrpsee, tonic, parity and alacritty. No edges were removed anywhere except the 11 moved ktor-samples calls and
+reads. A random 20 of the 25 added edges in the projects above (not counting the moved ones) were checked by hand
+against the source, and all 20 were correct. `tests/test_realtime_native.py` covers `tests/sio_native_fixture`: a
+socketioxide server with a namespace and a room, a rust_socketio bot, Dart, Kotlin and Swift clients with acks,
+string templates and constants, Ktor / Vapor / axum WebSocket routes, and Ktor, OkHttp and URLSession WebSocket
+clients.
+
 ## JS callback variables, property reads and returns (#138)
 
 Call edges are CALLS, TEST_CALLS and RENDERS, counted by (kind, source, target, line), before -> after.

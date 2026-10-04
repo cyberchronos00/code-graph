@@ -1,0 +1,5 @@
+name: chat_mobile
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+dependencies:
+  socket_io_client: ^2.0.3

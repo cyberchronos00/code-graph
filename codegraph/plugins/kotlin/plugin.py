@@ -52,6 +52,8 @@ EXTS = (".kt", ".kts")
 # an unknown receiver whose method name is declared on more classes than this gets no candidate edges (#83 item 6)
 MAX_CANDIDATES = 5
 VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+KTOR_WS = {"webSocket", "webSocketRaw"}                       # Ktor server `webSocket("/chat") { }` -> route:WS (#32)
+KTOR_WS_CLIENT = {"webSocket", "ws", "wss", "webSocketSession", "webSocketRaw", "wsRaw", "wssRaw"}
 RETROFIT = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
 SPRING_MAP = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE",
               "PatchMapping": "PATCH", "RequestMapping": None}
@@ -1025,9 +1027,9 @@ class KotlinPlugin(LanguagePlugin):
                 g = f"authenticate({template(sarg) if sarg else ''})"
                 self._refs(lam, kf, owner, decl, {**ctx, "guards": ctx["guards"] + [g]})
                 return True
-            if ctx.get("routing") and name in VERBS:
+            if ctx.get("routing") and (name in VERBS or name in KTOR_WS):
                 uri = join_path(ctx["prefix"], template(sarg) if sarg is not None else "")
-                hid = self._ktor_route(kf, name.upper(), uri, c, owner, ctx)
+                hid = self._ktor_route(kf, "WS" if name in KTOR_WS else name.upper(), uri, c, owner, ctx)
                 self._refs(lam, kf, hid, decl, {**ctx, "routing": False})
                 return True
             route = self._route_arg(args, kf, decl, "route") if name in ("composable", "dialog") and targs is None else None
@@ -1079,14 +1081,29 @@ class KotlinPlugin(LanguagePlugin):
                                       "file": kf.rel, "line": line, **({"via": "url helper"} if hu else {})})
                     if hu:
                         self.st["http_ktor_url_helper"] += 1
+        if name in KTOR_WS_CLIENT and recv is not None and re.search(r"(?i)client|http", rtext or "") and args is not None:
+            # Ktor client WebSockets: client.webSocket("ws://h/chat") { } / client.wss(host = .., path = "/chat") { }
+            first = self._first_arg(args)
+            at = self.t(args)
+            pm = re.search(r'\bpath\s*=\s*("(?:[^"\\]|\\.)*")', at)
+            raw = self.t(first) if first is not None and first.type == "string_literal" else (pm.group(1) if pm else None)
+            if raw is not None:
+                self.http.append({"src": owner, "method": "WS", "url": template(raw), "client": "ktor-websockets", "file": kf.rel, "line": line})
+                self.st["http_ktor_websockets"] += 1
         if name == "url" and rtext and "Request.Builder" in rtext and sarg is not None:
             whole = c
             while whole.parent is not None and whole.parent.type in ("navigation_expression", "call_expression"):
                 whole = whole.parent
             tail = self.t(whole)[len(self.t(c)):]
             m = re.search(r"\.(post|put|delete|patch|head)\s*\(", tail)
-            self.http.append({"src": owner, "method": m.group(1).upper() if m else "GET", "url": template(self._raw_first(args)),
-                              "client": "okhttp", "file": kf.rel, "line": line})
+            on = self.b.nodes.get(owner)
+            body = ""
+            if on is not None and on.line:
+                lines = kf.src.decode("utf-8", "replace").split("\n")
+                body = "\n".join(lines[on.line - 1:(on.end_line or on.line)])
+            ws = not m and "newWebSocket(" in body           # the request opens an OkHttp WebSocket in this function
+            self.http.append({"src": owner, "method": "WS" if ws else (m.group(1).upper() if m else "GET"), "url": template(self._raw_first(args)),
+                              "client": "okhttp-websocket" if ws else "okhttp", "file": kf.rel, "line": line})
         if name == "baseUrl" and args is not None:
             first = self._first_arg(args)
             raw = sarg
@@ -1356,10 +1373,10 @@ class KotlinPlugin(LanguagePlugin):
         attrs = {"uri": uri, "method": method, "framework": fw}
         if guards:
             attrs["middleware"] = list(dict.fromkeys(guards))
-        rid = self.b.add_node("route", key, name=key, file=file, line=line, lang="kotlin", entry_kind="http_route",
-                              attrs=attrs)
+        ek = "websocket" if method == "WS" else "http_route"
+        rid = self.b.add_node("route", key, name=key, file=file, line=line, lang="kotlin", entry_kind=ek, attrs=attrs)
         if self.b.nodes[rid].entry_kind is None:
-            self.b.nodes[rid].entry_kind = "http_route"
+            self.b.nodes[rid].entry_kind = ek
         if handler:
             self.b.add_edge(rid, handler, "ROUTES_TO", file, line, conf)
             self.b.nodes[rid].attrs.setdefault("handler", self.b.nodes[handler].name if handler in self.b.nodes else handler)

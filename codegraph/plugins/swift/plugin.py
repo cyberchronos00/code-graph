@@ -70,7 +70,7 @@ LIFECYCLE = re.compile(r"^(application\w*|scene\w*|sceneDid\w*|sceneWill\w*|view
                        r"userNotificationCenter|perform|handle|body)$")
 LIFECYCLE_BASES = {"UIApplicationDelegate", "UIWindowSceneDelegate", "UISceneDelegate", "NSApplicationDelegate",
                    "UIViewController", "AppIntent", "Widget", "WKApplicationDelegate"}
-URLSESSION = re.compile(r"\b(data|dataTask|upload|uploadTask|download|downloadTask|bytes)\s*\(\s*(from|for|with)\s*:")
+URLSESSION = re.compile(r"\b(data|dataTask|upload|uploadTask|download|downloadTask|bytes|webSocketTask)\s*\(\s*(from|for|with)\s*:")
 # Sequence / Collection / Dictionary / Optional / String members: a call of one of these on a receiver of unknown type
 # is not resolved to a same-named project method by the unique-name fallback
 STDLIB_METHODS = {
@@ -1502,7 +1502,7 @@ class SwiftPlugin(LanguagePlugin):
         if routers is not None and recv is not None:
             base = self._router(recv, routers)
             if base is not None:
-                if name in VERBS or name == "on":
+                if name in VERBS or name == "on" or name == "webSocket":
                     self._vapor_route(name, al, lam, base, sf, owner, decl, c, ctx)
                     return lam is not None
                 if name in ("group", "grouped") and lam is not None:
@@ -1607,7 +1607,7 @@ class SwiftPlugin(LanguagePlugin):
 
     def _vapor_route(self, verb, al, lam, base, sf, owner, decl, c, ctx):
         pfx, guards = base
-        segs, handler, method = [], None, verb.upper()
+        segs, handler, method = [], None, "WS" if verb == "webSocket" else verb.upper()   # app.webSocket("chat") { req, ws in }
         for lab, v in al:
             if v is None:
                 continue
@@ -1623,9 +1623,9 @@ class SwiftPlugin(LanguagePlugin):
         attrs = {"uri": uri, "method": method, "framework": "vapor"}
         if guards:
             attrs["middleware"] = list(dict.fromkeys(guards))
-        rid = self.b.add_node("route", key, name=key, file=sf.rel, line=line, lang="swift", entry_kind="http_route",
-                              attrs=attrs)
-        self.b.nodes[rid].entry_kind = self.b.nodes[rid].entry_kind or "http_route"
+        ek = "websocket" if method == "WS" else "http_route"
+        rid = self.b.add_node("route", key, name=key, file=sf.rel, line=line, lang="swift", entry_kind=ek, attrs=attrs)
+        self.b.nodes[rid].entry_kind = self.b.nodes[rid].entry_kind or ek
         self.st["routes"] += 1
         self.st["routes_vapor"] += 1
         self.b.add_edge(owner, rid, "REFERENCES_FN", sf.rel, line, EXACT, how="router registration")
@@ -1752,8 +1752,9 @@ class SwiftPlugin(LanguagePlugin):
             self.st["urlsession_url_unknown"] += 1
             return
         mm = re.search(r'httpMethod\s*=\s*"(\w+)"', txt)
-        self.http.append({"src": d.id, "method": (mm.group(1) if mm else "GET").upper(), "url": url, "client": "urlsession",
-                          "file": sf.rel, "line": d.line})
+        ws = all(m.group(1) == "webSocketTask" for m in URLSESSION.finditer(txt))   # only a URLSessionWebSocketTask
+        self.http.append({"src": d.id, "method": "WS" if ws else (mm.group(1) if mm else "GET").upper(), "url": url,
+                          "client": "urlsession-websocket" if ws else "urlsession", "file": sf.rel, "line": d.line})
 
     # ---- @available(macOS, unavailable): the declaration (and its members) does not exist on that platform;
     # @available(*, unavailable): on none. Version forms (`@available(iOS 17, *)`, `@available(iOS, introduced: 15)`,

@@ -24,6 +24,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   → `{playlist_folder}`), and honour `parameters` / `parameter`, `shallow`, `only` / `except`, `names` / `name`
   and `scoped` (binding fields stored on the route). A slash in the name is a URI prefix; the route count and
   handler lookup are unchanged.
+- Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32, part 3): `endpoint:socketio:` receivers and sends
+  from socketioxide servers (`io.ns` namespaces, rooms) and rust_socketio, Dart socket_io_client,
+  socket.io-client-java and socket.io-client-swift clients (string templates and constants as event names, acks as
+  requests). Ktor `webSocket(path)`, Vapor `app.webSocket(path)` and axum routes whose handler takes
+  `WebSocketUpgrade` are `route:WS` websocket entry points; Ktor `client.webSocket(url)`, OkHttp `newWebSocket` and
+  `URLSession.webSocketTask` are `http:WS` clients.
 - WebSocket connections and Server-Sent Events (#32, part 2): `ws` servers (`new WebSocketServer({ path, port })`
   with their `connection` handler), express-ws / Elysia `app.ws(path, h)`, @fastify/websocket `{ websocket: true }`,
   Hono `upgradeWebSocket` and Python `websockets.serve` are `route:WS` websocket entry points; browser `new
@@ -175,6 +181,9 @@ tree-sitter-swift 0.7.4 (pinned, #133).
 
 ### Changed
 
+- Rust routes (axum, actix-web, rocket) carry `uri` and `method` attributes, with `:id` /
+  `<id>` as `{id}` and `*rest` / `{*rest}` / `<rest..>` as `{rest*}`, so the HTTP matcher and `cg link` see them
+  (#32). Before, a Rust route never matched a client.
 - @fastify/websocket routes (`{ websocket: true }`) and Hono `upgradeWebSocket(..)` routes are `route:WS <path>`
   (entry kind `websocket`) instead of `route:GET <path>` (#32). Routes and calls with `stream: sse` move from the
   `http` protocol of `cg protocols` to `sse`.
