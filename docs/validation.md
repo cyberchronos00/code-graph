@@ -1091,6 +1091,23 @@ for `github:push`), which runs only for that event but is not its handler. `test
 and @octokit/webhooks), Twilio, GitLab and a generic HMAC hook, verified and unverified, with `switch` / `if` / PHP
 `match` event dispatch and the `cg routes` markers.
 
+## Webhook senders (#37 part 2)
+
+| Project | Senders | Notes |
+|---|---|---|
+| cal.com | 3 SENDS_TO `cal.com:{event}` | `_sendPayload` and `WebhookService.sendWebhookDirectly` (`fetch` POST with `X-Cal-Signature-256` from `createWebhookSignature` / `createHmac`) and `handleWebhookScheduledTriggers` (`headers["X-Cal-Signature-256"] = ..`). The event comes from the stored subscription, so it stays `{event}` (heuristic) |
+| netbox | 1 SENDS_TO `netbox:{event}` | `extras.webhooks.send_webhook`: `prepared_request.headers['X-Hook-Signature'] = generate_signature(..)`, sent with `session.send` |
+| firefly-iii | 1 SENDS_TO `firefly-iii:{event}` | `StandardWebhookSender::send`: Guzzle `request('POST', ..)` with a `Signature` header from `$signatureGenerator->generate(..)` |
+
+No sender in the other 18 projects, and no receiver edge changed anywhere. Two false positives found on the way were
+fixed before this run: librenms' Kayako transport (a `signature` form field of an API call, not a header) and request
+headers read with `headers['X-Sig']`. Not seen: saleor (its signature header is the constant
+`SALEOR_SIGNATURE_HEADER`), invoiceninja and coolify (their outgoing webhooks are unsigned; invoiceninja adds the subscriber's own headers). All 10 new edges (the 5
+above and the fixture's 4 sends plus the `cg link` pairing of `hooks-ts` `order.created` with the `hooks-py`
+`/hooks/acme` receiver) were checked by hand against the source, and all 10 were correct. `tests/test_webhooks.py`
+covers svix, spatie/laravel-webhook-server and hand-signed `fetch` / `requests` senders, event names from a caller's
+argument, and the pairing.
+
 ## Socket.IO and WebSocket in Dart / Kotlin / Swift / Rust (#32 part 3)
 
 | Project | New | Notes |

@@ -83,7 +83,7 @@ register(Protocol("socketio", "tcp", "Socket.IO event (<namespace>#<event>; emit
                   directional=True))
 register(Protocol("webhook", "tcp", "Webhook event <provider>:<event> (codegraph/webhooks.py): a provider (Stripe, GitHub, "
                   "svix, Twilio, ...) posts it to a receiver route; receivers record their signature check as a guard",
-                  fanout=True, guards=True, ports=(443,), schemes=("https",), framework_senders=("*",)))
+                  matcher=M.webhook, fanout=True, guards=True, ports=(443,), schemes=("https",), framework_senders=("*",)))
 
 # ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)
 register(Protocol("tcp", "tcp", "Raw TCP socket: connect -> listener on the same port (listen / bind vs connect; "

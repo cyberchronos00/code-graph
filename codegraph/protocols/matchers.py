@@ -157,3 +157,21 @@ def confidence(info: dict, tied: bool) -> str:
     if info["ph_into_lit"] or tied:
         return "heuristic"
     return "resolved" if (info["wild"] or info["multi"]) else "exact"
+
+
+GENERIC_WEBHOOK = {"hmac", "webhook", "standard-webhooks", "svix"}
+
+
+def webhook(send: str, recv: str) -> dict | None:
+    """`<app>:<event>` (codegraph/webhooks.py): the same app and event; a receiver whose provider is only a generic
+    signature scheme (`hmac`, standard webhooks, svix) takes any sending app's event of that name (heuristic, as a
+    placeholder fit)."""
+    if send == recv:
+        return _info(lit=2)
+    sa, _, se = send.partition(":")
+    ra, _, re_ = recv.partition(":")
+    if not se or se != re_ or PARAM.match(se):
+        return None
+    if ra in GENERIC_WEBHOOK:
+        return _info(lit=1, ph_into_lit=1)
+    return None

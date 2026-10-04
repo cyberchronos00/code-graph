@@ -74,6 +74,14 @@ CT_RX = re.compile(r"\btimingSafeEqual\s*\(|\bcompare_digest\s*\(|\bhash_equals\
 MW_RX = re.compile(r"(?i)verify\w*(?:webhook|signature)|webhook\w*(?:signature|verif)|stripe[-_.]webhook")
 CODE_EXT = JS_EXT + (".jsx", ".py", ".php", ".kt", ".rs", ".swift", ".rb", ".java")
 SHARED_CALLERS = 6
+SVIX_HINT = re.compile(r"""['"]svix['"]|\bfrom\s+svix\b|\bimport\s+svix\b|Svix\\|\bnew\s+Svix\s*\(""")
+SVIX_SEND = re.compile(r"(?:\.|->)\s*message\s*(?:\.|->)\s*create\s*\(")
+HTTP_OUT = re.compile(r"\bfetch\s*\(|\baxios\b|\bgot\s*\(|\brequests\s*\.\s*(?:post|put|request)\s*\(|\bhttpx\b|"
+                      r"\bHttp\s*::\s*(?:post|withHeaders|withBody|send)|\bcurl_setopt|->\s*post\s*\(|\burlopen\s*\(|"
+                      r"\bsession\s*\.\s*(?:post|request|send)\s*\(|\bClient\s*\(\s*\)\s*->\s*(?:post|request)|"
+                      r"->\s*request\s*\(\s*['\"]POST['\"]")
+# a signature built by a signing helper (`createWebhookSignature(..)`, `$signatureGenerator->generate(..)`)
+SIGN_CALL = re.compile(r"\b(?:\w*[Ss]ignature\w*|sign|sign_\w+|\w+_sign)\s*\(|\$?\w*[Ss]ignature\w*\s*->\s*\w+\s*\(")
 # helpers a branch calls that do not handle the event: predicates, readers, logging, responses
 HELPER_NAME = re.compile(r"^(?:is|has|can|should|get|read|parse|to|format|log|audit|debug|info|warn|error|report|validate|"
                          r"verify|check|ensure|assert|json|response|abort)(?:[A-Z_]|$)")
@@ -159,6 +167,10 @@ def _arms(src, lo, hi):
 
 
 class Webhooks(BrokerScan):
+    def __init__(self, project, b, sock=None):
+        super().__init__(project, b, sock)
+        self.app = getattr(project, "name", None) or self.root.name
+
     def run(self) -> dict:
         from .tests_index import is_test_node
         self.is_test_node = is_test_node
@@ -182,6 +194,7 @@ class Webhooks(BrokerScan):
                 continue
             self.route(rid, n, handlers[rid], mw.get(rid, []))
         self.octokit_on()
+        self.senders(callers)
         out = {k: v for k, v in self.st.items() if v}
         if out and self.samples:
             out["samples"] = dict(self.samples)
@@ -461,6 +474,99 @@ class Webhooks(BrokerScan):
                 protocol_receive(self.b, "webhook", name, d, file, line, HEURISTIC if HEURISTIC in (c, conf) else c,
                                  guards=guards, route=rid, how="event branch", via=fn)
                 self.st["webhook_branch_handlers"] += 1
+
+    # ------------------------------------------------------------ senders
+    def senders(self, callers):
+        """Outbound webhooks: svix `message.create(app, { eventType })`, spatie/laravel-webhook-server
+        `WebhookCall::create()..->dispatch()`, and functions that POST with a signature header they compute (an HMAC
+        here or in a function called from here) -> SENDS_TO endpoint:webhook:<this app>:<event>."""
+        q = r"""(['"])((?:(?!\1)[^\\\n])+)\1"""
+        for nid, n in list(self.b.nodes.items()):
+            if n.kind not in ("function", "method") or self.is_test_node(n):
+                continue
+            bd = self.body(nid)
+            if bd is None:
+                continue
+            file, src, lo, hi = bd
+            text = src[lo:hi]
+            if file.endswith(JS_EXT + (".py", ".php")) and "message" in text and SVIX_HINT.search(src):
+                for m in SVIX_SEND.finditer(text):
+                    if self.s.masked(file, lo + m.start()):
+                        continue
+                    a = text[m.end():m.end() + 600]
+                    ev = re.search(r"(?:eventType|event_type)\s*(?::|=>?)\s*" + q, a)
+                    self.send_event(nid, file, lo + m.start(), ev.group(2) if ev else None, "svix", "svix message.create")
+            if file.endswith(".php") and "WebhookCall" in text:
+                for m in re.finditer(r"\bWebhookCall\s*::\s*create\s*\(", text):
+                    if self.s.masked(file, lo + m.start()):
+                        continue
+                    end = text.find("->dispatch", m.end())
+                    chain = text[m.end():end if end > 0 else m.end() + 800]
+                    ev = re.search(r"['\"](?:event|type|event_type|eventType)['\"]\s*=>\s*" + q, chain)
+                    self.send_event(nid, file, lo + m.start(), ev.group(2) if ev else None, "spatie/laravel-webhook-server",
+                                    "WebhookCall::create")
+            if not HTTP_OUT.search(text):
+                continue
+            hdr = next((m for m in re.finditer(r"""['"]((?:x[-_])?[\w-]*(?:signature|hmac)[\w-]*)['"]\s*(:|=>|,|\]\s*=(?!=))""", text, re.I)
+                        if not self.s.masked(file, lo + m.start())
+                        and not (re.search(r"(?:\bget|\bheader|getHeader|\bheaders\s*\[)\s*\(?\s*$", text[max(0, m.start() - 16):m.start()])
+                                 and not m.group(2).startswith("]"))     # `headers['X-Sig'] = ..` writes
+                        # a bare `signature` key is a header only inside a headers block (not a form field)
+                        and ("-" in m.group(1) or re.search(r"header", text[max(0, m.start() - 300):m.start()], re.I))),
+                       None)                           # a header written, not read (`request.headers.get('X-Sig', '')`)
+            if hdr is None:
+                continue
+            signed = HMAC_RX.search(text) or SIGN_CALL.search(text) or any(
+                (cb := self.body(d)) is not None and HMAC_RX.search(cb[1], cb[2], cb[3]) for d, _k, _l, _c in self.callees.get(nid, ()))
+            if not signed:
+                continue
+            self.st["webhook_signed_senders"] += 1
+            ev = re.search(r"""(?:\b|['"])(?:triggerEvent|eventType|event_type|event)['"]?\s*(?::|=>?)\s*""" + q, text)
+            if ev and EVENT_LIT.fullmatch(ev.group(2)):
+                self.send_event(nid, file, lo + hdr.start(), ev.group(2), "http", f"signed POST ({hdr.group(1)})")
+                continue
+            # the event is a parameter: the callers' literal arguments name it
+            params = [x[0] for x in self.s.params(file, nid)] if hasattr(self.s, "params") else []
+            idx = next((i for i, x in enumerate(params) if re.fullmatch(r"(?i)(?:trigger_?)?event(?:_?type|_?name)?|type", x.lstrip("$"))), None)
+            got = False
+            if idx is not None:
+                for c in sorted(callers.get(nid, ())):
+                    for d, _k, ln, _cf in self.callees.get(c, ()):
+                        if d != nid or not ln:
+                            continue
+                        cn = self.b.nodes.get(c)
+                        if cn is None or not cn.file:
+                            continue
+                        csrc = self.s.text(cn.file)
+                        pos = self.s.off(cn.file, ln)
+                        nm = re.split(r"[.:#]+", n.name or nid)[-1]
+                        cm = re.compile(rf"\b{re.escape(nm)}\s*\(").search(csrc, pos, pos + 400)
+                        if not cm:
+                            continue
+                        from .brokers import _args
+                        a = _args(csrc, cm.end() - 1)
+                        if idx < len(a):
+                            val, conf = self.value(cn.file, cm.start(), a[idx])
+                            if val and "{" not in val and EVENT_LIT.fullmatch(val):
+                                self.send_event(c, cn.file, cm.start(), val, "http", f"signed POST ({hdr.group(1)})", via=nid,
+                                                conf=conf)
+                                got = True
+            if not got:
+                self.send_event(nid, file, lo + hdr.start(), None, "http", f"signed POST ({hdr.group(1)})")
+
+    def send_event(self, src, file, pos, event, lib, how, via=None, conf=None):
+        from .protocols import protocol_send
+        name = f"{self.app}:{event if event else '{event}'}"
+        line = self.s.line_of(file, pos)
+        if ("send", name, src, line) in self.done:
+            return
+        self.done.add(("send", name, src, line))
+        protocol_send(self.b, "webhook", name, src, file, line, (conf or EXACT) if event else HEURISTIC,
+                      test=self.is_test(file, src), role="publish", node_attrs={"provider": self.app, "event": event},
+                      library=lib, how=how, via=via)
+        self.st["webhook_sends"] += 1
+        if not event:
+            self.miss("webhook_send_event_unknown", f"{file}:{line}")
 
     # ------------------------------------------------------------ @octokit/webhooks
     def octokit_on(self):

@@ -251,9 +251,20 @@ Events: comparisons of the event type with a literal become `endpoint:webhook:<p
   (`how: event branch`, `via` = the dispatching function), so `impact` on `markInvoicePaid` lists `stripe:invoice.paid`;
 - @octokit/webhooks `webhooks.on('push', fn)` receives `github:push` directly.
 
-Provider events are sent from outside, so they are never `no_sender`. Not yet: senders (svix `message.create`,
-spatie/laravel-webhook-server, hand-written signed POSTs) and pairing them with receivers, Laravel Cashier and
-spatie/laravel-webhook-client conventions, and Kotlin `when` / Rust `match` dispatch.
+Provider events are sent from outside, so they are never `no_sender`.
+
+Senders (#37 part 2) send `endpoint:webhook:<this project>:<event>`:
+
+| sender | event name |
+|---|---|
+| svix `svix.message.create(appId, { eventType })` (JS / TS, Python `event_type=`, PHP `eventType:`) | `eventType` |
+| spatie/laravel-webhook-server `WebhookCall::create()->..->dispatch()` | an `'event'` / `'type'` key of the chain's payload, else `{event}` |
+| a function that POSTs (`fetch`, axios, requests, `session.send`, httpx, Laravel `Http::`, Guzzle `->post` / `->request('POST', ..)`, curl) with a signature header it writes (`'X-Acme-Signature': sig`, `headers['X-Sig'] = ..`; a bare `Signature` key only inside a headers block) and an HMAC or a signing helper (`createSignature(..)`, `$signatureGenerator->generate(..)`) there, or an HMAC in a function it calls | an `event` / `type` / `triggerEvent` / `eventType` literal in the function; else, when a parameter is named like `event` / `triggerEvent` / `eventType`, the literal each caller passes (the caller sends, `via` = the function); else `{event}` (heuristic) |
+
+`cg link` pairs a sender with a receiver of the same `<app>:<event>`, and with a receiver whose provider is only a
+signature scheme (`hmac`, `svix`, `standard-webhooks`) and the same event name (heuristic). Not yet: Laravel Cashier
+and spatie/laravel-webhook-client conventions, Kotlin `when` / Rust `match` dispatch, event names held in a stored
+subscription (`webhook.event_type`), and pairing through subscriber URLs in seed data or config.
 
 ## Raw TCP / UDP sockets
 

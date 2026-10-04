@@ -52,6 +52,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
   → `{playlist_folder}`), and honour `parameters` / `parameter`, `shallow`, `only` / `except`, `names` / `name`
   and `scoped` (binding fields stored on the route). A slash in the name is a URI prefix; the route count and
   handler lookup are unchanged.
+- Webhook senders (#37, part 2): svix `message.create`, spatie/laravel-webhook-server `WebhookCall::create()` and
+  functions that POST with a signature header they compute send `endpoint:webhook:<project>:<event>` (event from the
+  payload, or from the callers' literal argument when the event is a parameter); `cg link` pairs them with receivers
+  of the same event (heuristic when the receiver only knows a generic HMAC / standard-webhooks signature).
 - Webhook receivers (#37, part 1): routes whose handler (or a function it calls, or its middleware) verifies a
   provider signature (Stripe `constructEvent`, svix / standardwebhooks `verify`, @octokit/webhooks, Twilio, Shopify,
   HMAC with a constant-time comparison, GitLab tokens) get `attrs.webhook` with the provider and the check location;

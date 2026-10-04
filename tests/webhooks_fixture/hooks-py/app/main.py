@@ -61,3 +61,15 @@ async def twilio_open(request: Request):
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+@app.post("/hooks/acme")
+async def acme_hook(request: Request):
+    raw = await request.body()
+    mac = hmac.new(os.environ["ACME_SECRET"].encode(), raw, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(mac, request.headers.get("X-Acme-Signature", "")):
+        return {"error": "bad signature"}
+    payload = await request.json()
+    if payload["event"] == "order.created":
+        log("order")
+    return {}

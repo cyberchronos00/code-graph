@@ -1,4 +1,4 @@
-"""Webhook receivers (#37 part 1) over tests/webhooks_fixture: Stripe, svix / standardwebhooks, GitHub (HMAC and
+"""Webhook receivers and senders (#37) over tests/webhooks_fixture: Stripe, svix / standardwebhooks, GitHub (HMAC and
 @octokit/webhooks), Twilio, GitLab and a generic HMAC partner hook in TS, Python and PHP, each verified and unverified;
 provider events from `switch (event.type)` / `event["type"] ==` / the `X-GitHub-Event` header; `cg routes` markers."""
 import json
@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from codegraph.core.store import GraphStore  # noqa: E402
 from codegraph.indexer import index_project  # noqa: E402
+from codegraph.link import link  # noqa: E402
 from codegraph.routes import render_routes, routes_report  # noqa: E402
 
 FX = ROOT / "tests" / "webhooks_fixture"
@@ -24,6 +25,8 @@ def dbs(tmp_path_factory):
     for r in ("hooks-ts", "hooks-py", "hooks-php"):
         out[r + "-stats"] = index_project(FX / r, d / f"{r}.db", r)
         out[r] = d / f"{r}.db"
+    out["link"] = d / "link.db"
+    link(str(out["hooks-py"]), str(out["hooks-ts"]), str(out["link"]), backend_name="hooks-py", frontend_name="hooks-ts")
     return out
 
 
@@ -103,3 +106,29 @@ def test_routes_report(dbs):
     assert "webhook signature (Stripe constructEvent) [secret]" in txt
     un = routes_report(st, unguarded=True)
     assert {i["name"] for i in un["items"]} == {"POST /webhooks/stripe-open", "POST /webhooks/gitlab"}
+
+
+def _sends(db):
+    con = sqlite3.connect(db)
+    return {(r[0], r[1]): (r[2], json.loads(r[3] or "{}")) for r in
+            con.execute("select src, dst, confidence, attrs from edges where kind='SENDS_TO' and dst like 'endpoint:webhook:%'")}
+
+
+def test_senders(dbs):
+    ts, py, php = _sends(dbs["hooks-ts"]), _sends(dbs["hooks-py"]), _sends(dbs["hooks-php"])
+    assert ts[("function:src/outbound.ts#announceInvoice", "endpoint:webhook:hooks-ts:invoice.paid")][1]["library"] == "svix"
+    c, a = ts[("function:src/outbound.ts#orderCreated", "endpoint:webhook:hooks-ts:order.created")]   # deliver('order.created')
+    assert a["via"] == "function:src/outbound.ts#deliver" and a["how"] == "signed POST (X-Acme-Signature)"
+    assert ("function:app.outbound.notify_shipped", "endpoint:webhook:hooks-py:order.shipped") in py
+    assert py[("function:app.outbound.notify_shipped", "endpoint:webhook:hooks-py:order.shipped")][0] == "exact"
+    assert php[("method:App\\Services\\Notifier::invoiceSent", "endpoint:webhook:hooks-php:invoice.sent")][1]["library"] == \
+        "spatie/laravel-webhook-server"
+    # receivers that read a signature header are not senders
+    assert not [k for k in py if "acme_hook" in k[0] or "github_webhook" in k[0]]
+
+
+def test_pairing(dbs):
+    con = sqlite3.connect(dbs["link"])
+    m = {(r[0], r[1]): r[2] for r in con.execute("select src, dst, confidence from edges where kind='MATCHES_ENDPOINT'")}
+    assert m.get(("endpoint:webhook:hooks-ts:order.created", "endpoint:webhook:hmac:order.created")) == "heuristic"
+    assert not [k for k in m if k[0].endswith("invoice.paid")]                                # no receiver of that event
