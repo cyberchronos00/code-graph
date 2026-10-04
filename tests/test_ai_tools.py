@@ -343,6 +343,56 @@ def test_lowlevel_server_built_inside_function(tmp_path):
     assert ("endpoint:mcp_tool:mcp-git/git_status", "function:git_srv.git_status") in edges(GraphStore(db), "RECEIVED_BY")
 
 
+def test_lowlevel_server_enum_value_and_single_tool(tmp_path):
+    """#102: mcp-server-time (`case TimeTools.X.value:`) and mcp-server-fetch (one tool, no branch on the name)."""
+    (tmp_path / "time_srv.py").write_text(textwrap.dedent('''
+        from enum import Enum
+        from mcp.server import Server
+        from mcp.types import Tool
+
+
+        class TimeTools(str, Enum):
+            NOW = "get_current_time"
+
+
+        class TimeServer:
+            def now(self, tz):
+                return tz
+
+
+        async def serve():
+            server = Server("mcp-time")
+            time_server = TimeServer()
+
+            @server.call_tool()
+            async def call_tool(name: str, arguments: dict):
+                match name:
+                    case TimeTools.NOW.value:
+                        return time_server.now(arguments)
+        '''))
+    (tmp_path / "fetch_srv.py").write_text(textwrap.dedent('''
+        from mcp.server import Server
+        from mcp.types import Tool
+
+
+        async def serve():
+            server = Server("mcp-fetch")
+
+            @server.list_tools()
+            async def list_tools():
+                return [Tool(name="fetch", description="d", inputSchema={})]
+
+            @server.call_tool()
+            async def call_tool(name, arguments: dict):
+                return arguments
+        '''))
+    db = tmp_path / "g.db"
+    index_project(tmp_path, db, "srv")
+    e = edges(GraphStore(db), "RECEIVED_BY")
+    assert ("endpoint:mcp_tool:mcp-time/get_current_time", "method:time_srv.TimeServer.now") in e
+    assert ("endpoint:mcp_tool:mcp-fetch/fetch", "function:fetch_srv.serve") in e
+
+
 @pytest.mark.skipif(not (ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules").exists(),
                     reason="run `npm ci` in codegraph/plugins/ts/extractor")
 def test_typescript_mcp_server_registrations(tmp_path):

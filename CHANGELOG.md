@@ -15,6 +15,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `endpoint:mcp_<kind>:<server>/<name>` RECEIVED_BY the handler; an inline handler gets its own function node, so its
   calls no longer land on the register helper. modelcontextprotocol/servers: 49 TypeScript tools, prompts and
   resources (none before), 20 sampled links correct.
+- Low-level Python MCP servers (#102): branches on `Enum.X.value` (mcp-server-time) and single-tool servers that do
+  not branch on the name (mcp-server-fetch, from the one `Tool(name=)` in `list_tools`). Every reference server's
+  tools now have a handler: mcp-time 2 and mcp-fetch 1 (none before), all 3 correct.
 
 ## [0.10.1] - 2026-10-04
 

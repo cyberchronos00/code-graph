@@ -394,9 +394,12 @@ def index(prog, b, walk_body, Ctx) -> dict:
         return (isinstance(e, ast.Name) and e.id in NAME_VARS) or (isinstance(e, ast.Attribute) and e.attr == "name")
 
     def lit_of(m, e):
-        """A string literal, or a `Cls.MEMBER` whose class body assigns it a string (`class GitTools(str, Enum)`, #76)."""
+        """A string literal, or a `Cls.MEMBER` whose class body assigns it a string (`class GitTools(str, Enum)`, #76),
+        also as `Cls.MEMBER.value` (mcp-server-time, #102)."""
         if _s(e):
             return _s(e)
+        if isinstance(e, ast.Attribute) and e.attr == "value" and isinstance(e.value, ast.Attribute):
+            e = e.value
         if not (isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name)):
             return None
         c = m.classes.get(e.value.id)
@@ -415,6 +418,27 @@ def index(prog, b, walk_body, Ctx) -> dict:
         if var:
             return local_servers.get(f.id, {}).get(var) or server_of(f.module, var) or f.module.name
         return None
+
+    def list_tool_names(f):
+        """The distinct `Tool(name=<literal>)` names in the `@<server>.list_tools()` functions next to f (the module's,
+        or the ones nested in f when the server is built inside it): [(name, line)]."""
+        def listers():
+            for g in prog.funcs.values():
+                if g.module is f.module and any(_last(d.func if isinstance(d, ast.Call) else d) == "list_tools"
+                                                for d in g.decorators):
+                    yield g.node
+            for sub in walk_body(f.node):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                        _last(d.func if isinstance(d, ast.Call) else d) == "list_tools" for d in sub.decorator_list):
+                    yield sub
+        out = {}
+        for node in listers():
+            for c in ast.walk(node):
+                if isinstance(c, ast.Call) and _last(c.func) == "Tool":
+                    nm = next((lit_of(f.module, k.value) for k in c.keywords if k.arg == "name"), None)
+                    if nm:
+                        out.setdefault(nm, c.lineno)
+        return list(out.items())
 
     for f in list(prog.funcs.values()):
         if f.module.name not in ai_mods:
@@ -443,6 +467,12 @@ def index(prog, b, walk_body, Ctx) -> dict:
                 _dynamic(b, f, sub, st)
             elif isinstance(sub, ast.Call) and _last(sub.func) == "eval":
                 _dynamic(b, f, sub, st)
+        if srv and not branches:
+            # a low-level server with one tool and no branching on the name (mcp-server-fetch, #102): the one
+            # `Tool(name=..)` its `@server.list_tools()` returns names the whole handler
+            names = list_tool_names(f)
+            if len(names) == 1:
+                branches.append((names[0][0], [], names[0][1], "single tool"))
         for lit, body, line, how in branches:
             h = None
             for s in body:
