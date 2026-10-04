@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- Generated Swift (#100): files with a Sourcery, SwiftGen, swift-openapi-generator or Mockolo banner, and R.swift's
+  `R.generated.swift`, are classified as generated. Like other generated files, they stay out of the graph unless
+  `--include-generated` (or `.cg.yaml` `generated.keep`) is used. element-x-ios: 9 files (6 Sourcery mocks / preview
+  and accessibility test lists, 3 SwiftGen asset / string files). The other Swift repos surveyed have none.
+
 - `cg platforms divergence` (#91): references from test code whose platforms are only the project default are
   listed apart, as `missing_callee_tests` (FROM TEST CODE WHOSE PLATFORMS ARE THE PROJECT DEFAULT, with
   `platform_source`). The test code must have no `#if` and no test-target membership narrowing it. An unguarded

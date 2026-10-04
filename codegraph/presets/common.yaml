@@ -58,6 +58,7 @@ generated:
     "*_grpc_pb.js": protoc output (JavaScript)
     "*.pb.swift": protoc output (Swift)
     "*.grpc.swift": protoc output (Swift)
+    "R.generated.swift": R.swift output
     "*.pb.cc": protoc output (C++)
     "*.pb.h": protoc output (C++)
     "*.grpc.pb.cc": protoc output (C++)
