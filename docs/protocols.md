@@ -23,6 +23,9 @@ endpoint (send side)  -MATCHES_ENDPOINT->  endpoint (receive side)       names d
 - `SENDS_TO` (code -> endpoint, propagating): attrs `role` (send, publish, emit, request, invoke, enqueue), `library`,
   `process` (server / client), `room`, `ack`, `schema`. From test code: `TEST_CALLS` with `orig` = SENDS_TO.
 - `RECEIVED_BY` (endpoint -> handler, propagating): attrs `library`, `process`, `platform` (bridges).
+- `QUEUE_ROUTES` (job queue endpoint -> a task routed to it, not propagating): a receiver in `cg protocols` and
+  `cg link`. It does not propagate because a send to a queue runs only the job it names, not every job of the queue
+  ([job queues](#job-queues)).
 - `MATCHES_ENDPOINT` (send-side endpoint -> receive-side endpoint, propagating): attrs `sender_name`, `pattern`,
   `segments`, `ambiguous` (number of equally specific receivers). File / line: where the receiver registers.
   Confidence: `resolved` for a wildcard or `{param}` fit, `heuristic` when a sender template fitted a receiver literal
@@ -98,7 +101,7 @@ alone does not report every route as `no_sender`, nor a client every call as `no
 | `test_sender_only` | received, sent from tests only |
 | `ambiguous` | a sender matched several receivers equally well (HTTP: several routes; request protocols: ties) |
 | `schema_mismatch` | senders and receivers name different message types (when both are known) |
-| `no_consumer` | a job queue that jobs are sent to; the repo starts workers of that framework and none consumes it ([job queues](#job-queues-celery-rq-dramatiq)) |
+| `no_consumer` | a job queue that jobs are sent to; the repo starts workers of that framework and none consumes it ([job queues](#job-queues)) |
 | `unguarded` | a receiver reachable from outside (HTTP / WebSocket / GraphQL routes, server-side Socket.IO handlers) with no auth guard: routes are classified as in `cg routes --unguarded`; a guard a plugin records on a receiver (a Socket.IO `connect` handler that rejects) counts as auth; Nest message handlers (`nest-rpc`, `nest-event`, `nest-ws`, `grpc`) record their `@UseGuards` (handler and class) and `APP_GUARD` guard classes, classified like route guards (`app.useGlobalGuards()` binds the HTTP app only, so it does not count) |
 | `external` | declared in `.cg.yaml` (`protocols.external`), a third-party HTTP origin, a signal the framework itself sends (Django's `post_save`, `request_finished`, ...: never `no_sender`), or a bridge module implemented outside the repo |
 
@@ -361,15 +364,16 @@ root-field requests (TEST_CALLS). On saleor-dashboard (Apollo + codegen, f9093f2
 the callers of 672 generated hooks and from `client.query({query})` calls, and every requested field is declared in
 its schema copy.
 
-## Job queues (Celery, RQ, Dramatiq)
+## Job queues
 
-`codegraph/jobs.py` (#36 part 1, Python) adds two endpoint protocols:
+`codegraph/jobs.py` (#36) adds two endpoint protocols for Celery, RQ, Dramatiq, Bull / BullMQ, Laravel queues
+and Symfony Messenger:
 
 - `endpoint:job:<framework>:<name>`: one per task. RECEIVED_BY the function that runs it; SENDS_TO (role `enqueue`,
   or `schedule`) from the code that enqueues it. `attrs.queue` is the queue it is routed to (the framework default
   when none is named) and `attrs.processes` the worker processes that consume that queue.
 - `endpoint:queue:<framework>/<queue>`: one per named queue. SENDS_TO from enqueue sites whose queue is known,
-  RECEIVED_BY the tasks routed to it. `attrs.consumers` lists the worker processes that consume it, with
+  QUEUE_ROUTES to the tasks routed to it. `attrs.consumers` lists the worker processes that consume it, with
   `consumers_at`. A consumed queue is `served` (a worker takes any job off it), so a producer in one repo and a
   worker in another link by queue name.
 
@@ -415,14 +419,47 @@ The process is named by the Procfile key, the compose service, the supervisor pr
 consumes the queue. Examples are a `task_routes` queue missing from `-Q`, and saleor's `observability` queue, which
 its only worker command (pyproject `celery worker`, default queue) does not consume.
 
-Not covered yet (#36 part 2): BullMQ / Bull outside Nest, Laravel queues and Horizon, Symfony Messenger, Huey, arq,
-apalis, Spring JMS, graphile-worker, Agenda. Also job classes run through a framework wrapper (netbox's
-`JobRunner.enqueue`) and actors passed around as attributes (`self.sync_task.send_with_options`).
+**Bull / BullMQ** (JS / TS files importing `bull` / `bullmq`):
+- Queues: `new Queue(name)` / `new Bull(name)` with a string, a TS enum member or an `as const` object member
+  (`new Queue(QueueName.Emails)`). A function passing its parameter to `new Queue(param)` is a factory
+  (outline's `createQueue`), and `createQueue("tasks")` calls bind the assigned variable and the getter function
+  around the call (`taskQueue()`).
+- Sends: `q.add(name, data)` sends to `job:bull:<queue>:<name>` and the queue; `q.add(data)` and `addBulk` send
+  to the queue only.
+- Receivers: `q.process(name, fn)` receives `<queue>:<name>`. Queue-wide processors (`new Worker(queue, fn)`,
+  `q.process(fn)`) receive the template `<queue>:{name}`, so a named sender in another repo links to them; a named
+  processor is more specific and wins.
+- Nest `@Processor` / `@Process` / `WorkerHost` job nodes get the same twins (`job:<queue>:<name>` ->
+  `endpoint:job:bull:<queue>:<name>`, `WorkerHost` -> `<queue>:{name}`), merged into the job node by `cg protocols`.
+
+**Laravel** (the plugin's `job:<Class>` nodes, which keep their DISPATCHES and `queue_job` entries):
+- Twins `endpoint:job:laravel:<FQCN>`.
+- A job's queue comes from `public $queue = 'x'`, `$this->onQueue('x')` / `$this->queue = 'x'` in the class, or
+  `#[OnQueue('x')]`.
+- Queue sends: the plugin's dispatches send to the job's queue. `X::dispatch(..)->onQueue('x')`,
+  `dispatch(new X)->onQueue('x')`, `self::dispatch` and each job of `Bus::batch([...])->onQueue('x')` send to `x`
+  instead.
+- Workers: `config/horizon.php` supervisors (`'queue' => ['high', 'default']`, process `horizon:<supervisor>`) and
+  `artisan queue:work --queue=a,b` / `queue:listen` in process files (default queue `default`).
+
+**Symfony Messenger:**
+- Handlers: `#[AsMessageHandler]` on a class (`__invoke`, or `method:`) or a method, and `MessageHandlerInterface`.
+  Each receives `endpoint:job:messenger:<message FQCN>`, the type of its first parameter or `handles:`
+  (resolved through `use` / `namespace`).
+- Sends: `$bus->dispatch(new X(..))` (any `$..bus..` receiver) and `$this->dispatchMessage(new X)`.
+- Queues: transports are queues. `framework.messenger.routing` in `config/packages/*.yaml` routes a message to
+  `queue:messenger/<transport>`. `fromTransport:` restricts a handler. Workers come from `messenger:consume a b`.
+
+Not covered yet (follow-up issue): Huey, arq, apalis, Spring JMS, graphile-worker, Agenda; project wrappers around
+the frameworks (netbox `JobRunner.enqueue`, immich `@OnJob({name, queue})` with `jobRepository.queue({name})`,
+outline's task classes run by name from the `tasks` queue); actors held in attributes
+(`self.sync_task.send_with_options`); Nest producers whose processor is in another repo (the plugin records
+DISPATCHES only to processors it sees); Messenger `#[AsMessage]` routing and Messenger stamps.
 
 ## Not covered yet
 
 - Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
-  children (#32, #35, #37, #38); job queues beyond Celery / RQ / Dramatiq (#36 part 2); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
+  children (#32, #35, #37, #38); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
   endpoints (#32).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.

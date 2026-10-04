@@ -40,8 +40,8 @@ register(Protocol("laravel-queue", "tcp", "Laravel queued job (dispatch / Bus / 
 register(Protocol("celery", "tcp", "Celery / RQ / Dramatiq task (.delay / .apply_async / send_task -> task function)",
                   source=A, kinds=("job",)))
 register(Protocol("job", "tcp", "Background job / task by name, endpoint:job:<framework>:<name> (codegraph/jobs.py): "
-                  "enqueue (Celery .delay / send_task, RQ enqueue, Dramatiq .send) -> the task function; Celery job nodes "
-                  "of the Django plugin are shown with their twin's senders", matcher=M.template))
+                  "enqueue (Celery .delay / send_task, RQ enqueue, Dramatiq .send, Bull add, Messenger dispatch) -> the "
+                  "task function; the Django / Nest / Laravel plugins' job nodes are shown with their twin's senders", matcher=M.template))
 register(Protocol("queue", "tcp", "Named job queue, endpoint:queue:<framework>/<queue> (codegraph/jobs.py): enqueue sites "
                   "naming the queue -> the tasks routed to it; attrs.consumers: worker processes (Procfile, compose, systemd, "
                   "supervisor, scripts); no_consumer: produced, workers known, none consumes it", fanout=True, entry=False))

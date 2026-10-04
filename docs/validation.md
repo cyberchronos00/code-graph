@@ -913,24 +913,36 @@ one in the file; the binding now prefers the calling function's own assignment, 
 `tests/test_graphql.py` covers the document parser, SDL, resolver maps, Apollo clients, a codegen hook, Nest twins in
 `cg protocols`, graphene, strawberry, ariadne and Python clients on `tests/graphql_fixture`.
 
-## Job queues: Celery, RQ, Dramatiq (#36 part 1)
+## Job queues: Celery, RQ, Dramatiq, Bull, Laravel, Messenger (#36)
 
 | Project | Job / queue endpoints | Edges | Notes |
 |---|---|---|---|
-| saleor 8385ca6 (Celery in Django) | 75 jobs, 2 queues | 77 RECEIVED_BY, 1 SENDS_TO | Every task gets an endpoint twin of the Django plugin's job node. The plugin's 78 DISPATCHES are not repeated and its entries are unchanged. `observability` (`@app.task(queue=OBSERVABILITY_QUEUE_NAME)`) is `no_consumer`: the only worker command in the repo (pyproject `celery worker -E`) consumes the default queue. The other `queue=settings.X` names are env settings with no default |
+| saleor 8385ca6 (Celery in Django) | 75 jobs, 2 queues | 75 RECEIVED_BY, 2 QUEUE_ROUTES, 1 SENDS_TO | Every task gets an endpoint twin of the Django plugin's job node. The plugin's 78 DISPATCHES are not repeated and its entries are unchanged. `observability` (`@app.task(queue=OBSERVABILITY_QUEUE_NAME)`) is `no_consumer`: the only worker command in the repo (pyproject `celery worker -E`) consumes the default queue. The other `queue=settings.X` names are env settings with no default |
 | authentik 2c6f657 (Dramatiq) | 71 actors | 71 RECEIVED_BY, 60 SENDS_TO, 82 TEST_CALLS | `@actor(description=_(..))` decorators span lines. Sends are `.send()` / `.send_with_options()` plus `ScheduleSpec(actor=x)` registrations (heuristic): 46 of 71 actors are linked. Most of the rest are sync actors held as provider attributes (`self.sync_objects_task`). Workers start through `ak worker`, so no consumer is known |
-| netbox 251458b (django-rq) | 1 job, 3 queues | 2 RECEIVED_BY, 1 SENDS_TO | `rq_queue.enqueue('extras.webhooks.send_webhook')`. The systemd `netbox-rq.service` runs `rqworker high default low`. `JobRunner.enqueue` jobs go through netbox's own wrapper and are not followed |
-| microblog a975ef6 (RQ) | 2 jobs, 1 queue | 2 RECEIVED_BY, 2 SENDS_TO, 1 MATCHES_ENDPOINT | `current_app.task_queue.enqueue(f'app.tasks.{name}')` is a template matching `app.tasks.export_posts` (heuristic). The `microblog-tasks` queue is consumed by the Procfile `worker` and by the supervisor program |
+| netbox 251458b (django-rq) | 1 job, 3 queues | 1 RECEIVED_BY, 1 QUEUE_ROUTES, 1 SENDS_TO | `rq_queue.enqueue('extras.webhooks.send_webhook')`. The systemd `netbox-rq.service` runs `rqworker high default low`. `JobRunner.enqueue` jobs go through netbox's own wrapper and are not followed |
+| microblog a975ef6 (RQ) | 2 jobs, 1 queue | 1 RECEIVED_BY, 1 QUEUE_ROUTES, 2 SENDS_TO, 1 MATCHES_ENDPOINT | `current_app.task_queue.enqueue(f'app.tasks.{name}')` is a template matching `app.tasks.export_posts` (heuristic). The `microblog-tasks` queue is consumed by the Procfile `worker` and by the supervisor program |
 | flask (examples/celery) | 3 jobs | 3 RECEIVED_BY, 3 SENDS_TO | Celery without Django: `@shared_task` plus `.delay()` from the views |
+| pixelfed c7dc513 (Laravel + Horizon) | 127 job twins, 15 queues | 127 RECEIVED_BY, 87 QUEUE_ROUTES, 130 SENDS_TO | `X::dispatch(..)->onQueue('feed')` (multi-line chains, `self::dispatch`, `Bus::batch`): 157 queue sends, 1 left unresolved (a `->catch()` closure in between). The 4 Horizon supervisors consume all 15 queues, so none is `no_consumer`. Entries are unchanged |
+| outline 478e812 (Bull) | 4 queues, 4 queue-wide job templates | 4 RECEIVED_BY, 4 QUEUE_ROUTES, 7 SENDS_TO | The `createQueue(name)` factory and the `globalEventQueue()` getters bind the queues. Sends are `.add(data)` (queue only); receivers are the `.process(fn)` blocks of the worker service. Task classes dispatched by class name (`BaseTask.schedule`) are a follow-up |
+| laravel.io 24be489, koel 295d8c1 | 9 + 9 job twins | 9 + 9 RECEIVED_BY | Only `ShouldQueue` classes get twins: 33 + 11 `App\Jobs` classes run synchronously |
+| nest `sample/26-queues` (35142c3) | 1 job twin | 1 RECEIVED_BY, 1 QUEUE_ROUTES | `@Process('transcode')` -> `endpoint:job:bull:audio:transcode`, merged into the job node with the controller's DISPATCHES |
 
-The other 18 #39 corpora are unchanged (same nodes and edges), and no corpus loses an edge. In saleor, netbox, flask
+The other 17 #39 corpora are unchanged (same nodes and edges; immich's BullMQ wrapper is a follow-up), and no corpus loses an edge. In saleor, netbox, flask
 and microblog the only entry rows added are those of the new endpoints. authentik's actors are new
 `message_handler` entries, so the entry counts of the code they reach change. A random 20 of the 320 new edges were
 checked by hand against the source: 20 correct (actor and task definitions, `.send` / `send_with_options` / `actor=`
-call sites, test sends). `tests/test_jobs.py` covers the cross-repo cases on `tests/jobs_fixture`:
+call sites, test sends). For part 2, a random 20 of the 476 new edges of pixelfed, outline, laravel.io and koel were checked: 20 correct.
+An earlier part-2 sample found a twin for a laravel.io `App\Jobs` class without `ShouldQueue` (a synchronous job);
+twins now need `ShouldQueue`. The queue edges were first RECEIVED_BY. On pixelfed that let an http route reach every
+job of the queue it sends to, and changed 5,485 entry rows; QUEUE_ROUTES does not propagate, and the entry rows are
+now unchanged. `tests/test_jobs.py` covers the cross-repo cases on `tests/jobs_fixture`:
 - a Flask shop's `send_task("billing.charge")` links to the billing worker's task with `cg link`, while
   `billing.refund` stays `no_receiver`;
 - a `task_routes` queue missing from the Procfile's `-Q` is `no_consumer`;
 - RQ import paths and an f-string template resolve to the mailer repo's functions at link time;
 - the compose `rq worker` / `dramatiq -Q` consumers are found;
 - Django twins keep their DISPATCHES.
+- a BullMQ `emails.add("welcome")` links to another repo's `new Worker("emails", fn)` through the `emails:{name}`
+  template;
+- Laravel `$queue` / `->onQueue()` sends and Horizon consumers;
+- Symfony Messenger handlers, `messenger.yaml` routing and `messenger:consume` workers.

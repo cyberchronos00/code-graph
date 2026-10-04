@@ -1,0 +1,5 @@
+{
+    "name": "acme/symfony-shop",
+    "require": {"php": ">=8.2", "symfony/framework-bundle": "^7.1", "symfony/messenger": "^7.1"},
+    "autoload": {"psr-4": {"App\\": "src/"}}
+}

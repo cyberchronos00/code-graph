@@ -146,7 +146,10 @@ def test_nest_messages_and_bull_jobs_adapted(nest_db):
     msgs = protocols(st, protocol="nest-rpc")["endpoints"] + protocols(st, protocol="nest-ws")["endpoints"]
     assert msgs and all(m["id"].startswith("message:") for m in msgs)
     assert before == {r[0] for r in st.q("SELECT id FROM nodes WHERE kind IN ('message','job')")}
-    assert not list(st.q("SELECT 1 FROM nodes WHERE kind='endpoint'"))       # no new nodes for adapted kinds
+    # no new nodes for adapted kinds, except the job / queue twins of Bull processors (#36), merged in the view
+    eps = list(st.q("SELECT id, attrs FROM nodes WHERE kind='endpoint'"))
+    assert eps and all(json.loads(r["attrs"])["protocol"] in ("job", "queue") for r in eps)
+    assert all(j["id"].startswith("job:") for j in protocols(st, protocol="job")["endpoints"])
     r = cli("protocols", "--db", str(nest_db))
     assert r.returncode == 0 and "bull" in r.stdout and "nest-rpc" in r.stdout
 

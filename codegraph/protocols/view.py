@@ -40,12 +40,12 @@ from . import REGISTRY, compatible, external_match
 KINDS = ("http", "route", "channel", "channel_sub", "message", "job", "event", "endpoint")
 EDGE_ROLE_KINDS = ("HTTP_CALLS", "MATCHES_ROUTE", "ROUTES_TO", "USES_MIDDLEWARE", "TEST_HTTP", "BROADCASTS_ON",
                    "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL", "DISPATCHES", "HANDLED_BY", "LISTENED_BY", "SCHEDULES",
-                   "SENDS_TO", "RECEIVED_BY", "MATCHES_ENDPOINT", "TEST_CALLS")
+                   "SENDS_TO", "RECEIVED_BY", "QUEUE_ROUTES", "MATCHES_ENDPOINT", "TEST_CALLS")
 NEST = {"rpc": "nest-rpc", "event": "nest-event", "ws": "nest-ws", "grpc": "grpc"}
 SEND_IN = {"http": ("HTTP_CALLS",), "route": ("SENDS_TO",), "channel": ("BROADCASTS_ON",), "message": ("DISPATCHES",),
            "job": ("DISPATCHES", "SCHEDULES", "SENDS_TO"), "event": ("DISPATCHES",), "endpoint": ("SENDS_TO",)}
 RECV_OUT = {"route": ("ROUTES_TO",), "message": ("HANDLED_BY",), "job": ("HANDLED_BY",),
-            "event": ("LISTENED_BY", "HANDLED_BY"), "endpoint": ("RECEIVED_BY",)}
+            "event": ("LISTENED_BY", "HANDLED_BY"), "endpoint": ("RECEIVED_BY", "QUEUE_ROUTES")}
 RECV_IN = {"channel_sub": ("SUBSCRIBES_CHANNEL",)}
 MATCH = ("MATCHES_ROUTE", "MATCHES_CHANNEL", "MATCHES_ENDPOINT")
 TEST_ORIG = ("HTTP_CALLS", "DISPATCHES", "SENDS_TO", "SUBSCRIBES_CHANNEL")

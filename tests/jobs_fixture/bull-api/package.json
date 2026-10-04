@@ -1,0 +1,1 @@
+{"name": "bull-api", "version": "1.0.0", "dependencies": {"bullmq": "^5.0.0", "bull": "^4.12.0", "express": "^4.19.0"}}

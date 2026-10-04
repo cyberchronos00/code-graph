@@ -52,6 +52,7 @@ class Protocol:
 
 
 REGISTRY: dict[str, Protocol] = {}
+RECV_KINDS = ("RECEIVED_BY", "QUEUE_ROUTES")      # QUEUE_ROUTES: job queue -> routed task (#36), never propagating
 
 
 def register(p: Protocol) -> Protocol:
@@ -230,7 +231,7 @@ def apply(builder, externals: list | tuple = ()) -> dict:
                 procs[("send", e.dst)].add(e.attrs["process"])
         elif e.kind == "TEST_CALLS" and e.dst in eps and e.attrs.get("orig") == "SENDS_TO":
             senders.add(e.dst)
-        elif e.kind == "RECEIVED_BY" and e.src in eps:
+        elif e.kind in RECV_KINDS and e.src in eps:
             receivers.add(e.src)
             if e.attrs.get("process"):
                 procs[("recv", e.src)].add(e.attrs["process"])
@@ -261,7 +262,8 @@ def link_db(db) -> dict:
     rq_paths = _rq_import_paths(db, eps)
     senders = {r[0] for r in db.execute("SELECT DISTINCT dst FROM edges WHERE kind='SENDS_TO' OR (kind='TEST_CALLS' AND "
                                         "json_extract(attrs,'$.orig')='SENDS_TO')") if r[0] in eps}
-    receivers = {r[0] for r in db.execute("SELECT DISTINCT src FROM edges WHERE kind='RECEIVED_BY'") if r[0] in eps}
+    receivers = {r[0] for r in db.execute("SELECT DISTINCT src FROM edges WHERE kind IN ('RECEIVED_BY', 'QUEUE_ROUTES')")
+                 if r[0] in eps}
     receivers |= {r[0] for r in db.execute("SELECT id FROM nodes WHERE kind='endpoint' AND "
                                            "json_extract(attrs,'$.served') IS NOT NULL") if r[0] in eps}
     existing = {(r[0], r[1]) for r in db.execute("SELECT src, dst FROM edges WHERE kind='MATCHES_ENDPOINT'")}
@@ -281,7 +283,7 @@ def link_db(db) -> dict:
                 procs[(side, nid)].add(pr)
     rows, st = match_rows(eps, senders, receivers, existing, externals=list(dict.fromkeys(externals)), procs=procs)
     loc = {}
-    for r in db.execute("SELECT src, file, line FROM edges WHERE kind='RECEIVED_BY' ORDER BY rowid"):
+    for r in db.execute("SELECT src, file, line FROM edges WHERE kind IN ('RECEIVED_BY', 'QUEUE_ROUTES') ORDER BY rowid"):
         loc.setdefault(r[0], (r[1], r[2]))
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)",
                    [(s, d, "MATCHES_ENDPOINT", *loc.get(d, (None, None)), c, CONFIDENCE_RANK[c], json.dumps(a), None)

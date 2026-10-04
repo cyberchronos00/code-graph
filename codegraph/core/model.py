@@ -95,6 +95,8 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
                        "plugin / React Native module method, Flutter MethodChannel.invokeMethod); attrs.role, via"),
     "RECEIVED_BY": (True, "protocol endpoint -> the handler receiving it (subscriber, event handler; native @PluginMethod / "
                           "@ReactMethod / channel handler); attrs.platform"),
+    "QUEUE_ROUTES": (False, "job queue endpoint -> a task routed to it (#36; never propagating: a send to the queue "
+                            "runs the job it names, not every job of the queue); a receiver in `cg protocols`"),
     "MATCHES_ENDPOINT": (True, "send-side endpoint -> receive-side endpoint of the same protocol whose name matches by the "
                                "protocol's rules (wildcards, {param} templates); attrs.pattern, segments"),
     # external systems (#40, codegraph/external.py): external:<protocol>:<target>

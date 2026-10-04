@@ -2,8 +2,8 @@
 
   endpoint:job:<framework>:<name>   one per task / job: RECEIVED_BY the function that runs it, SENDS_TO from the code
                                     that enqueues it by name or by reference (attrs.queue: the queue it is routed to)
-  endpoint:queue:<framework>/<q>    one per named queue: SENDS_TO from enqueue sites that name the queue, RECEIVED_BY
-                                    the tasks routed to it; attrs.consumers: the worker processes consuming it
+  endpoint:queue:<framework>/<q>    one per named queue: SENDS_TO from enqueue sites that name the queue, QUEUE_ROUTES
+                                    (non-propagating) to the tasks routed to it; attrs.consumers: the worker processes consuming it
                                     (Procfile / docker-compose / systemd / supervisor / scripts)
 
 Part 1, Python:
@@ -34,7 +34,9 @@ PROC_FILE = re.compile(r"(?:^|/)(?:Procfile[\w.-]*|(?:docker-)?compose[\w.-]*\.y
                        r"[\w.-]*(?:deploy|worker|k8s|helm)[\w.-]*\.ya?ml|entrypoint[\w.-]*|pyproject\.toml|tox\.ini|justfile)$")
 RQ_FLAGS = {"-b", "--burst", "-s", "--with-scheduler", "-v", "--verbose", "-q", "--quiet", "--disable-job-desc-logging",
             "--disable-default-exception-handler", "--sentry-debug"}
-DEFAULT_QUEUE = {"celery": "celery", "rq": "default", "dramatiq": "default"}
+DEFAULT_QUEUE = {"celery": "celery", "rq": "default", "dramatiq": "default", "laravel": "default", "messenger": "async"}
+JS_EXT = (".ts", ".tsx", ".js", ".mjs", ".cjs", ".mts", ".cts")
+JSSTR = r"""(?:'([^'\\\n]*)'|"([^"\\\n]*)"|`([^`$\\]*)`)"""
 
 CELERY_DECO = re.compile(r"^[ \t]*@((?:[\w.]+\.)?(?:task|shared_task|periodic_task))\b", re.M)
 RQ_JOB_DECO = re.compile(r"^[ \t]*@((?:django_rq\.)?job)\b", re.M)
@@ -95,6 +97,7 @@ class Scan:
             if e.kind in ("DISPATCHES", "SCHEDULES") and e.dst in b.nodes and b.nodes[e.dst].kind == "job":
                 self.dispatched.add((e.src, e.line, e.dst))
         self._consts = None
+        self._enums = None
 
     def miss(self, key, text):
         self.st[key] += 1
@@ -178,11 +181,10 @@ class Scan:
             self.queue_recv(fw, queue, handler, file, line, conf, f"{fw} task queue")
 
     def queue_recv(self, fw, queue, handler, file, line, conf, how):
-        from .protocols import protocol_receive
-        protocol_receive(self.b, "queue", f"{fw}/{queue}", handler, file, line, conf, library=fw, how=how,
-                         node_attrs={"framework": fw, "queue": queue})
-        ep = self.b.nodes[f"endpoint:queue:{fw}/{queue}"]
-        ep.entry_kind = None                              # the task (or its job node) is the entry point
+        """QUEUE_ROUTES endpoint:queue:<fw>/<queue> -> the task routed to it (a receiver that does not propagate)."""
+        from .protocols import _endpoint
+        nid = _endpoint(self.b, "queue", f"{fw}/{queue}", {"framework": fw, "queue": queue})
+        self.b.add_edge(nid, handler, "QUEUE_ROUTES", file=file, line=line, confidence=conf, library=fw, how=how)
         self.queues_used.add((fw, queue))
 
     def send(self, fw, name, file, pos, conf, how, queue=None, target=None, role="enqueue"):
@@ -495,10 +497,378 @@ class Scan:
                     self.send("dramatiq", key[1], f, m.start(), HEURISTIC, "actor=", queue=self.tasks[key]["queue"],
                               role="schedule")
 
+    # -------------------------------------------------------------- Bull / BullMQ (outside Nest)
+    def js_name(self, file, expr):
+        """A queue / job name: a string literal, or `Enum.Member` / `CONST.member` of a TS enum or object constant."""
+        expr = (expr or "").strip()
+        m = re.fullmatch(JSSTR, expr)
+        if m:
+            return next(g for g in m.groups() if g is not None), RESOLVED
+        m = re.fullmatch(r"([A-Z]\w*)\.(\w+)", expr)
+        if not m:
+            return None, None
+        if self._enums is None:
+            self._enums = defaultdict(dict)
+            for f in self.s.files:
+                if not f.endswith(JS_EXT):
+                    continue
+                t = self.s.text(f)
+                if "enum " not in t and " as const" not in t:
+                    continue
+                for e in re.finditer(r"\benum\s+(\w+)\s*\{([^{}]*)\}|\bconst\s+(\w+)\s*=\s*\{([^{}]*)\}\s*as\s+const", t):
+                    name, body = (e.group(1), e.group(2)) if e.group(1) else (e.group(3), e.group(4))
+                    for mm in re.finditer(r"(\w+)\s*[=:]\s*" + JSSTR, body):
+                        self._enums[name].setdefault(mm.group(1), next(g for g in mm.groups()[1:] if g is not None))
+        v = self._enums.get(m.group(1), {}).get(m.group(2))
+        return (v, RESOLVED) if v is not None else (None, None)
+
+    def bull(self):
+        files = [f for f in sorted(self.s.files) if f.endswith(JS_EXT) and not f.endswith(".d.ts")]
+        libs = [f for f in files if re.search(r"""(?:from\s+|require\(\s*)['"](?:bull|bullmq)['"]""", self.s.text(f))]
+        if not libs:
+            return
+        self.uses.add("bull")
+        from .process_runs import _args_text
+        from .sockets import split_args
+        binds = defaultdict(set)              # variable / getter function short name -> queue names
+        factories = set()                     # functions turning their first parameter into `new Queue(param)`
+        for f in libs:
+            src = self.s.text(f)
+            for m in re.finditer(r"\bnew\s+(?:Bull\.)?(Queue|Bull|Worker|QueueEvents)\b\s*(?:<[^()]*?>)?\s*\(", src):
+                if self.s.masked(f, m.start()):
+                    continue
+                a = split_args(_args_text(src, m.end() - 1, 3000))
+                if not a:
+                    continue
+                q, conf = self.js_name(f, a[0])
+                fn, _lo, _hi = self.s.fn_bounds(f, m.start())
+                if q is None:
+                    if fn and re.fullmatch(r"\w+", a[0].strip()) and a[0].strip() in [p for p, _d in self.s.params(f, fn)]:
+                        factories.add((self.b.nodes[fn].name or "").split(".")[-1])
+                    else:
+                        self.miss("bull_queue_name_unresolved", f"{f}:{self.s.line_of(f, m.start())} {a[0][:40]}")
+                    continue
+                if m.group(1) == "Worker":
+                    h = self.s.handler(a[1], f) if len(a) > 1 else None
+                    self.bull_consume(f, m.start(), q, None, h, conf, "new Worker")
+                    continue
+                if m.group(1) == "QueueEvents":
+                    continue
+                v = re.search(r"(?:(?:const|let|var)\s+|this\.|\b)(\w+)\s*(?::[^=;\n]+)?=\s*$", src[max(0, m.start() - 120):m.start()])
+                if v:
+                    binds[v.group(1)].add(q)
+                if fn:
+                    binds[(self.b.nodes[fn].name or "").split(".")[-1]].add(q)
+        if factories:
+            rx = re.compile(r"\b(" + "|".join(map(re.escape, sorted(factories))) + r")\s*(?:<[^()]*?>)?\s*\(")
+            for f in files:
+                src = self.s.text(f)
+                for m in rx.finditer(src):
+                    if self.s.masked(f, m.start()) or re.search(r"(?:function\s+|\bdef\s+)$", src[max(0, m.start() - 10):m.start()]):
+                        continue
+                    a = split_args(_args_text(src, m.end() - 1, 2000))
+                    q, _c = self.js_name(f, a[0]) if a else (None, None)
+                    if q is None:
+                        continue
+                    v = re.search(r"(?:(?:const|let|var)\s+|this\.|\b)(\w+)\s*(?::[^=;\n]+)?=\s*$", src[max(0, m.start() - 120):m.start()])
+                    if v:
+                        binds[v.group(1)].add(q)
+                    fn, _lo, _hi = self.s.fn_bounds(f, m.start())
+                    if fn:
+                        binds[(self.b.nodes[fn].name or "").split(".")[-1]].add(q)
+                    self.st["bull_factory_queues"] += 1
+        binds = {k: v for k, v in binds.items() if len(v) == 1}
+        if not binds:
+            return
+        rx = re.compile(r"(?:\bthis\.|\b)(" + "|".join(map(re.escape, sorted(binds))) + r")(\s*\(\s*\))?\s*\.\s*(add|addBulk|process)\s*\(")
+        for f in files:
+            src = self.s.text(f)
+            if ".add" not in src and ".process" not in src:
+                continue
+            for m in rx.finditer(src):
+                if self.s.masked(f, m.start()):
+                    continue
+                q = next(iter(binds[m.group(1)]))
+                a = split_args(_args_text(src, m.end() - 1, 3000))
+                if m.group(3) == "process":
+                    name, conf = self.js_name(f, a[0]) if a else (None, None)
+                    h = self.s.handler(a[-1], f) if a else None
+                    self.bull_consume(f, m.start(), q, name, h, RESOLVED if name or not a else conf, ".process()")
+                elif m.group(3) == "add":
+                    name, _c = self.js_name(f, a[0]) if len(a) >= 2 else (None, None)
+                    self.bull_send(f, m.start(), q, name, ".add()")
+                else:
+                    self.bull_send(f, m.start(), q, None, ".addBulk()")
+
+    def bull_consume(self, file, pos, q, name, handler, conf, how):
+        fn = handler
+        if fn is None:
+            fn, _lo, _hi = self.s.fn_bounds(file, pos)
+        if fn is None:
+            fn = self.module_of(file)
+        if fn is None:
+            return
+        line = self.s.line_of(file, pos)
+        self.st["bull_consumers"] += 1
+        # a named processor takes `queue.add(name, ..)` of that name; a queue-wide one (`new Worker(q, fn)`,
+        # `queue.process(fn)`) any name: the template `<queue>:{name}` (the more specific named one wins a match)
+        self.job_ep("bull", f"{q}:{name}" if name else f"{q}:{{name}}", fn, file, line, conf or RESOLVED, how, queue=q)
+
+    def bull_send(self, file, pos, q, name, how):
+        if name:
+            self.send("bull", f"{q}:{name}", file, pos, RESOLVED, how, queue=q)
+        else:
+            self.send_queue("bull", q, file, pos, RESOLVED, how)
+
+    def send_queue(self, fw, q, file, pos, conf, how, task=None):
+        """SENDS_TO endpoint:queue:<fw>/<q> only (a job without its own name: Bull `queue.add(data)`)."""
+        from .protocols import protocol_send
+        from .tests_index import is_test_node
+        if self.s.masked(file, pos):
+            return
+        fn, _lo, _hi = self.s.fn_bounds(file, pos)
+        fn = fn or self.module_of(file)
+        if fn is None:
+            return
+        line = self.s.line_of(file, pos)
+        if ("q", fw, q, fn, line) in self.done:
+            return
+        self.done.add(("q", fw, q, fn, line))
+        self.fws.add(fw)
+        n = self.b.nodes.get(fn)
+        test = bool(n and is_test_node(n)) or bool(TEST_FILE.search(file)) or bool(re.search(r"\.(?:test|spec)\.[jt]sx?$", file))
+        protocol_send(self.b, "queue", f"{fw}/{q}", fn, file, line, conf, test=test, role="enqueue", library=fw, how=how,
+                      task=task, node_attrs={"framework": fw, "queue": q})
+        self.queues_used.add((fw, q))
+        self.st[f"{fw}_queue_sends"] += 1
+
+    # -------------------------------------------------------------- twins of the plugins' job nodes
+    def twins(self):
+        """Nest Bull / BullMQ processors (`job:<queue>[:<name>]`) and Laravel jobs (`job:<Class>`) keep their nodes,
+        DISPATCHES and entries; endpoint twins carry the names `cg link` pairs across repos."""
+        for nid, n in list(self.b.nodes.items()):
+            if n.kind != "job" or n.lang not in ("ts", "php"):
+                continue
+            a = n.attrs or {}
+            h = next((e.dst for e in self.b.edges.values() if e.src == nid and e.kind == "HANDLED_BY"), None)
+            if not h:
+                continue
+            if n.lang == "ts" and a.get("queue"):
+                q = a["queue"]
+                self.job_ep("bull", f"{q}:{a['job']}" if a.get("job") else f"{q}:{{name}}", h, n.file, n.line, RESOLVED,
+                            f"{'@Process' if a.get('job') else 'WorkerHost'} (nest {a.get('framework')})", queue=q)
+                self.uses.add("bull")
+                self.st["nest_job_twins"] += 1
+            elif n.lang == "php":
+                if "ShouldQueue" not in self.s.text(n.file) if n.file else True:
+                    self.st["laravel_sync_jobs"] += 1   # an App\Jobs class without ShouldQueue runs in the dispatching process
+                    continue
+                self.job_ep("laravel", n.fqn or nid.split(":", 1)[1], h, n.file, n.line, RESOLVED, "ShouldQueue job")
+                self.uses.add("laravel")
+                self.st["laravel_job_twins"] += 1
+
+    # -------------------------------------------------------------- Laravel queues
+    def laravel(self):
+        if not any(k[0] == "laravel" for k in self.tasks):
+            return
+        php = [f for f in sorted(self.s.files) if f.endswith(".php")]
+        self.job_tasks = {}                      # the plugin dispatches to the job node or (via=job) its handle()
+        for (fw, _n), t in self.tasks.items():
+            if fw == "laravel" and t["job"]:
+                self.job_tasks[t["job"]] = t
+                self.job_tasks[t["handler"]] = t
+        for (fw, name), t in self.tasks.items():
+            if fw != "laravel":
+                continue
+            src = self.s.text(t["file"])
+            m = re.search(r"(?:public|protected|private)\s+(?:\??string\s+)?\$queue\s*=\s*['\"]([\w.:-]+)['\"]|"
+                          r"\$this->(?:onQueue\(\s*|queue\s*=\s*)['\"]([\w.:-]+)['\"]|#\[\s*(?:\\?Illuminate\\Queue\\Attributes\\)?OnQueue\(\s*['\"]([\w.:-]+)", src)
+            if m:
+                q = m.group(1) or m.group(2) or m.group(3)
+                t["queue"] = q
+                self.b.nodes[t["nid"]].attrs["queue"] = q
+                self.queue_recv("laravel", q, t["handler"], t["file"], self.s.line_of(t["file"], m.start()), RESOLVED, "job queue")
+        for e in list(self.b.edges.values()):     # the plugin's dispatches of a job with its own queue: to that queue
+            if e.kind == "DISPATCHES" and e.dst in self.job_tasks and e.src in self.b.nodes and e.line:
+                t = self.job_tasks[e.dst]
+                f = self.b.nodes[e.src].file
+                if t["queue"] and f and f.endswith(".php"):
+                    src = self.s.text(f)
+                    at = self.s.off(f, e.line)
+                    end = src.find(";", at)
+                    if "onQueue" in src[at:end if end > 0 else at + 400]:
+                        continue                      # ->onQueue('x') overrides the job's own queue (below)
+                    self.send_queue("laravel", t["queue"], f, self.s.off(f, e.line), RESOLVED, "job $queue",
+                                    task=self.b.nodes[t["nid"]].attrs.get("task"))
+        short = defaultdict(list)
+        for (fw, name), t in self.tasks.items():
+            if fw == "laravel":
+                short[name.split("\\")[-1]].append(t)
+        disp = defaultdict(list)                 # (file, line) -> job nodes the plugin dispatches there
+        for e in self.b.edges.values():
+            if e.kind == "DISPATCHES" and e.dst in self.job_tasks:
+                disp[(self.b.nodes[e.src].file if e.src in self.b.nodes else None, e.line)].append(self.job_tasks[e.dst]["job"])
+        for f in php:
+            src = self.s.text(f)
+            if "onQueue" not in src:
+                continue
+            for m in re.finditer(r"->\s*onQueue\(\s*['\"]([\w.:-]+)['\"]", src):
+                if self.s.masked(f, m.start()):
+                    continue
+                stmt_lo = max(src.rfind(";", 0, m.start()), src.rfind("{", 0, m.start()), src.rfind("}", 0, m.start())) + 1
+                stmt = src[stmt_lo:m.start()]
+                found = []
+                for c in re.finditer(r"\b([A-Z]\w*|self|static)::dispatch(?:Sync|AfterResponse)?\s*\(|\bnew\s+\\?(?:[\w\\]+\\)?([A-Z]\w*)\s*\(", stmt):
+                    cls = c.group(1) or c.group(2)
+                    if cls in ("self", "static"):
+                        k = re.search(r"^\s*(?:final\s+|abstract\s+)?class\s+(\w+)", src, re.M)
+                        cls = k.group(1) if k else cls
+                    if cls in short and cls not in [x[0] for x in found]:
+                        found.append((cls, stmt_lo + c.start()))   # a job, or each job of a Bus::batch / chain
+                if not found:
+                    self.miss("laravel_onqueue_unresolved", f"{f}:{self.s.line_of(f, m.start())}")
+                    continue
+                q = m.group(1)
+                for cls, at in found:
+                    cands = short[cls]
+                    line = self.s.line_of(f, at)
+                    hit = [t for t in cands if any(j == t["job"] for ln in range(line, self.s.line_of(f, m.start()) + 1)
+                                                   for j in disp.get((f, ln), ()))]
+                    t = hit[0] if hit else (cands[0] if len(cands) == 1 else None)
+                    self.send_queue("laravel", q, f, at, RESOLVED if t else HEURISTIC, "->onQueue()",
+                                    task=t and self.b.nodes[t["nid"]].attrs.get("task"))
+                    if t:
+                        self.queue_recv("laravel", q, t["handler"], f, line, HEURISTIC, "dispatched onQueue")
+        self.horizon()
+
+    def horizon(self):
+        """config/horizon.php supervisors: `'supervisor-x' => [... 'queue' => ['a', 'b'] ...]` (defaults and
+        environments): the queues `php artisan horizon` consumes."""
+        f = "config/horizon.php"
+        if not (self.root / f).is_file():
+            return
+        t = (self.root / f).read_text(encoding="utf-8", errors="replace")
+        for m in re.finditer(r"['\"]([\w.-]+)['\"]\s*=>\s*\[(?:[^\[\]]|\[[^\[\]]*\])*?['\"]queue['\"]\s*=>\s*(\[[^\]]*\]|['\"][^'\"]+['\"])", t):
+            qs = re.findall(r"['\"]([\w.:-]+)['\"]", m.group(2))
+            line = t.count("\n", 0, m.start()) + 1
+            for q in qs:
+                self.consumers[("laravel", q)].append({"process": f"horizon:{m.group(1)}", "at": f"{f}:{line}"})
+            self.st["horizon_supervisors"] += 1
+
+    # -------------------------------------------------------------- Symfony Messenger
+    @staticmethod
+    def php_fqcn(src, short):
+        """FQCN of a class name in a PHP file: its `use` statements (aliases too), else the file's namespace."""
+        short = short.lstrip("\\")
+        if "\\" in short:
+            return short
+        m = re.search(rf"^\s*use\s+\\?([\w\\]+\\{re.escape(short)})\s*;|^\s*use\s+\\?([\w\\]+)\s+as\s+{re.escape(short)}\s*;", src, re.M)
+        if m:
+            return m.group(1) or m.group(2)
+        ns = re.search(r"^\s*namespace\s+([\w\\]+)\s*;", src, re.M)
+        return f"{ns.group(1)}\\{short}" if ns else short
+
+    def messenger(self):
+        php = [f for f in sorted(self.s.files) if f.endswith(".php")]
+        hfiles = [f for f in php if re.search(r"AsMessageHandler|MessageHandlerInterface|MessageSubscriberInterface", self.s.text(f))]
+        routing = self.messenger_routing()
+        if not hfiles and not routing:
+            return
+        self.uses.add("messenger")
+        for f in hfiles:
+            src = self.s.text(f)
+            cls = re.search(r"^\s*(?:final\s+|abstract\s+|readonly\s+)*class\s+(\w+)([^{]*)", src, re.M)
+            if not cls:
+                continue
+            cfq = self.php_fqcn(src, cls.group(1))
+            on_class = re.search(r"#\[\s*(?:\\?[\w\\]*\\)?AsMessageHandler\b(\((?:[^()]|\([^()]*\))*\))?\s*\]\s*(?:#\[[^\]]*\]\s*)*"
+                                 r"(?:final\s+|readonly\s+)*class\b", src)
+            methods = []
+            if on_class or re.search(r"\bimplements\b[^{]*\bMessageHandlerInterface\b", cls.group(2)):
+                meth = _lit(_kw((on_class.group(1) or "()")[1:-1], "method") or "") if on_class else None
+                methods.append((meth or "__invoke", (on_class.group(1) or "") if on_class else ""))
+            for m in re.finditer(r"#\[\s*(?:\\?[\w\\]*\\)?AsMessageHandler\b(\((?:[^()]|\([^()]*\))*\))?\s*\]\s*(?:#\[[^\]]*\]\s*)*"
+                                 r"(?:public\s+)?function\s+(\w+)", src):
+                methods.append((m.group(2), m.group(1) or ""))
+            for meth, args in methods:
+                h = f"method:{cfq}::{meth}"
+                if h not in self.b.nodes:
+                    self.miss("messenger_handler_without_method", f"{f} {meth}")
+                    continue
+                handles = re.search(r"handles\s*:\s*\\?([\w\\]+)::class", args)
+                if handles:
+                    msg = self.php_fqcn(src, handles.group(1))
+                else:
+                    sig = re.search(rf"function\s+{re.escape(meth)}\s*\(\s*(?:[\w\\]+\s*\|\s*)?\\?([\w\\]+)\s+\$", src)
+                    if not sig:
+                        self.miss("messenger_message_type_unknown", f"{f} {meth}")
+                        continue
+                    msg = self.php_fqcn(src, sig.group(1))
+                tr = re.search(r"fromTransport\s*:\s*['\"]([\w.-]+)['\"]", args)
+                n = self.b.nodes[h]
+                self.job_ep("messenger", msg, h, n.file, n.line, RESOLVED, "#[AsMessageHandler]",
+                            queue=tr.group(1) if tr else None)
+        for (msg, tr, f, line) in routing:
+            t = self.tasks.get(("messenger", msg))
+            if t:
+                if not t["queue"]:
+                    t["queue"] = tr
+                    self.b.nodes[t["nid"]].attrs["queue"] = tr
+                if t["queue"] == tr:
+                    self.queue_recv("messenger", tr, t["handler"], f, line, RESOLVED, "messenger routing")
+        routes = defaultdict(list)
+        for msg, tr, _f, _l in routing:
+            routes[msg].append(tr)
+        for f in php:
+            src = self.s.text(f)
+            if "dispatch" not in src:
+                continue
+            for m in re.finditer(r"(\$[\w>-]*(?:bus|Bus)\w*)\s*->\s*dispatch\s*\(\s*new\s+\\?([\w\\]+)\s*\(|"
+                                 r"\$this->dispatchMessage\s*\(\s*new\s+\\?([\w\\]+)\s*\(", src):
+                if self.s.masked(f, m.start()):
+                    continue
+                msg = self.php_fqcn(src, m.group(2) or m.group(3))
+                self.send("messenger", msg, f, m.start(), RESOLVED, "bus->dispatch()", queue=None)
+                for tr in routes.get(msg) or []:
+                    self.send_queue("messenger", tr, f, m.start(), RESOLVED, "messenger routing", task=msg)
+
+    def messenger_routing(self):
+        """[(message FQCN, transport, file, line)] of `framework.messenger.routing` in config/packages/*.yaml."""
+        out = []
+        for f in sorted(self.root.glob("config/packages/**/*.yaml")) + sorted(self.root.glob("config/packages/*.yml")):
+            try:
+                t = f.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "routing:" not in t or "messenger" not in t:
+                continue
+            rel = str(f.relative_to(self.root))
+            lines = t.split("\n")
+            for i, ln in enumerate(lines):
+                m = re.match(r"^(\s*)routing:\s*$", ln)
+                if not m:
+                    continue
+                ind = len(m.group(1))
+                for j in range(i + 1, len(lines)):
+                    r = lines[j]
+                    if r.strip() == "" or r.lstrip().startswith("#"):
+                        continue
+                    if len(r) - len(r.lstrip()) <= ind:
+                        break
+                    e = re.match(r"^\s*['\"]?\\?([\w\\*]+)['\"]?\s*:\s*(.*)$", r)
+                    if not e or "\\" not in e.group(1):
+                        continue
+                    trs = re.findall(r"[\w.-]+", e.group(2).split("#")[0])
+                    for tr in trs:
+                        out.append((e.group(1).replace("\\\\", "\\"), tr, rel, j + 1))
+        return out
+
     # -------------------------------------------------------------- worker processes
     WORKER = (("celery", re.compile(r"\bcelery\b[^\n]*?\bworker\b([^\n]*)")),
               ("rq", re.compile(r"\b(?:rq\s+worker|rqworker)\b([^\n]*)")),
-              ("dramatiq", re.compile(r"(?:^|[\s/])dramatiq\s+([^\n]*)")))
+              ("dramatiq", re.compile(r"(?:^|[\s/])dramatiq\s+([^\n]*)")),
+              ("laravel", re.compile(r"\bartisan\s+queue:(?:work|listen)\b([^\n]*)")),
+              ("messenger", re.compile(r"\bmessenger:consume\b([^\n]*)")))
 
     def workers(self):
         fws = {fw for fw, _n in self.tasks} | self.fws | self.uses
@@ -530,7 +900,7 @@ class Scan:
                 if not m:
                     continue
                 rest = m.group(1)
-                if fw == "rq":
+                if fw in ("rq", "messenger"):
                     qs, toks = [], re.split(r"\s+", re.split(r"&&|\|\||;|\||>", rest)[0].strip())
                     i2 = 0
                     while i2 < len(toks):
@@ -599,11 +969,18 @@ class Scan:
                 ep.attrs["processes"] = sorted({c["process"] for c in self.consumers[(fw, q)]})
 
     def run(self) -> dict:
-        if not any(f.endswith(".py") for f in self.s.files):
+        if any(f.endswith(".py") for f in self.s.files):
+            self.celery()
+            self.rq()
+            self.dramatiq()
+        if any(f.endswith(JS_EXT) for f in self.s.files):
+            self.bull()
+        self.twins()
+        if any(f.endswith(".php") for f in self.s.files):
+            self.laravel()
+            self.messenger()
+        if not self.tasks and not self.queues_used and not self.fws:
             return {}
-        self.celery()
-        self.rq()
-        self.dramatiq()
         self.workers()
         self.attach_consumers()
         out = {k: v for k, v in self.st.items() if v}

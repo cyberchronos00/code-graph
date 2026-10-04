@@ -19,6 +19,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   consumes. Celery outside Django is now covered. The Django plugin's `job` nodes keep their DISPATCHES and entries;
   their endpoint twins carry the task name for `cg link`, which also resolves RQ import paths to the worker repo's
   functions. `cg protocols --protocol job` lists the adapted job nodes too.
+- Job queues, part 2 (#36): Bull / BullMQ outside Nest (`new Queue(name)` with enum names, queue factory
+  functions, `add` / `process` / `new Worker`), endpoint twins for Nest Bull processors and Laravel jobs, Laravel
+  queues (`$queue`, `->onQueue()`, `Bus::batch`) with Horizon supervisors and `queue:work --queue` workers, and
+  Symfony Messenger (`#[AsMessageHandler]`, `$bus->dispatch(new X)`, `messenger.yaml` routing to transports,
+  `messenger:consume` workers). A queue's link to the tasks routed to it is the new non-propagating edge kind
+  `QUEUE_ROUTES`, so a send to a queue does not reach every job of that queue in `impact` / `reaches` or entry
+  tagging.
 - GraphQL root fields as protocol endpoints (#34, part 1): `endpoint:graphql:<Query|Mutation|Subscription>.<field>`
   from SDL files, gql templates and Python `gql("..")` strings (`extend type`, custom `schema { query: X }` roots).
   RECEIVED_BY comes from JS / TS resolver maps (spreads, references, `subscribe`), graphene root classes and their

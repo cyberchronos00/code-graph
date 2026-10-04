@@ -1,0 +1,13 @@
+framework:
+    messenger:
+        transports:
+            async: '%env(MESSENGER_TRANSPORT_DSN)%'
+            images:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    queue_name: images
+            audit: '%env(MESSENGER_TRANSPORT_DSN)%'
+        routing:
+            'App\Message\SendInvoice': async
+            App\Message\ResizeImage: images
+            'App\Message\AuditLog': [audit]

@@ -1,6 +1,7 @@
 """Job queues as protocol endpoints (#36): codegraph/jobs.py over tests/jobs_fixture (a Flask shop enqueuing Celery
 tasks by name and RQ jobs by import path, a Celery billing worker with task_routes and a Procfile, a mailer with RQ
-and Dramatiq workers in docker-compose, a Django shop whose Celery job nodes get endpoint twins), linked by cg link."""
+and Dramatiq workers in docker-compose, a Django shop whose Celery job nodes get endpoint twins, a Bull / BullMQ
+producer and worker, a Laravel app with Horizon, a Symfony Messenger app), linked by cg link."""
 import json
 import sqlite3
 import sys
@@ -24,13 +25,12 @@ J, Q = "endpoint:job:", "endpoint:queue:"
 def dbs(tmp_path_factory):
     d = tmp_path_factory.mktemp("jobs")
     out = {}
-    for r in ("shop-web", "billing-worker", "mailer", "django-shop"):
+    for r in ("shop-web", "billing-worker", "mailer", "django-shop", "bull-api", "bull-worker", "laravel-app", "symfony-shop"):
         out[r + "-stats"] = index_project(FX / r, d / f"{r}.db", r)
         out[r] = d / f"{r}.db"
-    for be in ("billing-worker", "mailer"):
+    for be, fe in (("billing-worker", "shop-web"), ("mailer", "shop-web"), ("bull-worker", "bull-api")):
         out[f"link-{be}"] = d / f"link-{be}.db"
-        out[f"link-{be}-res"] = link(str(out[be]), str(out["shop-web"]), str(out[f"link-{be}"]), backend_name=be,
-                                     frontend_name="shop-web")
+        out[f"link-{be}-res"] = link(str(out[be]), str(out[fe]), str(out[f"link-{be}"]), backend_name=be, frontend_name=fe)
     return out
 
 
@@ -57,7 +57,7 @@ def test_decorators_span_lines_and_nest():
 
 def test_celery_tasks_routes_and_workers(dbs):
     db = dbs["billing-worker"]
-    rb = _edges(db, "RECEIVED_BY")
+    rb = _edges(db, "RECEIVED_BY") | _edges(db, "QUEUE_ROUTES")
     assert (J + "celery:billing.charge", "function:billing.tasks.charge") in rb
     assert (J + "celery:billing.export.csv", "function:billing.tasks.export_csv") in rb
     assert (J + "celery:billing.tasks.nightly_report", "function:billing.tasks.nightly_report") in rb   # no name=: qualname
@@ -90,7 +90,7 @@ def test_name_based_sends(dbs):
 
 def test_dramatiq_and_rq_workers(dbs):
     db = dbs["mailer"]
-    rb = _edges(db, "RECEIVED_BY")
+    rb = _edges(db, "RECEIVED_BY") | _edges(db, "QUEUE_ROUTES")
     assert (J + "dramatiq:send_digest", "function:mailer.actors.send_digest") in rb
     assert (J + "dramatiq:mailer.bounce", "function:mailer.actors.handle_bounce") in rb   # actor_name=
     st = _edges(db, "SENDS_TO")
@@ -132,7 +132,7 @@ def test_cg_link_celery(dbs):
 def test_cg_link_rq_by_import_path(dbs):
     db = dbs["link-mailer"]
     assert dbs["link-mailer-res"]["stats"]["protocols"]["job"]["rq_import_paths"] == 2
-    rb = _edges(db, "RECEIVED_BY")
+    rb = _edges(db, "RECEIVED_BY") | _edges(db, "QUEUE_ROUTES")
     c, a = rb[(J + "rq:mailer.jobs.send_receipt", "function:mailer.jobs.send_receipt")]
     assert c == "heuristic" and a["how"] == "import path (cg link)"
     assert (J + "rq:mailer.jobs.send_welcome", "function:mailer.jobs.send_welcome") in rb  # the template's candidates
@@ -150,3 +150,51 @@ def test_proc_names():
     assert Scan._proc_name("deploy/docker-compose.yml", ["services:", "  w1:", "    command: x"], 2) == "w1"
     assert Scan._proc_name("conf/sv.conf", ["[program:jobs]", "command=rq worker"], 1) == "jobs"
     assert Scan._proc_name("ops/netbox-rq.service", ["ExecStart=x"], 0) == "netbox-rq.service"
+
+
+def test_bull_queues_factories_and_link(dbs):
+    st = _edges(dbs["bull-api"], "SENDS_TO")
+    assert any(k[1] == J + "bull:emails:welcome" for k in st)                              # enum queue name, named add
+    assert any(k[1] == Q + "bull/digest" for k in st)                                       # createQueue() factory getter
+    assert dbs["bull-api-stats"]["jobs"]["bull_factory_queues"] == 1
+    rb = _edges(dbs["bull-worker"], "RECEIVED_BY") | _edges(dbs["bull-worker"], "QUEUE_ROUTES")
+    assert (J + "bull:emails:{name}", "function:src/worker.ts#sendEmail") in rb               # new Worker(q, handler)
+    assert (Q + "bull/digest", "function:src/worker.ts#startWorkers") in rb                   # inline process(fn)
+    v = _view(dbs["link-bull-worker"], "job")
+    assert v["bull:emails:welcome"]["linked"] and v["bull:emails:welcome"]["checks"] == []
+    q = _view(dbs["link-bull-worker"], "queue")
+    assert q["bull/digest"]["linked"] and q["bull/emails"]["linked"]
+
+
+def test_laravel_queues_and_horizon(dbs):
+    db = dbs["laravel-app"]
+    a, ek = _attrs(db, J + "laravel:App\\Jobs\\ProcessPodcast")
+    assert a["job_node"] == "job:App\\Jobs\\ProcessPodcast" and a["queue"] == "podcasts" and ek is None
+    assert a["processes"] == ["horizon:supervisor-1"]
+    st = _edges(db, "SENDS_TO")
+    store = "method:App\\Http\\Controllers\\PodcastController::store"
+    assert st[(store, Q + "laravel/podcasts")][1]["how"] == "job $queue"                    # public $queue = 'podcasts'
+    assert st[(store, Q + "laravel/mail")][1]["task"] == "App\\Jobs\\SendDigest"         # ->onQueue('mail')
+    assert (store, Q + "laravel/podcasts") in st and not any(k[1].startswith(J) for k in st)   # DISPATCHES not repeated
+    v = _view(db, "queue")
+    assert v["laravel/mail"]["checks"] == ["no_consumer"] and v["laravel/podcasts"]["checks"] == []
+    jobs = {e["id"]: e for e in protocols(GraphStore(db), protocol="job")["endpoints"]}
+    assert "job:App\\Jobs\\ProcessPodcast" in jobs and jobs["job:App\\Jobs\\ProcessPodcast"]["protocol"] == "laravel-queue"
+
+
+def test_symfony_messenger(dbs):
+    db = dbs["symfony-shop"]
+    rb = _edges(db, "RECEIVED_BY") | _edges(db, "QUEUE_ROUTES")
+    assert (J + "messenger:App\\Message\\SendInvoice", "method:App\\MessageHandler\\SendInvoiceHandler::__invoke") in rb
+    assert (J + "messenger:App\\Message\\ResizeImage", "method:App\\MessageHandler\\ImageHandlers::resize") in rb
+    assert (Q + "messenger/async", "method:App\\MessageHandler\\SendInvoiceHandler::__invoke") in rb   # routing
+    st = _edges(db, "SENDS_TO")
+    create = "method:App\\Controller\\OrderController::create"
+    assert {k[1] for k in st if k[0] == create} == {
+        J + "messenger:App\\Message\\SendInvoice", J + "messenger:App\\Message\\ResizeImage",
+        J + "messenger:App\\Message\\AuditLog", Q + "messenger/async", Q + "messenger/images", Q + "messenger/audit"}
+    assert _attrs(db, Q + "messenger/images")[0]["consumers"] == ["worker"]                # messenger:consume async images
+    jv, qv = _view(db, "job"), _view(db, "queue")
+    assert jv["messenger:App\\Message\\AuditLog"]["checks"] == ["no_receiver"]
+    assert qv["messenger/audit"]["checks"] == ["no_receiver", "no_consumer"] and qv["messenger/async"]["checks"] == []
+
