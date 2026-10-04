@@ -21,6 +21,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Kotlin properties (#105): `count++`, `--cart.count` and `cart.count += 1` count as a read and a write. A property
+  node with a setter or delegate gets one `CALLS` edge with `property: read_write` (before: `read` for `++` / `--`,
+  `write` for `+=`; `--c.n` was missed, since it parses as `(--c).n`); a stored property gets both `READS_PROP` and
+  `WRITES_PROP`. A `var x by remember { }` local now shadows a property named `x`, and `{ x = 1` / `f(x)` no longer
+  hide the property reads and writes they are. Property `CALLS` / `TEST_CALLS`: bitwarden-android +116 (104 reads,
+  12 writes), nowinandroid +50, KaMPKit +2 and `calledCount++` read → read_write; none lost. Stored property refs:
+  +6 / +3 (bitwarden-android / ktor-samples).
+
 - Kotlin (#104): Ktor routing such as `val x = ...` followed by `get("/path") { }` no longer parses as that
   property's getter, and a call or function named `dynamic` no longer hits the Kotlin/JS type keyword. Both errors
   swallowed the enclosing function. The parsed copy is rewritten at the same length, so lines, offsets and names stay

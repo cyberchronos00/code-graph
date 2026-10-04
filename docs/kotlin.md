@@ -122,7 +122,9 @@ Delegates.observable(...)`, `by viewModels()`, `by remember { }` on a class memb
 `accessors: [get, set, lazy, delegate]`. The calls inside come from that node with `accessor: get | set | lazy |
 delegate` on the edge (impact shows `(get)`). A read (`cart.label`, an implicit `summary`, `3.asPrice`, a top-level
 `banner`) is a `CALLS` edge with `property: read`; an assignment to a property with a setter or delegate is
-`property: write`. Receivers follow the method-call rules: a known receiver type (a parameter / property type, a
+`property: write`. `count++`, `--cart.count` and `cart.count += 1` run the getter and the setter: on a property with a
+setter or delegate that is one edge with `property: read_write` (a get-only node keeps `read`), and on a stored
+property both `READS_PROP` and `WRITES_PROP` (#105). Receivers follow the method-call rules: a known receiver type (a parameter / property type, a
 constructor call, a literal) binds exactly or not at all; an unknown receiver binds only a class member property whose
 name no stored property shares, with `binding: "name"` (extension and top-level properties never bind by name). A
 stored property's initializer counts for its class, which `impact` lists as `(in a property)`.

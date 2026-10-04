@@ -1013,12 +1013,15 @@ class KotlinPlugin(LanguagePlugin):
 
     def _prop_ref(self, c, kf: KFile, owner: str, decl: Decl | None):
         """A read (or write) of a property node: `cart.label`, `summary`, `3.asPrice`, `cart.items = x` (#89)."""
-        p = c.parent
+        p, pre = c.parent, False
         if c.type == "navigation_expression":
             kids = [x for x in c.children if x.type != "."]
             if len(kids) != 2 or kids[1].type != "identifier":
                 return
             nm, recv = self.t(kids[1]), kids[0]
+            if (recv.type == "unary_expression" and len(recv.children) == 2
+                    and recv.children[0].type in ("++", "--")):
+                pre, recv = True, recv.children[1]   # `--c.n` parses as `(--c).n`
         else:
             if p is None or p.type in ("variable_declaration", "parameter", "class_parameter", "function_value_parameter",
                                        "import", "qualified_identifier", "package_header", "user_type", "type_identifier",
@@ -1035,12 +1038,19 @@ class KotlinPlugin(LanguagePlugin):
             return
         if p is not None and p.type == "call_expression" and p.children and p.children[0] == c:
             return                                   # `x.label()`: a call, not a property read
-        mode = "write" if p is not None and p.type == "assignment" and p.children and p.children[0] == c else "read"
+        mode = "read"
+        if p is not None and p.type == "assignment" and p.children and p.children[0] == c:
+            # `x = v` writes; `x += v` / `x -= v` run the getter and the setter (#105)
+            mode = "write" if len(p.children) > 1 and p.children[1].type == "=" else "read_write"
+        elif pre or p is not None and p.type == "unary_expression" and any(x.type in ("++", "--") for x in p.children):
+            mode = "read_write"                      # `count++` / `--cart.count`
         rv = (recv.type, self.t(recv)) if recv is not None else None     # text now: self.t reads the current file
         if nm in self.props_by_name:
             self.reads.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, mode))
         if nm in self.field_names:
-            w = mode == "write"
+            if mode == "read_write":                 # a stored property read and written in place (#105)
+                self.frefs.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, False))
+            w = mode != "read"
             if not w and p is not None and p.type == "navigation_expression" and p.children and p.children[0] == c:
                 ids = [x for x in p.children if x.type == "identifier"]
                 gp = p.parent
@@ -1256,7 +1266,7 @@ class KotlinPlugin(LanguagePlugin):
             return True
         body = "\n".join(kf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:decl.end])
         n = re.escape(nm)
-        return bool(re.search(rf"\b(?:val|var)\s+(?:\([^)]*?)?\b{n}\b\s*[:=),]"            # val x = / val (a, x) =
+        return bool(re.search(rf"\b(?:val|var)\s+(?:\([^)]*?)?\b{n}\b\s*(?:[:=),]|by\b)"   # val x = / val (a, x) = / var x by
                               rf"|\bfor\s*\(\s*(?:\([^)]*?)?\b{n}\b[^)]*?\bin\b"               # for (x in / for ((a, x) in
                               rf"|[(,]\s*{n}\s*:"                                         # (x: T  a parameter
                               rf"|\{{\s*(?:\(?\s*[\w\s,:<>?]*,\s*)?{n}\b\s*(?:,[\w\s,:<>?]*)?\)?\s*->", body))  # { a, x -> / { (a, x) ->
@@ -1441,8 +1451,8 @@ class KotlinPlugin(LanguagePlugin):
             how, r = None, []
             rt = recv[1] if recv is not None else None
             if recv is None or rt == "this":
-                if recv is None and self._shadowed(decl, name, kf, line):
-                    continue
+                if recv is None and self._shadowed_local(decl, name, kf):
+                    continue                         # not `_shadowed`: `{ x = 1` and `f(x)` do not declare `x` (#105)
                 if cls is not None:
                     r = self._prop_member(cls, name)
                 if not r and decl is not None and decl.receiver:
@@ -1486,9 +1496,12 @@ class KotlinPlugin(LanguagePlugin):
             for t in r[:3]:
                 if t.id == owner:
                     continue
-                self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, property=mode,
+                m = mode
+                if m == "read_write" and not {"set", "delegate"} & set(self.props[t.id]["accessors"]):
+                    m = "read"                       # only the getter is a node's code: the setter is the default
+                self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, property=m,
                                 **({"binding": how} if how else {}))
-                self.st["property_reads" if mode == "read" else "property_writes"] += 1
+                self.st[{"read": "property_reads", "write": "property_writes"}.get(m, "property_read_writes")] += 1
 
     def _targets(self, name: str, recv: str | None, kf: KFile, decl: Decl | None) -> list[Decl]:
         cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None

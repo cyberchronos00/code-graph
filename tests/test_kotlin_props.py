@@ -76,3 +76,35 @@ def test_impact_and_tests():
     assert d["app.Checkout.summary"] == 2 and d["app.Checkout.render"] == 2      # render reads banner directly
     t = Q.tests_covering(st, "formatPrice")
     assert [x["name"] for x in t["transitive"]] == ["label"] and not t["direct"]
+
+
+def test_increments_and_compound_assignments_read_and_write(tmp_path):
+    """#105: `n++` / `--c.n` / `c.n += 1` run the getter and the setter: a delegated or custom-setter property gets
+    one CALLS edge with `property: read_write` (a get-only node stays `read`); a stored property gets READS_PROP and
+    WRITES_PROP. A plain `=` stays a write."""
+    d = tmp_path / "src" / "main" / "kotlin"
+    d.mkdir(parents=True)
+    (d / "Counter.kt").write_text(
+        "package app\n\nimport kotlin.properties.Delegates\n\nclass Counter {\n"
+        "    var hits: Int by Delegates.observable(0) { _, _, _ -> }\n    var plain = 0\n"
+        "    var shown: Int = 0\n        get() = field * 2\n\n"
+        "    fun bump() {\n        hits++\n        plain += 2\n        shown++\n    }\n\n"
+        "    fun reset() {\n        hits = 0\n        plain = 0\n    }\n}\n\n"
+        "fun touch(c: Counter) {\n    --c.hits\n    c.hits -= 3\n    c.plain++\n}\n")
+    dbp = tmp_path / "g.db"
+    st = index_project(tmp_path, dbp, "rmw")
+    c = sqlite3.connect(dbp)
+    calls = {(s, t, ln): json.loads(a or "{}").get("property")
+             for s, t, ln, a in c.execute("SELECT src, dst, line, attrs FROM edges WHERE kind = 'CALLS'")}
+    assert calls[("method:app.Counter.bump", "method:app.Counter.hits", 12)] == "read_write"
+    assert calls[("method:app.Counter.bump", "method:app.Counter.shown", 14)] == "read"
+    assert calls[("method:app.Counter.reset", "method:app.Counter.hits", 18)] == "write"
+    assert calls[("function:app.touch", "method:app.Counter.hits", 24)] == "read_write"
+    assert calls[("function:app.touch", "method:app.Counter.hits", 25)] == "read_write"
+    props = {(s, t, k, ln) for s, t, k, ln in c.execute(
+        "SELECT src, dst, kind, line FROM edges WHERE kind IN ('READS_PROP', 'WRITES_PROP')")}
+    for src, ln in (("method:app.Counter.bump", 13), ("function:app.touch", 26)):
+        dst = next(t for s, t, k, l_ in props if s == src and l_ == ln)
+        assert {(src, dst, "READS_PROP", ln), (src, dst, "WRITES_PROP", ln)} <= props
+    assert not any(s == "method:app.Counter.reset" and k == "READS_PROP" for s, _, k, _ in props)
+    assert st["plugins"]["kotlin"]["property_read_writes"] == 3
