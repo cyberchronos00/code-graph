@@ -65,7 +65,9 @@ Per system: the code and connections using it (with file:line and how: connectio
 kinds reaching those users, CONFIGURED_BY / CREDENTIAL_FROM keys, TLS. MCP: `external_systems(pattern?, protocol?,
 source?, tls_off?)`. `reaches external:...` lists the entry points that reach a system, and `impact external:...` /
 `impact table:...` lists the code using it (CONNECTS_TO / USES_CONNECTION / READS_TABLE / WRITES_TABLE /
-MAPS_TO_TABLE as the first hop, then callers) with the entry points above it.
+MAPS_TO_TABLE as the first hop, then callers) with the entry points above it. A table's impact also covers the code
+that reads or writes only some of its columns (READS_COLUMN / WRITES_COLUMN on the columns it CONTAINS, #103), and
+`impact column:orders.total` lists the users of one column.
 
 ## Not covered yet
 

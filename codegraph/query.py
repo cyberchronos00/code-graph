@@ -1131,8 +1131,20 @@ def impact(st: GraphStore, spec: str, min_conf="heuristic", platform: str | None
 
 # impact on a data node (#77): its users are the code that connects to / uses / reads / writes it; these edges only
 # point at data nodes, so following them never widens the walk above the first code hop
-DATA_USE = ["CONNECTS_TO", "USES_CONNECTION", "READS_TABLE", "WRITES_TABLE", "MAPS_TO_TABLE"]
-DATA_TARGET = ("external:", "connection:", "table:")
+DATA_USE = ["CONNECTS_TO", "USES_CONNECTION", "READS_TABLE", "WRITES_TABLE", "MAPS_TO_TABLE", "READS_COLUMN", "WRITES_COLUMN"]
+DATA_TARGET = ("external:", "connection:", "table:", "column:")
+
+
+def _table_columns(st: GraphStore, targets: list) -> list:
+    """The column nodes of table targets (table -CONTAINS-> column): code reading / writing only some columns
+    (READS_COLUMN / WRITES_COLUMN, #103) uses the table too."""
+    tabs = [t for t in targets if t.startswith("table:")]
+    out = []
+    for i in range(0, len(tabs), 500):
+        chunk = tabs[i:i + 500]
+        out += [r["dst"] for r in st.q(f"SELECT dst FROM edges WHERE kind='CONTAINS' AND dst LIKE 'column:%' "
+                                       f"AND src IN ({','.join('?' * len(chunk))})", chunk)]
+    return [c for c in dict.fromkeys(out) if c not in targets]
 
 
 def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> dict:
@@ -1141,9 +1153,10 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
     si = _has_class_target(targets)
     rel = override_relations(st, targets, min_conf)
     below = override_seeds(st, spec, targets, min_conf)
-    seeds = targets + below
+    cols = _table_columns(st, targets) if kinds is not CALL_LIKE else []
+    seeds = targets + cols + below
     depth = reverse_closure(st, seeds, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform)
-    own = reverse_closure(st, targets, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform) if below else depth
+    own = reverse_closure(st, targets + cols, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform) if below else depth
     paths = shortest_paths(st, depth, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform)
     bases = _dispatch_only(st, depth, paths, min_conf, platform)
     for b in list(depth):

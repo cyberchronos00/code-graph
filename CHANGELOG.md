@@ -25,6 +25,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `validate(process.env)`). outline: Redis found (none before), 427 env reads through its `env` wrapper; immich
   server: `DB_*` / `REDIS_*` read through its zod env schema now connect to Postgres / Redis, with their passwords.
 
+### Changed
+
+- `impact table:x` also follows READS_COLUMN / WRITES_COLUMN into code that touches only some of the table's columns,
+  and `impact column:t.c` follows them too (it found no callers before) (#103). On a Laravel API with column
+  edges, three busy tables go from 55 to 366, 20 to 301 and 21 to 137 callers. Every earlier caller is kept, and 20
+  sampled new callers all touch a column of that table.
+
 ### Fixed
 
 - TypeScript `process.env.X = ...` no longer counts as reading `X` (#103).

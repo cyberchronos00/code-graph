@@ -357,3 +357,23 @@ def test_node_client_constructors_and_env_wrappers(tmp_path):
     assert ("module:src/config.ts", "env:QUEUE_URL") in env
     assert not any(d == "env:FEATURE_FLAG" for _, d in env)
     assert b"pg-fixture-literal" not in db.read_bytes()
+
+
+def test_impact_on_table_includes_column_users(tmp_path):
+    """#103: `impact table:x` also follows READS_COLUMN / WRITES_COLUMN into code that touches only some columns."""
+    from codegraph.core.model import Edge, Node
+    from codegraph.query import impact
+    st = GraphStore.create(tmp_path / "g.db")
+    st.write([Node("table:orders", "table", "orders"), Node("column:orders.total", "column", "total"),
+              Node("table:users", "table", "users"), Node("column:users.email", "column", "email"),
+              *(Node(f"function:{n}", "function", n, file="a.py", line=i + 1, lang="python")
+                for i, n in enumerate(("repo", "report", "mail", "handler")))],
+             [Edge("table:orders", "column:orders.total", "CONTAINS"),
+              Edge("table:users", "column:users.email", "CONTAINS"),
+              Edge("function:repo", "table:orders", "READS_TABLE", "a.py", 1),
+              Edge("function:report", "column:orders.total", "READS_COLUMN", "a.py", 2),
+              Edge("function:mail", "column:users.email", "READS_COLUMN", "a.py", 3),
+              Edge("function:handler", "function:report", "CALLS", "a.py", 4)])
+    callers = {c["name"]: c["depth"] for c in impact(st, "table:orders")["callers"]}
+    assert callers == {"repo": 1, "report": 1, "handler": 2}           # not mail: another table's column
+    assert {c["name"] for c in impact(st, "column:orders.total")["callers"]} == {"report", "handler"}
