@@ -120,7 +120,8 @@ cg protocols --db combined.db --unmatched --side send # only endpoints with a ch
 
 `--json` returns `summary`, `endpoints` (id, kind, protocol, name, side, linked, checks, external, guards, senders,
 test_senders, receivers, matches, at, transport) and `registry` (every registered protocol with its matcher). MCP:
-`protocol_links(pattern?, protocol?, side?, unmatched?)`.
+`protocol_links(pattern?, protocol?, side?, unmatched?, listeners?)`. `--listeners` lists every listening TCP / UDP
+socket with its exposure, bind address and handler (raw sockets, below).
 
 ## Socket.IO (python-socketio, Flask-SocketIO)
 
@@ -143,11 +144,82 @@ used in their module or imported by name:
 `cg path "route:POST /orders" table:orders` runs route -> handler -> `SENDS_TO endpoint:socketio:/orders#order:created`
 -> `RECEIVED_BY` -> `WRITES_TABLE`.
 
+## Raw TCP / UDP sockets
+
+`endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function
+nodes. The only name both ends share is the port, so a pair means "same port in this graph", not proof that the
+programs talk to each other.
+
+| language | listen (RECEIVED_BY) | connect / send (SENDS_TO) |
+|---|---|---|
+| Python | `sock.bind((h, p))`, `socket.create_server`, `socketserver.TCPServer((h, p), Handler)` / UDP / Threading / Forking, `asyncio.start_server(cb, h, p)`, `loop.create_server(F, h, p)`, `create_datagram_endpoint(F, local_addr=)` | `connect((h, p))`, `sendto(d, (h, p))`, `socket.create_connection`, `asyncio.open_connection(h, p)`, `remote_addr=` |
+| JS / TS | `net.createServer(cb).listen(p, h)` (also `server.listen`), `dgram.createSocket(..)` + `.bind(p, h)` (handler: `on('message', fn)`) | `net.connect(p, h)` / `createConnection({ port, host })`, `socket.send(m, [o, l,] p, h)` |
+| Rust | `TcpListener::bind(a)`, `UdpSocket::bind(a)` (std, tokio, async-std) | `TcpStream::connect(a)`, `send_to(b, a)`, `connect(a)` on a bound `UdpSocket` |
+| Kotlin | `ServerSocket(p)`, `DatagramSocket(p)` / `MulticastSocket(p)`, Ktor `aSocket(..).tcp().bind(h, p)`, `*Channel.open()` + `bind` | `Socket(h, p)`, `DatagramPacket(.., h, p)`, Ktor `.connect(h, p)`, `DatagramChannel.send(b, a)` |
+| C / C++ | `bind()` in a function that sets `htons(p)`, libuv `uv_ip4_addr(h, p, &a)` + `uv_tcp_bind` / `uv_udp_bind` | `connect()` / `sendto()` with `htons(p)`, `uv_tcp_connect` / `uv_udp_send` |
+| Swift | `NWListener(using: .tcp / .udp, on: p)` | `NWConnection(host:, port:, using:)` |
+| Dart | `ServerSocket.bind(h, p)`, `RawDatagramSocket.bind(h, p)` | `Socket.connect(h, p)`, `RawDatagramSocket.send(d, a, p)` |
+| PHP | `stream_socket_server('tcp://h:p')`, `socket_bind($s, h, p)` | `stream_socket_client`, `fsockopen('udp://h', p)`, `socket_connect`, `socket_sendto` |
+
+TCP vs UDP comes from the API (`SOCK_DGRAM` in the function, else the file's only socket type, for BSD-style calls).
+A plain Node program that uses `net` / `dgram` / `tls` without a framework or a tsconfig is now indexed with allowJs.
+
+Port values: literals (`"127.0.0.1:6379"`, `8125`), format strings (`format!("0.0.0.0:{port}")`, f-strings, template
+literals, concatenation), the last assignment in the function, fallbacks (`cli.port.unwrap_or(DEFAULT_PORT)`,
+`config.port || 8125`, `?:`), constants of the file or a unique one of the project (`#define TEST_PORT 9123`,
+`pub const DEFAULT_PORT: u16 = 6379`), `self.x` / `this.x` fields, parameter defaults, CLI option defaults (clap
+`default_value_t`, argparse / click `default=`) and environment reads. `os.environ.get("PORT", 8125)` gives port 8125
+with `port_envs: [PORT]`. Without a default the endpoint is `env:PORT`, matched (MATCHES_ENDPOINT, heuristic) to the
+endpoints whose port is read from the same key. When the port is a parameter of the enclosing function, that function
+is a wrapper, and its call sites (CALLS / INSTANTIATES edges, two levels) are resolved instead:
+`Client::connect("127.0.0.1:6379")` -> `TcpStream::connect(addr)`. Port 0 (ephemeral) and unresolved ports are
+counted in the `sockets` index stats (`ephemeral`, `listen_unresolved`, `connect_unresolved`, `send_unresolved`,
+`call_site_unresolved`, with samples). They are not linked.
+
+The receiver of a listener is its handler when one is named: a callback, `Handler.handle`, a protocol factory's
+`data_received` / `datagram_received`, or the function the listener is passed to (`server::run(listener, ..)`).
+Otherwise it is the function that listens. The RECEIVED_BY edge records `bind_address` and `exposure`: `all`
+(0.0.0.0, ::, or no address, as in `server.listen(port)` / `ServerSocket(port)`), `loopback` or `specific`. The node
+lists `bind_addresses`, an overall `exposure`, `port_envs` and the `multicast_group` a UDP socket joins in the same
+function (`addMembership`, `IP_ADD_MEMBERSHIP` + `inet_aton`, `join_multicast_v4`, `joinGroup`). Confidence is
+`resolved` for literal / constant / call-site ports and `heuristic` for fallbacks, defaults and env keys.
+
+```bash
+cg protocols --db g.db --listeners      # every listening socket: port, exposure, bind address, handler
+cg protocols --db g.db --protocol udp   # endpoints with senders and receivers
+```
+
+On the validation corpora: tokio `examples/` pairs `hello_world` with `graceful-shutdown` / `chat` on 6142, `proxy`
+with the 8080 servers, and `udp-client` with `echo-udp`. mini-redis pairs the three examples with the server binary's
+listener (`server::run`) on `DEFAULT_PORT` 6379. statsd's Python example client reaches the Node UDP server on 8125.
+libuv's tests pair on `TEST_PORT` 9123. Numbers are in docs/validation.md.
+
+## UDP application protocols: mDNS, OSC, CoAP, SSDP
+
+These carry a name both ends share, so they get their own endpoints (codegraph/udp_apps.py) next to the UDP port:
+
+| protocol | endpoint name | receive (RECEIVED_BY) | send (SENDS_TO) |
+|---|---|---|---|
+| `mdns` | service type without `.local.` (`_http._tcp`) | python-zeroconf `ServiceInfo(type, name, port=..)` registered, bonjour-service `publish({ type })`, Swift `NWListener.Service(type:)` / `NetService(.., type:)`, Android `NsdServiceInfo` + `registerService`, JmDNS `ServiceInfo.create`, bonsoir `BonsoirService` | `ServiceBrowser` / `AsyncServiceBrowser`, `ServiceInfo` without a port (a lookup), `find({ type })`, `NWBrowser(for: .bonjour(type:))`, `searchForServices(ofType:)`, `discoverServices`, `addServiceListener`, `BonsoirDiscovery` |
+| `osc` | address pattern (`/filter`) | python-osc `dispatcher.map('/addr', handler)` | python-osc `send_message('/addr', ..)`, node-osc / osc.js `send` |
+| `coap` | resource path (`/time`) | aiocoap `add_resource(['time'], R())` (the `render_*` method, else the resource class) | aiocoap `Message(uri='coap://host/time')`, Californium `CoapClient(uri)`, node-coap `coap.request(uri)` |
+| `ssdp` | search target / USN (`urn:...`) | node-ssdp `addUSN`, ssdpy `SSDPServer(device_type=)` | node-ssdp `search`, ssdpy `m_search`, async_upnp_client `search_target=` |
+
+mDNS advertises on the receiving side (`role: advertise`) and browses on the sending side (`role: browse`). OSC
+address patterns match as globs (`/filter*`), CoAP paths with the HTTP path matcher. python-osc's servers and clients
+are also UDP sockets. Names may be literals, f-strings, concatenations (unknown parts become `{name}`) or a name
+assigned one. Calls in comments and docstrings (doctest examples) are skipped and counted as `in_comment`; the
+per-protocol counts are under `sockets.applications` in the index stats. On the corpora: python-zeroconf's examples
+pair the `_http._tcp` registration with its browser; aiocoap's `server.py` resources `/time` and `/other/block`
+pair with `clientGET.py` and `clientPUT.py`.
+
 ## Not covered yet
 
 - Extraction for the other registered protocols (MQTT, NATS, AMQP, Kafka, Redis pub/sub) and the rest of the epic's
-  children (#32-#39); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
+  children (#32-#38); Socket.IO in TypeScript / Dart / Swift / Kotlin, `ws` / SSE message names, rooms as their own
   endpoints (#32).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.
 - Broker / host nodes (#30 / #40) are not attached to endpoints yet.
+- Sockets (#39): QUIC / ALPN, WebRTC data channels, message-type framing on a port, Go (no plugin), servers whose port
+  comes only from a config file, and `env:` endpoints across repositories in `cg link` (follow-up issue).

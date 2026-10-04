@@ -57,6 +57,21 @@ register(Protocol("socketio", "tcp", "Socket.IO event (<namespace>#<event>; emit
                   "server and client)", matcher=M.template, ports=(80, 443), schemes=("ws", "wss", "http", "https"), guards=True,
                   directional=True))
 
+# ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)
+register(Protocol("tcp", "tcp", "Raw TCP socket: connect -> listener on the same port (listen / bind vs connect; "
+                  "bind address and exposure on the listener)"))
+register(Protocol("udp", "udp", "Raw UDP socket: send_to / connect -> socket bound on the same port", fanout=True))
+
+# UDP application protocols with a shared name (#39, codegraph/udp_apps.py)
+register(Protocol("mdns", "udp", "mDNS / DNS-SD service type: browse -> advertise (zeroconf, bonjour, NWBrowser / "
+                  "NetService, NsdManager, JmDNS, bonsoir)", fanout=True, ports=(5353,)))
+register(Protocol("osc", "udp", "Open Sound Control address: send_message -> dispatcher map (address patterns as globs)",
+                  matcher=M.glob, fanout=True))
+register(Protocol("coap", "udp", "CoAP resource path: request -> resource (aiocoap, Californium, node-coap)", matcher=M.path,
+                  ports=(5683, 5684), schemes=("coap", "coaps")))
+register(Protocol("ssdp", "udp", "SSDP / UPnP search target: M-SEARCH -> advertised USN / device type", fanout=True,
+                  ports=(1900,)))
+
 # ---- AI harnesses (#66, codegraph/plugins/python/aitools.py): tools the model or an MCP client calls by name
 register(Protocol("llm_tool", "local", "LLM tool / function: schema offered to the model (OpenAI, Anthropic, LangChain, "
                   "Agents SDK, LlamaIndex) -> handler (decorated function, dict registry, agent-loop branch)",

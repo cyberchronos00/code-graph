@@ -10,6 +10,17 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Raw TCP / UDP sockets (#39) as `endpoint:tcp:<port>` / `endpoint:udp:<port>`: listeners (RECEIVED_BY the handler or
+  the listening function, with `bind_address`, `exposure` all / loopback / specific, multicast group and port env
+  keys) and connects / sends (SENDS_TO) in Python, JS / TS, Rust, Kotlin, C (BSD sockets and libuv), Swift, Dart and
+  PHP. Ports resolve from literals, format strings, constants, fields, parameter and CLI-option defaults and env
+  reads (`env:PORT` endpoints are matched by key), and through wrapper call sites. `cg protocols --listeners` /
+  `protocol_links(listeners=true)` list every listening socket. Plain Node programs using `net` / `dgram` / `tls`
+  are now indexed. mini-redis, tokio's examples, statsd and libuv pair client and server; 20 sampled edges correct.
+- UDP application protocols (#39): mDNS / DNS-SD service types (python-zeroconf, bonjour-service, Network.framework,
+  NetService, NsdManager, JmDNS, bonsoir), OSC address patterns (python-osc, node-osc), CoAP resource paths (aiocoap,
+  Californium, node-coap) and SSDP search targets (node-ssdp, ssdpy, async_upnp_client) as `endpoint:mdns|osc|coap|ssdp:
+  <name>`. Calls inside comments and docstrings are skipped.
 - TypeScript MCP servers (#102): `registerTool` / `tool`, `registerPrompt` / `prompt` and `registerResource` /
   `resource` (literal URIs and `ResourceTemplate`s) on an `@modelcontextprotocol/sdk` server become
   `endpoint:mcp_<kind>:<server>/<name>` RECEIVED_BY the handler; an inline handler gets its own function node, so its

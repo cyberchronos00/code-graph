@@ -149,7 +149,8 @@ def collect(st) -> dict:
             ep[job_of_handler[d]]["senders"].append({"fn": s, "at": at, "confidence": e["confidence"], "via": "dispatch"})
         if s in ep and k in RECV_OUT.get(ep[s]["kind"], ()):
             ep[s]["receivers"].append({"handler": d, "at": at, "confidence": e["confidence"],
-                                       **({k2: a[k2] for k2 in ("platform", "process", "schema") if a.get(k2)})})
+                                       **({k2: a[k2] for k2 in ("platform", "process", "schema", "bind_address", "exposure")
+                                          if a.get(k2) is not None and a.get(k2) != ""})})
         if d in ep and k in RECV_IN.get(ep[d]["kind"], ()):
             ep[d]["receivers"].append({"handler": s, "at": at, "confidence": e["confidence"]})
     # sides per protocol
@@ -238,9 +239,15 @@ def collect(st) -> dict:
     return ep
 
 
+SOCKET_ATTRS = ("port", "port_envs", "bind_addresses", "exposure", "multicast_group")
+
+
 def protocols(st, pattern: str | None = None, protocol: str | None = None, side: str | None = None,
-              unmatched: bool = False, max_items: int = 200) -> dict:
+              unmatched: bool = False, max_items: int = 200, listeners: bool = False) -> dict:
+    """listeners: every listening TCP / UDP socket (#39) with its bind address, exposure and handler."""
     ep = collect(st)
+    if listeners:
+        side = "receive"
     summ = defaultdict(lambda: defaultdict(int))
     for n in ep.values():
         s = summ[n["protocol"]]
@@ -252,12 +259,14 @@ def protocols(st, pattern: str | None = None, protocol: str | None = None, side:
             s[c] += 1
         s["external"] += bool(n["external"])
     sel = []
-    listing = bool(pattern or protocol or side or unmatched)
+    listing = bool(pattern or protocol or side or unmatched or listeners)
     if listing:
         p = pattern[len("endpoint:"):] if pattern and pattern.startswith("endpoint:") else pattern
         for nid in sorted(ep):
             n = ep[nid]
             if protocol and n["protocol"] != protocol:
+                continue
+            if listeners and (n["protocol"] not in ("tcp", "udp") or not n["receivers"]):
                 continue
             if side and n["side"] not in (side, "both"):
                 continue
@@ -278,6 +287,9 @@ def protocols(st, pattern: str | None = None, protocol: str | None = None, side:
             item["schemas"] = n["schemas"]
         if n["attrs"].get("test_only"):
             item["test_only"] = True
+        for k in SOCKET_ATTRS if n["protocol"] in ("tcp", "udp") else ():
+            if n["attrs"].get(k) not in (None, [], ""):
+                item[k] = n["attrs"][k]
         if detail:
             for s in item["senders"]:
                 s["entry_kinds"] = {e["entry_kind"]: e["entry_count"] for e in
@@ -285,7 +297,7 @@ def protocols(st, pattern: str | None = None, protocol: str | None = None, side:
         out.append(item)
     reg = [{"name": p.name, "transport": p.transport, "matcher": getattr(p.matcher, "__name__", "custom"), "fanout": p.fanout,
             "source": p.source, "description": p.description} for p in REGISTRY.values()]
-    return {"pattern": pattern, "protocol": protocol, "side": side, "unmatched": unmatched,
+    return {"pattern": pattern, "protocol": protocol, "side": side, "unmatched": unmatched, "listeners": listeners,
             "summary": {k: dict(v) for k, v in sorted(summ.items())}, "endpoints": out, "selected": len(sel),
             "listing": listing, "registry": reg}
 
@@ -307,6 +319,18 @@ def render_protocols(res: dict, max_items: int = 60) -> str:
     if not eps:
         return "no protocol endpoint matches " + ", ".join(
             f"{k}={res[k]!r}" for k in ("pattern", "protocol", "side") if res.get(k)) + (" (unmatched only)" if res["unmatched"] else "")
+    if res.get("listeners"):
+        L.append("listening sockets (port, bind address / exposure, handler):")
+        for i in eps[:max_items]:
+            extra = (f"  group {i['multicast_group']}" if i.get("multicast_group") else "") + \
+                (f"  env {', '.join(i['port_envs'])}" if i.get("port_envs") else "")
+            for r in i["receivers"][:6]:
+                b = r.get("bind_address", "*" if r.get("exposure") == "all" else "?") or "*"
+                L.append(f"[{i['protocol']}] {i['name']:<8} {r.get('exposure') or '?':<9} ({b}) -> {short_id(r['handler'])} @ {r['at']}"
+                         f" [{r['confidence']}]{extra}")
+        if res["selected"] > min(len(eps), max_items):
+            L.append(f"... {res['selected'] - min(len(eps), max_items)} more")
+        return "\n".join(L)
     detail = len(eps) <= 6
     for i in eps[:max_items]:
         flags = list(i["checks"]) + ([f"external ({i['external']})"] if i["external"] else [])
@@ -315,6 +339,11 @@ def render_protocols(res: dict, max_items: int = 60) -> str:
                  + (f"  ! {'; '.join(flags)}" if flags else ""))
         if detail:
             L.append(f"    node {i['id']}" + (f" @ {i['at']}" if i.get("at") else ""))
+            if i.get("bind_addresses") or i.get("multicast_group") or i.get("port_envs"):
+                L.append("    " + "; ".join(x for x in (
+                    f"bind {', '.join(b or '*' for b in i.get('bind_addresses') or [])} ({i.get('exposure')})" if i.get("bind_addresses") else "",
+                    f"multicast group {i['multicast_group']}" if i.get("multicast_group") else "",
+                    f"port from env {', '.join(i['port_envs'])}" if i.get("port_envs") else "") if x))
             for s in i["senders"][:8]:
                 ek = ", ".join(f"{k}({v})" for k, v in sorted((s.get("entry_kinds") or {}).items()))
                 L.append(f"    sent by {short_id(s['fn'])} @ {s['at']} [{s['confidence']}]" + (f"  entries: {ek}" if ek else ""))

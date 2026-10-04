@@ -18,7 +18,7 @@
   python -m codegraph.cli bridges [PATTERN] --db ... [--protocol capacitor] [--unmatched]   (web / native bridge calls)
   python -m codegraph.cli external [PATTERN] --db ... [--protocol P] [--source S] [--tls-off]   (databases, caches, brokers, mail ... and who reaches them)
   python -m codegraph.cli tools [PATTERN] --db ... [--framework F] [--agent A] [--unmatched]   (LLM / MCP tools: handler, tables, agents, checks)
-  python -m codegraph.cli protocols [PATTERN] --db ... [--protocol P] [--side send|receive] [--unmatched]   (every protocol endpoint: senders, receivers, checks)
+  python -m codegraph.cli protocols [PATTERN] --db ... [--protocol P] [--side send|receive] [--unmatched] [--listeners]   (every protocol endpoint: senders, receivers, checks; listening sockets)
   python -m codegraph.cli platforms [summary|divergence] --db ... [--target ios]   (platform-specific code, gaps between variants)
   reaches / impact / downstream / path / routes / search take --platform TARGET: only code built for that target
 spec forms: table.column | connection:<name> (glob *) | env:<KEY*> | config:<a.b> | Class.method or Class::method (either
@@ -154,6 +154,8 @@ def main(argv=None):
     p.add_argument("--side", choices=["send", "receive"]); p.add_argument("--max-items", type=int, default=60)
     p.add_argument("--unmatched", action="store_true", help="only endpoints with a check (no_receiver, no_sender, ambiguous, "
                                                             "schema_mismatch, unguarded) or an external peer")
+    p.add_argument("--listeners", action="store_true", help="every listening TCP / UDP socket with its bind address, exposure "
+                                                            "(all interfaces / loopback / specific) and handler")
     p = sub.add_parser("external", help="external systems (databases, caches, brokers, mail, directories, file transfer, object "
                                          "stores, third-party HTTP hosts): users, entry points, address and credential sources")
     p.add_argument("pattern", nargs="?", help="external id, substring or glob (`external:postgres:*`, `redis`)")
@@ -429,7 +431,8 @@ def main(argv=None):
         return
     if a.cmd == "protocols":
         from .protocols.view import protocols, render_protocols
-        res = protocols(st, a.pattern, protocol=a.protocol, side=a.side, unmatched=a.unmatched, max_items=max(a.max_items, 200) if a.json else a.max_items)
+        res = protocols(st, a.pattern, protocol=a.protocol, side=a.side, unmatched=a.unmatched, max_items=max(a.max_items, 200) if a.json else a.max_items,
+                        listeners=a.listeners)
         print(json.dumps(res, indent=1, default=str) if a.json else render_protocols(res, max_items=a.max_items))
         return
     if a.cmd == "tests":

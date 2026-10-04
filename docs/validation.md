@@ -811,3 +811,23 @@ previous version only the multi-model steps changed:
 
 `tests/test_laravel_determinism.py` indexes the issue's fixture under two seeds that differed before and compares the
 whole graph.
+
+## Raw TCP / UDP sockets and UDP application protocols (#39)
+
+Socket and UDP-application edges on the corpora that use them (indexed at the commits shown):
+
+| Project | Endpoints (paired) | Edges | What pairs |
+|---|---|---|---|
+| mini-redis 3d93b42 | tcp 1 (1) | 1 RECEIVED_BY, 4 SENDS_TO | the `pub` / `sub` / `hello_world` examples and the CLI (clap `default_value_t = DEFAULT_PORT`) reach `server::run` through `Client::connect`'s call sites on 6379 |
+| tokio examples 5d5cd8b | tcp 3 (2), udp 1 (1) | 8 RECEIVED_BY, 3 SENDS_TO | `hello_world` with `chat` / `graceful-shutdown` on 6142, `proxy` with the 8080 servers, `udp-client` with `echo-udp` |
+| statsd f7157b8 | tcp 2, udp 1 (1) | 3 RECEIVED_BY, 1 SENDS_TO | the Python example client with the Node UDP server on 8125; the TCP server and admin listeners (8125, 8126) have no client in the repo; the PHP example reads its port from an ini file and the Java / Kotlin clients take it as a constructor parameter with no caller, so they are counted as unresolved |
+| libuv | tcp 5 (1), udp 6 (2) | 99 RECEIVED_BY, 99 SENDS_TO | the tests on `TEST_PORT` 9123 (and `TEST_PORT_2` 9124); 10 ephemeral binds are counted, not linked |
+| python-zeroconf f0c27b3 | mdns 13 (1) | 1 RECEIVED_BY, 5 SENDS_TO, 84 TEST_CALLS | `examples/async_registration.py` advertises `_http._tcp`, `async_browser.py` / `async_service_info_request.py` browse it |
+| aiocoap f867dc4 | coap 29 (3) | 12 RECEIVED_BY, 2 SENDS_TO, 35 TEST_CALLS | `server.py`'s `/time` and `/other/block` with `clientGET.py` / `clientPUT.py`; 6 doctest examples in docstrings are skipped |
+
+tauri gains one edge, the CLI's built-in dev server listening on its default port 1430 (`port.unwrap_or(1430)`).
+No edge changed on redis, httpie, flask, opentelemetry-python, the MCP python-sdk and servers, electron-fiddle,
+alacritty, ktor-samples, django, netbox, immich, outline, saleor, element-x-ios, eslint and ansible (whose `SSH_AUTH_SOCK` Unix-socket paths
+are not TCP ports). A random 20 of the new edges were checked by hand against the source: 20 correct (an earlier
+sample of 20 found a wrong `/` path for a concatenated CoAP URI, fixed before this one). `tests/test_sockets.py` covers
+each language on `tests/sockets_fixture` and the BSD / libuv C calls on `tests/sockets_c_fixture`.

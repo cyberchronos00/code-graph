@@ -698,20 +698,21 @@ def bridges(pattern: str | None = None, protocol: str | None = None, unmatched: 
 
 @tool
 def protocol_links(pattern: str | None = None, protocol: str | None = None, side: str | None = None,
-                   unmatched: bool = False) -> str:
+                   unmatched: bool = False, listeners: bool = False) -> str:
     """Every protocol endpoint in one view (#31 model): HTTP client endpoints and routes (http / ws / graphql), Pusher
     broadcast channels and subscriptions, NestJS microservice messages (nest-rpc / nest-event / nest-ws / grpc), job
     queues (bull, laravel-queue, celery), application events (laravel-event, nest-event-emitter, django-signal), web /
     native bridges and desktop IPC (capacitor, react-native, flutter, electron-ipc, tauri ...) and the generic
     endpoint:<protocol>:<name> nodes (code -SENDS_TO-> endpoint -RECEIVED_BY-> handler, MATCHES_ENDPOINT for
-    wildcard / template matches; MQTT, NATS, AMQP, Kafka, Redis pub/sub, Socket.IO). Without arguments: one line per
+    wildcard / template matches; MQTT, NATS, AMQP, Kafka, Redis pub/sub, Socket.IO, raw TCP / UDP sockets by port).
+    listeners: every listening TCP / UDP socket with bind address, exposure and handler. Without arguments: one line per
     protocol (endpoints, send / receive sides, linked, check counts). With a pattern (name, id, substring or glob) /
     protocol / side (send | receive) / unmatched: one block per endpoint with senders (and, for a few endpoints, the
     entry points reaching them), receivers, guards, matches and checks: no_receiver, no_sender, test_sender_only,
     ambiguous, schema_mismatch, unguarded, external (.cg.yaml protocols.external, third-party origins, bridge
     packages). impact / reaches / path / downstream follow SENDS_TO / RECEIVED_BY / MATCHES_ENDPOINT as usual."""
     from .protocols.view import protocols as _pr, render_protocols
-    return render_protocols(_pr(_st(), pattern, protocol=protocol, side=side, unmatched=unmatched))
+    return render_protocols(_pr(_st(), pattern, protocol=protocol, side=side, unmatched=unmatched, listeners=listeners))
 
 
 @tool

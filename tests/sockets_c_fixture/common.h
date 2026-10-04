@@ -1,0 +1,2 @@
+#define ECHO_PORT 9123
+#define BEACON_PORT 5353

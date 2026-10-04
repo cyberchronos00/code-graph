@@ -234,6 +234,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     from .process_runs import apply as apply_process_runs
     if (pr := apply_process_runs(project, builder)):
         stats["process_runs"] = pr
+    # raw TCP / UDP sockets paired by port (#39): endpoint:tcp:<port> / endpoint:udp:<port>
+    from .sockets import apply as apply_sockets
+    t_so = time.time()
+    if (so := apply_sockets(project, builder)):
+        so["seconds"] = round(time.time() - t_so, 2)
+        stats["sockets"] = so
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

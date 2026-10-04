@@ -157,6 +157,29 @@ def cordova_www_dirs(root: Path) -> list[str]:
     return out[:50]
 
 
+NODE_NET = re.compile(r"""(?:require\(\s*|from\s+)['"](?:node:)?(?:net|dgram|tls)['"]""")
+
+
+def node_socket_dirs(root: Path, limit: int = 400) -> list[str]:
+    """Top-level directories (or `.`) of the plain-JS files of a Node program that use net / dgram / tls (#39)."""
+    out, seen = [], 0
+    skip = set(SKIP_DIRS) | {"test", "tests", "examples", "docs", "build", "vendor"}   # preset skip dirs + non-program dirs
+    cands = [p for p in root.glob("*.js")] + [p for d in sorted(root.iterdir()) if d.is_dir() and d.name not in skip
+                                              and not d.name.startswith(".") for p in d.glob("*.js")]
+    for p in cands:
+        seen += 1
+        if seen > limit:
+            break
+        try:
+            if NODE_NET.search(p.read_text(errors="replace")[:20000]):
+                d = "." if p.parent == root else p.parent.name
+                if d not in out:
+                    out.append(d)
+        except OSError:
+            continue
+    return ["."] if "." in out else out
+
+
 class TypeScriptPlugin(LanguagePlugin):
     name = "typescript"
 
@@ -173,7 +196,9 @@ class TypeScriptPlugin(LanguagePlugin):
         if project.exists("package.json") and any((project.root / d).is_dir() for d in LARAVEL_ASSET_DIRS):
             return True     # Laravel / Rails-style app with a plain-JS frontend under resources/js (allowJs)
         from ..tsweb.common import has_server_framework   # plain-JS server projects (Express, Koa, ...): allowJs
-        return project.exists("package.json") and has_server_framework(project)
+        if project.exists("package.json") and has_server_framework(project):
+            return True
+        return project.exists("package.json") and bool(node_socket_dirs(project.root))   # plain Node net / dgram (#39)
 
     def prerequisite_problem(self, project: Project) -> str | None:
         if not shutil.which("node"):
@@ -201,6 +226,11 @@ class TypeScriptPlugin(LanguagePlugin):
             ctx.extractor_cfg["package_tsconfigs"] = pkg_cfgs
         for fw in frameworks:
             fw.register_hooks(ctx)
+        if not ctx.extractor_cfg.get("allow_js") and not project.exists("tsconfig.json") and not project.exists("jsconfig.json") \
+                and not pkg_cfgs and (nd := node_socket_dirs(project.root)):
+            # a plain Node program (no framework, no tsconfig) using net / dgram / tls: its JS files with allowJs (#39)
+            from ..tsweb.common import TEST_SKIP_RE, merge_extractor_cfg
+            merge_extractor_cfg(ctx.extractor_cfg, src_dirs=nd, skip_re=TEST_SKIP_RE, walk_src=True, allow_js=True)
         # the walks' directory rules (codegraph/presets: common + typescript skip_dirs, the test walk's
         # test_walk_skip_dirs, the tsconfig files that are resolution input only), adjusted by .cg.yaml skip_dirs.add /
         # keep and include; exclude globs and skip_dirs.add names also drop files the tsconfig itself lists
