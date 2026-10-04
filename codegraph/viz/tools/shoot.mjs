@@ -85,6 +85,7 @@ async function measure (page) {
       edges: c.edges().length,
       ltrPct: c.edges().length ? +(100 * ltr / c.edges().length).toFixed(1) : null,
       targetsVisible: c.nodes('.target, .entry').filter((n) => inView(n.boundingBox())).length + '/' + c.nodes('.target, .entry').length,
+      offscreen: c.nodes().not(':parent').filter((n) => { const b = n.boundingBox({ includeLabels: false }); return b.x1 < ext.x1 - 1 || b.x2 > ext.x2 + 1 || b.y1 < ext.y1 - 1 || b.y2 > ext.y2 + 1 }).length,
       fitAll: document.getElementById('fitall').hidden ? null : document.getElementById('fitall').textContent,
       status: document.getElementById('status').innerText.slice(0, 160)
     })
@@ -99,6 +100,7 @@ function check (m, s) {
   if (m.perf && m.perf.nodes && m.perf.nodes <= 300 && m.tReady > BUDGET.firstGraphMs) f.push(`first graph ${m.tReady} ms > ${BUDGET.firstGraphMs}`)
   if (m.perf && m.perf.layoutMs > BUDGET.layoutMs) f.push(`layout ${m.perf.layoutMs} ms > ${BUDGET.layoutMs}`)
   if (m.perf && m.perf.rendered > BUDGET.rendered) f.push(`rendered elements ${m.perf.rendered} > ${BUDGET.rendered}`)
+  if (m.offscreen) f.push(`${m.offscreen} nodes outside the canvas on first load (fit must include every node)`)
   if (m.logs.length) f.push(`console: ${m.logs.length} (${m.logs[0]})`)
   if (!['1', 'landing'].includes(m.ready)) f.push(`view reported ${m.ready}`)
   if (m.header.scroll > m.header.client) f.push(`header overflow ${m.header.scroll} > ${m.header.client}`)

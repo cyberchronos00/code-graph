@@ -207,7 +207,10 @@ const top = (o) => L.build(data, o).units.filter((u) => !u.lane)
 const b = L.build(data, {})
 console.log(JSON.stringify({ top: top({}).length, unbounded: top({ maxItems: 1e9 }).length, flat: top({ flat: true }).length,
   covered: nodes.every((n) => b.rep.has(n.id)), single: top({}).filter((u) => u.type === 'cluster' && u.count === 1).length,
-  target: top({}).some((u) => u.id === 'T') }))
+  target: top({}).some((u) => u.id === 'T'),
+  gapClosed: L.build(data, { fitWidth: 1600 }).gap, gapWide: L.build(data, {}).gap,
+  gapOpen: L.build(data, { fitWidth: 1600, open: new Map([[b.units.find((u) => u.type === 'cluster').id, 20]]) }).gap,
+  floor: L.MIN_GAP_CLUSTER, full: L.GAP_X }))
 """
 
 
@@ -219,3 +222,7 @@ def test_layered_total_item_budget():
     r = json.loads(out)
     assert r["unbounded"] > 40 and r["top"] <= 30, r
     assert r["covered"] and r["single"] == 0 and r["target"] and r["flat"] == 268, r
+    # with every cluster closed the nine layers narrow to fit the canvas width, so the first fit shows every column
+    # (IceCubesApp screenshots cut the leftmost one off); an open cluster's member lane needs the full gap
+    assert r["floor"] <= r["gapClosed"] < r["full"] and 8 * r["gapClosed"] + 140 <= 1600, r
+    assert r["gapWide"] == r["full"] and r["gapOpen"] == r["full"], r

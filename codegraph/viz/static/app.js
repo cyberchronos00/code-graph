@@ -316,7 +316,7 @@
       gravityRangeCompound: 1.4, numIter: incremental ? 800 : 2500, tile: true, tilingPaddingVertical: 18, tilingPaddingHorizontal: 18, padding: 30 }
   }
 
-  let incremental = false
+  let incremental = false; let anchorId = null; let pinned = null
   function render (keepView) {
     if (!data) return
     const els = elements()
@@ -337,13 +337,21 @@
       window.__cgCy = cy  // read by tools/shoot.mjs (label sizes, overlap, item counts)
     } else {
       const prev = keepView ? new Map(cy.nodes().map((n) => [n.id(), { ...n.position() }])) : null
+      // opening / folding a cluster can change the layer gap: the cluster the user clicked stays where it was on screen
+      const a = keepView && anchorId && cy.getElementById(anchorId)
+      pinned = a && a.length ? { id: anchorId, at: { ...a.renderedPosition() } } : null
       cy.elements().remove(); cy.add(els)
       if (prev && layoutKind() !== 'layered') cy.nodes().forEach((n) => { const p = prev.get(n.id()); if (p) n.position(p) })
       incremental = !!prev && layoutKind() !== 'layered'
     }
     const t0 = performance.now()
     const l = cy.layout(layoutOpts(incremental)); incremental = false
-    l.one('layoutstop', () => { window.__cgLayoutMs = performance.now() - t0; if (!keepView) initialFit(); lod(); document.body.dataset.ready = '1' })
+    l.one('layoutstop', () => {
+      window.__cgLayoutMs = performance.now() - t0
+      if (!keepView) initialFit()
+      else if (pinned) { const n = cy.getElementById(pinned.id); if (n.length) { const r = n.renderedPosition(); cy.panBy({ x: pinned.at.x - r.x, y: pinned.at.y - r.y }) } }
+      pinned = null; lod(); document.body.dataset.ready = '1'
+    })
     document.body.dataset.ready = '0'
     l.run()
     applyConf()
@@ -359,31 +367,39 @@
   function toggleConf (c) { if (hiddenConf.has(c)) hiddenConf.delete(c); else hiddenConf.add(c); applyConf() }
 
   function initialFit () {
-    // fit everything when leaf labels stay legible; otherwise the target and the layer next to it at >= 11 px, and a
-    // "fit all" button
+    // the first view always fits every node (#82: no column cut off at the canvas edge). When that leaves leaf labels
+    // under 11 px they hide (the target, entries and the hovered neighbourhood keep theirs) and a "readable zoom"
+    // button zooms to the target and the layer next to it instead
     const btn = $('fitall'); btn.hidden = true
     cy.fit(undefined, 30)
     if (cy.zoom() > MAX_FIT_ZOOM) { cy.zoom(MAX_FIT_ZOOM); cy.center() }  // a handful of nodes is not blown up to poster size
+    if (cy.zoom() >= (MIN_PX + 0.5) / LEAF_FS || cy.nodes().length <= 1) return
+    btn.textContent = 'readable zoom'; btn.title = 'zoom to the target and its neighbours at legible label size (f fits all again)'
+    btn.hidden = false
+  }
+
+  function focusCore () {
+    // the target and the layer next to it at >= 11 px; a target at the edge of the drawing (impact: right,
+    // downstream: left) stays at that edge of the canvas
     const need = (MIN_PX + 0.5) / LEAF_FS
-    if (cy.zoom() >= need || cy.nodes().length <= 1) return
     const tg = cy.nodes('.target')
     const core = tg.length ? tg.closedNeighborhood().nodes() : cy.nodes('.entry')
     if (!core.length) return
     cy.fit(core, 40)
     cy.zoom(Math.min(1.0, Math.max(need, cy.zoom()))); cy.center(core)
-    // a target at the edge of the drawing (impact: right, downstream: left) stays at that edge of the canvas
     const all = cy.nodes().boundingBox(); const bb = core.boundingBox(); const z = cy.zoom(); const W = cy.width(); const pan = cy.pan()
     const tx = tg.length ? tg.boundingBox() : bb
     if (tx.x2 >= all.x2 - 1) cy.pan({ x: W - 40 - bb.x2 * z, y: pan.y })
     else if (tx.x1 <= all.x1 + 1) cy.pan({ x: 40 - bb.x1 * z, y: pan.y })
-    btn.textContent = `fit all (${cy.nodes().not(':parent').length})`; btn.hidden = false
+    lod()
   }
 
   function lod () {
     // level of detail: leaves below 11 rendered px hide (min-zoomed-font-size); these keep a readable label
     if (!cy) return
     const z = cy.zoom()
-    const keep = cy.nodes('.target, .entry, :selected')
+    // entry-point labels stay readable while zooming out until they would grow into their neighbours (z < 0.8)
+    const keep = cy.nodes(z >= 0.8 ? '.target, .entry, :selected' : '.target, :selected')
     let k = keep
     if (hover) { const h = cy.getElementById(hover); k = k.union(h).union(h.neighborhood().nodes()) }
     const sel = cy.nodes(':selected'); if (sel.length) k = k.union(sel.neighborhood().nodes())
@@ -391,7 +407,9 @@
       cy.nodes('.n').forEach((n) => {
         if (k.has(n)) { const base = n.hasClass('target') ? 14 : LEAF_FS; n.style('font-size', Math.min(40, Math.max(base, (MIN_PX + 0.5) / z))) } else n.removeStyle('font-size')
       })
-      cy.nodes('.cluster, .module, .collapsed').forEach((n) => n.style('font-size', Math.min(60, Math.max(13, 12.5 / z))))
+      // cluster / module labels grow to stay readable while zooming out, until they would outgrow their 130 px wrap
+      // and run into the next column (z < 0.8); below that they hide like leaf labels
+      cy.nodes('.cluster, .module, .collapsed').forEach((n) => n.style(z >= 0.8 ? { 'font-size': Math.min(60, Math.max(13, 12.5 / z)), 'min-zoomed-font-size': 0 } : { 'font-size': 13, 'min-zoomed-font-size': MIN_PX }))
     })
   }
 
@@ -579,7 +597,7 @@
     if (k === 'l' || k === 'L') { if (data) toggleList(); e.preventDefault(); return }
     if (!cy || !data) return
     const centre = { x: cy.width() / 2, y: cy.height() / 2 }
-    if (k === 'f') { cy.fit(undefined, 30); $('fitall').hidden = true }
+    if (k === 'f') { initialFit(); lod() }
     else if (k === '+' || k === '=') cy.zoom({ level: Math.min(cy.maxZoom(), cy.zoom() * 1.25), renderedPosition: centre })
     else if (k === '-' || k === '_') cy.zoom({ level: Math.max(cy.minZoom(), cy.zoom() / 1.25), renderedPosition: centre })
     else if (k === '0') initialFit()
@@ -646,10 +664,10 @@
     const u = lay && lay.units.find((x) => x.id === id); if (!u) return
     if (!u.open) open.set(id, 20); else if (u.shown < u.count) open.set(id, u.shown + 20); else open.delete(id)
     lastCluster = open.has(id) ? id : null
-    saveExpand(); render(true)
+    anchorId = id; saveExpand(); render(true); anchorId = null
     const v = lay.units.find((x) => x.id === id); if (v) showCluster(v)
   }
-  function foldCluster (id) { if (open.delete(id)) { saveExpand(); render(true) } lastCluster = null }
+  function foldCluster (id) { if (open.delete(id)) { anchorId = id; saveExpand(); render(true); anchorId = null } lastCluster = null }
 
   function showCluster (u) {
     const ns = u.members.map((m) => byId[m]).filter(Boolean)
@@ -1011,8 +1029,8 @@
       render()
     }
     $('expand').onclick = () => { if (layoutKind() === 'layered') { open.clear(); flat = true } else collapsed.clear(); render() }
-    $('fit').onclick = () => { if (cy) { cy.fit(undefined, 30); $('fitall').hidden = true } }
-    $('fitall').onclick = () => { if (cy) { cy.fit(undefined, 30); $('fitall').hidden = true } }
+    $('fit').onclick = () => { if (cy) { initialFit(); lod() } }
+    $('fitall').onclick = () => { if (cy) focusCore() }
     $('layout').onchange = () => {
       if (!STATIC) setHash((h) => { if ($('layout').value === 'auto') h.delete('layout'); else h.set('layout', $('layout').value); h.delete('expand') })
       if (data) { open.clear(); flat = false; render() }

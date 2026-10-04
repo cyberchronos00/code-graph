@@ -73,6 +73,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Web view: the first fit shows every node. Before, a wide drawing was zoomed to the target and its neighbours,
+  which cut the leftmost column off (IceCubesApp `impact MastodonClient.get`). With no cluster open, the layer gaps
+  now narrow (down to 170 px) to fit the canvas. When labels would still be under 11 px they hide, and a
+  "readable zoom" button zooms to the target. An opened or folded cluster stays where it was on screen.
+  `shoot.mjs` fails when a node is outside the canvas on first load (#82).
 - Visual view: a deep impact view no longer grows past 30 top-level items. The layers share one budget, and the
   widest fold further (IceCubesApp `impact MastodonClient.get`: 44 → 28 items, `post` 32 → 29; #82 item 6 / 15).
 - `cg parity` (#107): symbols tagged with the source app's own platform (one that tags at least half of the compared

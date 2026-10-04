@@ -21,6 +21,7 @@
   // between two layers without touching their labels
   const GAP_X = 260
   const MIN_GAP_X = 160  // narrowest layer gap (leaf labels wrap at 110 px), used when nothing is clustered
+  const MIN_GAP_CLUSTER = 170  // narrowest gap next to a closed cluster (its label wraps at 130 px)
   const LANE_DX = 135
   const ROW = 64         // leaf row pitch (node + up to three label lines)
   const ROW_CLUSTER = 90  // cluster box + up to three label lines
@@ -131,11 +132,13 @@
         })
       }
     }
-    // without clusters (no lanes to make room for) a drawing that is too wide narrows its layer gaps to fit opts.fitWidth
+    // with no open cluster (no member lanes to make room for) a drawing that is too wide narrows its layer gaps to
+    // fit opts.fitWidth, so the first fit shows every column at a legible zoom where it can
     let gap = GAP_X
     const nl = new Set(units.map((u) => u.layer)).size
-    if (opts.fitWidth && nl > 1 && !units.some((u) => u.type === 'cluster')) {
-      gap = Math.max(MIN_GAP_X, Math.min(GAP_X, Math.floor((opts.fitWidth - 140) / (nl - 1))))
+    if (opts.fitWidth && nl > 1 && !units.some((u) => u.type === 'cluster' && u.open)) {
+      const floor = units.some((u) => u.type === 'cluster') ? MIN_GAP_CLUSTER : MIN_GAP_X
+      gap = Math.max(floor, Math.min(GAP_X, Math.floor((opts.fitWidth - 140) / (nl - 1))))
     }
     return { units, rep, pos: positions(units, data.edges, rep, opts.heightOf, gap), layers: lay, gap }
   }
@@ -228,7 +231,7 @@
 
   function weight (u) { return u.type === 'cluster' ? u.count : 1 }
 
-  const api = { folderKey, layers, build, clusterLayer, layerBudgets, GENERIC, GAP_X, MIN_GAP_X, LANE_DX, MAX_ITEMS }
+  const api = { folderKey, layers, build, clusterLayer, layerBudgets, GENERIC, GAP_X, MIN_GAP_X, MIN_GAP_CLUSTER, LANE_DX, MAX_ITEMS }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.CGLayered = api
 })(typeof window !== 'undefined' ? window : this)

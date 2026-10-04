@@ -29,8 +29,9 @@ stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/vi
   columns by table; HTTP calls, settings and request keys by kind), one-node modules get no box, big modules start
   folded; click a folded box to open it, double-click an open box to fold it. Edges between folded items are merged
   and labelled with the evidence-edge count.
-- Labels render at 11 px or more on screen: the first fit shows everything when that keeps leaf labels legible,
-  otherwise the target and its neighbourhood with a "fit all (N)" button; zoomed out, leaf labels hide (cluster,
+- Labels render at 11 px or more on screen. The first fit always shows every node; with no cluster open the layer
+  gaps narrow (down to 170 px) to fit the canvas width. When leaf labels would still be under 11 px a "readable zoom"
+  button zooms to the target and its neighbourhood (`f` / *fit* fits all again); zoomed out, leaf labels hide (cluster,
   module, target, entry-point and hovered / selected labels stay readable). Hover a node for its full name, kind,
   file:line and confidence.
 - Colour = node kind; ◆ entry points with their kind (`[HTTP route]`, `[artisan]`, `[UI page]` …); ★ query targets;
