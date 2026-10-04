@@ -8,6 +8,15 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-04
+
+Protocol links for RPC contracts and raw sockets: gRPC services from `.proto` files (#33), Thrift, tRPC router
+trees and JSON-RPC 2.0 methods (#33), raw TCP / UDP sockets and mDNS / OSC / CoAP / SSDP (#39), each pairing servers
+with clients across languages. Also TypeScript and low-level Python MCP servers (#102), more external-system clients
+(#103), Rust macro-generated tests and subprocess-run scripts (#106), Kotlin navigation / Ktor / Spring Security gaps
+(#99), and fixes for the C/C++ parse after file-level macros (#131), older rust-analyzer releases (#130) and
+tree-sitter-swift 0.7.4 (pinned, #133).
+
 ### Added
 
 - gRPC (#33): every `rpc` of a `service` in the project's `.proto` files becomes
@@ -1148,7 +1157,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/cyberchronos00/code-graph/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/cyberchronos00/code-graph/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/cyberchronos00/code-graph/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/cyberchronos00/code-graph/compare/v0.8.2...v0.9.0
