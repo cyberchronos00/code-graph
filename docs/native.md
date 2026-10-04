@@ -65,6 +65,7 @@ Non-library targets are qualified by target: `kv_core[test:roundtrip]::put_then_
 | routes (bonus) | axum `.route("/p", get(h).post(h2))` and actix/rocket attribute routes → `route:<METHOD> <path>` (entry `http_route`) → ROUTES_TO handler |
 | attribute references | `#[serde(default = "f", with = "m", ...)]`, clap `value_parser = f` → REFERENCES_FN |
 | macro-wrapped items | items inside item-level macro bodies (`cfg_rt! { pub mod rt; ... }`) are indexed when the body parses as Rust |
+| macro-generated tests | a project `macro_rules!` whose rule expands to `#[test] fn $name` (ripgrep's `rgtest!`, table-driven `matches!(name, ..)` tests) gives each invocation a `test` function node named by its first `ident` argument. Calls in the invocation's tokens (the closure) are its calls, and so are the macro body's own path calls (`crate::util::setup(..)`, `via: "test macro body"`), so `cg tests` reaches code under the generated tests |
 
 ## C and C++
 

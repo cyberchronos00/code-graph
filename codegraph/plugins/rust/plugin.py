@@ -14,6 +14,8 @@ set CODEGRAPH_RUST_BUILD_SCRIPTS=1 to enable both (more macro-generated code get
 """
 from __future__ import annotations
 
+import re
+
 import hashlib
 import json
 import os
@@ -113,6 +115,7 @@ class RustPlugin(LanguagePlugin):
         self.files: dict[str, RFile] = {}
         self.file_meta: dict[str, dict] = {}
         self._module_trees(pkgs, stats)
+        self._macro_tests(stats)
         stats["files"] = len(self.files)
         orphans = [f for f in _rust_files(root, self.rules) if f.endswith(".rs") and f not in self.files
                    and "/target/" not in f and not f.startswith("target/")]
@@ -140,6 +143,7 @@ class RustPlugin(LanguagePlugin):
             self._heuristic_refs(stats)
         else:
             self._cfg_inactive_refs(stats)
+        self._macro_body_refs(stats)
         self._impls(stats, mode)
         self._facts(stats, mode)
         self._entries(stats)
@@ -150,6 +154,31 @@ class RustPlugin(LanguagePlugin):
         if scip_info:
             out["scip"] = scip_info
         return out
+
+    def _macro_tests(self, stats):
+        """Project `macro_rules!` that expand to `#[test] fn $name()` (ripgrep's `rgtest!`, #106): files invoking one
+        are extracted again with the macros known, so each invocation becomes a test function."""
+        tm = {}
+        for rf in self.files.values():
+            tm.update(rf.test_macros)
+        if not tm:
+            return
+        pat = re.compile(rb"\b(" + b"|".join(re.escape(k.encode()) for k in tm) + rb")\s*!")
+        for rel, rf in list(self.files.items()):
+            args = self.file_meta.get(rel, {}).get("args")
+            if args is None:
+                continue
+            try:
+                src = (self.root / rel).read_bytes()
+            except OSError:
+                continue
+            if not pat.search(src):
+                continue
+            nrf = extract(rel, src, *args, test_macros=tm)
+            if nrf.macro_tests:
+                self.files[rel] = nrf
+                stats["macro_tests"] += nrf.macro_tests
+        stats["test_macros"] = len(tm)
 
     # ------------------------------------------------------------------ module trees
     def _module_trees(self, pkgs, stats):
@@ -172,9 +201,10 @@ class RustPlugin(LanguagePlugin):
                         src = (self.root / rel).read_bytes()
                     except OSError:
                         continue
-                    rf = extract(rel, src, tgt.crate, module, cfgs, in_test or tgt.kind in ("test", "bench"), pub_chain)
+                    args = (tgt.crate, module, cfgs, in_test or tgt.kind in ("test", "bench"), pub_chain)
+                    rf = extract(rel, src, *args)
                     self.files[rel] = rf
-                    self.file_meta[rel] = {"pkg": pkg, "target": tgt, "is_root": is_root, "cfgs": cfgs}
+                    self.file_meta[rel] = {"pkg": pkg, "target": tgt, "is_root": is_root, "cfgs": cfgs, "args": args}
                     p = Path(rel)
                     mod_rs = is_root or p.name in ("mod.rs", "lib.rs", "main.rs")
                     base = p.parent if mod_rs else p.parent / p.stem
@@ -673,7 +703,7 @@ class RustPlugin(LanguagePlugin):
             return [c for c in cands if c.parent in traits][:1], HEURISTIC
         return [], HEURISTIC
 
-    def _call_edges(self, rf: RFile, owner: RItem, form, path, name, line, col, stats, **attrs) -> bool:
+    def _call_edges(self, rf: RFile, owner: RItem, form, path, name, line, col, stats, after=None, **attrs) -> bool:
         if form == "macro":
             m = [c for c in self.by_name.get(name, []) if c.kind == "macro"]
             if len(m) == 1:
@@ -687,7 +717,7 @@ class RustPlugin(LanguagePlugin):
             return False
         line_txt = rf.lines[line - 1] if line - 1 < len(rf.lines) else ""
         for t in targets:
-            self._ref_edge(self.nid(owner), self.nid(t), rf.path, line, conf, line_txt[col + len(name):].lstrip() or "(", stats, **attrs)
+            self._ref_edge(self.nid(owner), self.nid(t), rf.path, line, conf, after or line_txt[col + len(name):].lstrip() or "(", stats, **attrs)
         return True
 
     def _cfg_inactive_refs(self, stats):
@@ -724,6 +754,15 @@ class RustPlugin(LanguagePlugin):
                     mark(b, rf.path, it.start, it.end, cfg_cond(pred), line=line)
             for start, end, pred, aline, _owner in rf.cfg_regions:
                 mark(b, rf.path, start, end, cfg_cond(pred), line=aline, nodes=False)
+
+    def _macro_body_refs(self, stats):
+        """Calls the expansion of a test-generating macro makes (`crate::util::setup(..)` in `rgtest!`, #106): neither
+        SCIP nor the syntax layer sees them at the invocation, so they are resolved from the macro body's paths."""
+        for rf in self.files.values():
+            for owner_key, form, path, name, line, col in rf.macro_calls:
+                owner = self.by_key.get(owner_key)
+                if owner is not None and self._call_edges(rf, owner, form, path, name, line, col, stats, after="(", via="test macro body"):
+                    stats["macro_body_calls"] += 1
 
     def _heuristic_refs(self, stats):
         for rf in self.files.values():
