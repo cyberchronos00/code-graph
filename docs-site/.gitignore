@@ -1,0 +1,13 @@
+.output
+.data
+.nuxt
+.nitro
+.cache
+dist
+node_modules
+.wrangler
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store

@@ -1,0 +1,15 @@
+# Static-capable Cloudflare Worker for *.workers.dev.
+# Nitro preset `cloudflare_module` writes the worker and prerendered assets.
+# `pnpm run build` refreshes `.output`; this file is what `wrangler deploy` reads.
+name = "code-graph-docs"
+main = ".output/server/index.mjs"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat", "no_nodejs_compat_v2"]
+workers_dev = true
+
+[assets]
+directory = ".output/public"
+binding = "ASSETS"
+
+[observability]
+enabled = false

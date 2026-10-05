@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Docs site (`docs-site/`): Nuxt 4, Nuxt UI and Nuxt Content read the existing `docs/` markdown
+  (lime / violet / zinc, light and dark). Build with `pnpm install && pnpm run build` in
+  `docs-site/`; Cloudflare Workers deploy steps are in `docs-site/README.md`.
 - Cloud and SaaS SDKs (#42, part 2): `boto3`, `@aws-sdk/client-*`, aws-sdk-php, GCS, Azure Blob,
   Stripe, and OpenAI / Anthropic clients become `external:s3:<bucket-or-env>`,
   `external:gcs:…`, `external:azure-blob:…`, `external:aws:<service>[:resource]`,

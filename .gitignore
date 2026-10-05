@@ -22,3 +22,11 @@ build/
 *.egg-info/
 dist/
 .install.lock
+docs-site/node_modules/
+docs-site/.nuxt/
+docs-site/dist/
+docs-site/.output/
+docs-site/.data/
+docs-site/.nitro/
+docs-site/.cache/
+docs-site/.wrangler/
