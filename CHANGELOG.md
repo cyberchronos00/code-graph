@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Laravel Eloquent / migration tables, PHP PDO / Doctrine and Spring datasources (#41): tables attach to the
+  connection's external (`$connection` or default); `new PDO` / `DriverManager::getConnection` and
+  `spring.datasource.url` (skipping embedded H2) become external systems with credential locations.
 - TypeORM `DataSource`, Drizzle config and Kysely tables as external systems (#41): `new DataSource({type,url})`
   and `drizzle.config.ts` (`dialect` + `dbCredentials.url`) name the system; `@Entity` / `pgTable` / Kysely
   `selectFrom` tables get `attrs.system` and CONNECTS_TO it. When a project has a single SQL external (Immich

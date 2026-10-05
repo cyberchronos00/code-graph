@@ -665,4 +665,7 @@ class PhpPlugin(LanguagePlugin):
         stats.update(dict(prog.stats))
         if gate_stats:
             stats["gates"] = gate_stats
+        from .external import contribute as php_ext
+        if (pe := php_ext(project, builder)):
+            stats["php_external"] = pe
         return stats

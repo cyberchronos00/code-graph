@@ -481,3 +481,38 @@ def test_orm_impact_cli(orm_db):
     assert "listOrders" in r.stdout or "listAssets" in r.stdout
     r = cli("external", "--db", str(orm_db))
     assert "tables" in r.stdout and "postgres" in r.stdout
+
+
+# ---- #41 step 3: Laravel tables via connection, PHP PDO, Spring datasource
+def test_laravel_tables_via_connection(dbs):
+    st = GraphStore(dbs["shop-api"])
+    sysof = {r["id"]: json.loads(r["attrs"] or "{}") for r in st.q("SELECT id, attrs FROM nodes WHERE kind='table'")}
+    assert sysof["table:orders"]["system"] == "external:postgres:db:5432"
+    assert sysof["table:reports"]["system"] == "external:mysql:reports.internal.example:3306"
+    ct = edges(st, "CONNECTS_TO")
+    assert ("table:orders", "external:postgres:db:5432") in ct
+    assert ("table:reports", "external:mysql:reports.internal.example:3306") in ct
+    r = cli("impact", "external:postgres:db:5432", "--db", str(dbs["shop-api"]))
+    assert "Order" in r.stdout or "orders" in r.stdout
+
+
+def test_php_pdo_clients(tmp_path):
+    d = tmp_path / "pdo.db"
+    index_project(FX / "shop-php-pdo", d, "pdo")
+    st = GraphStore(d)
+    e = ext(st)
+    assert "external:postgres:pg.internal:5432" in e
+    assert e["external:mysql:reports.internal:3306"]["address_source"] == "literal"
+    assert ("function:connect", "external:postgres:pg.internal:5432") in edges(st, "CONNECTS_TO")
+    assert b"pd0-fixture-pw" not in d.read_bytes()
+
+
+def test_spring_datasource(tmp_path):
+    d = tmp_path / "spring.db"
+    index_project(FX / "shop-spring", d, "spring")
+    st = GraphStore(d)
+    e = ext(st)
+    a = e["external:mysql:db.internal:3306"]
+    assert a["library"] == "spring" and a["address_source"] == "literal"
+    assert a.get("credential_source") == "literal"
+    assert b"spr1ng-fixture-pw" not in d.read_bytes()

@@ -1289,3 +1289,14 @@ the `new DataSource({ type: process.env.DATABASE_TYPE, url: process.env.DATABASE
 `src/database/data-source.ts` (`via: typeorm datasource default`); Mongoose `@Schema` collections stay
 out. koel (Laravel tables without an ORM tag) and outline / create-t3-turbo / solidtime: no node or
 edge changes.
+
+## Laravel tables, PHP PDO and Spring datasources (#41 step 3)
+
+koel: 35 migration / Eloquent tables CONNECTS_TO `external:mysql:env:DB_HOST` through
+`connection:mysql` (`via: laravel connection`); inferred aliases (`information_schema.*`, `*_new`) stay
+unattached. `impact` on the system reaches 396 callers / 127 entry points. pixelfed: 135 tables the same
+way. spring-petclinic-kotlin: `application-mysql.properties` `jdbc:mysql://localhost/petclinic` becomes
+`external:mysql:localhost:3306` (literal password location recorded, value not stored); 4 Spring Data
+tables (owners, pets, vets, visits) attach; the default H2 profile is skipped. outline and
+nestjs-boilerplate: no node or edge changes. shop-api fixture: `table:orders` -> default pgsql,
+`table:reports` -> the model's `$connection = reporting`.

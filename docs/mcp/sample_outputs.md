@@ -44,7 +44,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 ```
 project=bookstore-api+bookstore-web root=None indexed_at=<indexed_at> index_seconds=None
 nodes: method×32, column×29, class×19, config×13, property×10, route×9, request_key×7, env×6, external_class×6, function×6, http×6, module×5, table×5, composable×4, resolution×4, script×4, setting×3, connection×2, external×2, i18n×2, page×2, admin×1, command×1, component×1, field×1, layout×1, store×1, type×1
-edges: CONTAINS×84, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, READS_PROP×7, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, CONNECTS_TO×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
+edges: CONTAINS×84, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, READS_PROP×7, CONNECTS_TO×7, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
 coverage bookstore-api: php 22 exact
 coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
 ```
@@ -169,7 +169,7 @@ route (3): GET /v1/{store}/admin/inventory [gated]; POST /v1/orders; POST /v1/st
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
 
-## `reaches {'targets': ['env:WAREHOUSE_DB_*'], 'group_by': 'entry_kind'}`  (1706 chars)
+## `reaches {'targets': ['env:WAREHOUSE_DB_*'], 'group_by': 'entry_kind'}`  (1696 chars)
 
 ```
 targets: env:WAREHOUSE_DB_*→2 | gate=new_inventory | conf>=heuristic
@@ -184,7 +184,7 @@ dependents: 7 code (no-entry 1, operator 1, runtime 4, gated 1); entry points 4 
 
 ## OPERATOR (1)
 [cmd]
-  Console\Commands\SyncWarehouseCommand::handle  cmd×1 d3  USES_CONNECTION@SyncWarehouseCommand.php:16~r → CONNECTS_TO@database.php:11~h → CONFIGURED_BY@None:None~h → env:WAREHOUSE_DB_HOST
+  Console\Commands\SyncWarehouseCommand::handle  cmd×1 d3  READS_TABLE@SyncWarehouseCommand.php:16~r → CONNECTS_TO@None:None~h → CONFIGURED_BY@None:None~h → env:WAREHOUSE_DB_HOST
 
 ## GATED (1)
 [route]

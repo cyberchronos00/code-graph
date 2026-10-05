@@ -26,6 +26,8 @@ without extra nodes.
 """
 from __future__ import annotations
 
+from . import presets
+
 import json
 import re
 from pathlib import Path
@@ -218,10 +220,77 @@ def dep_sql_protocol(root: Path, compose: dict | None = None) -> str | None:
 
 
 # ------------------------------------------------------------------ index-time pass
+SPRING_SKIP = {"h2", "hsqldb", "derby", "sqlite"}
+_SKIP = presets.skip_dirs("common")
+
+
+def read_spring_datasources(root: Path) -> list:
+    """`spring.datasource.url` in application*.properties / *.yml (#41 step 3). Embedded H2/HSQLDB/Derby/SQLite skipped."""
+    out, files = [], []
+    for pat in ("**/application*.properties", "**/application*.yml", "**/application*.yaml"):
+        files += [p for p in root.glob(pat) if _SKIP.isdisjoint(p.parts)]
+    for f in list(dict.fromkeys(files))[:20]:
+        try:
+            txt = f.read_text()
+        except Exception:
+            continue
+        rel = str(f.relative_to(root))
+        props = {}
+        if f.suffix == ".properties":
+            for m in re.finditer(r"^(spring\.datasource\.\S+?)\s*=\s*(.+)$", txt, re.M):
+                props[m.group(1).strip()] = m.group(2).strip()
+        else:
+            for m in re.finditer(r"^spring\.datasource\.(\S+?)\s*:\s*(.+)$", txt, re.M):
+                props[f"spring.datasource.{m.group(1)}"] = m.group(2).strip().strip("\"'")
+            block = re.search(r"(?m)^spring:\s*$\n((?:[ \t]+.*\n)*)", txt)
+            if block:
+                ds = re.search(r"(?m)^[ \t]+datasource:\s*$\n((?:[ \t]+.*\n)*)", block.group(1))
+                if ds:
+                    for m in re.finditer(r"(?m)^[ \t]+(url|username|password|driver-class-name)\s*:\s*(.+)$", ds.group(1)):
+                        props[f"spring.datasource.{m.group(1)}"] = m.group(2).strip().strip("\"'")
+        url = props.get("spring.datasource.url")
+        if not url:
+            continue
+        em = re.fullmatch(r"\$\{(\w+)(?::([^}]*))?\}", url)
+        line = next((i for i, L in enumerate(txt.splitlines(), 1)
+                     if "datasource.url" in L or re.match(r"\s+url\s*:", L)), 1)
+        fact = {"datasource": "spring", "protocol": None, "file": rel, "line": line,
+                "var": "spring.datasource", "module": rel, "library": "spring", "tables": []}
+        if em:
+            fact["url"] = ("env", em.group(1), em.group(2))
+            d = parse_dsn(em.group(2) or "") if em.group(2) else None
+            fact["protocol"] = (d["protocol"] if d else None) or "sql"
+        else:
+            d = parse_dsn(url)
+            if not d:
+                continue
+            if d["protocol"] in SPRING_SKIP:
+                continue
+            fact["url"] = ("lit", url)
+            fact["protocol"] = d["protocol"]
+        if fact["protocol"] in SPRING_SKIP or fact["protocol"] is None:
+            continue
+        pw = props.get("spring.datasource.password")
+        if pw and not pw.startswith("${"):
+            fact["password"] = ("lit", f"{rel}:{line}")
+        elif pw and (pm := re.fullmatch(r"\$\{(\w+)(?::([^}]*))?\}", pw)):
+            fact["password"] = ("env", pm.group(1), None)
+        out.append(fact)
+    return out
+
 def attach(builder, root: Path) -> dict:
     root = Path(root)
     envs = {n.id[len("env:"):]: n for n in builder.nodes.values() if n.kind == "env"}
     conns = [n for n in builder.nodes.values() if n.kind == "connection"]
+    # Spring datasources before the empty-check so a repo with only application*.properties still indexes (#41)
+    if (spring := read_spring_datasources(root)):
+        jpa_orm = sorted({n.name for n in builder.nodes.values()
+                          if n.kind == "table" and (
+                              (n.attrs or {}).get("orm") in ("Entity", "Table")
+                              or (n.attrs or {}).get("via") in ("spring-data", "exposed"))})
+        for f in spring:
+            f["tables"] = jpa_orm
+        builder.external_facts = getattr(builder, "external_facts", []) + spring
     facts = getattr(builder, "external_facts", None) or []
     # model calls made from test code are fixtures, not systems the application talks to (as for third-party HTTP)
     llm = [n for n in builder.nodes.values() if (n.attrs or {}).get("llm_calls") and not n.attrs.get("test")]
@@ -245,7 +314,7 @@ def attach(builder, root: Path) -> dict:
         if url_key:
             d = parse_dsn(val(url_key) or "")
             if d:
-                proto = proto or d["protocol"]
+                proto = d["protocol"] if (not proto or proto == "sql") else proto
                 a.update({k: d[k] for k in ("scheme", "resource", "user", "tls") if d.get(k) is not None})
                 a["credential_in_url"] = d["has_password"] or None
                 host, port = d["host"], d["port"]
@@ -523,6 +592,32 @@ def attach(builder, root: Path) -> dict:
             builder.add_edge(e.src, nid, "CONNECTS_TO", e.file, e.line, "heuristic" if conf == "heuristic" else "resolved",
                              op="connect", via=f"env {akey}")
             st["connects"] += 1
+
+    # ---- Laravel Eloquent / migration tables -> the connection's external (#41 step 3)
+    conn_ext = {e.src: e.dst for e in builder.edges.values()
+                if e.kind == "CONNECTS_TO" and e.src.startswith("connection:") and e.dst.startswith("external:")}
+    default_ext = conn_ext.get(f"connection:{default}") if default else None
+    maps = [(e.src, e.dst) for e in builder.edges.values() if e.kind == "MAPS_TO_TABLE"]
+    uses = {e.src: e.dst for e in builder.edges.values()
+            if e.kind == "USES_CONNECTION" and e.src.startswith("class:") and e.dst.startswith("connection:")}
+    model_ext = {tid: conn_ext[cid] for cls, tid in maps
+                 if (cid := uses.get(cls)) and cid in conn_ext}
+    php_tables = {tid for cls, tid in maps
+                  if (src := builder.nodes.get(cls)) and (src.lang == "php" or (src.file or "").endswith(".php"))}
+    for n in list(builder.nodes.values()):
+        if n.kind != "table" or (n.attrs or {}).get("system"):
+            continue
+        if n.id not in model_ext and n.id not in php_tables and not (n.module or "").startswith("database/migrations"):
+            continue
+        nid = model_ext.get(n.id) or default_ext
+        if not nid:
+            continue
+        n.attrs.setdefault("system", nid)
+        n.attrs.setdefault("orm", (n.attrs or {}).get("orm") or "eloquent")
+        builder.add_edge(n.id, nid, "CONNECTS_TO", n.file, n.line,
+                         (builder.nodes[nid].attrs or {}).get("confidence") or "resolved",
+                         op="table", via="laravel connection")
+        st["tables"] = st.get("tables", 0) + 1
 
     # ---- ORM tables without a datasource block: attach to the sole SQL system of the project (#41 step 2)
     # Immich (Kysely + DB_URL), Nest TypeORM (@Entity + DATABASE_URL) when no DataSource fact named them.
