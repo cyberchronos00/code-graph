@@ -359,6 +359,19 @@ protocol: `new Worker(path.join(__dirname, 'w.js'))` (also through `pathToFileUR
 Messages into a running isolate (the entry sends its own `SendPort` back and the parent sends on it) are not
 followed, since the port travels as a message. Isolates a test starts on a test function are skipped.
 
+## XPC and Darwin notifications (#38 part 3)
+
+Swift, codegraph/apple_ipc.py.
+
+| protocol | endpoint | senders | receivers |
+|---|---|---|---|
+| `xpc` | `<service>` | `NSXPCConnection(machServiceName: "x", ..)` / `NSXPCConnection(serviceName: "x")` (role `connect`) | `NSXPCListener(machServiceName: "x")`: the listener class's `listener(_:shouldAcceptNewConnection:)`, else the function creating it |
+| `xpc` | `<Protocol>.<method>` | a call of the method on a proxy, in a file naming the protocol and a `remoteObjectProxy..`; `resolved` when the receiver is cast to / returns the protocol | the method of a class adopting an in-repo `@objc protocol` used with `NSXPCInterface(with: P.self)`, in a file that sets `exportedInterface` |
+| `darwin-notification` | `<name>` | `CFNotificationCenterPostNotification(center, name, ..)` | `CFNotificationCenterAddObserver(center, observer, callback, name, ..)`: the function registering it (fan-out) |
+
+Names come from literals (`"x" as CFString`, `CFNotificationName("x" as CFString)`) or string constants. XPC services
+named in an `Info.plist` (`NSXPCListener.service()`) and protocols from dependencies are not modeled.
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function

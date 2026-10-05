@@ -306,6 +306,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (aist := apply_android_ipc(project, builder)):
         aist["seconds"] = round(time.time() - t_ai, 2)
         stats["android_ipc"] = aist
+    # XPC services and Darwin notifications (#38 part 3)
+    from .apple_ipc import apply as apply_apple_ipc
+    if (apst := apply_apple_ipc(project, builder)):
+        stats["apple_ipc"] = apst
     # Dart isolates (#38 part 3)
     from .dart_isolates import apply as apply_isolates
     if (isost := apply_isolates(project, builder)):

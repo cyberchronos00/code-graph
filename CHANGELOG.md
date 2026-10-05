@@ -10,6 +10,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- XPC and Darwin notifications (#38, part 3) in Swift: `NSXPCConnection(machServiceName:)` to the
+  `NSXPCListener` delegate (`xpc:<service>`), proxy calls of an in-repo `@objc` XPC protocol to the exported
+  object's methods (`xpc:<Protocol>.<method>`), and `CFNotificationCenterPostNotification` to
+  `CFNotificationCenterAddObserver` (`darwin-notification:<name>`).
 - Dart isolates (#38, part 3) as `isolate:<file>#<entry>` endpoints: `Isolate.spawn` / `run` / `spawnUri` and
   Flutter `compute` to the entry function, and the entry's `SendPort.send` / `Isolate.exit` back to the spawner's
   `ReceivePort` listener (`<entry>:out`).

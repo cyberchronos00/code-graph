@@ -1254,3 +1254,12 @@ writes, a zod schema, an array result of `.map(cb)`, `s.url` on a server, `vi.ho
 `Mocha.prototype` write, and callbacks' calls moved to their module. One added edge is in a minified bundle
 (`socket.io.min.js`) and could not be checked. `tests/test_js_refs.py` covers `tests/jsref_fixture`: a factory
 callback, a wrapper, expando assignments, `return l` and test-file reads of a server.
+
+## XPC and Darwin notifications (#38 part 3)
+
+exelban/stats (shallow clone): 1 service (`eu.exelban.Stats.SMC.Helper`, `SMCHelper.helperConnection` ->
+`Helper.listener`), `HelperProtocol` with 6 methods all received by the privileged `Helper`, and 7 proxy calls in
+`Kit/helpers.swift`; 15 new edges, all hand-checked. Three `self.setFanMode` / `self.uninstall` calls on
+`SMCHelper`'s own wrappers were false positives before calls on `self` / `super` were skipped. No corpus here posts
+Darwin notifications; that path is covered by tests/xpc_fixture only. Swift regression set (swift-template,
+Alamofire, Kingfisher, SwiftUIX, isowords, IceCubesApp, bitwarden-ios, element-x-ios): no node or edge changes.
