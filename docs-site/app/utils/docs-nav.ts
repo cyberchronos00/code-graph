@@ -8,7 +8,7 @@ export interface DocGroup {
   items: DocLink[]
 }
 
-/** Sidebar order. Pages themselves stay in the repo `docs/` tree. */
+/** Sidebar order and the short labels. Page H1s stay in `docs/`. */
 export const docGroups: DocGroup[] = [
   {
     title: 'Start',
@@ -31,7 +31,7 @@ export const docGroups: DocGroup[] = [
       { slug: 'value-facts', title: 'Value facts' },
       { slug: 'plans', title: 'Plans' },
       { slug: 'viz', title: 'Visual view' },
-      { slug: 'generated', title: 'Generated files' }
+      { slug: 'generated', title: 'Generated' }
     ]
   },
   {
@@ -41,8 +41,8 @@ export const docGroups: DocGroup[] = [
       { slug: 'php', title: 'PHP' },
       { slug: 'kotlin', title: 'Kotlin' },
       { slug: 'swift', title: 'Swift' },
-      { slug: 'native', title: 'Rust, C and C++' },
-      { slug: 'ts-frameworks', title: 'TypeScript frameworks' }
+      { slug: 'native', title: 'Rust, C, C++' },
+      { slug: 'ts-frameworks', title: 'TS frameworks' }
     ]
   },
   {
@@ -51,15 +51,15 @@ export const docGroups: DocGroup[] = [
       { slug: 'platforms', title: 'Platforms' },
       { slug: 'bridges', title: 'Bridges' },
       { slug: 'protocols', title: 'Protocols' },
-      { slug: 'external', title: 'External systems' },
+      { slug: 'external', title: 'External' },
       { slug: 'ai-tools', title: 'AI tools' },
-      { slug: 'channels-and-tests', title: 'Channels and tests' }
+      { slug: 'channels-and-tests', title: 'Channels, tests' }
     ]
   },
   {
     title: 'Reference',
     items: [
-      { slug: 'mcp/sample_outputs', title: 'MCP sample outputs' }
+      { slug: 'mcp/sample_outputs', title: 'MCP samples' }
     ]
   }
 ]

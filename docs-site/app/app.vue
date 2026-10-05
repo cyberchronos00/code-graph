@@ -40,7 +40,7 @@ const navigation = computed<ContentNavigationItem[]>(() => {
       const path = `/docs/${item.slug}`
       const found = byPath.get(path)
       return {
-        title: found?.title || item.title,
+        title: item.title,
         path,
         stem: found?.stem
       }

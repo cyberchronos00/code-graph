@@ -15,13 +15,6 @@ const clips = [
     poster: '/media/cg-terminal-demo.gif',
     to: '/docs/cli',
     link: 'CLI docs'
-  },
-  {
-    title: 'Setup',
-    caption: 'Install cg and connect Cursor to the local MCP server.',
-    src: '/media/cg-setup-demo.mp4',
-    to: '/docs/install',
-    link: 'Install docs'
   }
 ]
 </script>
@@ -34,7 +27,7 @@ const clips = [
     <h2 class="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
       Watch the graph answer
     </h2>
-    <div class="mt-8 grid gap-4 lg:grid-cols-3">
+    <div class="mt-8 grid gap-4 lg:grid-cols-2">
       <article
         v-for="clip in clips"
         :key="clip.src"

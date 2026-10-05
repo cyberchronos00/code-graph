@@ -82,12 +82,13 @@ const stacks = [
             v-for="icon in stack.icons"
             :key="icon.name"
             class="inline-flex size-9 items-center justify-center rounded-lg bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100"
+            :aria-label="icon.label"
           >
             <UIcon
               :name="icon.name"
               class="size-5"
+              aria-hidden="true"
             />
-            <span class="sr-only">{{ icon.label }}</span>
           </span>
         </div>
         <h3 class="mt-3 font-semibold text-zinc-900 dark:text-zinc-50">

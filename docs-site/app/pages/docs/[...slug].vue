@@ -2,6 +2,7 @@
 import type { ContentNavigationItem } from '@nuxt/content'
 import { findPageHeadline } from '@nuxt/content/utils'
 import { withoutTrailingSlash } from 'ufo'
+import { stripDocChrome } from '~/utils/doc-page'
 
 definePageMeta({
   layout: 'docs'
@@ -19,6 +20,8 @@ const { data: page } = await useAsyncData(routePath.value, () =>
 if (!page.value) {
   throw createError({ statusCode: 404, statusMessage: 'Page not found', fatal: true })
 }
+
+stripDocChrome(page.value)
 
 const { data: surround } = await useAsyncData(`${routePath.value}-surround`, () => {
   return queryCollectionItemSurroundings('docs', routePath.value, {

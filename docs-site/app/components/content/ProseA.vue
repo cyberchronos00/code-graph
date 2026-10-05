@@ -21,11 +21,15 @@ const poster = computed(() =>
 </script>
 
 <template>
-  <DocVideo
-    v-if="isVideo"
-    :src="props.href"
-    :poster="poster"
-  />
+  <template v-if="isVideo">
+    <span class="font-medium">
+      <slot />
+    </span>
+    <DocVideo
+      :src="props.href"
+      :poster="poster"
+    />
+  </template>
   <ULink
     v-else
     :to="props.href"
