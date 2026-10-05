@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Redis key prefixes and Elasticsearch index names (#41): literal / f-string / template prefixes
+  (`cache:user:{id}`) and Django `KEY_PREFIX` become `attrs.key_prefixes` on redis externals; ES `index=`
+  literals and index-prefix env defaults become `attrs.indices` (shown by `cg external`).
 - Laravel Eloquent / migration tables, PHP PDO / Doctrine and Spring datasources (#41): tables attach to the
   connection's external (`$connection` or default); `new PDO` / `DriverManager::getConnection` and
   `spring.datasource.url` (skipping embedded H2) become external systems with credential locations.

@@ -650,6 +650,8 @@ def attach(builder, root: Path) -> dict:
                     st["tables"] = st.get("tables", 0) + 1
                     st["sole_attach"] = st.get("sole_attach", 0) + 1
 
+    attach_redis_es_resources(builder, root, st)
+
     return {k: v for k, v in st.items() if v} if st["systems"] else {}
 
 
@@ -746,6 +748,12 @@ def render_external(res: dict, max_items: int = 60) -> str:
             bits.append("tls" if a["tls"] else "plaintext")
         if a.get("resource"):
             bits.append(f"resource {a['resource']}")
+        if a.get("key_prefixes"):
+            bits.append("key prefixes " + ", ".join(a["key_prefixes"][:6])
+                        + (" ..." if len(a["key_prefixes"]) > 6 else ""))
+        if a.get("indices"):
+            bits.append("indices " + ", ".join(a["indices"][:6])
+                        + (" ..." if len(a["indices"]) > 6 else ""))
         L.append(f"{s['id']}  [{a.get('confidence') or 'exact'}]")
         L.append("    " + "; ".join(bits))
         if s["entry_kinds"]:
@@ -763,3 +771,221 @@ def render_external(res: dict, max_items: int = 60) -> str:
     if res["selected"] > max_items:
         L.append(f"... {res['selected'] - max_items} more")
     return "\n".join(L)
+
+
+# ------------------------------------------------------------------ Redis key prefixes / Elasticsearch indices (#41 step 4)
+_REDIS_CALL = re.compile(
+    r"""(?:redis|cache|client|r|conn|store)\s*\.\s*(?:async_)?(?:get|set|setex|setnx|add|delete|del|exists|expire|hget|hset|hdel|hgetall|incr|decr|lpush|rpush|sadd|zadd|keys|mget|mset|getdel|unlink|get_or_set|set_many|delete_many|has_key|touch|fetch|getex)\s*\(\s*""",
+    re.I,
+)
+_ES_INDEX_KW = re.compile(
+    r"""\.(?:index|search|delete_by_query|update_by_query|indices\.create|indices\.delete|indices\.exists)\s*\(\s*""",
+    re.I,
+)
+_FSTR_PREFIX = re.compile(r"""^[fF]?["']([^"'{}$]*:)(?:\{|\$\{)""")  # f"cache:user:{id}" / f'a:{x}'
+_TPL_PREFIX = re.compile(r"""^`([^`${]*:)(?:\$\{)""")                 # `website:${id}`
+_LIT_KEY = re.compile(r"""^["']([\w.:\-]+/?)["']""")                  # "cache:user:1" or 'posts'
+# Word-boundary so API_KEY_PREFIX / DISPLAY_KEY_PREFIX do not match KEY_PREFIX.
+_KEY_PREFIX_ASSIGN = re.compile(
+    r"""["']?\b(?:KEY_PREFIX|key_prefix|keyPrefix|INDEX_PREFIX|index_prefix|indexPrefix)\b["']?\s*[=:]\s*["']([^"']+)["']""",
+)
+_ENV_DEFAULT_PREFIX = re.compile(
+    r"""(?:getenv|env|os\.environ\.get)\s*\(\s*["'](\w*(?:INDEX_PREFIX|KEY_PREFIX|PREFIX)\w*)["']\s*,\s*["']([^"']+)["']""",
+    re.I,
+)
+# Helper-returned / assigned key templates (saleor: `return f"login:fail:ip:{ip}"`).
+_KEY_EXPR_BIND = re.compile(
+    r"""(?:return\s+|=\s*)([fF]["'][^"']*["']|`[^`]*`)""",
+)
+
+
+def _prefix_of(expr: str) -> str | None:
+    """Static prefix of a redis/cache key expression (`cache:user:{id}` -> `cache:user:`)."""
+    e = (expr or "").strip()
+    for rx in (_FSTR_PREFIX, _TPL_PREFIX):
+        m = rx.match(e)
+        if m and len(m.group(1)) >= 2:
+            return m.group(1)
+    m = _LIT_KEY.match(e)
+    if m and ":" in m.group(1):
+        # literal key: keep through the last colon (namespace), drop the final segment if it looks like an id
+        parts = m.group(1).rsplit(":", 1)
+        if len(parts) == 2 and parts[0]:
+            return parts[0] + ":"
+    return None
+
+
+def _arg0(src: str, call_end: int) -> str | None:
+    """First argument text of a call whose '(' ends at call_end-1... actually call_end is past '('."""
+    i = call_end
+    depth, in_str, q, beg = 0, False, "", i
+    while i < len(src) and i < call_end + 400:
+        c = src[i]
+        if in_str:
+            if c == "\\" and i + 1 < len(src):
+                i += 2
+                continue
+            if c == q:
+                in_str = False
+            i += 1
+            continue
+        if c in "'\"`":
+            in_str, q = True, c
+            i += 1
+            continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0 and c == ")":
+                return src[beg:i].strip()
+            depth -= 1
+        elif c == "," and depth == 0:
+            return src[beg:i].strip()
+        i += 1
+    return None
+
+
+def _ok_redis_prefix(p: str) -> bool:
+    if not p or len(p) < 2 or len(p) > 80 or " " in p or "\n" in p:
+        return False
+    body = p.rstrip(":")
+    if not body or body.isdigit() or body in ("True", "False", "None", "null", "undefined"):
+        return False
+    if re.match(r"(?i)(https?|mailto|xmlns|mcp|ftp|file|data|sha256|x-api-key):", p):
+        return False
+    if not re.search(r"[A-Za-z]", body):
+        return False
+    # Prefer namespace-shaped tokens (colon or trailing underscore, or Django KEY_PREFIX bare word)
+    if ":" in p:
+        if not re.match(r"^[A-Za-z_][\w.\-/]*:$", p) and not re.match(r"^[A-Za-z_][\w.\-/]*(?:[\w.\-/]*:)+$", p):
+            # multi-segment prefixes like login:fail:ip:
+            if not re.match(r"^[A-Za-z_][\w.\-/]*(?:\:[\w.\-/]+)*:$", p):
+                return False
+    elif not re.match(r"^[A-Za-z_][\w.\-]*_?$", p):
+        return False
+    return True
+
+
+def _ok_es_index(name: str) -> bool:
+    if not name or len(name) < 2 or len(name) > 120 or " " in name:
+        return False
+    if name.isdigit() or name.upper() in ("HNSW", "COSINE", "EUCLIDEAN", "DOT", "IP", "L2", "TRUE", "FALSE"):
+        return False
+    if not re.fullmatch(r"[A-Za-z][\w.\-]*", name):
+        return False
+    # Bare words like "data"/"docs" are usually unrelated kwargs; prefer namespaced indices.
+    if "_" not in name and "-" not in name and "." not in name and len(name) < 8:
+        return False
+    return True
+
+
+def scan_redis_es_resources(root: Path) -> dict:
+    """Literal redis key prefixes and Elasticsearch index names in the project (#41 step 4)."""
+    prefixes, indices = set(), set()
+    needles = ("redis", "Redis", "ioredis", "cache.", "cache[", "cache(", "KEY_PREFIX", "keyPrefix",
+               "elasticsearch", "Elasticsearch", "OpenSearch", "opensearch", "INDEX_PREFIX", "index_prefix")
+    files = []
+    for pat in ("**/*.py", "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.php"):
+        for pth in root.glob(pat):
+            if not _SKIP.isdisjoint(pth.parts):
+                continue
+            # skip noisy generated / test-only OpenAPI fixtures for prefix assigns
+            name = pth.name
+            if name.endswith((".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.tsx", ".spec.js")):
+                continue
+            if "/generated/" in str(pth).replace("\\", "/") or pth.parts[-2:] == ("generated", name):
+                continue
+            try:
+                txt = pth.read_text(errors="ignore")
+            except Exception:
+                continue
+            if any(k in txt for k in needles):
+                files.append((pth, txt))
+            if len(files) >= 400:
+                break
+        if len(files) >= 400:
+            break
+
+    redisish = ("redis", "Redis", "cache.", "cache[", "ioredis", "BullModule", "bullmq", "django.core.cache")
+    for f, txt in files:
+        is_redis_file = any(k in txt for k in redisish)
+        for m in _KEY_PREFIX_ASSIGN.finditer(txt):
+            v = m.group(1)
+            if "index" in m.group(0).lower():
+                if _ok_es_index(v):
+                    indices.add(v)
+            elif _ok_redis_prefix(v):
+                prefixes.add(v)
+        for m in _ENV_DEFAULT_PREFIX.finditer(txt):
+            key, default = m.group(1), m.group(2)
+            if "INDEX" in key.upper():
+                if _ok_es_index(default):
+                    indices.add(default)
+            elif _ok_redis_prefix(default):
+                prefixes.add(default)
+        if is_redis_file:
+            for m in _REDIS_CALL.finditer(txt):
+                a0 = _arg0(txt, m.end())
+                if not a0:
+                    continue
+                if re.match(r"^\w+\s*=", a0) and not a0.lstrip().startswith(("key", "name", "path")):
+                    km = re.search(r"""(?:key|name|path)\s*=\s*(.+)""", a0)
+                    a0 = km.group(1).strip() if km else a0
+                pfx = _prefix_of(a0)
+                if pfx and _ok_redis_prefix(pfx):
+                    prefixes.add(pfx)
+            # Helper-returned / assigned key templates near redis/cache usage
+            for m in _KEY_EXPR_BIND.finditer(txt):
+                pfx = _prefix_of(m.group(1))
+                if pfx and _ok_redis_prefix(pfx):
+                    prefixes.add(pfx)
+        for m in re.finditer(r"""\bindex\s*=\s*([fF]?["'`][^"'`]*["'`]|f["'][^"']*\{)""", txt):
+            expr = m.group(1)
+            pfx = _prefix_of(expr) if ("{" in expr or "$" in expr) else None
+            lit = re.match(r"""[fF]?["']([^"'{}$]+)["']""", expr.rstrip("{"))
+            if pfx and _ok_es_index(pfx.rstrip(":")):
+                indices.add(pfx.rstrip(":"))
+            elif lit and _ok_es_index(lit.group(1)):
+                indices.add(lit.group(1))
+        for m in _ES_INDEX_KW.finditer(txt):
+            a0 = _arg0(txt, m.end())
+            if not a0 or a0.lstrip().startswith("index"):
+                continue
+            lit = re.match(r"""[fF]?["']([^"'{}$]+)["']""", a0)
+            if lit and _ok_es_index(lit.group(1)):
+                indices.add(lit.group(1))
+    return {"key_prefixes": sorted(prefixes), "indices": sorted(indices)}
+
+
+
+def attach_redis_es_resources(builder, root: Path, st: dict) -> None:
+    """Attach scanned redis key prefixes / ES index names onto the matching external nodes."""
+    found = scan_redis_es_resources(root)
+    if not found["key_prefixes"] and not found["indices"]:
+        return
+    redis_nodes = [n for n in builder.nodes.values()
+                   if n.kind == "external" and (n.attrs or {}).get("protocol") == "redis"]
+    es_nodes = [n for n in builder.nodes.values()
+                if n.kind == "external" and (n.attrs or {}).get("protocol") == "elasticsearch"]
+    if found["key_prefixes"] and redis_nodes:
+        # prefer a single redis node; otherwise attach to all (same prefixes used cluster-wide)
+        for n in redis_nodes:
+            cur = list(n.attrs.get("key_prefixes") or [])
+            for p in found["key_prefixes"]:
+                if p not in cur:
+                    cur.append(p)
+            n.attrs["key_prefixes"] = cur
+            # resource: the first literal prefix when nothing else is set (DSN db number stays)
+            if not n.attrs.get("resource") and len(cur) == 1:
+                n.attrs["resource"] = cur[0]
+        st["redis_prefixes"] = len(found["key_prefixes"])
+    if found["indices"] and es_nodes:
+        for n in es_nodes:
+            cur = list(n.attrs.get("indices") or [])
+            for i in found["indices"]:
+                if i not in cur:
+                    cur.append(i)
+            n.attrs["indices"] = cur
+            if not n.attrs.get("resource") and len(cur) == 1:
+                n.attrs["resource"] = cur[0]
+        st["es_indices"] = len(found["indices"])

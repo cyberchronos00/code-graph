@@ -1300,3 +1300,19 @@ way. spring-petclinic-kotlin: `application-mysql.properties` `jdbc:mysql://local
 tables (owners, pets, vets, visits) attach; the default H2 profile is skipped. outline and
 nestjs-boilerplate: no node or edge changes. shop-api fixture: `table:orders` -> default pgsql,
 `table:reports` -> the model's `$connection = reporting`.
+
+## Redis key prefixes and Elasticsearch indices (#41 step 4)
+
+`attrs.key_prefixes` on redis externals and `attrs.indices` on elasticsearch externals, from call-site
+keys / f-string and template prefixes, Django `KEY_PREFIX`, and ES index / index-prefix defaults.
+Shown by `cg external`.
+
+| Corpus | Before | After | Notes |
+|--------|--------|-------|-------|
+| saleor | redis without prefixes | `login:fail:ip:`, `login:block:ip:`, `allow_storefront_traffic:`, `bbrs`, `oidc:`, … | Django cache + circuit-breaker `KEY_PREFIX`; attr-only (no edge delta) |
+| umami | redis without prefixes | `website:`, `link:`, `pixel:`, `account:`, `team:`, `session:`, `auth:`, `white-label:` | `redis.client.get/set/del/fetch` template keys |
+| open-webui | redis / ES without attrs | redis prefixes + `open_webui_collections` / `open_webui` indices | `ELASTICSEARCH_INDEX_PREFIX` default; short unrelated index kwargs filtered |
+| shop-py fixture | – | `cache:user:`, `sess:`, `login:block:ip:`, `shop:` + index `shop_products` | unit coverage |
+
+Edge-only `ddiff` is silent for this step (attrs only). Leftover FPs / missed helper-only keys -> follow-up.
+

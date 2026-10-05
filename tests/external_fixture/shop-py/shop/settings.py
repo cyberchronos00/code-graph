@@ -15,6 +15,7 @@ DATABASES = {
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
+        "KEY_PREFIX": "shop:",
         "LOCATION": os.environ.get("REDIS_URL", "redis://cache:6379/1"),
     }
 }

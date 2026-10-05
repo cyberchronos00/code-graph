@@ -516,3 +516,26 @@ def test_spring_datasource(tmp_path):
     assert a["library"] == "spring" and a["address_source"] == "literal"
     assert a.get("credential_source") == "literal"
     assert b"spr1ng-fixture-pw" not in d.read_bytes()
+
+
+# ---- #41 step 4: Redis key prefixes / Elasticsearch index names
+def test_redis_key_prefixes_and_es_indices(dbs):
+    st = GraphStore(dbs["shop-py"])
+    redis_nodes = [a for i, a in ext(st).items() if i.startswith("external:redis:")]
+    assert redis_nodes, "expected a redis external"
+    prefixes = set()
+    for a in redis_nodes:
+        prefixes.update(a.get("key_prefixes") or [])
+    assert {"cache:user:", "login:block:ip:", "sess:", "shop:"} <= prefixes
+    es = next(a for i, a in ext(st).items() if i.startswith("external:elasticsearch:"))
+    assert es.get("indices") == ["shop_products"] and es.get("resource") == "shop_products"
+    r = cli("external", "--db", str(dbs["shop-py"]), "--protocol", "redis")
+    assert "key prefixes" in r.stdout
+    r = cli("external", "--db", str(dbs["shop-py"]), "--protocol", "elasticsearch")
+    assert "indices shop_products" in r.stdout
+
+
+def test_redis_prefixes_ts_worker(dbs):
+    st = GraphStore(dbs["shop-worker"])
+    a = next(a for i, a in ext(st).items() if i.startswith("external:redis:"))
+    assert "order:" in (a.get("key_prefixes") or [])
