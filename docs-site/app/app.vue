@@ -1,13 +1,26 @@
 <script setup lang="ts">
 import type { ContentNavigationItem } from '@nuxt/content'
 import { docGroups } from '~/utils/docs-nav'
+import { toDocsSearchQuery } from '~/utils/docs-search'
 
 const { seo } = useAppConfig()
 
 const { data: rawNavigation } = await useAsyncData('navigation', () => queryCollectionNavigation('docs'))
-const { data: files } = useLazyAsyncData('search', () => queryCollectionSearchSections('docs'), {
-  server: false
+
+// Body sections (page intro plus h2–h6). :files alone makes ContentSearch
+// filter navigation labels, so concepts in the body never match.
+const { search: searchSections, status: searchStatus } = useSearchCollection('docs', {
+  minHeading: 'h2',
+  maxHeading: 'h6'
 })
+
+async function searchDocs(term: string, opts?: Parameters<typeof searchSections>[1]) {
+  const query = toDocsSearchQuery(term)
+  if (!query) {
+    return []
+  }
+  return searchSections(query, opts)
+}
 
 const navigation = computed<ContentNavigationItem[]>(() => {
   const byPath = new Map<string, ContentNavigationItem>()
@@ -72,8 +85,9 @@ provide('navigation', navigation)
 
     <ClientOnly>
       <LazyUContentSearch
-        :files="files"
         :navigation="navigation"
+        :search="searchDocs"
+        :search-status="searchStatus"
       />
     </ClientOnly>
   </UApp>
