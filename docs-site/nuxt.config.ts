@@ -33,6 +33,16 @@ export default defineNuxtConfig({
     }
   },
 
+  // Local `app/components/content/Tabs.vue` replaces Nuxt UI's prose tabs.
+  mdc: {
+    components: {
+      map: {
+        tabs: 'Tabs',
+        'tabs-item': 'TabsItem'
+      }
+    }
+  },
+
   content: {
     experimental: {
       sqliteConnector: 'native'
