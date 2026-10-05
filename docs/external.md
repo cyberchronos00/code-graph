@@ -38,7 +38,7 @@ service), `config:<module>.<setting>` for a settings dict that points at the loc
 | Kysely / sole SQL system (#41) | when the project has exactly one SQL external (postgres / mysql / mssql / oracle / mongodb) and ORM tables (`Entity`, `Table`, `kysely`, `drizzle`, `knex`, `prisma`) have no system yet, they attach with `via: sole <protocol> system` (Immich: Kysely + `DB_URL`) | heuristic |
 | Prisma `datasource` blocks (#41) | `provider` gives the protocol (postgresql / cockroachdb, mysql, sqlserver, mongodb; sqlite is a local file and is skipped), `url = env("DATABASE_URL")` resolves through `.env.example` / docker-compose like any env key, a literal URL is parsed as a DSN. The schema's model tables get `attrs.system` and CONNECTS_TO the system (`op = table`), so `impact` / `reaches` on the system go through the tables to the code reading and writing them | resolved / heuristic |
 | Model calls (`attrs.llm_calls` from [AI tools](ai-tools.md)) | `external:llm:<provider>` (openai, anthropic, azure-openai, ollama ...) with the `models` called, or `external:llm:<host>:<port>` for a non-local `base_url`; CONNECTS_TO from the calling function, CREDENTIAL_FROM the provider's API-key env var when code reads it; calls from test code are left out | resolved / exact |
-| Third-party HTTP (`http` nodes with origin_kind other) | shown by `cg external` as `external:https:<host>:<port>` through an adapter, without extra nodes; origins only called from tests are left out | exact |
+| Third-party HTTP (`http` nodes with origin_kind other) | real `external:http:<host>:80` / `external:https:<host>:443` nodes (or the explicit port; literal origin on the http node). CONNECTS_TO from the calling function (`via` http, `op` request, `count` when that function has several call sites); paths on `attrs.paths`. Loopback hosts (`localhost`, `127.0.0.1`, `::1`, …) and template / unresolved hosts (`${base}`, `{host}`) stay unattached. Origins only called from tests are left out. `cg link` is unchanged: `match_endpoint` still skips `origin_kind` other, and these nodes are not routes | exact |
 
 DSNs: postgres(ql) / pgsql, mysql / mariadb, mssql / sqlserver, oracle, mongodb(+srv), redis / rediss / valkey, amqp(s),
 smtp(s), ldap(s), sftp / ssh / scp, ftp(s), s3, memcached, elasticsearch, nats, kafka, mqtt(s), imap(s), pop3(s),
@@ -84,7 +84,7 @@ that reads or writes only some of its columns (READS_COLUMN / WRITES_COLUMN on t
 - class-validator DTOs read through a separate validation step, and settings objects passed between functions.
 - Spring `application.yml`, Rails `database.yml`, Kubernetes / Helm / Terraform values, settings built with
   f-strings (NetBox's `CACHES` from `REDIS`), docker-compose files outside the indexed root.
-- Third-party HTTP hosts are an adapter in `cg external`, not graph nodes.
+- Cloud and SaaS SDK clients (S3, GCS, Stripe, OpenAI, and the rest of #42 part 2).
 - A Prisma schema in a sibling workspace package (cal.com's `packages/prisma`, used by `apps/web`) is not found
   from the app. Prisma models are only read in projects with a TypeScript web framework, and other ORM configs
   (TypeORM / Sequelize / Knex / Drizzle / Kysely) do not name a system yet.

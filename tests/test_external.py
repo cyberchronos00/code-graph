@@ -42,6 +42,9 @@ def edges(st, kind):
     ("sftp://files.example/in", "ssh", "files.example", 22, "in", True),
     ("s3://my-bucket/prefix", "s3", "my-bucket", None, "prefix", True),
     ("jdbc:postgresql://pg.example:5433/core", "postgres", "pg.example", 5433, "core", None),
+    ("https://api.github.com/zen", "https", "api.github.com", 443, "zen", True),
+    ("http://api.example.com/x", "http", "api.example.com", 80, "x", False),
+    ("http://api.example.com:8080/x", "http", "api.example.com", 8080, "x", False),
 ])
 def test_parse_dsn(url, proto, host, port, res, tls):
     d = parse_dsn(url)
@@ -539,3 +542,57 @@ def test_redis_prefixes_ts_worker(dbs):
     st = GraphStore(dbs["shop-worker"])
     a = next(a for i, a in ext(st).items() if i.startswith("external:redis:"))
     assert "order:" in (a.get("key_prefixes") or [])
+
+
+def test_third_party_https_hosts(tmp_path):
+    """#42 part 1: origin_kind other becomes external:http(s):<host>:<port> with CONNECTS_TO."""
+    from codegraph.link import match_endpoint
+    from codegraph.query import impact
+
+    db = tmp_path / "https.db"
+    index_project(FX / "https-client", db, "https-client")
+    st = GraphStore(db)
+    e = ext(st)
+    gh, slack = "external:https:api.github.com:443", "external:https:hooks.slack.com:443"
+    plain = "external:http:httpbin.org:80"
+    assert gh in e and slack in e and plain in e
+    assert e[gh]["address_source"] == "literal" and e[gh]["tls"] is True and e[gh]["protocol"] == "https"
+    assert e[plain]["protocol"] == "http" and e[plain]["tls"] is False and e[plain]["port"] == 80
+    assert set(e[gh]["paths"]) == {"/repos/{repo}", "/zen"}
+    assert e[slack]["paths"] == ["/services/T/B/x"]
+    assert e[plain]["paths"] == ["/get"]
+    assert not any(h in k for k in e for h in ("127.0.0.1", "localhost"))
+    # bare http:// must not collide with https on 443
+    assert "external:https:httpbin.org:443" not in e
+    rows = list(st.q(
+        "SELECT src, dst, attrs FROM edges WHERE kind='CONNECTS_TO' AND "
+        "(dst LIKE 'external:https:%' OR dst LIKE 'external:http:%')"))
+    by_dst = {}
+    for r in rows:
+        by_dst.setdefault(r["dst"], []).append((r["src"], json.loads(r["attrs"] or "{}")))
+    assert len(by_dst[gh]) == 1 and by_dst[gh][0][1]["via"] == "http" and by_dst[gh][0][1]["count"] == 2
+    assert "notifyGithub" in by_dst[gh][0][0]
+    assert len(by_dst[slack]) == 1 and by_dst[slack][0][1]["via"] == "http" and "count" not in by_dst[slack][0][1]
+    assert "pingSlack" in by_dst[slack][0][0]
+    assert "pingHttpBin" in by_dst[plain][0][0]
+    assert not list(st.q("SELECT 1 FROM edges WHERE kind='MATCHES_ROUTE'"))
+    http = [json.loads(r["attrs"]) for r in st.q("SELECT attrs FROM nodes WHERE kind='http'")]
+    assert any(a.get("origin") == "http://127.0.0.1:3000" and a.get("origin_kind") == "other" for a in http)
+    dyn = next(a for a in http if a.get("origin") == "{base}")
+    assert not any("base" in k for k in e)
+    gh_call = next(a for a in http if a.get("origin") == "https://api.github.com")
+    # other-origin calls are not app routes, even when a route path would otherwise match
+    assert match_endpoint("GET", "/zen", [{"id": "route:GET /zen", "method": "GET", "uri": "/zen", "uris": [("literal", "/zen")]}],
+                           "other", gh_call["origin"])["matched"] == []
+    assert match_endpoint(dyn["method"], dyn["path"], [], dyn["origin_kind"], dyn["origin"])["matched"] == []
+    r = cli("external", "--db", str(db), "--json")
+    assert r.returncode == 0, r.stderr
+    ids = [s["id"] for s in json.loads(r.stdout)["systems"]]
+    assert ids.count(gh) == 1 and ids.count(slack) == 1 and ids.count(plain) == 1
+    assert len(ids) == 3
+    text = cli("external", "--db", str(db), "--protocol", "https")
+    assert text.stdout.count(gh) == 1 and "x2" in text.stdout and plain not in text.stdout
+    http_text = cli("external", "--db", str(db), "--protocol", "http")
+    assert plain in http_text.stdout and gh not in http_text.stdout
+    callers = {c["name"] for c in impact(st, gh)["callers"]}
+    assert "notifyGithub" in callers

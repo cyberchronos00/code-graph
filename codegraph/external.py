@@ -21,8 +21,10 @@ Sources, language-agnostic over the built graph:
   * `.env.example` / `.env.sample` / `.env.dist` values and `docker-compose*.yml` / `compose*.yaml` services resolve
     the target (`DB_HOST=db` + a `db` service running postgres -> external:postgres:db:5432).
 Secret values (passwords, tokens, DSN passwords) are never read into the graph: only the key and its location.
-Third-party HTTP origins (`http` nodes with origin_kind = other) are shown by `cg external` as `https` systems
-without extra nodes.
+Third-party HTTP origins (`http` nodes with origin_kind = other) become real `external:http(s):<host>:<port>`
+nodes (`http` → port 80, `https` → 443, or the explicit port) with CONNECTS_TO from the calling function
+(`via` http). Template hosts and loopback addresses stay unattached; `cg external` reads those nodes
+(no query-time adapter).
 """
 from __future__ import annotations
 
@@ -42,13 +44,14 @@ SCHEMES = {
     "s3": "s3", "memcached": "memcached", "memcache": "memcached", "elasticsearch": "elasticsearch",
     "nats": "nats", "kafka": "kafka", "mqtt": "mqtt", "mqtts": "mqtt", "imap": "imap", "imaps": "imap",
     "pop3": "pop3", "pop3s": "pop3", "clickhouse": "clickhouse", "cassandra": "cassandra",
+    "http": "http", "https": "https",
 }
 TLS_SCHEMES = {"rediss", "amqps", "smtps", "ldaps", "ftps", "mqtts", "imaps", "pop3s", "https", "mongodb+srv", "sftp", "ssh",
                "scp", "s3"}
 PLAIN_SCHEMES = {"redis", "amqp", "smtp", "ldap", "ftp", "mqtt", "imap", "pop3", "http"}
 PORTS = {"postgres": 5432, "mysql": 3306, "mssql": 1433, "oracle": 1521, "mongodb": 27017, "redis": 6379, "amqp": 5672,
          "smtp": 587, "ldap": 389, "ssh": 22, "ftp": 21, "memcached": 11211, "elasticsearch": 9200, "nats": 4222,
-         "kafka": 9092, "mqtt": 1883, "imap": 143, "pop3": 110, "clickhouse": 9000, "cassandra": 9042, "https": 443}
+         "kafka": 9092, "mqtt": 1883, "imap": 143, "pop3": 110, "clickhouse": 9000, "cassandra": 9042, "https": 443, "http": 80}
 SCHEME_PORTS = {"amqps": 5671, "smtps": 465, "ldaps": 636, "ftps": 990, "mqtts": 8883, "imaps": 993, "pop3s": 995}
 TLS_PORTS = {"smtp": {465}, "ldap": {636}, "imap": {993}, "pop3": {995}, "redis": set(), "amqp": {5671}, "mqtt": {8883},
              "ftp": {990}}
@@ -88,7 +91,7 @@ def parse_dsn(url: str) -> dict | None:
         u = u[5:]
     scheme = u.split("://", 1)[0].lower()
     base = scheme.split("+")[0] if scheme not in SCHEMES else scheme
-    proto = SCHEMES.get(scheme) or SCHEMES.get(base) or ("https" if base in ("http", "https") else None)
+    proto = SCHEMES.get(scheme) or SCHEMES.get(base)
     if proto is None:
         return None
     try:
@@ -294,7 +297,8 @@ def attach(builder, root: Path) -> dict:
     facts = getattr(builder, "external_facts", None) or []
     # model calls made from test code are fixtures, not systems the application talks to (as for third-party HTTP)
     llm = [n for n in builder.nodes.values() if (n.attrs or {}).get("llm_calls") and not n.attrs.get("test")]
-    if not envs and not conns and not facts and not llm:
+    http_other = any(n.kind == "http" and (n.attrs or {}).get("origin_kind") == "other" for n in builder.nodes.values())
+    if not envs and not conns and not facts and not llm and not http_other:
         return {}
     ex = read_env_example(root)
     compose = read_compose(root)
@@ -651,8 +655,69 @@ def attach(builder, root: Path) -> dict:
                     st["sole_attach"] = st.get("sole_attach", 0) + 1
 
     attach_redis_es_resources(builder, root, st)
+    _attach_http_hosts(builder, node, st)
 
     return {k: v for k, v in st.items() if v} if st["systems"] else {}
+
+
+def _attach_http_hosts(builder, node, st) -> None:
+    """Group `http` nodes with `origin_kind` other into `external:http(s):<host>:<port>`.
+
+    Scheme selects the protocol and default port (`http` → 80, `https` → 443; an explicit port wins).
+    CONNECTS_TO runs from the calling function to the host (`via` http, `op` request). Several call sites
+    from one function are one edge with `count`. Hosts `parse_dsn` rejects (`{...}`, `${...}`) stay
+    unattached. Loopback (`localhost`, `127.0.0.1`, `::1`, ...) is skipped. Calls only from tests are left out.
+    These nodes are not routes: `match_endpoint` already ignores `origin_kind` other, and nothing here
+    writes MATCHES_ROUTE.
+    """
+    incoming: dict = {}
+    for e in builder.edges.values():
+        incoming.setdefault(e.dst, []).append(e)
+    groups: dict = {}
+    for n in builder.nodes.values():
+        if n.kind != "http":
+            continue
+        a = n.attrs or {}
+        if a.get("origin_kind") != "other" or a.get("test_only"):
+            continue
+        origin = a.get("origin") or ""
+        if "://" not in origin:
+            continue
+        d = parse_dsn(origin)
+        if not d or d["protocol"] not in ("http", "https") or (d.get("host") or "").lower() in LOOPBACK:
+            continue
+        # Skip TEST_* edges and edges from test nodes (tests_index remaps later; attach runs first).
+        calls = []
+        for e in incoming.get(n.id, ()):
+            if str(e.kind).startswith("TEST_"):
+                continue
+            src_n = builder.nodes.get(e.src)
+            if e.src.startswith("test:") or (src_n is not None and (
+                    src_n.kind == "test" or (src_n.attrs or {}).get("test"))):
+                continue
+            calls.append(e)
+        if not calls:
+            continue
+        proto = d["protocol"]
+        key = target_of(d["host"], d["port"])
+        g = groups.setdefault((proto, key), {"tls": d["tls"], "scheme": d["scheme"], "paths": set(), "by_src": {}})
+        if a.get("path") and a["path"] not in ("", "/"):
+            g["paths"].add(a["path"])
+        for e in calls:
+            g["by_src"].setdefault(e.src, []).append(e)
+    for (proto, key), g in groups.items():
+        nid = node(proto, key, {
+            "scheme": g["scheme"], "tls": g["tls"], "address_source": "literal",
+            "paths": sorted(g["paths"]) or None,
+        }, "exact")
+        for src, es in g["by_src"].items():
+            es.sort(key=lambda e: ((e.file or ""), e.line or 0))
+            e0 = es[0]
+            extra = {"via": "http", "op": "request"}
+            if len(es) > 1:
+                extra["count"] = len(es)
+            builder.add_edge(src, nid, "CONNECTS_TO", e0.file, e0.line, "exact", **extra)
+            st["connects"] += 1
 
 
 def _cred_kind(key: str) -> str:
@@ -669,23 +734,6 @@ def external(st, pattern: str | None = None, protocol: str | None = None, source
     for r in rows:
         a = json.loads(r["attrs"] or "{}")
         systems.append({"id": r["id"], "protocol": a.get("protocol"), "target": a.get("target"), "attrs": a})
-    # third-party HTTP origins: an adapter over http nodes (no extra nodes)
-    https: dict = {}
-    for r in st.q("SELECT id, attrs FROM nodes WHERE kind='http' AND attrs LIKE '%\"origin_kind\": \"other\"%'"):
-        a = json.loads(r["attrs"] or "{}")
-        o = a.get("origin") or ""
-        d = parse_dsn(o) if "://" in o else None
-        if not d or a.get("test_only"):
-            continue
-        kinds = {x["kind"] for x in st.q("SELECT kind FROM edges WHERE dst=?", (r["id"],))}
-        if kinds and all(k.startswith("TEST_") for k in kinds):          # only tests call it (fixtures, mocks)
-            continue
-        key = target_of(d["host"], d["port"])
-        h = https.setdefault(key, {"id": f"external:https:{key}", "protocol": "https", "target": key,
-                                   "attrs": {"protocol": "https", "host": d["host"], "port": d["port"], "tls": d["tls"],
-                                             "address_source": "literal", "adapter": "http"}, "http": []})
-        h["http"].append(r["id"])
-    systems += list(https.values())
     out = []
     for s in sorted(systems, key=lambda x: x["id"]):
         a = s["attrs"]
@@ -697,16 +745,13 @@ def external(st, pattern: str | None = None, protocol: str | None = None, source
             continue
         if pattern and not (fnmatch.fnmatchcase(s["id"], pattern) or pattern.lower() in s["id"].lower()):
             continue
-        if s.get("http"):
-            users = [{"id": h, "via": "http", "op": "request"} for h in s["http"]]
-            ids = []
-            for h in s["http"]:
-                ids += [x["src"] for x in st.q("SELECT src FROM edges WHERE dst=? AND kind IN ('CALLS_API','SENDS_TO','CALLS')", (h,))]
-        else:
-            users = [{"id": x["src"], "op": json.loads(x["attrs"] or "{}").get("op"), "via": json.loads(x["attrs"] or "{}").get("via"),
-                      "at": f"{x['file']}:{x['line']}" if x["file"] else None, "confidence": x["confidence"]}
-                     for x in st.q("SELECT src, attrs, file, line, confidence FROM edges WHERE dst=? AND kind IN ('CONNECTS_TO','TEST_USES')", (s["id"],))]
-            ids = [u["id"] for u in users]
+        users = []
+        ids = []
+        for x in st.q("SELECT src, attrs, file, line, confidence FROM edges WHERE dst=? AND kind IN ('CONNECTS_TO','TEST_USES')", (s["id"],)):
+            ua = json.loads(x["attrs"] or "{}")
+            users.append({"id": x["src"], "op": ua.get("op"), "via": ua.get("via"), "count": ua.get("count"),
+                          "at": f"{x['file']}:{x['line']}" if x["file"] else None, "confidence": x["confidence"]})
+            ids.append(x["src"])
         tables = sorted(u["id"] for u in users if u["id"].startswith("table:"))
         users = [u for u in users if not u["id"].startswith("table:")]
         callers = set(ids) - set(tables)
@@ -754,12 +799,15 @@ def render_external(res: dict, max_items: int = 60) -> str:
         if a.get("indices"):
             bits.append("indices " + ", ".join(a["indices"][:6])
                         + (" ..." if len(a["indices"]) > 6 else ""))
+        if a.get("paths"):
+            bits.append("paths " + ", ".join(a["paths"][:6]) + (" ..." if len(a["paths"]) > 6 else ""))
         L.append(f"{s['id']}  [{a.get('confidence') or 'exact'}]")
         L.append("    " + "; ".join(bits))
         if s["entry_kinds"]:
             L.append("    reached from " + ", ".join(f"{k}({v})" for k, v in sorted(s["entry_kinds"].items())))
         for u in s["users"][:8]:
-            L.append(f"    <- {u['id']}" + (f" @ {u['at']}" if u.get("at") else "") + (f"  ({u['via']})" if u.get("via") else ""))
+            L.append(f"    <- {u['id']}" + (f" @ {u['at']}" if u.get("at") else "") + (f"  ({u['via']})" if u.get("via") else "")
+                     + (f" x{u['count']}" if u.get("count") else ""))
         if len(s["users"]) > 8:
             L.append(f"    ... {len(s['users']) - 8} more users")
         if s.get("tables"):

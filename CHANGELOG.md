@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Third-party HTTP hosts (#42, part 1): `http` nodes with `origin_kind` other become
+  `external:http:<host>:80` / `external:https:<host>:443` graph nodes (or the explicit port) with
+  CONNECTS_TO from the calling function (`via` http, `count` when several call sites). Loopback and
+  template hosts stay unattached. `cg external` reads those nodes; the query-time adapter is gone.
+  `cg link` still ignores other-origin URLs.
+
 ## [0.12.0] - 2026-10-05
 
 ### Added

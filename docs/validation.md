@@ -1329,3 +1329,11 @@ wrapper class resolves the same way.
 `settings-bus` `TaskQueue._publish(queue, ...)` with callers passing module constants: five / two AMQP queue
 sends from the helper; `AIOKafkaConsumer(settings.events_topic, group_id=...)` is a kafka receive (no separate
 `.subscribe` needed).
+
+## Third-party HTTP hosts as external nodes (#42 part 1)
+
+`http` nodes with `origin_kind` other become `external:http:<host>:80` / `external:https:<host>:443`
+(or the explicit port) with CONNECTS_TO (`via` http). Loopback, templates, and test-only callers stay out.
+`https-client` fixture: GitHub + Slack (https) and httpbin (http). outline: `updates.getoutline.com`.
+cal.com / saleor / open-webui / immich server: no app-called other-origin hosts in this pass (same-origin /
+unknown / none). Query-time https adapter removed; `cg link` still skips other-origin URLs.
