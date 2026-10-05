@@ -16,8 +16,11 @@
     "@iconify-json/simple-icons": "^1.2.98",
     "@nuxt/content": "^3.16.1",
     "@nuxt/ui": "^4.11.3",
+    "@tresjs/core": "5.9.2",
+    "@tresjs/nuxt": "5.7.2",
     "nuxt": "^4.5.2",
     "tailwindcss": "^4.1.16",
+    "three": "0.186.1",
     "ufo": "^1.6.1"
   },
   "devDependencies": {

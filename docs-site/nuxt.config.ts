@@ -4,7 +4,11 @@ import { rewriteDocLinks } from './rewrite-doc-links'
 import { docRoutes } from './app/utils/docs-nav'
 
 export default defineNuxtConfig({
-  modules: ['@nuxt/ui', '@nuxt/content'],
+  modules: ['@nuxt/ui', '@nuxt/content', '@tresjs/nuxt'],
+
+  tres: {
+    devtools: false
+  },
 
   css: ['~/assets/css/main.css'],
 

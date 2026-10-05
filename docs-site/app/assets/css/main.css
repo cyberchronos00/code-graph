@@ -44,6 +44,16 @@ html {
   color: var(--ui-text);
 }
 
+::selection {
+  background: color-mix(in oklab, var(--cg-lime-deep) 55%, white);
+  color: #18181b;
+}
+
+.dark ::selection {
+  background: color-mix(in oklab, var(--cg-lime) 70%, black);
+  color: #fafafa;
+}
+
 .shiki,
 .shiki span {
   font-family: var(--font-mono);
