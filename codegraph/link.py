@@ -1,11 +1,12 @@
-"""Cross-repo linking: client HTTP endpoints (frontend graph) -> backend Route nodes.
+"""Cross-repo linking: client HTTP endpoints -> route nodes of other repos.
 
-link(backend_db, frontend_db, out_db) builds ONE combined SQLite graph:
-  * nodes/edges of both graphs (ids are kept; `file` is prefixed with the repo name and
-    attrs.repo is set, so evidence stays unambiguous),
-  * MATCHES_ROUTE edges  http:<METHOD> <client path>  ->  route:<METHOD> <uri>,
-  * entry tagging recomputed over the union (frontend pages become entry points that reach
-    backend tables), plus the live-under-gate closure for the backend's gate scenario.
+link(backend_db, frontend_db, out_db) is the two-repo form. link_many(repos, out_db) merges N
+graphs (role backend, frontend or both):
+  * nodes/edges of every graph (`file` prefixed with the repo name, attrs.repo set),
+  * an id that occurs in more than one repo is stored as `<repo>:<id>` and its edges are rewritten;
+    unique ids are unchanged, so a two-repo link with no shared ids keeps the same ids,
+  * MATCHES_ROUTE from every repo's http endpoints to routes of every other server repo,
+  * entry tagging once over the union, plus the live-under-gate closure for the first server scenario.
 
 Matching is deterministic (no guessing):
   - the client path is the extractor's URL template with the origin (scheme://host or the
@@ -30,7 +31,7 @@ import json
 import re
 import sqlite3
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -203,71 +204,203 @@ def tag_entries_rows(nodes: list, edges: list, prop: set, skip_gate: str | None 
     return tag_entries(b, skip_gate=skip_gate)
 
 
+_ROLES = ("backend", "frontend", "both")
+# These ids name one logical thing across repos (one database, one protocol endpoint). Other collisions
+# (two classes, two routes, two client calls with the same id) are stored as `<repo>:<id>`.
+_SHARED_ID_KINDS = ("external", "endpoint")
+
+
+def _id_kind(nid: str) -> str:
+    return nid.split(":", 1)[0]
+
+
+def _is_server(role: str) -> bool:
+    return role in ("backend", "both")
+
+
+def _is_client(role: str, mode: str) -> bool:
+    """`frontend` mode (the two-repo `link`) matches frontend and both.
+    `all` matches every repo, so a backend can call another backend."""
+    return role in ("frontend", "both") if mode == "frontend" else True
+
+
 def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend", frontend_name="frontend") -> dict:
+    """Two-repo shorthand. Same ids and edges as link_many when no node id is shared."""
+    return link_many(
+        [(backend_name, backend_db, "backend"), (frontend_name, frontend_db, "frontend")],
+        out_db, clients="frontend")
+
+
+def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | None = None,
+              clients: str = "all") -> dict:
+    """Merge N graphs into `out_db`. `repos` is `(name, db_path, role)` with role backend, frontend or both.
+    `allow` maps a client repo to the server names it may call (others call every other server).
+    `clients` is `all` (every repo's http nodes) or `frontend` (frontend role only)."""
+    if clients not in ("all", "frontend"):
+        raise ValueError(f"clients must be 'all' or 'frontend', got {clients!r}")
+    for name, _path, role in repos:
+        if not name:
+            raise ValueError("repo names must be unique and non-empty")
+        if role not in _ROLES:
+            raise ValueError(f"role {role!r} for {name} must be backend, frontend or both")
+    # The same checkout linked to itself (one DB, one name, both roles) keeps a single copy of each id
+    # and matches its own HTTP calls to its own routes.
+    folded_self = False
+    if len({n for n, _, _ in repos}) != len(repos):
+        merged: dict[str, list] = {}
+        order: list[str] = []
+        for name, path, role in repos:
+            resolved = str(Path(path).resolve())
+            prev = merged.get(name)
+            if prev is None:
+                merged[name] = [resolved, role]
+                order.append(name)
+            elif prev[0] != resolved:
+                raise ValueError("repo names must be unique and non-empty")
+            elif prev[1] != role:
+                prev[1] = "both"
+                folded_self = True
+        repos = [(n, merged[n][0], merged[n][1]) for n in order]
+    names = [n for n, _, _ in repos]
     t0 = time.time()
     store = GraphStore.create(out_db)
     db = store.db
-    stats = {"backend": backend_name, "frontend": frontend_name}
-    for alias, path, repo in (("b", backend_db, backend_name), ("f", frontend_db, frontend_name)):
-        db.execute(f"ATTACH DATABASE ? AS {alias}", (str(path),))
-        before = db.execute("SELECT count(*) FROM nodes").fetchone()[0]
-        db.execute(f"""INSERT OR IGNORE INTO nodes
-            SELECT id, kind, name, fqn, CASE WHEN file IS NULL THEN NULL ELSE ? || '/' || file END, line, end_line, module, doc, lang,
-                   entry_kind, json_set(coalesce(attrs, '{{}}'), '$.repo', ?) FROM {alias}.nodes""", (repo, repo))
-        n_in = db.execute(f"SELECT count(*) FROM {alias}.nodes").fetchone()[0]
-        added = db.execute("SELECT count(*) FROM nodes").fetchone()[0] - before
-        stats[f"{repo}_nodes"] = n_in
-        stats[f"{repo}_id_collisions"] = n_in - added
-        db.execute(f"""INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate)
-            SELECT src, dst, kind, CASE WHEN file IS NULL THEN NULL ELSE ? || '/' || file END, line, confidence, conf_rank, attrs, gate
-            FROM {alias}.edges""", (repo,))
-        stats[f"{repo}_edges"] = db.execute(f"SELECT count(*) FROM {alias}.edges").fetchone()[0]
-    db.execute("INSERT OR REPLACE INTO gate_predicates SELECT * FROM b.gate_predicates")
+    server_names = [n for n, _, role in repos if _is_server(role)]
+    client_names = [n for n, _, role in repos if _is_client(role, clients)]
+    stats = {
+        "backend": server_names[0] if len(server_names) == 1 else ",".join(server_names),
+        "frontend": client_names[0] if len(client_names) == 1 else ",".join(client_names),
+    }
+    allow = allow or {}
+
+    def q(sql, params=()):
+        cur = db.execute(sql, params)
+        rows = cur.fetchall()
+        cur.close()
+        return rows
+
+    per_ids: dict[str, list] = {}
+    externals: list = []
+    for name, path, _role in repos:
+        db.execute("ATTACH DATABASE ? AS src", (str(path),))
+        try:
+            per_ids[name] = [r[0] for r in q("SELECT id FROM src.nodes")]
+            try:
+                got = q("SELECT value FROM src.meta WHERE key='stats'")
+            except sqlite3.OperationalError:
+                got = []
+            if got:
+                externals += ((json.loads(got[0][0]).get("config") or {}).get("protocols") or {}).get("external") or []
+        finally:
+            db.commit()
+            db.execute("DETACH DATABASE src")
+    collided = {i for i, n in Counter(i for ids in per_ids.values() for i in set(ids)).items() if n > 1}
+    collisions = {i for i in collided if _id_kind(i) not in _SHARED_ID_KINDS}
+    db.execute("CREATE TEMP TABLE cg_id_collisions(id TEXT PRIMARY KEY)")
+    if collisions:
+        db.executemany("INSERT INTO cg_id_collisions VALUES (?)", [(i,) for i in collisions])
+
+    def mid(repo: str, nid: str) -> str:
+        return f"{repo}:{nid}" if nid in collisions else nid
+
+    routes: list[dict] = []
+    http_rows: list[tuple] = []          # (client, id, attrs, test_only)
+    calls_by_ep: dict = defaultdict(list)
+    fe_classes: dict[str, dict] = {}
+    be_classes: dict[str, dict] = {}
+    chans, subs, events, on = [], [], {}, defaultdict(set)
+    scen: list = []
+    for name, path, role in repos:
+        db.execute("ATTACH DATABASE ? AS src", (str(path),))
+        try:
+            q("""INSERT OR IGNORE INTO nodes
+                SELECT CASE WHEN id IN (SELECT id FROM cg_id_collisions) THEN ? || ':' || id ELSE id END,
+                       kind, name, fqn, CASE WHEN file IS NULL THEN NULL ELSE ? || '/' || file END,
+                       line, end_line, module, doc, lang, entry_kind,
+                       json_set(coalesce(attrs, '{}'), '$.repo', ?)
+                FROM src.nodes""", (name, name, name))
+            q("""INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate)
+                SELECT CASE WHEN src IN (SELECT id FROM cg_id_collisions) THEN ? || ':' || src ELSE src END,
+                       CASE WHEN dst IN (SELECT id FROM cg_id_collisions) THEN ? || ':' || dst ELSE dst END,
+                       kind, CASE WHEN file IS NULL THEN NULL ELSE ? || '/' || file END,
+                       line, confidence, conf_rank, attrs, gate
+                FROM src.edges""", (name, name, name))
+            stats[f"{name}_nodes"] = len(per_ids[name])
+            stats[f"{name}_id_collisions"] = sum(1 for i in per_ids[name] if i in collided)
+            stats[f"{name}_edges"] = q("SELECT count(*) FROM src.edges")[0][0]
+            if _is_server(role):
+                q("INSERT OR REPLACE INTO gate_predicates SELECT * FROM src.gate_predicates")
+                scen += [r[0] for r in q("SELECT DISTINCT scenario FROM src.node_entry_live")]
+                be_classes[name] = {r[0]: json.loads(r[1] or "{}") for r in q(
+                    "SELECT id, attrs FROM src.nodes WHERE kind='class' AND attrs LIKE '%schema_fields%'")}
+                for r in q("SELECT id, file, attrs, line FROM src.nodes WHERE kind='route'"):
+                    a = json.loads(r[2] or "{}")
+                    uri, method = a.get("uri"), a.get("method")
+                    if not uri or not method:
+                        continue
+                    uris = [("as-declared", uri)]
+                    if (r[1] or "").startswith("routes/api.php") or (r[1] or "").startswith("routes/api/"):
+                        uris.append(("api-prefixed", "/api" + uri))
+                    routes.append({"id": mid(name, r[0]), "uri": uri, "method": method, "uris": uris, "server": name,
+                                   "file": f"{name}/{r[1]}" if r[1] else None, "line": r[3],
+                                   "attrs": dict(a, _file=r[1], _line=r[3])})
+                for r in q("SELECT id, attrs, file, line FROM src.nodes WHERE kind='channel'"):
+                    chans.append((mid(name, r[0]), json.loads(r[1] or "{}"), f"{name}/{r[2]}" if r[2] else None, r[3]))
+                for r in q("SELECT id, attrs FROM src.nodes WHERE kind='event'"):
+                    a = json.loads(r[1] or "{}")
+                    if a.get("broadcast"):
+                        events[mid(name, r[0])] = a
+                for r in q("SELECT src, dst FROM src.edges WHERE kind='BROADCASTS_ON'"):
+                    on[mid(name, r[1])].add(mid(name, r[0]))
+            if _is_client(role, clients):
+                fe_classes[name] = {r[0]: json.loads(r[1] or "{}") for r in q(
+                    "SELECT id, attrs FROM src.nodes WHERE kind='class' AND (attrs LIKE '%json_from%' OR attrs LIKE '%enum_values%' OR attrs LIKE '%json_to%')")}
+                for r in q("SELECT id, attrs FROM src.nodes WHERE kind='http'"):
+                    a = json.loads(r[1] or "{}")
+                    http_rows.append((name, mid(name, r[0]), a, a.get("test_only") in (1, True)))
+                for e in q("SELECT src, dst, file, line, confidence, attrs FROM src.edges WHERE kind='HTTP_CALLS'"):
+                    calls_by_ep[mid(name, e[1])].append({"src": mid(name, e[0]), "at": f"{name}/{e[2]}:{e[3]}",
+                                                        "confidence": e[4], **json.loads(e[5] or "{}")})
+                for r in q("SELECT id, attrs FROM src.nodes WHERE kind='channel_sub'"):
+                    subs.append((mid(name, r[0]), json.loads(r[1] or "{}")))
+        finally:
+            db.commit()
+            db.execute("DETACH DATABASE src")
     db.commit()
-    # ---- match client endpoints to routes
-    routes = []
-    for r in db.execute("SELECT id, file, attrs, line FROM b.nodes WHERE kind='route'"):
-        a = json.loads(r[2] or "{}")
-        uri, method = a.get("uri"), a.get("method")
-        if not uri or not method:
-            continue
-        uris = [("as-declared", uri)]
-        if (r[1] or "").startswith("routes/api.php") or (r[1] or "").startswith("routes/api/"):
-            uris.append(("api-prefixed", "/api" + uri))
-        routes.append({"id": r[0], "uri": uri, "method": method, "uris": uris, "file": f"{backend_name}/{r[1]}" if r[1] else None, "line": r[3],
-                       "attrs": dict(a, _file=r[1], _line=r[3])})
-    calls_by_ep = defaultdict(list)
-    for e in db.execute("SELECT src, dst, file, line, confidence, attrs FROM f.edges WHERE kind='HTTP_CALLS'"):
-        calls_by_ep[e[1]].append({"src": e[0], "at": f"{frontend_name}/{e[2]}:{e[3]}", "confidence": e[4], **json.loads(e[5] or "{}")})
+    # ---- match each client's endpoints against every other allowed server's routes
+    from .plugins.ts.baseurl import base_path
+    by_server: dict[str, list] = defaultdict(list)
+    for rt in routes:
+        by_server[rt["server"]].append(rt)
     results = []
     new_edges = []
-    for ep_id, attrs in db.execute("SELECT id, attrs FROM f.nodes WHERE kind='http'"):
-        a = json.loads(attrs or "{}")
-        from .plugins.ts.baseurl import base_path
+    for client, ep_id, a, _test in http_rows:
+        targets = [s for s in server_names if (s != client or folded_self) and (client not in allow or s in allow[client])]
+        pool = [rt for s in targets for rt in by_server[s]]
         bp = base_path((a.get("base") or {}).get("value") or "") if a.get("base") else None
-        res = match_endpoint(a["method"], a["path"], routes, a.get("origin_kind", "api"), a.get("origin"), base_prefix=bp or None)
-        res.update({"endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, [])})
+        res = match_endpoint(a["method"], a["path"], pool, a.get("origin_kind", "api"), a.get("origin"), base_prefix=bp or None)
+        res.update({"endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, []),
+                    "_client": client, "_servers": targets})
         results.append(res)
-        rmap = {r["id"]: r for r in routes}
+        rmap = {r["id"]: r for r in pool}
         for m in res["matched"]:
             rr = rmap[m["route"]]
             new_edges.append((ep_id, m["route"], "MATCHES_ROUTE", rr["file"], rr["line"], m["confidence"], CONFIDENCE_RANK[m["confidence"]],
                               json.dumps({"client_path": a["path"], "uri_variant": m["uri_variant"], "segments": m["segments"]}), None))
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)", new_edges)
     db.commit()
-    stats.update(link_channels(db, backend_name))
+    stats.update(link_channels(db, chans, subs, events, on))
+    if externals:
+        db.execute("INSERT OR REPLACE INTO meta VALUES ('stats', ?)", (json.dumps({"config": {"protocols": {"external": externals}}}),))
+        db.commit()
     from .protocols import link_db as link_protocols
     if (pr := link_protocols(db)):      # only graphs with endpoints of the #31 protocols (MQTT, Socket.IO, ...)
         stats["protocols"] = pr
-    test_only = {r[0] for r in db.execute("SELECT id FROM f.nodes WHERE kind='http' AND json_extract(attrs,'$.test_only')=1")}
+    test_only = {ep for _client, ep, _a, test in http_rows if test}
     test_results = [r for r in results if r["endpoint"] in test_only]
     results = [r for r in results if r["endpoint"] not in test_only]
     # ---- payload / field contract checks + routes without a client caller
     from .payload import Checker
-    fe_nodes = {r[0]: json.loads(r[1] or "{}") for r in db.execute(
-        "SELECT id, attrs FROM f.nodes WHERE kind='class' AND (attrs LIKE '%json_from%' OR attrs LIKE '%enum_values%' OR attrs LIKE '%json_to%')")}
-    be_nodes = {r[0]: json.loads(r[1] or "{}") for r in db.execute("SELECT id, attrs FROM b.nodes WHERE kind='class' AND attrs LIKE '%schema_fields%'")}
-    checker = Checker(fe_nodes, be_nodes, frontend_name, backend_name)
     rmap = {r["id"]: r for r in routes}
     issues = []
     called = set()
@@ -277,6 +410,7 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
         if len(res["matched"]) != 1:
             continue
         rr = rmap[res["matched"][0]["route"]]
+        checker = Checker(fe_classes.get(res["_client"], {}), be_classes.get(rr["server"], {}), res["_client"], rr["server"])
         for c in res["calls"]:
             try:
                 issues += checker.check(res["endpoint"], rr["id"], rr["attrs"], c)
@@ -297,7 +431,6 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
     nodes = [SimpleNamespace(id=r[0], entry_kind=r[1]) for r in db.execute("SELECT id, entry_kind FROM nodes")]
     edges = [SimpleNamespace(src=r[0], dst=r[1], kind=r[2], gate=r[3]) for r in db.execute("SELECT src, dst, kind, gate FROM edges")]
     db.executemany("INSERT INTO node_entry VALUES (?,?,?,?)", tag_entries_rows(nodes, edges, prop))
-    scen = [r[0] for r in db.execute("SELECT DISTINCT scenario FROM b.node_entry_live")]
     for sc in scen[:1]:
         db.executemany("INSERT INTO node_entry_live VALUES (?,?,?,?,?)", [(sc, *r) for r in tag_entries_rows(nodes, edges, prop, skip_gate=sc)])
     db.commit()
@@ -319,24 +452,47 @@ def link(backend_db: str, frontend_db: str, out_db: str, backend_name="backend",
         if not r["matched"]:
             reasons[r["reason"].split(":")[0].split(" (")[0]] += 1
     stats.update({"test_endpoints": len(test_results), "test_endpoints_matched": sum(1 for r in test_results if r["matched"])})
+    pair_stats = []
+    for client in client_names:
+        for server in server_names:
+            if (server == client and not folded_self) or (client in allow and server not in allow[client]):
+                continue
+            eps = [r for r in results if r["_client"] == client and server in r["_servers"]]
+            sm = {}
+            for r in eps:
+                hit = any(rmap[m["route"]]["server"] == server for m in r["matched"])
+                for c in r["calls"]:
+                    sm[c["at"]] = sm.get(c["at"], False) or hit
+            pair_stats.append({"client": client, "server": server, "endpoints": len(eps),
+                               "endpoints_matched": sum(1 for r in eps if any(rmap[m["route"]]["server"] == server for m in r["matched"])),
+                               "call_sites": len(sm), "call_sites_matched": sum(1 for v in sm.values() if v)})
+    for r in results:
+        r.pop("_client", None)
+        r.pop("_servers", None)
     stats.update({"endpoints": n_ep, "endpoints_matched": m_ep, "call_sites": len(sites), "call_sites_matched": m_sites,
                   "endpoint_match_confidence": dict(conf_ct), "unmatched_reasons": dict(reasons),
                   "ambiguous_endpoints": sum(1 for r in results if len(r["matched"]) > 1),
                   "payload_issues": dict(sorted({k: sum(1 for i in issues if i["severity"] == k) for k in ("high", "medium", "low", "info")}.items())),
-                  "routes_without_client_call": len(uncalled),
+                  "routes_without_client_call": len(uncalled), "pairs": pair_stats,
                   "link_seconds": round(time.time() - t0, 2)})
-    db.execute("DETACH DATABASE b")
-    db.execute("DETACH DATABASE f")
     from .coverage import for_graph
     cov = {}
-    for name, path in ((backend_name, backend_db), (frontend_name, frontend_db)):
+    for name, path, _role in repos:
         got = for_graph(GraphStore(path))
         cov.update({name: next(iter(got.values()))} if len(got) == 1 else got)
-    store.set_meta(project=f"{backend_name}+{frontend_name}", stats=stats, repos=[backend_name, frontend_name], coverage=cov,
-                   sources={backend_name: str(Path(backend_db).resolve()), frontend_name: str(Path(frontend_db).resolve())},
+    store.set_meta(project="+".join(names), stats=stats, repos=names, coverage=cov,
+                   sources={name: str(Path(path).resolve()) for name, path, _role in repos},
+                   repo_roles={name: role for name, _path, role in repos}, link_clients=clients, link_allow=allow,
                    indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()))
     db.close()
     return {"stats": stats, "results": results, "payload_issues": issues, "uncalled_routes": uncalled}
+
+
+def _kind_key(nid: str, kind: str) -> str:
+    """Key after the last `kind:` marker, so a repo-prefixed id `repo:channel:name` still yields `name`."""
+    mark = kind + ":"
+    i = nid.rfind(mark)
+    return nid[i + len(mark):] if i >= 0 else nid
 
 
 def channel_links(chans, subs, events, on):
@@ -347,9 +503,9 @@ def channel_links(chans, subs, events, on):
     rows, st = [], {"channel_subscriptions": len(subs), "channel_subscriptions_matched": 0, "listened_events": 0,
                     "listened_events_matched": 0}
     for sid, a in subs:
-        name = a.get("name") or sid.split(":", 1)[1]
-        exact = [c for c in chans if same_shape(name, c[1].get("pattern") or c[0][8:])]
-        hits = exact or [c for c in chans if channel_match(name, c[1].get("pattern") or c[0][8:])]
+        name = a.get("name") or _kind_key(sid, "channel_sub")
+        exact = [c for c in chans if same_shape(name, c[1].get("pattern") or _kind_key(c[0], "channel"))]
+        hits = exact or [c for c in chans if channel_match(name, c[1].get("pattern") or _kind_key(c[0], "channel"))]
         conf = "exact" if exact and len(exact) == 1 else ("resolved" if len(hits) == 1 else "heuristic")
         for cid, ca, cf, cl in hits:
             ea = {"client_name": name}
@@ -383,23 +539,13 @@ def channel_links(chans, subs, events, on):
     return rows, st
 
 
-def link_channels(db, backend_name: str) -> dict:
-    """MATCHES_CHANNEL (client subscription -> backend channel) and LISTENS_FOR (subscription -> broadcast event)."""
-    chans = [(r[0], json.loads(r[1] or "{}"), r[2], r[3]) for r in db.execute("SELECT id, attrs, file, line FROM b.nodes WHERE kind='channel'")]
-    subs = [(r[0], json.loads(r[1] or "{}")) for r in db.execute("SELECT id, attrs FROM f.nodes WHERE kind='channel_sub'")]
+def link_channels(db, chans, subs, events, on) -> dict:
+    """MATCHES_CHANNEL / LISTENS_FOR over already-copied channel rows (ids mapped, file repo-prefixed)."""
     if not subs:
         return {}
-    events = {}
-    for r in db.execute("SELECT id, attrs FROM b.nodes WHERE kind='event'"):
-        a = json.loads(r[1] or "{}")
-        if a.get("broadcast"):
-            events[r[0]] = a
-    on = defaultdict(set)
-    for r in db.execute("SELECT src, dst FROM b.edges WHERE kind='BROADCASTS_ON'"):
-        on[r[1]].add(r[0])
     rows, st = channel_links(chans, subs, events, on)
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)",
-                   [(s, d, k, f"{backend_name}/{f}" if f else None, l, c, CONFIDENCE_RANK[c], json.dumps(a), None)
+                   [(s, d, k, f, l, c, CONFIDENCE_RANK[c], json.dumps(a), None)
                     for s, d, k, c, a, f, l in rows])
     db.commit()
     return st
@@ -408,7 +554,9 @@ def link_channels(db, backend_name: str) -> dict:
 def write_match_report(res: dict, out_prefix: str) -> None:
     Path(out_prefix + ".json").write_text(json.dumps(res, indent=1, default=str))
     s = res["stats"]
-    L = [f"# API-call matching: {s['frontend']} -> {s['backend']}", "",
+    pairs = s.get("pairs") or []
+    head = "; ".join(f"{p['client']} -> {p['server']}" for p in pairs) if len(pairs) > 1 else f"{s['frontend']} -> {s['backend']}"
+    L = [f"# API-call matching: {head}", "",
          f"- call sites: {s['call_sites_matched']}/{s['call_sites']} matched "
          f"({100 * s['call_sites_matched'] / max(1, s['call_sites']):.1f}%)",
          f"- distinct client endpoints: {s['endpoints_matched']}/{s['endpoints']} matched "

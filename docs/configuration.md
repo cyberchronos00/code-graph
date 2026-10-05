@@ -32,9 +32,10 @@ plans:
 viz:
   presets:                             # canned queries for the visual view's starter cards
     - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
-apps:                                  # monorepo: one `cg index <root>` indexes each app and links each pair
+apps:                                  # workspace: one `cg index <root>` builds one combined graph
   - {name: api, root: apps/api, role: backend}
   - {name: web, root: apps/web, role: frontend, links: [api]}   # backends it calls (default: every backend)
+  - {name: orders, root: ../orders-api, role: backend}          # absolute or ../other-repo is allowed
 platforms:
   targets: [ios, android, web]         # build targets (default: detected)
   paths: {"src/win32/**": [windows]}   # files built only for some targets
@@ -66,9 +67,19 @@ The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` an
 
 `cg config show [ROOT]` prints each effective value and where it comes from (flag, `.cg.yaml`, preset or detection); `--json` prints the same as data. `cg config validate [ROOT]` checks the file and exits 2 when it is invalid. Unknown top-level keys are kept and listed under `stats.config.ignored_keys`; validate suggests a likely typo (`skip_dir` → `skip_dirs`).
 
-## Monorepo apps
+## Apps and workspace
 
-`cg index <root> --db out/mono.db` indexes each app into `out/mono.<app>.db` and links each frontend / backend pair into `out/mono.<frontend>+<backend>.db`. App names are the repo names in those graphs. Each app reads its own `.cg.yaml`; the root file's `apps` decides what is indexed. `out/mono.db` is the combined graph of the first pair (or the first app, when there is no frontend).
+`cg index <root> --db out/mono.db` indexes each app into `out/mono.<app>.db` and writes **one** combined `out/mono.db` for every app. Per-pair databases are not written. With a single app, `out/mono.db` is that app's graph.
+
+Each app reads its own `.cg.yaml`. The root file's `apps` decides what is indexed. `root` is relative to the workspace, or absolute, or `../other-repo`, so separate checkouts can share one config. A missing directory is rejected with the same message as a missing in-repo root.
+
+`role` is `backend` (publishes routes, and may call other backends) or `frontend` (calls servers, does not publish routes). `links:` on a frontend is the allow-list of backends it calls; omit it to call every backend. Client calls in every app are matched against every other backend, including backend-to-backend HTTP.
+
+```bash
+cg index . --db out/workspace.db
+```
+
+The same merge from graphs you already built is `cg link --repo` ([workspace](cli.md#workspace)). An id shared by two apps is stored as `repo:` plus the original id. `orders:Order` selects one app; `Order` matches every app that defines it.
 
 ## Framework presets
 

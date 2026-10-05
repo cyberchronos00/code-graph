@@ -5,7 +5,7 @@ Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to
 Tools: reaches, impact, callers, siblings, writers, readers, roundtrip, lint_async_state, routes, node, search, stats, starters, index, downstream, path,
 api_calls, resolutions, channels, bridges, protocol_links, llm_tools, external_systems, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
-Point --db at a combined graph (codegraph.cli link ...) to query across repos (frontend pages -> backend routes -> tables).
+Point --db at a combined graph (`cg link`, any number of repos) to query across repos (pages -> routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
 shortest evidence path (KIND@file:line hops). Every edge comes from parsers and static rules, so the same graph always
 gives the same answer. Paths in replies are repo-relative.
@@ -48,7 +48,7 @@ server = MCPServer(
         "guard names). Specs: table.column | table:<t> | connection:<name|glob*> | env:<KEY> | config:<a.b> | "
         "Class.method or Class::method (either separator in every language) | Class | pkg.module.func (Python) | file#name (TS/JS: src/app.ts#listOrders, "
         "svc.ts#OrderService.create; the file part may be a path suffix). "
-        "On a combined graph (backend + frontend) also: page:/route/path | app/pages/x.vue | useComposable.fn | "
+        "On a combined graph (N repos) also: page:/route/path | repo:Class.method | app/pages/x.vue | useComposable.fn | "
         "route:<METHOD> <uri>; `downstream` follows a page/component forward to backend routes and tables, `path` gives "
         "one evidence chain (and flags keys a call site passes that the request never sends), `api_calls` lists frontend "
         "HTTP calls with their matched backend routes. "
@@ -1155,12 +1155,20 @@ def plan_baseline(name: str) -> str:
 
 
 def _relink() -> dict:
-    from .link import link
+    from .link import link, link_many
     m = _st().meta()
     src = m["sources"]
-    be, fe = m["repos"]
+    repos = list(m["repos"])
+    roles = m.get("repo_roles") or {}
     tmp = STATE["db"] + ".tmp"
-    res = link(src[be], src[fe], tmp, be, fe)
+    if roles and all(r in roles for r in repos):
+        res = link_many([(n, src[n], roles[n]) for n in repos], tmp, allow=m.get("link_allow") or None,
+                        clients=m.get("link_clients") or "all")
+    elif len(repos) == 2:
+        be, fe = repos
+        res = link(src[be], src[fe], tmp, be, fe)
+    else:
+        res = link_many([(n, src[n], "both") for n in repos], tmp)
     os.replace(tmp, STATE["db"])
     return res["stats"]
 
@@ -1283,7 +1291,7 @@ def _index(root: str | None = None, gates: str | None = None, repo: str | None =
 @tool
 def index(root: str | None = None, gates: str | None = None, repo: str | None = None) -> str:
     """Re-index after editing (static analysis only: never boots the app or touches a database).
-    On a combined graph (backend + frontend): with no arguments every repo is re-indexed from its recorded root and the
+    On a combined graph (any number of repos): with no arguments every repo is re-indexed from its recorded root and the
     cross-repo link is rebuilt; repo (a name used at link time) re-indexes just that repo; root is matched to the
     recorded repo roots (a repo directory, a path inside one, or a parent of several). A root that matches no repo, or
     a result with 0 nodes, is refused and the graph is left unchanged.

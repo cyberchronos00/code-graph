@@ -14,7 +14,7 @@
 | `config show\|validate [ROOT]` | Effective config and where each value comes from, or check `.cg.yaml` (exit 2 if invalid). Same flags as `index`, `routes`, and `serve` (`--no-apps` included). | [configuration](configuration.md#project-file) |
 | `coverage --db DB` | One-line summary per repo and per language that is not fully indexed. `--details` / `--all-files` expand it. | [completeness](completeness.md) |
 | `starters --db DB` | Starter queries, each with the matching command and MCP call. | [viz](viz.md) |
-| `link --backend DB --frontend DB --db OUT` | Merge the two graphs and match client HTTP calls to routes. `--backend-name` / `--frontend-name` (default `backend` / `frontend`). `--report PREFIX` writes `.json` and `.md`. | `cg link -h` |
+| `link --backend DB --frontend DB --db OUT` | Merge graphs and match client HTTP calls to routes. Two repos: `--backend` / `--frontend`. N repos: repeat `--repo NAME=DB[:role]`. `--report PREFIX` writes `.json` and `.md`. | [workspace](#workspace) |
 | `reaches SPEC...` | Dependents, grouped by entry classification. On a base method, overrides are followed. | [specs](#query-targets-specs) |
 | `impact SPEC` | Callers up to entry points. `--plans-dir` adds external snapshot clients. | [answer shape](#answer-shape) |
 | `downstream SPEC` | Forward walk: page, composables, HTTP, routes, services, tables. | [specs](#query-targets-specs) |
@@ -61,6 +61,26 @@
 
 `node --json` is a list of `{node, out, in}`. `stats --json` is `{project, root, indexed_at, nodes, edges, nodes_by_kind, edges_by_kind, stats}`.
 
+## Workspace
+
+`--backend` and `--frontend` merge two graphs. `--repo` (repeatable) merges any number. The two forms cannot be combined. `role` is `backend`, `frontend` or `both` (default `both`).
+
+```bash
+cg link --backend out/api.db --frontend out/web.db --db out/graph.db
+```
+
+```bash
+cg link --repo orders=out/orders.db:backend \
+        --repo gateway=out/gateway.db:backend \
+        --repo web=out/web.db:frontend --db out/graph.db
+```
+
+Every repo's client calls are matched to routes on every other server, so a backend may call another backend. A frontend `links:` list limits which servers that app calls ([apps and workspace](configuration.md#apps-and-workspace)). Channels, protocols, payload checks and entry tagging run once on the combined graph. Stats include one row per client/server pair plus totals.
+
+An id that exists in two repos is stored as `repo:` plus the original id (`orders:class:Order`), and edges that used it are rewritten. `external:` and `endpoint:` ids stay a single node. Every other id is unchanged, so a two-repo link with no shared ids keeps the same ids. `orders:Order` and `orders:class:Order` select that repo; a plain `Order` matches every repo that defines it ([specs](#query-targets-specs)).
+
+`cg index` on a workspace `.cg.yaml` writes one combined `--db` for every app ([apps and workspace](configuration.md#apps-and-workspace)).
+
 ## Query targets (specs)
 
 | Form | Selects |
@@ -70,6 +90,7 @@
 | `connection:NAME`, `connection:tenant_*` | a connection from `config/database.php`, plus dynamic `Config::set('database.connections.…')` |
 | `env:KEY`, `config:dotted.key` | an env or config key |
 | `Class.method`, `Class::method`, `Class`, FQN | a symbol, suffix match |
+| `repo:Class.method`, `repo:class:Order` | that symbol in one repo of a combined graph (`orders:Order.total`). A plain name matches every repo |
 | `page:/reports/:id` | a Nuxt page by route |
 | `app/pages/x.vue`, `app/composables/useX.ts` | a TS module or Vue SFC (repo-relative suffix) |
 | `useX`, `useX.fn`, `fn` | a TS composable, store, or function |
@@ -87,7 +108,7 @@
 
 ## Answer shape
 
-- `index` leaves generated, copied, and vendored files out unless `--include-generated` (labelled `attrs.generated`; [generated](generated.md)). `--python-root` (repeatable) replaces detection and `python.source_roots`. Monorepo `apps` are each indexed and linked unless `--no-apps` ([configuration](configuration.md#monorepo-apps)). `--scip` is repeatable. Starters that miss a 20s budget are named in `starters_skipped`.
+- `index` leaves generated, copied, and vendored files out unless `--include-generated` (labelled `attrs.generated`; [generated](generated.md)). `--python-root` (repeatable) replaces detection and `python.source_roots`. Workspace `apps` are indexed into one combined graph unless `--no-apps` ([apps and workspace](configuration.md#apps-and-workspace)). `--scip` is repeatable. Starters that miss a 20s budget are named in `starters_skipped`.
 - `impact` marks a held function `(ref: collection | callback | assignment | decorator)` and a dispatch or plugin list `(call through a collection)`. Override lines are `overrides: Base.m` and `overridden by: A.m, B.m`. The base is not a caller of its override; a call of the base declaration is `(via base Base.m)`. `impact` on a base also lists callers of the overrides, `(via override A.m +1)`.
 - `path` to `table:` with no table edge ends at the column that is read or written. A hop that passes keys the next request never sends adds `note: sent but not forwarded: …`.
 - `api-calls` folds a runtime or env base URL (`(base {runtimeConfig.apiBase} = …)`). Endpoints only tests call are marked `(called from tests only)`.

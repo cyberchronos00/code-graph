@@ -44,7 +44,7 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 | `starters` | starter queries that resolve to nodes in this graph |
 | `stats` | node and edge counts |
 
-Argument lists match the CLI (`cg <cmd> -h`). `reaches`, `impact`, `downstream`, `path`, `routes` and `search` take `platform` (`windows`, `linux`, `macos`, `ios`, `android`, `web`). Rust and C / C++ specs: [Rust, C and C++ query specs](native.md#query-specs). `index` with no arguments re-indexes every linked repo; `repo` or `root` narrows it. A root that matches nothing, an unknown repo, or a result with 0 nodes is refused and the current graph stays.
+Argument lists match the CLI (`cg <cmd> -h`). `reaches`, `impact`, `downstream`, `path`, `routes` and `search` take `platform` (`windows`, `linux`, `macos`, `ios`, `android`, `web`). Rust and C / C++ specs: [Rust, C and C++ query specs](native.md#query-specs). On a combined graph, `repo:Class.method` selects one repo ([workspace linking](cli.md#workspace)). `index` with no arguments re-indexes every linked repo (two or more) and rebuilds the one combined link; `repo` or `root` narrows it. A root that matches nothing, an unknown repo, or a result with 0 nodes is refused and the current graph stays.
 
 Paths in replies are repo-relative. An empty result says why and suggests the next call.
 

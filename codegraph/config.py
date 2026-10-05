@@ -33,9 +33,10 @@ Records project-specific knowledge once, for the CLI, the MCP server and the vis
     viz:
       presets:                               # canned queries in the visual view's starter cards
         - {id: orders_writes, label: what writes the orders table, mode: reaches, specs: ["table:orders"]}
-    apps:                                    # monorepo: `cg index <root>` indexes each app and links each pair
+    apps:                                    # workspace: `cg index <root>` indexes each app into one combined graph
       - {name: api, root: apps/api, role: backend}
       - {name: web, root: apps/web, role: frontend, links: [api]}   # links: backends it calls (default: all)
+      # root may also be absolute or ../other-repo (a workspace of separate checkouts)
 
 Command-line flags take precedence over the file. Top-level keys this version does not read are kept and reported
 in the index stats (and as a warning by `cg config validate`), so a file written for a newer cg still indexes."""
@@ -73,6 +74,17 @@ def find(root: str | Path) -> Path | None:
         if p.is_file():
             return p
     return None
+
+
+def norm_app_root(value: Any, where: str) -> str:
+    """An app directory: relative to the workspace (`apps/api`, `./src`, `.`), `../other-repo`, or absolute."""
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{where}: expected a directory path, got {value!r}")
+    v = value.strip().replace("\\", "/")
+    if re.match(r"^[A-Za-z]:/", v) or v.startswith("/"):
+        return v.rstrip("/") or "/"
+    s = str(PurePosixPath(v))
+    return "" if s == "." else s
 
 
 def norm_root(value: Any, where: str) -> str:
@@ -309,8 +321,8 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
 
 def _apps(v: Any, fname: str) -> list[dict]:
     """apps as a list of {name, root, role, links} (or a mapping name -> {root, role, links}), validated: unique names,
-    roots inside the indexed root, role backend / frontend, links naming backend apps. A frontend without `links`
-    links to every backend."""
+    role backend / frontend, links naming backend apps. `root` may be relative, `../other-repo` or absolute.
+    A frontend without `links` links to every backend."""
     if isinstance(v, dict):
         v = [dict(x or {}, name=k) if isinstance(x, dict) or x is None else x for k, x in v.items()]
     if not isinstance(v, list) or not v:
@@ -329,7 +341,7 @@ def _apps(v: Any, fname: str) -> list[dict]:
         if name in names:
             raise ConfigError(f"{where}.name: {name!r} is used by two apps")
         names.add(name)
-        root = norm_root(a.get("root") if a.get("root") is not None else name, f"{where}.root")
+        root = norm_app_root(a.get("root") if a.get("root") is not None else name, f"{where}.root")
         role = a.get("role", "backend")
         if role not in APP_ROLES:
             raise ConfigError(f"{where}.role: expected backend or frontend, got {role!r}")

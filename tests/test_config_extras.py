@@ -1,7 +1,6 @@
 """`.cg.yaml` extras: `include` directories and `skip_dirs.keep` reaching every walk (Python, the TS and Dart
-extractors, which keep no skip list of their own), monorepo `apps` (one `cg index` indexes each app and links each
-pair, the same graphs as indexing and linking them one by one) and `cg config show` for the new keys. Fixtures are
-written from scratch in a temp dir."""
+extractors, which keep no skip list of their own), workspace `apps` (one `cg index` indexes each app into one
+combined graph) and `cg config show` for the new keys. Fixtures are written from scratch in a temp dir."""
 import json
 import re
 import sqlite3
@@ -16,7 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from codegraph.config import ConfigError, parse, effective  # noqa: E402
 from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link  # noqa: E402
 from codegraph.plugins.dart.plugin import find_dart  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
@@ -189,10 +187,10 @@ def test_monorepo_apps_one_command_matches_one_by_one(tmp_path):
     for a in ("api", "web", "admin"):
         index_project(root / "apps" / a, sep / f"{a}.db", a)
         assert graph(sep / f"{a}.db") == graph(out / f"mono.{a}.db")
-    link(str(sep / "api.db"), str(sep / "web.db"), str(sep / "web+api.db"), backend_name="api", frontend_name="web")
-    assert graph(sep / "web+api.db") == graph(out / "mono.web+api.db") == graph(out / "mono.db")
-    link(str(sep / "api.db"), str(sep / "admin.db"), str(sep / "admin+api.db"), backend_name="api", frontend_name="admin")
-    assert graph(sep / "admin+api.db") == graph(out / "mono.admin+api.db")
+    assert not (out / "mono.web+api.db").exists() and not (out / "mono.admin+api.db").exists()
+    con = sqlite3.connect(out / "mono.db")
+    assert json.loads(con.execute("SELECT value FROM meta WHERE key='repos'").fetchone()[0]) == ["api", "web", "admin"]
+    assert con.execute("SELECT count(*) FROM edges WHERE kind='MATCHES_ROUTE'").fetchone()[0] >= 3
     # --no-apps: the root as one project
     r = subprocess.run([sys.executable, "-m", "codegraph.cli", "index", str(root), "--db", str(tmp_path / "one.db"), "--no-apps"],
                        cwd=ROOT, capture_output=True, text=True)
@@ -203,10 +201,12 @@ def test_apps_validation():
     ok = parse({"apps": {"api": {"root": "apps/api"}, "web": {"root": "apps/web", "role": "frontend"}}})
     assert ok["apps"] == [{"name": "api", "root": "apps/api", "role": "backend"},
                           {"name": "web", "root": "apps/web", "role": "frontend"}]
+    outside = parse({"apps": [{"name": "api", "root": "../api"},
+                              {"name": "web", "root": "/srv/web", "role": "frontend", "links": ["api"]}]})
+    assert [a["root"] for a in outside["apps"]] == ["../api", "/srv/web"]
     for bad, msg in (
             ({"apps": [{"name": "a", "root": "x"}, {"name": "a", "root": "y"}]}, "used by two apps"),
             ({"apps": [{"name": "web", "root": "w", "role": "frontend", "links": ["api"]}]}, "is not a backend app"),
-            ({"apps": [{"name": "api", "root": "../api"}]}, "inside the indexed root"),
             ({"apps": [{"name": "api", "role": "server"}]}, "backend or frontend"),
             ({"apps": [{"name": "api", "links": ["x"]}]}, "only a frontend"),
             ({"apps": [{"name": "api", "path": "x"}]}, "unknown key 'path'"),

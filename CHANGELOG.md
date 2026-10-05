@@ -10,6 +10,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Workspace linking (#160): `cg link --repo NAME=DB[:role]` merges any number of graphs into one
+  database (`role` is `backend`, `frontend` or `both`). `apps:` in `.cg.yaml` writes that one
+  combined `--db` (per-app databases stay; per-pair databases do not). Every repo's HTTP calls
+  match routes on every other server, so a backend can call another backend; a frontend `links:`
+  list limits its targets. An id shared by two repos is stored as `repo:` plus the original id
+  and its edges are rewritten (`external:` and `endpoint:` ids stay one node);
+  a two-repo link with no shared ids keeps the same ids.
+  `repo:Class.method` selects one repo. An app `root` may be absolute or `../other-repo`.
 - Docs site (`docs-site/`): Nuxt 4, Nuxt UI and Nuxt Content read the existing `docs/` markdown
   (lime / violet / zinc, light and dark). Build with `pnpm install && pnpm run build` in
   `docs-site/`; Cloudflare Workers deploy steps are in `docs-site/README.md`.

@@ -42,7 +42,7 @@ cg path page:/reports/:id table:orders --db out/graph.db
 cg plan check preorders --plans-dir examples/plans --db out/graph.db
 ```
 
-A monorepo can list apps in `.cg.yaml` and index them with one `cg index`. Other samples in `examples/` (Nest, Next, Express, Django, Flutter, Rust, C, C++) index the same way. Queries, MCP (`cg-mcp --db out/graph.db`) and `cg serve` are in the [docs](https://code-graph.cyberchronos00.workers.dev/).
+A workspace `.cg.yaml` can list several apps, including checkouts outside that directory, and `cg index` builds one combined graph. `cg link --repo` merges graphs you already indexed. Other samples in `examples/` (Nest, Next, Express, Django, Flutter, Rust, C, C++) index the same way. Queries, MCP (`cg-mcp --db out/graph.db`) and `cg serve` are in the [docs](https://code-graph.cyberchronos00.workers.dev/).
 
 ## Preview
 

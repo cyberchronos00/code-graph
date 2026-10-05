@@ -37,6 +37,23 @@ from . import query as Q
 from .bridges import PROTOCOLS as BRIDGE_PROTOCOLS
 
 
+def _parse_repo(spec: str) -> tuple[str, str, str]:
+    """`NAME=DB[:role]` with role backend, frontend or both (default both)."""
+    if "=" not in spec:
+        raise ValueError(f"--repo {spec!r} must be NAME=DB[:role]")
+    name, rest = spec.split("=", 1)
+    if not name or not rest:
+        raise ValueError(f"--repo {spec!r} must be NAME=DB[:role]")
+    role = "both"
+    for r in ("backend", "frontend", "both"):
+        if rest.endswith(":" + r):
+            role, rest = r, rest[:-(len(r) + 1)]
+            break
+    if not rest:
+        raise ValueError(f"--repo {spec!r} must be NAME=DB[:role]")
+    return name, rest, role
+
+
 def main(argv=None):
     from . import __version__
     ap = argparse.ArgumentParser(prog="cg")
@@ -93,9 +110,13 @@ def main(argv=None):
     p.add_argument("--details", action="store_true", help="the full report: file lists (the first 5 per bucket), fix hints, "
                                                           "syntax error lines, Python source roots (default: a short summary)")
     p.add_argument("--all-files", action="store_true", help="the full report with every file per bucket, excluded files too")
-    p = sub.add_parser("link", help="combine a backend and a frontend graph and match client HTTP calls to backend routes")
-    p.add_argument("--backend", required=True); p.add_argument("--frontend", required=True); p.add_argument("--db", required=True)
+    p = sub.add_parser("link", help="merge graphs and match client HTTP calls to routes (two repos, or N --repo)")
+    p.add_argument("--backend", help="backend graph (with --frontend; not with --repo)")
+    p.add_argument("--frontend", help="frontend graph (with --backend; not with --repo)")
+    p.add_argument("--db", required=True)
     p.add_argument("--backend-name", default="backend"); p.add_argument("--frontend-name", default="frontend")
+    p.add_argument("--repo", action="append", default=[], metavar="NAME=DB[:ROLE]",
+                   help="repeatable. ROLE is backend, frontend or both (default both). Not with --backend/--frontend")
     p.add_argument("--report", help="write <prefix>.json/.md match report")
     p = sub.add_parser("path", help="one shortest evidence chain from SRC to DST (exit status 1 when there is none)"); p.add_argument("src"); p.add_argument("dst"); p.add_argument("--db", required=True)
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
@@ -260,7 +281,7 @@ def main(argv=None):
         from .config import ConfigError, load as load_config
         try:
             cfg = load_config(a.root) if not a.no_apps else {}
-            if cfg.get("apps"):        # monorepo: index each app, link each frontend / backend pair
+            if cfg.get("apps"):        # workspace: index each app into one combined graph
                 from .apps import index_apps, render as render_apps
                 summary = index_apps(a.root, a.db, cfg, a.scip, python_roots=a.python_root,
                                      include_generated=a.include_generated)
@@ -341,8 +362,25 @@ def main(argv=None):
             print(render(covs, all_files=a.all_files) if a.details or a.all_files else render_summary(covs))
         return
     if a.cmd == "link":
-        from .link import link, write_match_report
-        res = link(a.backend, a.frontend, a.db, a.backend_name, a.frontend_name)
+        from .link import link, link_many, write_match_report
+        if a.repo and (a.backend or a.frontend):
+            print("cg link: --repo cannot be combined with --backend/--frontend", file=sys.stderr)
+            return 2
+        try:
+            if a.repo:
+                if len(a.repo) < 2:
+                    print("cg link: pass at least two --repo NAME=DB[:role]", file=sys.stderr)
+                    return 2
+                repos = [_parse_repo(s) for s in a.repo]
+                res = link_many(repos, a.db)
+            elif a.backend and a.frontend:
+                res = link(a.backend, a.frontend, a.db, a.backend_name, a.frontend_name)
+            else:
+                print("cg link: pass --backend and --frontend, or repeated --repo NAME=DB[:role]", file=sys.stderr)
+                return 2
+        except ValueError as ex:
+            print(f"cg link: {ex}", file=sys.stderr)
+            return 2
         if a.report:
             write_match_report(res, a.report)
         print(json.dumps(res["stats"], indent=2))

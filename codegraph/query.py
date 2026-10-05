@@ -33,7 +33,8 @@ CLASS_KINDS = ("class", "interface", "trait", "enum")
 def resolve_targets(st: GraphStore, spec: str) -> list[str]:
     """spec: kind:key (glob * allowed) | table.column | Class::method | Class (short or FQN)
     | page:/route/path | a source file path (repo-relative, or repo/... in a combined DB)
-    | TS symbol (useX, useX.fn, fn). `Sub.method` for a method Sub inherits without redefining it resolves to the
+    | TS symbol (useX, useX.fn, fn) | `repo:Class.method` (one repo of a combined graph).
+    `Sub.method` for a method Sub inherits without redefining it resolves to the
     inherited definition (inherited_targets has the details)."""
     out = _resolve_direct(st, spec)
     if out:
@@ -345,6 +346,29 @@ def inherited_lines(res: dict) -> list[str]:
 MEMBER_PATH_RE = re.compile(r"\\?[A-Za-z_$][\w$\\]*(?:(?:\.|::)[A-Za-z_$][\w$]*)+")
 
 
+def _linked_repos(st: GraphStore) -> set[str]:
+    """Repo names recorded on a combined graph (meta `repos`, else attrs.repo)."""
+    try:
+        names = list(st.meta().get("repos") or [])
+    except Exception:  # noqa: BLE001
+        names = []
+    if names:
+        return set(names)
+    try:
+        return {r["r"] for r in st.q("SELECT DISTINCT json_extract(attrs,'$.repo') AS r FROM nodes") if r["r"]}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _in_repo(st: GraphStore, ids: list[str], repo: str) -> list[str]:
+    out = []
+    for i in ids:
+        row = st.q("SELECT json_extract(attrs,'$.repo') AS repo FROM nodes WHERE id=?", (i,))
+        if row and row[0]["repo"] == repo:
+            out.append(i)
+    return out
+
+
 def _resolve_direct(st: GraphStore, spec: str) -> list[str]:
     out = _resolve_direct_one(st, spec)
     if out or not MEMBER_PATH_RE.fullmatch(spec) or re.search(r"\.(vue|[cm]?[jt]sx?|py|dart|rs|c|h|cc|cpp|cxx|hh|hpp|hxx|m|mm|swift|kt|php)$", spec):
@@ -357,8 +381,14 @@ def _resolve_direct_one(st: GraphStore, spec: str) -> list[str]:
     if spec.startswith("page:/"):
         rows = st.q("SELECT id FROM nodes WHERE kind='page' AND json_extract(attrs,'$.route')=?", (spec[5:],))
         return [r["id"] for r in rows]
-    if st.q("SELECT 1 FROM nodes WHERE id=? LIMIT 1", (spec,)):  # an exact node id (e.g. method:App\X::y)
+    if st.q("SELECT 1 FROM nodes WHERE id=? LIMIT 1", (spec,)):  # an exact node id (e.g. method:App\X::y or repo:class:Order)
         return [spec]
+    if ":" in spec:
+        repo, rest = spec.split(":", 1)
+        if rest and repo in _linked_repos(st):
+            # `orders:Order` / `orders:Order.total` — the rest is an ordinary spec, limited to that repo.
+            # A colliding id is also `orders:class:Order`; that hits the exact-id check above.
+            return _in_repo(st, _resolve_direct(st, rest), repo)
     fn = _file_name_targets(st, spec)
     if fn is not None:
         return fn
@@ -371,6 +401,8 @@ def _resolve_direct_one(st: GraphStore, spec: str) -> list[str]:
         kind, key = spec.split(":", 1)
         pat = f"{kind}:{key}".replace("*", "%")
         rows = st.q("SELECT id FROM nodes WHERE id LIKE ?", (pat,)) if "%" in pat else st.q("SELECT id FROM nodes WHERE id=?", (pat,))
+        if not rows and "%" not in pat:
+            rows = st.q("SELECT id FROM nodes WHERE id LIKE ? ESCAPE '\\'", ("%:" + _like(pat),))
         return [r["id"] for r in rows]
     nat = _native_targets(st, spec)
     if nat:

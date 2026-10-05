@@ -268,9 +268,13 @@ def link_db(db) -> dict:
                                            "json_extract(attrs,'$.served') IS NOT NULL") if r[0] in eps}
     existing = {(r[0], r[1]) for r in db.execute("SELECT src, dst FROM edges WHERE kind='MATCHES_ENDPOINT'")}
     externals = []
-    for alias in ("b", "f"):          # protocols.external of both repos (.cg.yaml, in their index stats)
+    # protocols.external of every attached repo (.cg.yaml, in index stats). With nothing attached,
+    # the combined graph's own stats (seeded by link_many before this call) carry the merged list.
+    aliases = [r[1] for r in db.execute("PRAGMA database_list") if r[1] not in ("main", "temp")] or [None]
+    for alias in aliases:
         try:
-            r = db.execute(f"SELECT value FROM {alias}.meta WHERE key='stats'").fetchone()
+            sql = "SELECT value FROM meta WHERE key='stats'" if alias is None else f"SELECT value FROM {alias}.meta WHERE key='stats'"
+            r = db.execute(sql).fetchone()
         except Exception:  # noqa: BLE001  (not attached: a graph linked on its own)
             r = None
         if r:

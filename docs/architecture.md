@@ -25,7 +25,7 @@ language plugin.index()
 GraphBuilder  →  SQLite (core/store.py)
     │
     ├── query.py      reaches, impact, path, writers, readers
-    ├── link.py       frontend DB + backend DB → one DB
+    ├── link.py       N repo DBs → one DB (`link` is the two-repo form)
     ├── plans.py      overlay checks (the DB stays unchanged)
     ├── mcp_server    stdio; read-only except index
     └── viz/          local read-only web view
@@ -105,10 +105,11 @@ Specs: [query targets](cli.md#query-targets-specs).
 
 ## Cross-repo link
 
-`cg link --backend API.db --frontend WEB.db --db OUT` copies both graphs into one SQLite DB.
-Ids keep their language-specific shapes. `file` gains a repo prefix and `attrs.repo` is set.
-The command adds `MATCHES_ROUTE` from client `http:` endpoints to backend `route:` nodes, then recomputes entry tags over the union.
-`impact`, `downstream`, and `path` then cross both repos.
+`cg link` copies every repo graph into one SQLite DB ([workspace](cli.md#workspace)).
+`file` gains a repo prefix and `attrs.repo` is set. An id that occurs in more than one repo is stored as `<repo>:<id>` and its edges are rewritten, except `external:` and `endpoint:` ids, which stay one node (one system, one protocol name). Other ids are unchanged, so two repos with no shared ids keep the same ids.
+The command adds `MATCHES_ROUTE` from each repo's `http:` endpoints to routes of every other server (a backend may be the client), then runs channels, protocols, payload checks and entry tagging once over the union.
+`impact`, `downstream`, and `path` then cross the whole workspace, including a chain of three or more repos.
+A frontend `links:` list limits which servers that repo is matched against ([apps and workspace](configuration.md#apps-and-workspace)).
 
 Matching (`codegraph/link.py`) is deterministic: the method must agree, then each path segment.
 A literal fitted into `{param}` is `resolved`. Catch-alls absorb the tail. The best candidate has the fewest heuristic fits, then the most literal agreements; a tie is ambiguous.
