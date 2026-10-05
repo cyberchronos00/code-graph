@@ -117,6 +117,164 @@ def prisma_datasources(root: Path, models: dict) -> list:
     return out
 
 
+
+SQL_DIALECTS = {"postgres": "postgres", "postgresql": "postgres", "pg": "postgres", "cockroachdb": "postgres",
+                "mysql": "mysql", "mariadb": "mysql", "mysql2": "mysql", "mssql": "mssql", "sqlserver": "mssql",
+                "oracle": "oracle", "mongodb": "mongodb", "mongo": "mongodb"}
+
+
+def _env_or_lit(expr: str):
+    """`process.env.X` / `env('X')` / `"lit"` / `env.X` -> ('env', KEY, None) | ('lit', value) | None."""
+    e = (expr or "").strip()
+    m = re.match(r"""(?:process\.env\.(\w+)|process\.env\[\s*['\"](\w+)['\"]\s*\]|env\(\s*['\"](\w+)['\"]\s*\)|(?:import\.meta\.env|environment|env)\.(\w+)|['\"]([^'\"]+)['\"])""", e)
+    if not m:
+        return None
+    k = m.group(1) or m.group(2) or m.group(3) or m.group(4)
+    return ("env", k, None) if k else ("lit", m.group(5))
+
+
+def typeorm_datasources(root: Path, entity_tables: list) -> list:
+    """`new DataSource({ type: 'postgres'|process.env.DATABASE_TYPE, url|host: ... })` (#41)."""
+    out, files = [], []
+    for pat in ("**/data-source.ts", "**/data-source.js", "**/ormconfig.ts", "**/ormconfig.js",
+                "**/database.module.ts", "**/typeorm*.ts", "**/app.module.ts"):
+        files += [p for p in root.glob(pat) if COMMON_SKIP.isdisjoint(p.parts)]
+    files = list(dict.fromkeys(files))[:30]
+    for f in files:
+        try:
+            txt = f.read_text()
+        except Exception:
+            continue
+        if "DataSource" not in txt and "typeorm" not in txt.lower():
+            continue
+        rel = str(f.relative_to(root))
+        for m in re.finditer(r"""\bnew\s+DataSource\s*\(\s*\{""", txt):
+            # balanced object literal (Nest configs nest `extra: { ssl: {..} }`)
+            i, depth = m.end() - 1, 0
+            while i < len(txt):
+                c = txt[i]
+                if c in ("\"", "\'", "`"):
+                    q = c; i += 1
+                    while i < len(txt) and txt[i] != q:
+                        i += 2 if txt[i] == "\\" else 1
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            else:
+                continue
+            body = re.sub(r"(?m)(^|\s)//[^\n]*", r"\1", txt[m.end():i])
+            tv = re.search(r"""\btype\s*:\s*([^,\n]+)""", body)
+            if not tv:
+                continue
+            texpr = tv.group(1).strip().rstrip(",")
+            proto = None
+            tm = re.match(r"""['\"](\w+)['\"]""", texpr)
+            if tm:
+                proto = SQL_DIALECTS.get(tm.group(1).lower())
+            else:
+                ev = _env_or_lit(texpr)
+                # type from env: default to postgres when DATABASE_URL / DATABASE_TYPE (Nest boilerplate)
+                if ev and ev[0] == "env":
+                    proto = "postgres"   # refined below from url scheme if present
+            uv = re.search(r"""\b(?:url|connectionString)\s*:\s*([^,\n]+)""", body)
+            hv = re.search(r"""\bhost\s*:\s*([^,\n]+)""", body)
+            url = _env_or_lit(uv.group(1).strip().rstrip(",")) if uv else None
+            host = _env_or_lit(hv.group(1).strip().rstrip(",")) if hv else None
+            if url is None and host is None:
+                continue
+            if proto is None and url and url[0] == "lit":
+                from ...external import parse_dsn
+                d = parse_dsn(url[1])
+                proto = d["protocol"] if d else None
+            if proto is None:
+                proto = "postgres" if (url and url[0] == "env" and "MYSQL" not in (url[1] or "").upper()) else None
+            if proto is None:
+                continue
+            line = txt[:m.start()].count("\n") + 1
+            fact = {"datasource": "default", "protocol": proto, "file": rel, "line": line,
+                    "var": "default", "module": rel, "library": "typeorm", "tables": sorted(entity_tables)}
+            if url:
+                fact["url"] = url
+            else:
+                fact["host"] = host
+                pv = re.search(r"""\bport\s*:\s*([^,\n]+)""", body)
+                if pv:
+                    fact["port"] = _env_or_lit(pv.group(1).strip().rstrip(","))
+            out.append(fact)
+    return out
+
+
+def drizzle_datasources(root: Path, drizzle_tables: list) -> list:
+    """`drizzle.config.ts` dialect + dbCredentials.url (#41)."""
+    out = []
+    files = []
+    for pat in ("drizzle.config.ts", "drizzle.config.js", "drizzle.config.mts", "drizzle.config.mjs",
+                "**/drizzle.config.ts", "**/drizzle.config.js"):
+        files += [p for p in root.glob(pat) if COMMON_SKIP.isdisjoint(p.parts)]
+    for f in list(dict.fromkeys(files))[:10]:
+        try:
+            txt = f.read_text()
+        except Exception:
+            continue
+        rel = str(f.relative_to(root))
+        body = re.sub(r"(?m)(^|\s)//[^\n]*", r"\1", txt)
+        dv = re.search(r"""\bdialect\s*:\s*['\"](\w+)['\"]""", body)
+        proto = SQL_DIALECTS.get((dv.group(1) if dv else "").lower())
+        if proto is None:
+            # driver: 'pg' form
+            dv = re.search(r"""\bdriver\s*:\s*['\"](\w+)['\"]""", body)
+            proto = SQL_DIALECTS.get((dv.group(1) if dv else "").lower())
+        if proto is None:
+            continue
+        # dbCredentials: { url: process.env.X } or connectionString
+        uv = re.search(r"""\b(?:url|connectionString)\s*:\s*([^,\n}]+)""", body)
+        url = None
+        if uv:
+            url = _env_or_lit(uv.group(1).strip())
+            if url is None:
+                # `url: nonPoolingUrl` where `const nonPoolingUrl = process.env.POSTGRES_URL.replace(...)`
+                name = uv.group(1).strip()
+                if re.fullmatch(r"[A-Za-z_]\w*", name):
+                    cm = re.search(rf"""\b(?:const|let|var)\s+{re.escape(name)}\s*=\s*([^;\n]+)""", body)
+                    if cm:
+                        # process.env.X or process.env.X.replace(...)
+                        em = re.search(r"""process\.env\.(\w+)|process\.env\[\s*['\"](\w+)['\"]""", cm.group(1))
+                        if em:
+                            url = ("env", em.group(1) or em.group(2), None)
+        if url is None:
+            continue
+        line = 1
+        dm = re.search(r"""\bdialect\s*:""", body) or re.search(r"""\bdbCredentials\s*:""", body)
+        if dm:
+            line = txt[:dm.start()].count("\n") + 1
+        out.append({"datasource": "default", "protocol": proto, "url": url, "file": rel, "line": line,
+                    "var": "default", "module": rel, "library": "drizzle", "tables": sorted(drizzle_tables)})
+    return out
+
+
+def parse_drizzle_tables(root: Path) -> dict:
+    """`export const users = pgTable('users', ...)` / mysqlTable / sqliteTable -> {var: table} (#41)."""
+    out = {}
+    files = [p for p in root.rglob("*.ts") if COMMON_SKIP.isdisjoint(p.parts)
+             and ("schema" in p.name.lower() or "drizzle" in str(p.parent).lower())][:40]
+    rx = re.compile(r"""(?:export\s+)?(?:const|let)\s+(\w+)\s*=\s*(?:\w+\.)?(pgTable|mysqlTable|sqliteTable|singlestoreTable)\(\s*['"]([^'"]+)['"]""")
+    for f in files:
+        try:
+            txt = f.read_text()
+        except Exception:
+            continue
+        if "Table(" not in txt:
+            continue
+        rel = str(f.relative_to(root))
+        for m in rx.finditer(txt):
+            out[m.group(1)] = {"table": m.group(3), "file": rel, "line": txt[:m.start()].count("\n") + 1, "driver": m.group(2)}
+    return out
+
+
 def parse_prisma(root: Path) -> dict:
     """model Name { field Type @map("col") ... @@map("table") } -> {Name: {table, fields: {field: column}, file, line}}"""
     models = {}
@@ -198,9 +356,10 @@ def contribute_data(project: Project, b: GraphBuilder, ctx) -> dict:
         a0 = (d.get("args") or [None])[0]
         if hit == "Schema" and not (d.get("mod") or "").startswith("@nestjs/mongoose") and d.get("mod"):
             continue
-        if hit == "Table" and d.get("mod") and "sequelize" not in d["mod"]:
-            continue
         explicit = sval(a0) or sval(obj(a0).get("name")) or sval(obj(a0).get("tableName")) or sval(obj(a0).get("collection"))
+        # sequelize-typescript @Table; Immich @immich/sql-tools @Table('t'); skip bare @Table from unknown mods
+        if hit == "Table" and d.get("mod") and "sequelize" not in d["mod"] and not explicit:
+            continue
         if hit == "Schema":
             table, kind = explicit or plural(c["name"].lower()), {"collection": True}
         elif hit == "Table":
@@ -258,6 +417,13 @@ def contribute_data(project: Project, b: GraphBuilder, ctx) -> dict:
             drizzle_names[inst.get("name")] = t
             _ensure_table(b, t, orm="drizzle")
     st["drizzle_tables"] = len(drizzle)
+    for name, info in parse_drizzle_tables(project.root).items():
+        t = info["table"]
+        drizzle_names[name] = t
+        if name not in drizzle:
+            drizzle[name] = t
+        _ensure_table(b, t, orm="drizzle")
+    st["drizzle_tables"] = len(set(drizzle.values()) | set(drizzle_names.values()))
 
     # repositories / models injected into classes: (class id, prop name) -> table
     repo_prop = {}
@@ -325,11 +491,18 @@ def contribute_data(project: Project, b: GraphBuilder, ctx) -> dict:
         for t in tables:
             if not t or "{" in t:
                 continue
-            tid = _ensure_table(b, t)
+            tid = _ensure_table(b, t, **({"orm": "kysely"} if via == "kysely" else {}))
             write = m in WRITE_OPS or (via == "drizzle" and m in ("insert", "update", "delete")) \
                 or (via == "knex" and bool(KNEX_WRITES & set(mc.get("chain") or ())))
             b.add_edge(src, tid, "WRITES_TABLE" if write else "READS_TABLE", file=mc["file"], line=mc["line"], confidence=conf, via=via, op=m)
             st["table_writes" if write else "table_reads"] += 1
+    # TypeORM DataSource / Drizzle config -> external systems (#41 step 2)
+    typeorm_tables = sorted({n.name for n in b.nodes.values()
+                             if n.kind == "table" and (n.attrs or {}).get("orm") in ("Entity", "ViewEntity", "Table")})
+    drizzle_names_list = sorted(set(drizzle.values()) | set(drizzle_names.values()))
+    extra = typeorm_datasources(project.root, typeorm_tables) + drizzle_datasources(project.root, drizzle_names_list)
+    if extra:
+        b.external_facts = getattr(b, "external_facts", []) + extra
     st["tables"] = sum(1 for n in b.nodes.values() if n.kind == "table" and n.lang == "ts")
     return st
 

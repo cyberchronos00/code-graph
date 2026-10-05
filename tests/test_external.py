@@ -450,3 +450,34 @@ def test_prisma_sqlite_and_literal(tmp_path):
     assert (m["address_source"], m["library"]) == ("literal", "prisma")
     c = ext(GraphStore(tmp_path / "cfg.db"))["external:mysql:env:SHOP_DB_URL"]
     assert (c["address_source"], c["confidence"]) == ("env", "heuristic")
+
+
+# ---- #41 step 2: TypeORM DataSource, Drizzle config, Kysely sole-SQL attach
+@pytest.fixture(scope="module")
+def orm_db(tmp_path_factory):
+    d = tmp_path_factory.mktemp("orm") / "o.db"
+    index_project(FX / "shop-orm", d, "shop-orm")
+    return d
+
+
+def test_typeorm_drizzle_kysely_systems(orm_db):
+    st = GraphStore(orm_db)
+    a = ext(st)["external:postgres:pg.internal:5432"]
+    assert a["protocol"] == "postgres" and a["tls"] is True
+    sysof = {r["id"]: json.loads(r["attrs"] or "{}") for r in st.q("SELECT id, attrs FROM nodes WHERE kind='table'")}
+    assert sysof["table:orders"]["orm"] == "Entity" and sysof["table:orders"]["system"].endswith("pg.internal:5432")
+    assert sysof["table:customers"]["orm"] == "drizzle"
+    assert sysof["table:asset"]["orm"] == "kysely"
+    vias = {r["src"]: json.loads(r["attrs"] or "{}").get("via")
+            for r in st.q("SELECT src, attrs FROM edges WHERE kind='CONNECTS_TO' AND src LIKE 'table:%'")}
+    assert "typeorm datasource" in vias["table:orders"]
+    assert "drizzle datasource" in vias["table:customers"]
+    assert vias["table:asset"] == "sole postgres system"
+    assert b"t0rm-fixture-pw" not in orm_db.read_bytes() and b"dr1z-fixture-pw" not in orm_db.read_bytes()
+
+
+def test_orm_impact_cli(orm_db):
+    r = cli("impact", "external:postgres:pg.internal:5432", "--db", str(orm_db))
+    assert "listOrders" in r.stdout or "listAssets" in r.stdout
+    r = cli("external", "--db", str(orm_db))
+    assert "tables" in r.stdout and "postgres" in r.stdout

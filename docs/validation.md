@@ -1275,3 +1275,17 @@ against the schema; `impact` on the system goes from 429 callers / 198 entry poi
 directly. The other Prisma schemas in the corpora are sqlite (nest `22-graphql-prisma`) or outside the indexed app
 (cal.com's `packages/prisma`, read by `apps/web` and `apps/api/v2` through a workspace package), so they add
 nothing; no node or edge changes on the regression set.
+
+## TypeORM, Drizzle and Kysely as external systems (#41 step 2)
+
+immich-app/immich `server`: 76 tables gain `attrs.system` and CONNECTS_TO
+`external:postgres:env:DB_URL` (`via: sole postgres system`) — 16 from `@immich/sql-tools` `@Table`
+(now recognised alongside sequelize-typescript) plus 60 from Kysely `selectFrom` / `insertInto`
+(`orm: kysely`). `@Table` also adds CONTAINS column edges from the schema decorators. `impact` on the
+system goes from 211 callers / 318 entry points to 1329 / 341; 5 sampled depth-2 callers
+(`withSharedBy`, `withMetadata`, `updateThumbnailBuilder`, `checkSharedLinkAccess`,
+`ApiKeyRepository.update`) all query through Kysely. nestjs-boilerplate: 5 `@Entity` tables attach via
+the `new DataSource({ type: process.env.DATABASE_TYPE, url: process.env.DATABASE_URL })` in
+`src/database/data-source.ts` (`via: typeorm datasource default`); Mongoose `@Schema` collections stay
+out. koel (Laravel tables without an ORM tag) and outline / create-t3-turbo / solidtime: no node or
+edge changes.

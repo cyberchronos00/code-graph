@@ -523,6 +523,38 @@ def attach(builder, root: Path) -> dict:
             builder.add_edge(e.src, nid, "CONNECTS_TO", e.file, e.line, "heuristic" if conf == "heuristic" else "resolved",
                              op="connect", via=f"env {akey}")
             st["connects"] += 1
+
+    # ---- ORM tables without a datasource block: attach to the sole SQL system of the project (#41 step 2)
+    # Immich (Kysely + DB_URL), Nest TypeORM (@Entity + DATABASE_URL) when no DataSource fact named them.
+    SQL = {"postgres", "mysql", "mssql", "oracle", "mongodb", "sqlite"}
+    ORM = {"Entity", "ViewEntity", "Table", "kysely", "drizzle", "knex", "prisma", "typeorm"}
+    by_proto: dict = {}
+    for n in builder.nodes.values():
+        if n.kind != "external":
+            continue
+        pr = (n.attrs or {}).get("protocol")
+        if pr in SQL:
+            by_proto.setdefault(pr, []).append(n.id)
+    # Only tables an ORM declared (not bare Laravel migration tables / raw SQL names)
+    pending = [n for n in builder.nodes.values()
+               if n.kind == "table" and not (n.attrs or {}).get("system")
+               and (n.attrs or {}).get("orm") in ORM]
+    if pending and sum(1 for ids in by_proto.values() if len(ids) == 1) >= 1:
+        # one SQL system total across protocols, or one per protocol with all tables going to the only SQL proto
+        sole = [ids[0] for ids in by_proto.values() if len(ids) == 1]
+        if len(sole) == 1 or (len(by_proto) == 1 and len(sole) == 1):
+            nid = sole[0]
+            # If multiple sole protocols (postgres + redis), only attach to the SQL one (redis not in SQL... redis not in SQL set)
+            # sole may be [postgres] only since redis is not in SQL. Good.
+            if len([i for i in sole if builder.nodes[i].attrs.get("protocol") in SQL]) == 1:
+                nid = next(i for i in sole if builder.nodes[i].attrs.get("protocol") in SQL)
+                for n in pending:
+                    n.attrs.setdefault("system", nid)
+                    builder.add_edge(n.id, nid, "CONNECTS_TO", n.file, n.line, "heuristic",
+                                     op="table", via=f"sole {(builder.nodes[nid].attrs or {}).get('protocol')} system")
+                    st["tables"] = st.get("tables", 0) + 1
+                    st["sole_attach"] = st.get("sole_attach", 0) + 1
+
     return {k: v for k, v in st.items() if v} if st["systems"] else {}
 
 
