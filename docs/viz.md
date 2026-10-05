@@ -12,12 +12,12 @@ Watch the [visual view demo](media/cg-view-demo.mp4).
 
 ## What you can do
 
-- **Landing.** Project, index time, counts, a search box (kind chips, fuzzy short names, ↑/↓/Enter) and starter cards. Starters come from `--presets FILE` or `viz.presets`, then sample presets whose targets are in the graph, then queries derived from the graph ([configuration.md](configuration.md#viz-presets-and-starter-queries)).
+- **Landing.** Project, index time, counts, a search box (kind chips, fuzzy short names, ↑/↓/Enter) and starter cards. Starters come from `--presets FILE` or `viz.presets`, then sample presets whose targets are in the graph, then queries derived from the graph ([viz presets and starter queries](configuration.md#viz-presets-and-starter-queries)).
 - **Query.** Modes `reaches`, `impact`, `downstream` (with sinks), `path` (`source, [waypoints…,] target`) and `plan overlay`. Filters: min confidence and sinks. The subgraph is the union of the evidence paths.
 - **Layout.** Impact, downstream and path draw in layers; reaches and plan overviews use fcose with module boxes. Wide layers fold into clusters; click a cluster or a folded box to open it.
 - **Detail.** Click a node for file:line, a source snippet, evidence edges and actions that run a new query (`impact of this`, `downstream of this`, `path from here`). Copy id, FQN or the `cg impact` command. Drag the panel edge to resize it; the width is remembered.
 - **Search default.** Enter on a hit runs the default query for its kind: reaches for tables, columns, config and env; downstream for pages and routes; impact otherwise.
-- **Plan overlay.** Loads a plan on top of the graph. Colours mark planned nodes, modified targets, gaps and forbidden paths ([plans.md](plans.md)).
+- **Plan overlay.** Loads a plan on top of the graph. Colours mark planned nodes, modified targets, gaps and forbidden paths ([Planned changes](plans.md)).
 - **Share.** The URL hash stores the query, selection and layout. **Copy link** copies it.
 
 Layered views read left to right: impact (entry points, then the target), downstream (source, then sinks), path (the specs in order). A layer with more than 12 nodes folds into counted clusters. Click a cluster to show its next 20 members; Esc folds it. In the force-directed view, nodes sit in module boxes (columns by table). Click a folded box to open it; double-click an open box to fold it.

@@ -1,6 +1,6 @@
 # Kotlin
 
-What `.kt` / `.kts` add beyond [install.md](install.md), [CLI specs](cli.md#query-targets-specs), and [schema.md](schema.md): heuristic vs scip-java, the env flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
+What `.kt` / `.kts` add beyond [Install](install.md), [CLI specs](cli.md#query-targets-specs), and [Graph schema](schema.md): heuristic vs scip-java, the env flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
 
 ## Modes
 
@@ -45,7 +45,7 @@ Java in that index becomes `java` nodes with exact Kotlin ↔ Java and Java → 
 
 ## Query specs
 
-`Class.method` and `Class::method` follow [cli.md](cli.md#query-targets-specs). Kotlin-only shapes:
+`Class.method` and `Class::method` follow [query targets](cli.md#query-targets-specs). Kotlin-only shapes:
 
 | spec or id | selects |
 |---|---|

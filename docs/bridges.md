@@ -160,4 +160,4 @@ listed at the end as `unresolved` (`stats.bridges.dynamic`: a count and up to 20
   table. Tauri `emit` / `listen`, and commands invoked from `.svelte` / `.vue` outside
   `<script>`.
 
-Public-app results: [validation-log.md](validation-log.md#web--native-bridges).
+Public-app results: [web / native bridges](validation-log.md#web--native-bridges).

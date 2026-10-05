@@ -30,7 +30,7 @@ Tokens: class types, `@Inject('TOKEN')` / `@Inject(SYMBOL)`, `@Dependencies(A, B
 Providers are found in module arrays, spread arrays, custom-provider files and dynamic
 `forRoot()`. Library providers (`ConfigService`, `JwtService`, `@InjectX()`, tokens
 imported from packages) count as external. The GraphQL route's protocol twin is
-[protocols.md](protocols.md).
+[Protocol links](protocols.md).
 
 ## Next.js
 
@@ -84,13 +84,13 @@ setter on is not a write. A `RENDERS` or `INSTANTIATES` edge inside `if` / `swit
 carries `branch` and `branch_line`.
 
 `cg readers` / `cg writers` take `Class.field`. Public numbers:
-[validation-log.md](validation-log.md#typescript--javascript-frameworks).
+[TypeScript / JavaScript frameworks](validation-log.md#typescript--javascript-frameworks).
 
 ## Limitations
 
 - Paths built in a loop or from config become `{param}` or are missed. Custom decorators that
   wrap `@Get` through `applyDecorators` are not routes (a blind spot in
-  [completeness.md](completeness.md)).
+  [Completeness](completeness.md)).
 - Nest tokens are global. Request-scoped providers are treated as singletons. `@OnJob` and other
   `SetMetadata` systems are not entry points.
 - Next `pageExtensions`, MDX-only pages, i18n `locales` and `generateStaticParams` are not

@@ -58,7 +58,7 @@ After `index()`, a plugin may set `self.file_report` (repo-relative paths):
 | `excluded` | left out by skips or exclude globs |
 | `roots` | directories (ending in `/`) and files the plugin reads |
 
-`coverage.py` buckets every discovered file of that language from the report ([completeness.md](completeness.md)).
+`coverage.py` buckets every discovered file of that language from the report ([Completeness](completeness.md)).
 A file missing from `seen` counts as excluded, or as unmapped when the report has `roots` and the file sits under none of them.
 
 ## Plugins
@@ -87,7 +87,7 @@ Compiler indexes (rust-analyzer, scip-clang, scip-java, the Swift index) match S
 Ids stay the same in heuristic and exact mode. `cg index --scip FILE` merges an existing index.
 Go and Java have indexer recipes only (`plugins/stubs`).
 
-Per-language facts: [python.md](python.md), [php.md](php.md), [ts-frameworks.md](ts-frameworks.md), [kotlin.md](kotlin.md), [swift.md](swift.md), [native.md](native.md).
+Per-language facts: [Python](python.md), [PHP](php.md), [TypeScript / JavaScript frameworks](ts-frameworks.md), [Kotlin](kotlin.md), [Swift](swift.md), [Rust, C and C++](native.md).
 
 ## Queries
 
@@ -100,8 +100,8 @@ Per-language facts: [python.md](python.md), [php.md](php.md), [ts-frameworks.md]
 | `path` | one shortest chain between two specs |
 
 Override hops are the override relation: `impact` shows `overrides:` and `(via override)`, and `tests` / `reaches` seed the same way.
-With a gate scenario indexed, dependents reached only through gated code sit in a GATED group ([configuration.md](configuration.md#gate-scenarios)).
-Specs: [cli.md](cli.md#query-targets-specs).
+With a gate scenario indexed, dependents reached only through gated code sit in a GATED group ([gate scenarios](configuration.md#gate-scenarios)).
+Specs: [query targets](cli.md#query-targets-specs).
 
 ## Cross-repo link
 
@@ -117,4 +117,4 @@ A literal fitted into `{param}` is `resolved`. Catch-alls absorb the tail. The b
 ### Payload / field check
 
 For a client endpoint with one route match, `codegraph/payload.py` compares the keys the client sends and parses with the server schema or the returned shape, and writes `payload_checks` (each issue has `file:line` on both sides).
-Ambiguous matches are skipped. Kind names: [schema.md](schema.md).
+Ambiguous matches are skipped. Kind names: [Graph schema](schema.md).

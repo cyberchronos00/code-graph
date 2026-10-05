@@ -35,8 +35,8 @@ Gaps seen:
 
 Python source-root detection (`src/` and `lib/` layouts, monorepos, namespace packages) is validated on
 fastapi/full-stack-fastapi-template, opentelemetry-python, ansible, flask, pytest and netbox: see
-[python.md](python.md#validation). Test indexing (pytest, unittest, fixtures, Django / DRF test clients) is validated on
-the same projects: see [python.md](python.md#tests-pytest-and-unittest).
+[validation](python.md#validation). Test indexing (pytest, unittest, fixtures, Django / DRF test clients) is validated on
+the same projects: see [pytest and unittest](python.md#tests-pytest-and-unittest).
 
 `tests.py` modules and collection chains, checked on django (211 `tests.py` files), netbox, saleor, ansible,
 opentelemetry-python, mkdocs, flake8, httpie, beets, sphinx and pylint: every graph is identical before and after (same
@@ -216,7 +216,7 @@ In every default index no node comes from a classified file, and `cg coverage` l
 `*.freezed.dart` output, which the Dart plugin always skipped, is indexed too. On the Ionic app and on capacitor-plugins
 the node count does not move: the TS plugin only reads `src/`, so the 211 copies were never parsed, but they were
 counted as unindexed TypeScript and inflated the coverage gap. Linking the JS side of a Capacitor plugin to its
-Android/iOS implementation needs the Kotlin/Java and Swift plugins (see [generated.md](generated.md)).
+Android/iOS implementation needs the Kotlin/Java and Swift plugins (see [Generated files](generated.md)).
 
 Bundled examples are unchanged except `bookstore-flutter` (90 / 171 → 87 / 164: the `book.g.dart` json_serializable
 output is no longer a node; `PARSES_JSON` is unchanged, because the file is still read for the exact JSON keys). The classification scan
@@ -414,7 +414,7 @@ names the reason (`Swift toolchain found but the package was not built ...`, `no
 
 ## Web / native bridges
 
-`cg index <repo>` with no flags and no `.cg.yaml`, then `cg bridges` ([bridges.md](bridges.md)). The two Capacitor
+`cg index <repo>` with no flags and no `.cg.yaml`, then `cg bridges` ([Web / native bridges](bridges.md)). The two Capacitor
 repositories are monorepos without a root `tsconfig.json`; the TypeScript plugin indexes their per-package
 tsconfigs as one program (capacitor: 794 / 1664 → 1633 / 4521 nodes / edges, before that the plugin did not run;
 capacitor-plugins: 589 / 640 → 959 / 1367, 20 package tsconfigs instead of 3–4 files picked up by the fallback). Index time is one run each on a shared box (the spread between repeated
@@ -625,7 +625,7 @@ run each on a shared box.
 ## Protocol links: shared endpoint model (#31)
 
 `cg index` with no flags and no `.cg.yaml`, then `cg link` for the pairs and `cg protocols`
-([protocols.md](protocols.md)). The existing links are read through adapters, so the graph and the outputs of
+([Protocol links](protocols.md)). The existing links are read through adapters, so the graph and the outputs of
 `cg link`, `cg channels` and `cg bridges` were compared before and after on every project below: nodes, edges and all
 three outputs are identical. Index time is one run each on a shared box, within the run-to-run spread.
 
@@ -663,7 +663,7 @@ What the findings are, from spot checks:
 
 ## AI harnesses: LLM tools, MCP servers and agents (#66)
 
-`cg index` with no flags, then `cg tools` ([ai-tools.md](ai-tools.md)). Graphs of projects without these SDKs are
+`cg index` with no flags, then `cg tools` ([AI tools](ai-tools.md)). Graphs of projects without these SDKs are
 unchanged (bookstore-django 207 / 341, netbox 38,028 / 140,181, saleor 43,390 / 210,377 nodes / edges, identical
 before and after).
 
@@ -691,7 +691,7 @@ What the findings are, from spot checks:
 
 ## External systems (#40)
 
-`cg index` with no flags, then `cg external` ([external.md](external.md)). The only graph change is additive:
+`cg index` with no flags, then `cg external` ([External systems](external.md)). The only graph change is additive:
 `external` nodes and their CONNECTS_TO / CONFIGURED_BY / CREDENTIAL_FROM edges; projects without env reads,
 connections or settings dicts are unchanged.
 

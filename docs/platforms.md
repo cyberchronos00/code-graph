@@ -49,7 +49,7 @@ prints the targets and where each came from.
 
 `canImport(UIKit)` is ios, tvos, visionos (and macos in a Catalyst app). `canImport(AppKit)` is
 macos. `targetEnvironment(simulator)` is not a platform. `@available(iOS 17, *)` is a minimum OS
-version (`attrs.available`, [swift.md](swift.md)), not a target filter.
+version (`attrs.available`, [Swift](swift.md)), not a target filter.
 `@available(iOS, unavailable)` is a platform condition.
 
 ## What is recognised
@@ -61,7 +61,7 @@ version (`attrs.available`, [swift.md](swift.md)), not a target filter.
 | Dart | `Platform.isIOS`, `kIsWeb`, `TargetPlatform`, `switch` / `?:` | `import 'stub.dart' if (dart.library.io) 'io.dart'` |
 | TS / JS | `Platform.OS`, `Platform.select`, `process.platform`, `os.platform()` | `.ios.ts` / `.android.ts` / `.native.ts` / `.web.ts` (`moduleSuffixes`) |
 | Swift | `#if os(iOS)`, `canImport`, `targetEnvironment(macCatalyst)`, `@available(*, unavailable)` | one type or method per `#if` branch (`class:Toolbar`, `class:Toolbar@7`) |
-| Kotlin | `iosMain`, `androidMain`, … | `expect` links to each `actual` ([kotlin.md](kotlin.md)) |
+| Kotlin | `iosMain`, `androidMain`, … | `expect` links to each `actual` ([Kotlin](kotlin.md)) |
 
 A guard (`if (Platform.OS !== 'ios') return`) tags the rest of the block with the negated
 condition. A JS branch without braces ends at its line. Electron and Tauri process roles are
@@ -159,5 +159,5 @@ types. A nested type follows its variant.
 
 Kingfisher's tests are built for watchOS (`build` only, never `test`), which gives 35
 project-default test findings. Spot checks on ripgrep, alacritty, libuv, curl, dart-lang/http,
-localsend and bluesky social-app: [validation-log.md](validation-log.md#platform-specific-code)
+localsend and bluesky social-app: [platform-specific code](validation-log.md#platform-specific-code)
 .

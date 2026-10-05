@@ -83,5 +83,5 @@ generated:
 ```
 
 `cg config show` lists the built-in rules and these keys. Public repos:
-[validation-log.md](validation-log.md#generated-and-copied-files). Copied web assets are not
-bridge senders; only the source `webDir` files are indexed ([bridges.md](bridges.md)).
+[generated and copied files](validation-log.md#generated-and-copied-files). Copied web assets are not
+bridge senders; only the source `webDir` files are indexed ([Web / native bridges](bridges.md)).

@@ -49,7 +49,7 @@ protocol_receive(builder, "mqtt", "devices/+/state", handler_id, file, line, "ex
 | `template` | whole-name `{param}` | socketio, unix, pipe |
 | `dotted` | `.` segments with `{param}` | pusher |
 | `exact` | same name | bridges, nest-*, jobs, events, llm_tool, grpc, thrift, trpc, jsonrpc, graphql, redis-stream, tcp, udp |
-| `mcp` | `<server>/<name>`; `*` if the client omits the server | mcp_tool, mcp_resource, mcp_prompt ([ai-tools.md](ai-tools.md)) |
+| `mcp` | `<server>/<name>`; `*` if the client omits the server | mcp_tool, mcp_resource, mcp_prompt ([AI tools](ai-tools.md)) |
 
 ## Existing kinds
 
@@ -80,7 +80,7 @@ A side is judged only when the graph has some endpoint of that protocol on the o
 | `unguarded` | an outside-reachable receiver with no auth guard (HTTP / WS / GraphQL routes, server Socket.IO). Nest message handlers record `@UseGuards` and `APP_GUARD`; `app.useGlobalGuards()` is HTTP only |
 | `external` | `.cg.yaml`, a third-party HTTP origin, a framework signal (`post_save`, …), or a bridge module outside the repo |
 
-Bridge checks stay in [bridges.md](bridges.md): `missing_on`, `unregistered`, plus
+Bridge checks stay in [Web / native bridges](bridges.md): `missing_on`, `unregistered`, plus
 `no_receiver` / `no_sender` / `external`.
 
 ```yaml
@@ -112,7 +112,7 @@ socketio:/orders#order:created  side: both
 
 `cg path "route:POST /orders" table:orders` on the `tests/protocol_fixtures` link runs route →
 handler → `SENDS_TO` → `RECEIVED_BY` → `WRITES_TABLE`. Corpus numbers:
-[validation-log.md](validation-log.md#protocol-links-shared-endpoint-model-31).
+[protocol links](validation-log.md#protocol-links-shared-endpoint-model-31).
 
 ## Webhook verification
 

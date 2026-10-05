@@ -12,7 +12,7 @@ node_entry(node_id, entry_kind, entry_count, sample_entry)
 meta(key, value)  -- corpus, commit, stats
 ```
 
-On a combined DB only, `payload_checks(endpoint, route, kind, severity, message, client_at, server_at, details JSON)` holds the request/response field check ([architecture.md](architecture.md#payload--field-check)).
+On a combined DB only, `payload_checks(endpoint, route, kind, severity, message, client_at, server_at, details JSON)` holds the request/response field check ([payload / field check](architecture.md#payload--field-check)).
 
 `module` is the path or namespace (`Http/Controllers/Admin`, a Rust module path, a C/C++ directory). `doc` holds the doc comment. `reaches` groups by `module`.
 
@@ -22,14 +22,14 @@ On a combined DB only, `payload_checks(endpoint, route, kind, severity, message,
 |---|---|---|
 | PHP / shared | `class`, `interface`, `trait`, `method` (functions too), `property`, `external_class`, `route`, `command`, `schedule`, `job`, `event`, `listener`, `observer`, `admin`, `table`, `column`, `connection`, `config`, `env`, `script` | `channel:<pattern>` has `pattern`, `visibility`, `declared`, `callback` / `handler` |
 | Tests | `test` | id `test:<file>::<name>` (Python `test:<module>.<Class>.<method>`). Attrs: `framework` (phpunit, pest, vitest, jest, playwright, cypress, pytest, unittest), `suite`; Python adds `params`, `marks`, `testcase`, `inherited_from`. Nodes in test code have `attrs.test` |
-| TypeScript / Vue | `module`, `page`, `component`, `layout`, `app`, `composable`, `store`, `function`, `class`, `type`, `http`, `channel_sub`, `i18n` | `http:<METHOD> <path>`; `channel_sub:<name>`. See [ts-frameworks.md](ts-frameworks.md) for Nest, Next and Express kinds (`route`, `message`, `job`, …) |
-| Rust, C, C++ | `crate`, `mod`, `file`, `function`, `method`, `struct`, `enum`, `union`, `class`, `typedef`, `type_alias`, `trait`, `field`, `variant`, `enumerator`, `const`, `static`, `global`, `macro`, `ffi` | Fact nodes: `feature:`, `cfg:`, `define:`, `unsafe:`, `env:`. [native.md](native.md) |
-| Python | `module`, `class`, `function`, `method`, `field`, `script`, plus Django `route`, `table`, `column`, `config`, `env`, `job`, `listener`, `command`, `admin`, `event` | [python.md](python.md#entry-points-and-function-references) |
+| TypeScript / Vue | `module`, `page`, `component`, `layout`, `app`, `composable`, `store`, `function`, `class`, `type`, `http`, `channel_sub`, `i18n` | `http:<METHOD> <path>`; `channel_sub:<name>`. See [TypeScript / JavaScript frameworks](ts-frameworks.md) for Nest, Next and Express kinds (`route`, `message`, `job`, …) |
+| Rust, C, C++ | `crate`, `mod`, `file`, `function`, `method`, `struct`, `enum`, `union`, `class`, `typedef`, `type_alias`, `trait`, `field`, `variant`, `enumerator`, `const`, `static`, `global`, `macro`, `ffi` | Fact nodes: `feature:`, `cfg:`, `define:`, `unsafe:`, `env:`. [Rust, C and C++](native.md) |
+| Python | `module`, `class`, `function`, `method`, `field`, `script`, plus Django `route`, `table`, `column`, `config`, `env`, `job`, `listener`, `command`, `admin`, `event` | [entry points and function references](python.md#entry-points-and-function-references) |
 | Dart | `module`, `class`, `method`, `function`, `http`, `page`, `env` | Pages: Navigator, go_router, auto_route |
-| Protocols | `endpoint` | `endpoint:<protocol>:<name>`. Existing `http`, `route`, `channel`, `message`, `job`, `event` ids stay and are read as endpoints. [protocols.md](protocols.md) |
-| AI | `endpoint`, `agent` | `endpoint:llm_tool:`, `endpoint:mcp_tool:`, `endpoint:mcp_resource:`, `endpoint:mcp_prompt:`; `agent:<name>`. [ai-tools.md](ai-tools.md) |
-| External | `external` | `external:<protocol>:<target>`. Attrs name host, port, TLS and credential source, never the secret. [external.md](external.md) |
-| Bridges | `endpoint` | Capacitor, React Native, Flutter, Electron IPC, Tauri. Java / ObjC / missed Kotlin / Swift receivers are `method` nodes with `attrs.bridge_stub`. [bridges.md](bridges.md) |
+| Protocols | `endpoint` | `endpoint:<protocol>:<name>`. Existing `http`, `route`, `channel`, `message`, `job`, `event` ids stay and are read as endpoints. [Protocol links](protocols.md) |
+| AI | `endpoint`, `agent` | `endpoint:llm_tool:`, `endpoint:mcp_tool:`, `endpoint:mcp_resource:`, `endpoint:mcp_prompt:`; `agent:<name>`. [AI tools](ai-tools.md) |
+| External | `external` | `external:<protocol>:<target>`. Attrs name host, port, TLS and credential source, never the secret. [External systems](external.md) |
+| Bridges | `endpoint` | Capacitor, React Native, Flutter, Electron IPC, Tauri. Java / ObjC / missed Kotlin / Swift receivers are `method` nodes with `attrs.bridge_stub`. [Web / native bridges](bridges.md) |
 
 Route paths use `{param}`, `{param?}`, `{rest*}` and `{rest*?}`.
 
@@ -47,7 +47,7 @@ Every language indexes them as `CONTAINS` children of the type or module. A refe
 | Rust | `variant` | `const`, `static` | `ACCESSES_FIELD`, `USES_VALUE` |
 | C / C++ | `enumerator` | `global`, object-like `macro` | `USES_VALUE` |
 
-Ids and which spellings resolve: the language pages ([swift.md](swift.md), [kotlin.md](kotlin.md), [native.md](native.md), [python.md](python.md)).
+Ids and which spellings resolve: the language pages ([Swift](swift.md), [Kotlin](kotlin.md), [Rust, C and C++](native.md), [Python](python.md)).
 
 ## Edge kinds
 
@@ -90,4 +90,4 @@ Tagging walks forward from each entry over propagating edges. `reaches` then lab
 | Dev / build | `test`, `bench`, `example`, `build_script` |
 | UI | `ui_page`, `ui_global` |
 
-Which framework produces which kind: [python.md](python.md), [ts-frameworks.md](ts-frameworks.md), [channels-and-tests.md](channels-and-tests.md), [ai-tools.md](ai-tools.md), [native.md](native.md).
+Which framework produces which kind: [Python](python.md), [TypeScript / JavaScript frameworks](ts-frameworks.md), [Channels and tests](channels-and-tests.md), [AI tools](ai-tools.md), [Rust, C and C++](native.md).

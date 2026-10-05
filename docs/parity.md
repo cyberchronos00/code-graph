@@ -68,8 +68,8 @@ off. Inferred matches are an `== INFERRED` section (`summary.inferred`), never n
 | bucket | meaning |
 |---|---|
 | missing | no counterpart. Grouped by folder (a Gradle `src/main/kotlin/` path by package) |
-| unknown | the file parsed with syntax errors ([completeness.md](completeness.md)), so it is not "missing" |
-| platform_only | tagged only for platforms the target graph does not build ([platforms.md](platforms.md)), other than the source app's own platform. A tag on at least half the source symbols is the app itself, so that tag is compared like untagged code. A `watchos`-only widget stays platform-only |
+| unknown | the file parsed with syntax errors ([Completeness](completeness.md)), so it is not "missing" |
+| platform_only | tagged only for platforms the target graph does not build ([Platforms](platforms.md)), other than the source app's own platform. A tag on at least half the source symbols is the app itself, so that tag is compared like untagged code. A `watchos`-only widget stays platform-only |
 
 ## How far to trust "missing"
 

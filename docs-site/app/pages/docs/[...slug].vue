@@ -60,7 +60,6 @@ const links = computed(() => {
   <UPage v-if="page">
     <UPageHeader
       :title="page.title"
-      :description="page.description"
       :headline="headline"
     />
 

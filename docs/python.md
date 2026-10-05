@@ -1,8 +1,8 @@
 # Python
 
-What `.py` adds beyond [install.md](install.md), [CLI specs](cli.md#query-targets-specs), and [schema.md](schema.md): source roots and module names, reference `how` values, and FastAPI / Starlette / Flask route ids.
+What `.py` adds beyond [Install](install.md), [CLI specs](cli.md#query-targets-specs), and [Graph schema](schema.md): source roots and module names, reference `how` values, and FastAPI / Starlette / Flask route ids.
 The parser is the stdlib `ast` module. A checkout needs no virtualenv, and the project is never imported.
-Why a file is unmapped: `cg coverage`. The `python.source_roots` key: [configuration.md](configuration.md).
+Why a file is unmapped: `cg coverage`. The `python.source_roots` key: [Configuration](configuration.md).
 
 ## Source roots
 
@@ -32,7 +32,7 @@ The other names stay aliases, so both spellings resolve to the same node.
 When two trees claim one name (often `tests` in a monorepo), the tree with the most import evidence keeps it, then a tree with no other importable name, then the shallower root.
 The others are named from the indexed root (`svc-b.tests.conftest`). Relative imports inside each tree still resolve.
 
-A path that is not an importable name (`my-scripts/run.py`, `alembic/versions/1a2b_add.py`) is `unmapped` ([completeness.md](completeness.md)).
+A path that is not an importable name (`my-scripts/run.py`, `alembic/versions/1a2b_add.py`) is `unmapped` ([Completeness](completeness.md)).
 With configured roots, files outside them are `unmapped` too, and the coverage hint names `python.source_roots`.
 
 ```console
@@ -60,7 +60,7 @@ A decorator registration or `registry[key] = fn` whose caller is outside the gra
 
 ## Query specs
 
-`Class.method` and `Class::method` follow [cli.md](cli.md#query-targets-specs). Python-only shapes:
+`Class.method` and `Class::method` follow [query targets](cli.md#query-targets-specs). Python-only shapes:
 
 | spec or id | selects |
 |---|---|
@@ -130,7 +130,7 @@ Plugin stats: `references`, `decorator_calls`, `script_entries`, `registrations`
 Files pytest would collect are test code: `python_files`, `python_classes`, `python_functions`, and `testpaths` from `pytest.ini`, `pyproject.toml`, `tox.ini`, or `setup.cfg`, plus unittest cases.
 `cg tests` lists direct and transitive tests. `impact`, `callers`, and `reaches` count application callers only.
 
-Fixture chains, Django / DRF / FastAPI / Flask HTTP test requests, and a subprocess that starts a project program (`TEST_CALLS`, `via: subprocess`, helpers followed up to 5 calls) are in [channels-and-tests.md](channels-and-tests.md#tests).
+Fixture chains, Django / DRF / FastAPI / Flask HTTP test requests, and a subprocess that starts a project program (`TEST_CALLS`, `via: subprocess`, helpers followed up to 5 calls) are in [tests](channels-and-tests.md#tests).
 `cg coverage` adds a `python tests:` line: cases per framework, test files, fixtures, HTTP test requests, and how many reached a route.
 The plugin stats carry the same under `tests` and `subprocess` (`linked`, `outside_project`, `unresolved`, with samples).
 
@@ -146,7 +146,7 @@ A Flask subclass defined inside a function is a factory. Paths come from literal
 | Starlette | `Route`, `Mount`, `WebSocketRoute`, `Router`, `add_route`, `HTTPEndpoint` (one route per method). `{id:int}` → `{id}`. `Host("api.example.com", …)` sets `host`, not the path |
 | Flask | `@bp.route`, `@bp.get`, `add_url_rule`, `MethodView.as_view`, nested `register_blueprint` (the registration prefix replaces the blueprint's). `<int:id>` → `{id}`, `<path:p>` → `{p*}`. The endpoint name is what `url_for` takes. Built-in `GET /static/{filename}` (`static: true`; none when `static_folder=None`) |
 | class views | fastapi-utils / fastapi-restful `@cbv`, classy-fastapi `Routable`, flask-restful / flask-restx `add_resource` / `@ns.route`, Flask `View` / `MethodView` (`methods`, `dispatch_request`), Flask-Classful `X.register` |
-| Django | `http_route` (urls, django-ninja, DRF), `websocket` (Channels), `queue_job` (Celery), `listener` (signals), `management_command`, `admin_panel`. GraphQL root fields are protocol endpoints ([protocols.md](protocols.md)) |
+| Django | `http_route` (urls, django-ninja, DRF), `websocket` (Channels), `queue_job` (Celery), `listener` (signals), `management_command`, `admin_panel`. GraphQL root fields are protocol endpoints ([Protocol links](protocols.md)) |
 
 A router or blueprint no app includes keeps its routes with `mounted: false` and no entry point.
 A `for` over a literal list of `(path, view)` is unrolled, one registration per element.
@@ -173,8 +173,8 @@ A request that still has more than three candidates is dropped. An all-parameter
 
 Sanic, Litestar, and Bottle decorators stay the `python_decorator_routes` blind spot.
 A pluggy-style registry that returns views, and a route added by an unknown library call, stay unmodelled.
-Django `include()` targets and `urlpatterns` built in a loop are blind spots `django_unresolved_include` and `django_dynamic_urlpatterns` ([completeness.md](completeness.md#blind-spots)).
+Django `include()` targets and `urlpatterns` built in a loop are blind spots `django_unresolved_include` and `django_dynamic_urlpatterns` ([blind spots](completeness.md#blind-spots)).
 
 ## Validation
 
-Public-corpus counts for source roots, references, tests, and these routes are in [validation.md](validation.md).
+Public-corpus counts for source roots, references, tests, and these routes are in [How we validate](validation.md).

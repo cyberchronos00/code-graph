@@ -1,6 +1,6 @@
 # Rust, C and C++
 
-What Rust, C, and C++ add beyond [install.md](install.md), [CLI specs](cli.md#query-targets-specs), and [schema.md](schema.md): heuristic vs rust-analyzer / scip-clang, the indexer flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
+What Rust, C, and C++ add beyond [Install](install.md), [CLI specs](cli.md#query-targets-specs), and [Graph schema](schema.md): heuristic vs rust-analyzer / scip-clang, the indexer flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
 
 ## Modes
 
@@ -9,11 +9,11 @@ What Rust, C, and C++ add beyond [install.md](install.md), [CLI specs](cli.md#qu
 | heuristic | name resolution, labelled `heuristic` | tree-sitter (`tree-sitter-rust`, `tree-sitter-c`, `tree-sitter-cpp`) |
 | exact | compiler-resolved references (`exact`, or `resolved` through a receiver, a macro, or dispatch). Node ids stay the syntax layer's | Rust: rust-analyzer. C/C++: scip-clang plus `compile_commands.json` ([Exact mode](#exact-mode)) |
 
-The syntax layer also records facts the compiler index does not: crates and modules, entry points, the `pub` surface, `#[cfg]` / `#if` gates, env reads, `unsafe`, FFI, and routes. Kind names: [schema.md](schema.md#node-kinds).
+The syntax layer also records facts the compiler index does not: crates and modules, entry points, the `pub` surface, `#[cfg]` / `#if` gates, env reads, `unsafe`, FFI, and routes. Kind names: [node kinds](schema.md#node-kinds).
 
 ## Exact mode
 
-Exact mode runs when the indexer is installed. `CODEGRAPH_RUST_SCIP=0` or `CODEGRAPH_C_SCIP=0` forces the heuristic layer. A failed run is named by `cg coverage` (`exact indexer run failed`) and the index stays on the syntax layer. SCIP output is cached under `~/.cache/codegraph/scip/` ([cli.md](cli.md#clean)).
+Exact mode runs when the indexer is installed. `CODEGRAPH_RUST_SCIP=0` or `CODEGRAPH_C_SCIP=0` forces the heuristic layer. A failed run is named by `cg coverage` (`exact indexer run failed`) and the index stays on the syntax layer. SCIP output is cached under `~/.cache/codegraph/scip/` ([clean](cli.md#clean)).
 
 | indexer | how |
 |---|---|
@@ -51,7 +51,7 @@ Exact mode runs when the indexer is installed. `CODEGRAPH_RUST_SCIP=0` or `CODEG
 
 ## Query specs
 
-Qualified paths, `mod:`, source files, and `feature:` / `cfg:` / `define:` / `unsafe:` / `env:` follow [cli.md](cli.md#query-targets-specs). Ids that page does not spell out:
+Qualified paths, `mod:`, source files, and `feature:` / `cfg:` / `define:` / `unsafe:` / `env:` follow [query targets](cli.md#query-targets-specs). Ids that page does not spell out:
 
 | spec or id | selects |
 |---|---|
@@ -59,7 +59,7 @@ Qualified paths, `mod:`, source files, and `feature:` / `cfg:` / `define:` / `un
 | `crate::module::<Type as Trait>::method` | a trait impl method. A call on `dyn Trait` or `T: Trait` lands on the trait method (`dispatch: "trait"`) and reaches every impl |
 | `src/ringbuf.c#rb_lock` | a file-local item (`static`, an anonymous namespace). Same-named functions in different programs take the file prefix (`tools/a.c#main`). Overloads keep parameter types in the id |
 
-`impact` shows a virtual or trait base as `overrides:` (`via base`), not as a caller. `reaches` groups by Rust module or C/C++ directory. Gates use the same file as [configuration.md](configuration.md#gate-scenarios), with native keys `features_off`, `cfg_true`, and `defines_off`: edges under a false `#[cfg]` or `#if` are GATED; unknown atoms stay live.
+`impact` shows a virtual or trait base as `overrides:` (`via base`), not as a caller. `reaches` groups by Rust module or C/C++ directory. Gates follow [gate scenarios](configuration.md#gate-scenarios), with native keys `features_off`, `cfg_true`, and `defines_off`: edges under a false `#[cfg]` or `#if` are GATED; unknown atoms stay live.
 
 ## Framework facts
 

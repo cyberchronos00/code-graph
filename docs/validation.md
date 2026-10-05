@@ -9,7 +9,7 @@ compared by hand with the cited source line: method, full path (every prefix), p
 handler symbol. A pass means those rows match. Gaps sit next to the table that produced them.
 
 Full scoreboards, timings and the "other corpora unchanged" notes are in
-[validation-log.md](validation-log.md). This page is the method plus one headline per area.
+[Validation log](validation-log.md). This page is the method plus one headline per area.
 
 ## Headlines
 
@@ -30,7 +30,7 @@ Full scoreboards, timings and the "other corpora unchanged" notes are in
 | TS frameworks | immich, Nest samples, Ghost, dub, Next examples, realworld `cg link` | [TS frameworks](validation-log.md#typescript--javascript-frameworks) |
 | External | Prisma / ORM datasources, third-party HTTP hosts, cloud SDKs | [External](validation-log.md#external-systems-40) |
 | AI tools | MCP / LLM tool endpoints on public harnesses | [AI tools](validation-log.md#ai-harnesses-llm-tools-mcp-servers-and-agents-66) |
-| Parity | Bitwarden and Element X, name match and `--structure` | [parity.md](parity.md#how-far-to-trust-missing) |
+| Parity | Bitwarden and Element X, name match and `--structure` | [how far to trust missing](parity.md#how-far-to-trust-missing) |
 
 ## How to read a gap
 

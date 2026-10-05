@@ -1,4 +1,4 @@
-/** Drop the markdown H1 and intro when the doc chrome already shows them. */
+/** Drop a duplicate markdown H1. The intro stays in the body so its links render. */
 
 type TocLink = { depth?: number, text?: string, title?: string }
 
@@ -48,16 +48,6 @@ export function stripDocChrome(page: DocPageChrome): void {
   const title = norm(page.title || '')
   if (title && nodeTag(value[0]) === 'h1' && norm(nodeText(value[0])) === title) {
     value.shift()
-  }
-
-  const description = norm(page.description || '')
-  if (description && nodeTag(value[0]) === 'p') {
-    const para = norm(nodeText(value[0]))
-    const same = para === description
-      || (description.length >= 40 && (para.startsWith(description) || description.startsWith(para)))
-    if (same) {
-      value.shift()
-    }
   }
 
   const links = page.body?.toc?.links

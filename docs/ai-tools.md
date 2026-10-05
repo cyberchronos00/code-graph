@@ -35,7 +35,7 @@ A loop that picks the handler with `globals()[name]`, `getattr` or `eval` is rec
 `attrs.llm_dynamic_dispatch` and listed by `cg tools`. It is never linked. Literal `model=` /
 `base_url=` of `chat.completions.create`, `responses.create`, `messages.create`,
 `embeddings.create` and of constructors (`ChatOpenAI`, `OpenAI(base_url=)`, `init_chat_model`) are `attrs.llm_calls` (`provider`, `op`, `model`, `base_url`, `line`) on the calling
-function. Those facts feed the external nodes in [external.md](external.md). Confidence is
+function. Those facts feed the external nodes in [External systems](external.md). Confidence is
 `exact` for a literal name, `resolved` through a wrapper or a module constant, `heuristic` when
 a `BaseTool` subclass has no literal `name` (the class name is used).
 
@@ -67,4 +67,4 @@ RECEIVED_BY / MATCHES_ENDPOINT / OFFERS_TOOL with no extra flags.
   nodes.
 
 Public harnesses:
-[validation-log.md](validation-log.md#ai-harnesses-llm-tools-mcp-servers-and-agents-66).
+[AI harnesses](validation-log.md#ai-harnesses-llm-tools-mcp-servers-and-agents-66).

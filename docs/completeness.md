@@ -27,7 +27,7 @@ crate, or a `.ts` / `.js` file outside the TS source dirs, `bin` scripts and tes
 `.cg.yaml` `include`). Tool configs, `.d.ts` and fixtures inside those dirs are `excluded`.
 
 Generated, copied and vendored files are not `discovered`. They are
-`generated: N files excluded`. See [generated.md](generated.md). Parser mode (`exact`,
+`generated: N files excluded`. See [Generated files](generated.md). Parser mode (`exact`,
 `heuristic`, `scip`, …) is independent: a language can be `exact` and still incomplete.
 
 ```console

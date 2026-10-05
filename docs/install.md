@@ -148,6 +148,6 @@ The old package name `codegraph` (through v0.9.0) is removed by the install scri
 
 ## Elsewhere
 
-- Extractors install on the first index that needs them, or with `cg setup`. Cache and prune: `cg setup -h` and [cli.md](cli.md#clean).
-- Exact mode for Rust, C / C++, Kotlin and Swift needs optional indexers: [native.md](native.md), [kotlin.md](kotlin.md), [swift.md](swift.md).
-- What the install scripts do: `install.sh --help`. Working on a checkout of cg: [CONTRIBUTING.md](../CONTRIBUTING.md).
+- Extractors install on the first index that needs them, or with `cg setup`. Cache and prune: `cg setup -h` and [clean](cli.md#clean).
+- Exact mode for Rust, C / C++, Kotlin and Swift needs optional indexers: [Rust, C and C++](native.md), [Kotlin](kotlin.md), [Swift](swift.md).
+- What the install scripts do: `install.sh --help`. Working on a checkout of cg: [Contributing](../CONTRIBUTING.md).

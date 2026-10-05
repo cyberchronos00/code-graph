@@ -58,9 +58,9 @@ Comments in the file are the meanings. Flags and env vars that override a key:
 | `plans.dir` | `--plans-dir DIR` / `--plans DIR` |
 | `viz.presets` | `cg serve --presets FILE` |
 | `apps` | `cg index --no-apps` indexes the root as one project |
-| `rust.targets` | `CODEGRAPH_RUST_TARGETS` (takes precedence; [native.md](native.md)) |
+| `rust.targets` | `CODEGRAPH_RUST_TARGETS` (takes precedence; [Rust, C and C++](native.md)) |
 
-`include` walks only the path down to those directories; `exclude` still applies inside them. `skip_dirs.keep` also lets a walk into a hidden directory such as `.storybook`. `frameworks` names include `laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `express` (aliases such as `nestjs`, `next`, `fastify`, `drf` work). `platforms.targets` accepts `windows`, `linux`, `macos`, `ios`, `android`, `web`; `unix` and `native` work in `platforms.paths`. Details: [python.md](python.md), [generated.md](generated.md), [platforms.md](platforms.md).
+`include` walks only the path down to those directories; `exclude` still applies inside them. `skip_dirs.keep` also lets a walk into a hidden directory such as `.storybook`. `frameworks` names include `laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `express` (aliases such as `nestjs`, `next`, `fastify`, `drf` work). `platforms.targets` accepts `windows`, `linux`, `macos`, `ios`, `android`, `web`; `unix` and `native` work in `platforms.paths`. Details: [Python](python.md), [Generated files](generated.md), [Platforms](platforms.md).
 
 The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` and the MCP server read plans, auth patterns and presets from the DB without repeating the flags.
 
@@ -129,5 +129,5 @@ Starter cards are built in this order: `serve --presets FILE` or `viz.presets`; 
 | variable | effect |
 |---|---|
 | `CODEGRAPH_NO_CACHE=1` | disable the TS, Dart and native SCIP caches (keyed by file content) |
-| `CODEGRAPH_CACHE=DIR` | cache root (else `$CODEGRAPH_CACHE_DIR`, `%LOCALAPPDATA%\codegraph` on Windows, `$XDG_CACHE_HOME/codegraph`, `~/.cache/codegraph`). `cg clean` empties it ([cli.md](cli.md#clean)) |
-| `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0`, `CODEGRAPH_COMPDB`, `CODEGRAPH_CFAMILY`, … | Rust / C / C++ options ([native.md](native.md#environment-variables)) |
+| `CODEGRAPH_CACHE=DIR` | cache root (else `$CODEGRAPH_CACHE_DIR`, `%LOCALAPPDATA%\codegraph` on Windows, `$XDG_CACHE_HOME/codegraph`, `~/.cache/codegraph`). `cg clean` empties it ([clean](cli.md#clean)) |
+| `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0`, `CODEGRAPH_COMPDB`, `CODEGRAPH_CFAMILY`, … | Rust / C / C++ options ([environment variables](native.md#environment-variables)) |

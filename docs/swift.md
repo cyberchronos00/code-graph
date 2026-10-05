@@ -1,6 +1,6 @@
 # Swift
 
-What `.swift` adds beyond [install.md](install.md), [CLI specs](cli.md#query-targets-specs), and [schema.md](schema.md): heuristic vs the Swift index store, the `CODEGRAPH_SWIFT_*` flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
+What `.swift` adds beyond [Install](install.md), [CLI specs](cli.md#query-targets-specs), and [Graph schema](schema.md): heuristic vs the Swift index store, the `CODEGRAPH_SWIFT_*` flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
 
 ## Modes
 
@@ -42,7 +42,7 @@ A failed build keeps a `partial` store; the coverage reason includes the first `
 
 ## Query specs
 
-`Type.method` follows [cli.md](cli.md#query-targets-specs). Swift-only shapes:
+`Type.method` follows [query targets](cli.md#query-targets-specs). Swift-only shapes:
 
 | spec or id | selects |
 |---|---|
