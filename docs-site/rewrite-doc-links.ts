@@ -32,7 +32,8 @@ function rewriteTarget(target: string): string | null {
   }
 
   if (/\.(png|gif|jpe?g|svg|webp|mp4|webm)$/i.test(cleaned)) {
-    return `${REPO}/raw/main/docs/${cleaned}${hash}`
+    const file = cleaned.replace(/^(?:docs\/)?media\//, '')
+    return `/media/${file}${hash}`
   }
 
   return null

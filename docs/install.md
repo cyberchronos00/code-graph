@@ -3,6 +3,8 @@
 cg is a Python package (Python 3.11+) with two commands, `cg` (CLI) and `cg-mcp` (MCP server). It installs as a
 user-level tool in its own environment; no checkout and no sudo are needed.
 
+Watch the [setup video (MP4)](media/cg-setup-demo.mp4) and the [terminal demo (MP4)](media/cg-terminal-demo.mp4).
+
 ## Install
 
 | | command |

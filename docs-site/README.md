@@ -52,4 +52,4 @@ pnpm run deploy
 
 Nuxt Content logs that the server SQL adapter switches to a D1 binding named `DB`. Prerendered pages and the docs search dump are static assets, so the site renders on `*.workers.dev` without creating that database. Create a D1 database and bind it as `DB` only if you need the live `/__nuxt_content/*/query` route.
 
-Media files under `docs/media/` stay in git and are not copied into the site bundle. Relative links to them resolve to GitHub.
+Media files stay in `docs/media/` (source of truth). `public/media` is a symlink to that directory, so the site serves them at `/media/<file>`. Markdown links such as `[Watch the demo](media/cg-view-demo.mp4)` stay GitHub-friendly; on this site those `.mp4` / `.webm` links render as a video player.

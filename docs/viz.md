@@ -3,6 +3,8 @@
 `codegraph.cli serve --db out/graph.db [--port 8177] [--host 127.0.0.1] [--plans-dir examples/plans] [--presets FILE]`:
 stdlib HTTP server, read-only, Cytoscape.js + fcose vendored under `codegraph/viz/static/vendor` (MIT, versions in
 `VERSIONS.txt`; everything is served locally, so it works offline). Open `http://127.0.0.1:8177/`.
+
+Watch the [visual view demo (MP4)](media/cg-view-demo.mp4): search, evidence paths, then the planned-change overlay.
 - `/` opens a landing page: project, index time, node / edge / entry-point counts by kind and the share of edges by
   confidence (`/api/stats`), a search box with kind chips, fuzzy matching on short names and ↑/↓/Enter (Enter runs
   the default query for the hit's kind: reaches for tables, columns, config and env, downstream for pages and routes,
