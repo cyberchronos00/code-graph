@@ -1,51 +1,73 @@
-# Kotlin (Android, Kotlin Multiplatform, Ktor, Spring)
+# Kotlin
 
-cg indexes Kotlin (`.kt`, `.kts`) with a tree-sitter syntax layer (`pip install tree-sitter tree-sitter-kotlin`). No JDK
-or Gradle build is needed, so any checkout indexes as-is. `cg coverage` then reports Kotlin as **heuristic**: references
-are resolved by name, as for Rust and C / C++ without their compiler indexers. With a scip-java index of the build the
-call edges are compiler-resolved and coverage reports **exact** ([Exact mode](#exact-mode)). Callable references in that index are `REFERENCES_FN` (`how: callback`) rather than calls.
+What `.kt` / `.kts` add beyond [install.md](install.md), [CLI specs](cli.md#query-targets-specs), and [schema.md](schema.md): heuristic vs scip-java, the env flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
 
-tree-sitter-kotlin 1.1.0 cannot parse a suspend lambda used as an expression (`val b = suspend { 1 }`,
-`HttpMethod.Post to suspend { ... }`); the error used to swallow the enclosing class. Before parsing, `suspend` in
-front of such a `{` (after `=`, `(`, `,`, `[`, `to`, `return`, `->`, `&&`, `||`, `?:`) is replaced by spaces of the
-same length, so lines, byte offsets and names stay as written; the index stats count `suspend_lambdas_rewritten`.
-Two more same-length rewrites (#104): a line starting with `get("...")`, `get { }`, `get<T>` or the same with `set`
-right after a complete `val` / `var` line (Ktor routing) would parse as that property's accessor, so the whitespace
-in front of it becomes `;` (`accessor_like_calls_rewritten`); a call or function named `dynamic` (the Kotlin/JS type
-keyword) is parsed as `dynamiC` (`keyword_named_calls_rewritten`). Names always come from the original source.
-A suspend lambda that starts a statement (`suspend { ... }.runCatching(state)`) gets `;` and six spaces instead, so
-it does not become the trailing lambda of the line before.
+## Modes
 
-A file that still has errors is re-parsed member by member (#104): a small lexer splits it into top-level
-declarations and the members of class / object / interface bodies, each member is parsed alone inside the file's
-skeleton (package, imports, class headers, braces), and a member that still errors is blanked (spaces, newlines
-kept). The other members keep their nodes, lines and calls, instead of an ERROR swallowing the rest of the class.
-The dropped members are the file's error spans, so `cg coverage --details` lists them as declarations lost; the
-index stats count `files_reparsed_by_member` and `members_dropped_by_reparse`. When the skeleton itself does not
-parse (an error in a class header or constructor), or dropping would lose more than the error did, the file keeps
-its original tree.
-Other parse errors are listed by `cg coverage --details` with the declarations they cost.
+| mode | calls | needs |
+|---|---|---|
+| heuristic (default) | name resolution, labelled `heuristic` | tree-sitter (`tree-sitter`, `tree-sitter-kotlin`). No JDK or Gradle |
+| exact | compiler-resolved `CALLS` / `INSTANTIATES`; declarations and framework facts stay the syntax layer | scip-java, opt-in ([Exact mode](#exact-mode)) |
 
-## What is in the graph
+`--min-confidence resolved` (or `exact`) hides the heuristic call edges. Gradle `build/` (including KSP / kapt), `.gradle`, and IDE folders are skipped. tree-sitter-kotlin 1.1.0 rewrites some sources before parse (same length, so lines and names stay). A file that still errors is split into members (`files_reparsed_by_member`, `members_dropped_by_reparse`); dropped members are in `cg coverage --details`.
 
-| Area | Facts |
+| rewrite | when | stat |
+|---|---|---|
+| `suspend` blanked, or `;` plus spaces when it starts a statement | `val b = suspend { }`, `to suspend { }`, `suspend { }.runCatching(...)` | `suspend_lambdas_rewritten` |
+| one leading space → `;` | `get` / `set` call right after a `val` / `var` (Ktor routing) | `accessor_like_calls_rewritten` |
+| `dynamic` parsed as `dynamiC` | a call or function named `dynamic` | `keyword_named_calls_rewritten` |
+
+## Exact mode
+
+A scip-java index replaces name-based call edges. Ids stay the syntax layer's, so queries and `cg link` match both modes. Running scip-java runs the project's Gradle / Maven build, so it is opt-in.
+
+| source | how |
 |---|---|
-| Declarations | packages, classes, interfaces, objects, companion objects, top-level and extension functions, methods (`class:` / `function:` / `method:` ids by fully qualified name), properties with a custom accessor, `by lazy` or a delegate ([Properties that run code](#properties-that-run-code)) |
-| Calls | `CALLS` resolved through the enclosing class and its supertypes, the receiver's parameter / property / local type (`api.order()` with `api: OrdersApi`; `val repo = OrderRepo()` in a function body, `by lazy { OrderRepo() }`, a test double `mockk<OrderRepo> { .. }` / `spyk<..>` / `mock<..>()`, #96), imports, the same package and finally the method name alone (not for a receiver of a library type, `Headers.build { }` or `client: HttpClient`): one method of that name gives an edge with `binding: "name"`, two to five give a `candidate` edge to each (`binding: "candidate"`, flagged by `cg tests` / `impact`, left out of platform divergence; [#83](https://github.com/cyberchronos00/code-graph/issues/83)); constructor calls as `INSTANTIATES`; interface / superclass methods → overrides (`IMPLEMENTED_BY` / `OVERRIDDEN_BY`). A callable reference is `REFERENCES_FN` (`how: callback`, shown by `impact` as `(ref: callback)`): `recv::fn` from the receiver's parameter, property, constructor or local type (including `hiltViewModel<T>()` / `viewModel()` / `viewModels()`), `::fn` for a top-level or local function, and `Type::fn` for a member or an in-scope extension (`fun Navigator.navigateToTopic`). `::Foo` references the constructor. Overloads keep the arity of a function-typed parameter they are passed to; otherwise every candidate is kept. `::class` is not a function reference |
-| Ktor server | `routing { route("/a") { get("/{id}") { } } }` and `fun Route.x()` extensions → `route:GET /a/{id}`; type-safe resources `get<Articles.Id> { }` with the path from `@Resource("{id}")` and its `parent` resource (or enclosing resource class); each handler lambda is its own node; `authenticate("jwt") { }` is recorded as the route's guard |
-| Spring | `@RestController` / `@Controller` with `@RequestMapping` prefixes, `@GetMapping` ... and `@RequestMapping(method = [...])`; `@PreAuthorize`, `@Secured`, `@RolesAllowed` on the class or method as guards; `SecurityFilterChain` URL rules (`requestMatchers("/admin/**").hasRole("ADMIN")`, `anyRequest().authenticated()`, the Kotlin DSL `authorize("/admin/**", hasRole("ADMIN"))`; first match wins, `permitAll` adds none) as guards on the routes they match (`security` attribute names the file). With several chains, a route takes the rules of the first chain, by `@Order` and then declaration order, whose `securityMatcher("/api/**")` (or `securityMatchers { }`) matches it; a chain without one matches every route, and one scoped by a `RequestMatcher` bean is not applied (`security_chains_unknown_matcher` in the stats); `@Scheduled` (`scheduled`) and `@KafkaListener` / `@RabbitListener` / `@JmsListener` / `@SqsListener` / `@EventListener` (`listener`) entry points |
-| Tables | Spring Data repositories (`interface OwnerRepository : JpaRepository<Owner, Int>`, `CrudRepository`, coroutine / reactive / Mongo variants): a call on a repository-typed receiver (`owners.findById(id)`, inherited methods included) → `READS_TABLE` / `WRITES_TABLE` by method name (`find` / `get` / `count` / `exists` ... read, `save` / `delete` ... write) on the entity's `@Table(name)` or Spring Boot's snake_case default; Exposed `object Users : IntIdTable("users")` / `Table()` (default name: the object name without `Table`) with `Users.selectAll()`, `insert`, `update`, `deleteWhere` ... (confidence `resolved`, `via` names the call) |
-| HTTP clients | Retrofit interface methods (`@GET("v1/orders/{id}")`, `@HTTP(method=, path=)`) joined with the base URL from `Retrofit.Builder().baseUrl(...)`: the base URL of the builder chain that creates the interface (`.create(OrdersApi::class.java)`), else the project's only one; `baseUrl(BuildConfig.API_URL)` resolves through a `buildConfigField("String", "API_URL", ...)` in the Gradle files; Ktor client `client.get("...")` and builder blocks `client.get { url("...") }`, `client.request { method = HttpMethod.Post; url("...") }`, and URLs a project helper builds from a literal argument (`client.get { dogs("api/breeds") }` with a `HttpRequestBuilder.dogs(path)` extension that sets `takeFrom(BASE)` / `encodedPath = path`, `client.get(endpoint("items"))` with `fun endpoint(p: String) = "$BASE/$p"`; `via: "url helper"`); OkHttp `Request.Builder().url("...")` with the verb from the builder chain. `"$base/x"` keeps `{base}` as the origin, so `cg link` still matches the path |
-| Android | `AndroidManifest.xml` activities (`ui_page`), services / receivers / providers (`listener`) with their lifecycle methods; deep links (`<data scheme host path*>`) as `page:` nodes; `Worker` / `CoroutineWorker` / `JobService` subclasses (`queue_job`); Compose Navigation `composable("orders/{id}")` / typed `composable<OrderRoute>(deepLinks = ...) { }` and Navigation 3 `entry<OrderKey>(metadata = ...) { }` as `page:kotlin:<route>` (a nested destination keeps its outer class, `page:kotlin:SettingsRoute.Standard`; a project wrapper `inline fun <reified T> NavGraphBuilder.composableWithPushTransitions(..) { composable<T>(..) }`, also a wrapper of a wrapper, makes `composableWithPushTransitions<VaultRoute> { }` a typed page, `attrs.wrapper`) (the lambda's calls belong to the page; the route may be a string constant, `composable(route = Destinations.TASKS_ROUTE)`, and `$NAME` / `${Obj.NAME}` constants in route and `navigate` strings are put in) and `navigate("orders/1")` / `navigate(OrderRoute(id))` / `navigate(route = SettingsRoute.PreAuth, navOptions)` as `NAVIGATES_TO` |
-| Multiplatform | files in KMP source sets (`androidMain`, `iosMain`, `jsMain`, `wasmJsMain`, `macosMain`, `linuxMain`, `mingwMain` ..., and the per-platform test sets `iosTest`, `androidUnitTest`, `androidInstrumentedTest`) carry platform conditions (`cg platforms`, `--platform`); `expect` declarations link to each `actual` (`IMPLEMENTED_BY`, ids `function:pkg.name@android`); the project's targets come from the `kotlin { }` block (`androidTarget()`, `iosArm64()`, `jvm("desktop")`, `wasmJs()` ...) |
-| Tests | files under `src/test`, `src/androidTest`, `*Test` source sets and `*Test.kt` are test code; `@Test` / `@ParameterizedTest` / `@RepeatedTest` / `@TestFactory` functions are `test` entries with the framework (`junit5`, `junit4`, `kotlin-test`, `testng`, `kotest`) from the file's imports, counted in `cg tests`; `src/androidTest` tests are listed as UI tests, and a transitive test that runs through an `*Activity` is left out unless `--through-roots` ([#87](https://github.com/cyberchronos00/code-graph/issues/87)) |
+| `cg index --scip index.scip` | Kotlin documents go to this plugin, not the generic SCIP importer |
+| `CODEGRAPH_KOTLIN_SCIP_FILE` | a prebuilt index |
+| `CODEGRAPH_KOTLIN_SCIP=1` | cg runs `scip-java index` (cache `~/.cache/codegraph/scip`; `CODEGRAPH_NO_CACHE=1` forces a run; `CODEGRAPH_INDEXER_TIMEOUT` caps it) |
 
-Gradle build output (`build/`, including KSP / kapt sources under `build/generated`), `.gradle` and IDE folders are
-skipped (`codegraph/presets/kotlin.yaml`).
+| scip-java | Kotlin (Gradle builds checked) | install |
+|---|---|---|
+| 0.12.x | up to 2.1 | `cs install scip-java` |
+| 0.13.x | 2.2.0–2.2.10 | launcher; `CODEGRAPH_SCIP_JAVA` is one path or several joined by `:` |
+| none | 2.2.20 and newer | stays heuristic |
 
-## Example
+cg reads the version the build declares, tries the matching release first, then the next if the compiler plugin does not load. Index stats record `kotlin_version`, `indexer`, and failed `attempts`. `cg doctor <project>` names the release that fits. `install.sh --with kotlin` installs the supported pair (Windows: `cg doctor`).
 
-`examples/bookstore-android` is a Compose + Retrofit client of `examples/bookstore-django`:
+Java in that index becomes `java` nodes with exact Kotlin ↔ Java and Java → Java calls, including `AppKt.build()`. Without the index, Java stays unsupported. A Java-only build uses `--scip` and the generic importer. Stats `exact_vs_heuristic` is precision (heuristic call edges the compiler confirms) and recall (compiler edges the heuristic layer had found). Property read / write edges stay and are left out of that pair; a property read is not a call in the SCIP index.
+
+| still heuristic | why |
+|---|---|
+| Android modules | the build needs the SDK, and scip-java does not compile `compileDebugKotlin` (`android_modules` in the stats; named in the coverage reason) |
+| `FAIL_ON_PROJECT_REPOS` | Android template default rejects the repository the scip-java Gradle plugin adds |
+| files the index omits | those files keep heuristic calls, counted in the reason |
+
+## Query specs
+
+`Class.method` and `Class::method` follow [cli.md](cli.md#query-targets-specs). Kotlin-only shapes:
+
+| spec or id | selects |
+|---|---|
+| `method:<Type>.<name>`, `function:<pkg>.<name>` | a member, or a top-level / extension function (`receiver` on an extension) |
+| `function:pkg.name@android` | one platform's `actual` (`IMPLEMENTED_BY` from `expect`). Source sets (`androidMain`, `iosMain`, `iosTest`, …) carry platform tags — `cg platforms`, `--platform` |
+| `page:kotlin:orders/{id}` | Compose Navigation, typed routes, or Navigation 3 `entry`. A nested destination keeps its outer class (`page:kotlin:SettingsRoute.Standard`); a wrapper of `composable<T>` still yields a page (`attrs.wrapper`) |
+| `field:<Type>.<name>` | a stored `val` / `var` (constructor property included): `READS_PROP` / `WRITES_PROP` for `x`, `this.x`, and `v.x` when `v`'s type is known. `cg readers Type.prop` / `cg writers Type.prop` |
+| `enum_case:<Enum>.NAME`, `constant:<Type>.NAME` | `USES_VALUE` when the spelling is certain (`Color.RED`, a companion's `K.A`). An `object`'s `val`s stay constants |
+| `route:GET /a/{id}` | Ktor `routing` / `fun Route.x()`, or a Spring mapping |
+| `http:METHOD path` | Retrofit (`@GET` / `@HTTP` plus `baseUrl`), Ktor client, or OkHttp. `"$base/x"` keeps `{base}` so `cg link` can match the path |
+
+A custom `get` / `set`, `by lazy`, or other delegate is a `method:` / `function:` node (`kotlin_kind: property`). Reads and writes are `CALLS` (`property: read` / `write` / `read_write`); calls inside the accessor carry `accessor`. `impact` prints a callable reference as `(ref: callback)` (`REFERENCES_FN`, `how: callback`, both modes), an accessor body as `(get)` / `(set)` / `(lazy)` / `(delegate)`, and a stored-property initializer as `(in a property)`. Two to five methods of one name are `candidate` edges (`binding: "candidate"`): flagged by `cg tests` / `impact`, left out of platform divergence. A library-typed receiver (`Headers.build { }`, `client: HttpClient`) is not bound by name.
+
+## Framework facts
+
+| area | what you can query |
+|---|---|
+| Ktor | each handler lambda is its own node; `authenticate("jwt")` is the route's guard; `get<Articles.Id>` takes the path from `@Resource` and its parent |
+| Spring | class `@RequestMapping` prefixes; `@PreAuthorize` / `@Secured` / `@RolesAllowed` as guards; the first `SecurityFilterChain` whose `securityMatcher` matches (by `@Order`, then source order; a chain with none matches every route; a `RequestMatcher` bean is skipped, `security_chains_unknown_matcher`); `@Scheduled` and `@KafkaListener` / `@RabbitListener` / `@JmsListener` / `@SqsListener` / `@EventListener` entry points |
+| Tables | Spring Data calls on a repository receiver (`JpaRepository`, `CrudRepository`, coroutine / reactive / Mongo) and Exposed `selectAll` / `insert` / `update` / `deleteWhere` → `READS_TABLE` / `WRITES_TABLE`. Table name: `@Table` or Spring Boot snake_case; Exposed uses the name argument, or the object name without `Table` |
+| Android | manifest activities (`ui_page`), services / receivers / providers (`listener`), deep links, `Worker` / `CoroutineWorker` / `JobService` (`queue_job`); `navigate(...)` → `NAVIGATES_TO` |
+| Tests | `src/test`, `src/androidTest`, `*Test` source sets, `*Test.kt`. Framework from imports: `junit5`, `junit4`, `kotlin-test`, `testng`, `kotest`. `androidTest` counts as UI; a path through an `*Activity` is omitted unless `--through-roots` |
 
 ```bash
 cg index examples/bookstore-django  --db /tmp/dj.db
@@ -53,119 +75,3 @@ cg index examples/bookstore-android --db /tmp/android.db
 cg link --backend /tmp/dj.db --frontend /tmp/android.db --db /tmp/android-link.db
 cg path "page:kotlin:checkout/{bookId}" "table:catalog_order" --db /tmp/android-link.db
 ```
-
-The path runs from the Compose destination through the screen, view model and repository to the Retrofit method,
-its `http:POST /api/orders/` endpoint, the Django route and handler, and the table it writes.
-
-## Exact mode
-
-A [scip-java](https://sourcegraph.github.io/scip-java/) index of the Gradle / Maven build replaces the name-based call
-edges with compiler-resolved ones: overloads, lambdas (`it.area()`), extension functions, same-named methods on
-different classes and interface calls go to the declaration the compiler picked. Declarations, framework facts and the
-graph ids stay those of the syntax layer (SCIP symbols are matched to them by file, name line and name), so queries and
-`cg link` work the same in both modes. The layer is used when one of these provides an index:
-
-| Source | How |
-|---|---|
-| `cg index --scip index.scip` | an index with Kotlin documents is taken by the Kotlin plugin instead of the generic SCIP importer |
-| `CODEGRAPH_KOTLIN_SCIP_FILE=/path/index.scip` | a prebuilt index (e.g. from CI) |
-| `CODEGRAPH_KOTLIN_SCIP=1` | cg runs `scip-java index` at the project root through the native runner cache (`~/.cache/codegraph/scip`, keyed by the sources and build files; `CODEGRAPH_NO_CACHE=1` forces a run, `CODEGRAPH_INDEXER_TIMEOUT` caps it) |
-
-Running scip-java runs the project's Gradle / Maven build, and so its build scripts; that is why it is opt-in rather
-than automatic. It needs a JDK (`JAVA_HOME` or `java` on `PATH`) and scip-java (`CODEGRAPH_SCIP_JAVA`, `PATH`,
-`~/tools`, `~/.local/bin` or the coursier bin directory; `cs install scip-java` or the standalone launcher).
-
-Each scip-java release carries a Kotlin compiler plugin that loads into a narrow range of Kotlin versions:
-
-| scip-java | Kotlin (checked on Gradle builds) | Install |
-|---|---|---|
-| 0.12.x (`com.sourcegraph`) | up to 2.1 | `cs install scip-java` |
-| 0.13.x (`org.scip-code`) | 2.2.0 - 2.2.10 | the launcher from [github.com/scip-code/scip-java/releases](https://github.com/scip-code/scip-java/releases), saved as `~/tools/scip-java-0.13.1/scip-java` (or `~/.local/bin/scip-java-0.13.1`) and made executable |
-| none yet | 2.2.20 and newer | the heuristic layer stays; coverage says which release would be needed |
-
-Several releases can be installed side by side: cg reads the Kotlin version the build declares (`kotlin("jvm") version`,
-`id("org.jetbrains.kotlin.*") version`, the `kotlin` entry of `gradle/libs.versions.toml`, `kotlin_version` in
-`gradle.properties`, `<kotlin.version>` in `pom.xml`), runs the release that supports it first, and tries the next one
-when the compiler plugin does not load. `CODEGRAPH_SCIP_JAVA` takes one path or several joined by `:`. The index
-stats record `kotlin_version`, the `indexer` used and the failed `attempts`. scip-java 0.13 writes SCIP 0.9 typed
-ranges (`single_line_range`, `multi_line_enclosing_range`); cg reads both forms, also in the generic `--scip` importer.
-`install.sh --with kotlin` installs 0.12 with coursier and the 0.13.1 launcher (checksum-verified) as
-`~/.local/bin/scip-java-0.13.1` (0.13 ships only a POSIX `sh` launcher, so `install.ps1` prints the WSL / `--scip`
-routes instead). `cg doctor <project>` lists the installed releases with their Kotlin ranges and names the one that fits the build's
-Kotlin version, or says that none does.
-
-### Mixed Kotlin / Java modules
-
-scip-java indexes the Java sources of the build together with the Kotlin ones. Since the Kotlin plugin takes the
-index, it imports the Java documents too: Java classes (nested ones included) and methods become `java` nodes (ids as
-the generic SCIP importer makes them, `method:demo.Formatter::bold`), and Kotlin -> Java, Java -> Kotlin and Java ->
-Java calls and constructor calls become exact edges. A Java call of a top-level Kotlin function through its file
-facade (`AppKt.build()`) goes to the Kotlin function. The Java caller is the innermost Java method or class around the
-call (SCIP enclosing ranges). `cg coverage` reports Java as `scip` (imported from the Kotlin build's index) and the
-Kotlin stats carry `java: {documents, classes, methods, references, references_external}`. Without an index the Java
-files stay `unsupported`, as before.
-
-`cg coverage` names the mode and the reason: `kotlin: 38 files exact: scip-java index (--scip)`, or for heuristic mode
-why the exact layer did not run (no Gradle / Maven build file, no JDK, scip-java not installed, not opted in, or the
-scip-java run failed, with the last line of its output). Kotlin files the index does not contain keep their heuristic
-calls and are counted in the reason. `cg index` stats carry `exact_vs_heuristic`: how many of the heuristic call edges
-the compiler confirms (precision) and how many compiler edges the heuristic layer had found (recall).
-
-Limitations: no released scip-java loads into Kotlin 2.2.20 or newer (0.13.x is built against 2.2.0 and fails with
-`NoSuchMethodError` on 2.2.20+ and `AnalyzerRegistrar is incompatible` on 2.3+; 0.12.x fails on 2.2+); the build
-keeps the heuristic layer and coverage names the Kotlin version. Android modules are not indexed: they need the Android SDK for
-the build to run (`SDK location not found` in the reason), and even with the SDK scip-java's Gradle plugin compiles
-no Android variant (`compileDebugKotlin`), so their files keep the heuristic layer. cg lists the modules that apply the
-Android Gradle plugin (`android_modules` in the stats) and names them in the reason, as `skipped modules` when the
-rest of the build was indexed. Builds whose settings use `repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)`
-(the Android template default) reject the repository scip-java's Gradle plugin adds; the reason says so. Java fields and Java-only builds are not covered by this
-layer (index a Java-only build with scip-java and `--scip`). Property accessors are not call edges (a property read
-reports the synthetic getter, which may share its symbol with a declared `fun getX()`): the heuristic property read /
-write edges (below) are kept in exact mode and left out of the precision / recall comparison, and calls inside an
-accessor come from the property node in both modes.
-
-## Properties that run code
-
-A property with a custom `get()` / `set(value)`, a `by lazy { }` initializer or another delegate (`by
-Delegates.observable(...)`, `by viewModels()`, `by remember { }` on a class member ...) is a node (#89):
-`method:<Type>.<name>` in a class, `function:<package>.<name>` at the top level (an extension property keeps its
-`receiver`, as extension functions do), with `kotlin_kind: property`, `property: custom | lazy | delegated` and
-`accessors: [get, set, lazy, delegate]`. The calls inside come from that node with `accessor: get | set | lazy |
-delegate` on the edge (impact shows `(get)`). A read (`cart.label`, an implicit `summary`, `3.asPrice`, a top-level
-`banner`) is a `CALLS` edge with `property: read`; an assignment to a property with a setter or delegate is
-`property: write`. `count++`, `--cart.count` and `cart.count += 1` run the getter and the setter: on a property with a
-setter or delegate that is one edge with `property: read_write` (a get-only node keeps `read`), and on a stored
-property both `READS_PROP` and `WRITES_PROP` (#105). Receivers follow the method-call rules: a known receiver type (a parameter / property type, a
-constructor call, a literal) binds exactly or not at all; an unknown receiver binds only a class member property whose
-name no stored property shares, with `binding: "name"` (extension and top-level properties never bind by name). A
-stored property's initializer counts for its class, which `impact` lists as `(in a property)`.
-
-## Stored properties
-
-A stored property of a class or enum is a `field:<Type>.<name>` node (#88), with attrs `property: stored` and
-`binding: val | var`. This covers a body `val` / `var` without accessors or a delegate, and a constructor `val` /
-`var` parameter. An `object`'s / companion's `val`s stay constants (#84), and a plain constructor parameter is not a
-field.
-
-Reads and writes are `READS_PROP` / `WRITES_PROP` edges (`resolved`, attr `receiver`) for:
-- `x` / `this.x` inside the class or a subclass, unless a parameter or local shadows it;
-- `v.x` where the type of `v` is known: a parameter, a property, or a local `val v = T(...)`.
-
-An unknown receiver binds nothing. Writes are `=` and compound assignments, plus:
-- `items.add(x)` / `remove` / `clear` / `put` / `sort` … on the field (`via: mutating`);
-- `_state.value = x` on a `MutableStateFlow` / `LiveData` field (`via: value`).
-
-A data class `copy(x = v)` writes `x` (`via: copy`). With a known receiver type the edge is `resolved`. Otherwise it
-binds the one data class whose fields include every named argument (`heuristic`, `binding: name`); with no such
-class or several, nothing (stat `copy_unresolved`).
-
-A composable call or a constructor call inside `if` / `else` / a `when` entry carries attrs `branch` (`if (loading)`,
-`else of if (loading)`, `when Tab.Home`, `else of when (tab)`) and `branch_line`, as in Swift.
-
-`cg readers Type.prop` / `cg writers Type.prop` list them. Local delegated properties (`val x by remember { }`
-inside a function) belong to that function.
-
-## Roadmap
-
-- Exact mode on Kotlin 2.2.20+ builds (once a scip-java release supports them) and on Android modules (an init
-  script attaching the compiler plugins to the variant compile tasks, and allowing the plugin's repository).
