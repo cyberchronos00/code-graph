@@ -39,6 +39,8 @@ service), `config:<module>.<setting>` for a settings dict that points at the loc
 | Prisma `datasource` blocks (#41) | `provider` gives the protocol (postgresql / cockroachdb, mysql, sqlserver, mongodb; sqlite is a local file and is skipped), `url = env("DATABASE_URL")` resolves through `.env.example` / docker-compose like any env key, a literal URL is parsed as a DSN. The schema's model tables get `attrs.system` and CONNECTS_TO the system (`op = table`), so `impact` / `reaches` on the system go through the tables to the code reading and writing them | resolved / heuristic |
 | Model calls (`attrs.llm_calls` from [AI tools](ai-tools.md)) | `external:llm:<provider>` (openai, anthropic, azure-openai, ollama ...) with the `models` called, or `external:llm:<host>:<port>` for a non-local `base_url`; CONNECTS_TO from the calling function, CREDENTIAL_FROM the provider's API-key env var when code reads it; calls from test code are left out | resolved / exact |
 | Third-party HTTP (`http` nodes with origin_kind other) | real `external:http:<host>:80` / `external:https:<host>:443` nodes (or the explicit port; literal origin on the http node). CONNECTS_TO from the calling function (`via` http, `op` request, `count` when that function has several call sites); paths on `attrs.paths`. Loopback hosts (`localhost`, `127.0.0.1`, `::1`, …) and template / unresolved hosts (`${base}`, `{host}`) stay unattached. Origins only called from tests are left out. `cg link` is unchanged: `match_endpoint` still skips `origin_kind` other, and these nodes are not routes | exact |
+| Cloud / SaaS SDKs (#42 part 2) | `external:s3:<bucket-or-env>`, `external:gcs:<bucket-or-env>`, `external:azure-blob:<container-or-env>`, `external:aws:<service>[:resource]` (sqs, secretsmanager, dynamodb, ses), `external:saas:stripe`, `external:llm:<provider>` (the same ids as `attrs.llm_calls`). Python `boto3.client/resource`, `google.cloud.storage` `.bucket`, `azure.storage.blob` `get_container_client`, `stripe.*.create`; JS/TS `@aws-sdk/client-*` commands, `Upload`, `S3Client` (a `this.getBucket()` that returns `env.BUCKET` supplies the bucket), `@google-cloud/storage`, `@azure/storage-blob`, `stripe`, `openai` / `anthropic` chat calls; PHP aws-sdk-php `putObject`, Flysystem `AwsS3V3Adapter`, stripe-php. Resource from `Bucket` / `QueueUrl` / `SecretId` / `TableName` literals or env. CONNECTS_TO `via` = library, `op` = SDK operation. Explicit keys are CREDENTIAL_FROM; a default chain is `auth=ambient`. An SDK endpoint URL is stored as `attrs.endpoint` and is not also an `external:http(s)` node. Callers that are already test nodes are left out | exact / resolved |
+| Laravel disks / django-storages | `config/filesystems.php` disks whose driver is `s3` / `gcs` / `azure`, and Django `STORAGES` / `DEFAULT_FILE_STORAGE` (`S3Boto3Storage`, gcloud, Azure). Every `Storage::disk('name')` and `default_storage.save/open/delete/...` CONNECTS_TO that disk. Bucket from the disk `bucket` / `container` or `AWS_STORAGE_BUCKET_NAME` / `GS_BUCKET_NAME` / `AZURE_CONTAINER` | resolved |
 
 DSNs: postgres(ql) / pgsql, mysql / mariadb, mssql / sqlserver, oracle, mongodb(+srv), redis / rediss / valkey, amqp(s),
 smtp(s), ldap(s), sftp / ssh / scp, ftp(s), s3, memcached, elasticsearch, nats, kafka (aiokafka,
@@ -50,7 +52,7 @@ and TLS ports (465, 636, 993 ...), false for the plaintext schemes, unknown othe
 Node attrs: `protocol`, `target`, `host`, `port`, `confidence`, `address_source` (literal | env-example | compose |
 config | env | code-default) and `address_at`, `address_default` (the loopback / fallback address behind an
 `env:` or `config:` target), `deployment_name` / `image` / `compose_file`, `scheme`, `resource` (database, vhost,
-bucket), `user`, `tls`, `credential_source` (env | literal) and `credential_at` (a key or `file:line`), `library` /
+bucket), `user`, `tls`, `credential_source` (env | literal | ambient) and `credential_at`, `auth` (ambient | explicit) (a key or `file:line`), `library` /
 `connection` (Laravel), `setting` (Python), `protocol_source` (dependencies).
 
 ## Secrets
@@ -85,7 +87,7 @@ that reads or writes only some of its columns (READS_COLUMN / WRITES_COLUMN on t
 - class-validator DTOs read through a separate validation step, and settings objects passed between functions.
 - Spring `application.yml`, Rails `database.yml`, Kubernetes / Helm / Terraform values, settings built with
   f-strings (NetBox's `CACHES` from `REDIS`), docker-compose files outside the indexed root.
-- Cloud and SaaS SDK clients (S3, GCS, Stripe, OpenAI, and the rest of #42 part 2).
+- Mail, SMS, push, Firebase and the Kubernetes / Docker Engine APIs (#42 follow-ups). Broker pairing stays #35; SSRF candidates stay #47.
 - A Prisma schema in a sibling workspace package (cal.com's `packages/prisma`, used by `apps/web`) is not found
   from the app. Prisma models are only read in projects with a TypeScript web framework, and other ORM configs
   (TypeORM / Sequelize / Knex / Drizzle / Kysely) do not name a system yet.

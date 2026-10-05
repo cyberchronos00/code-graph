@@ -307,12 +307,10 @@ def attach(builder, root: Path) -> dict:
     facts = getattr(builder, "external_facts", None) or []
     # model calls made from test code are fixtures, not systems the application talks to (as for third-party HTTP)
     llm = [n for n in builder.nodes.values() if (n.attrs or {}).get("llm_calls") and not n.attrs.get("test")]
-    http_other = any(n.kind == "http" and (n.attrs or {}).get("origin_kind") == "other" for n in builder.nodes.values())
+    # Cloud SDK calls (boto3, S3Client, Storage::disk, …) can be the only signal — do not return
+    # before attach_sdk. http_other / compose-only brokers still run through the loops below.
     ex = read_env_example(root)
     compose = read_compose(root)
-    if not envs and not conns and not facts and not llm and not http_other and not any(
-            c.get("protocol") in COMPOSE_ONLY for c in compose.values()):
-        return {}
     readers: dict = {}
     for e in builder.edges.values():
         if e.kind == "READS_ENV":
@@ -369,8 +367,9 @@ def attach(builder, root: Path) -> dict:
                 n.attrs.setdefault(k, v)
         if ":" in target and not target.startswith(("env:", "config:")):
             h, _, p = target.rpartition(":")
-            n.attrs.setdefault("host", h)
+            # host:port only. `aws` targets such as `sqs:env:QUEUE` and `secretsmanager:prod/db` are not addresses.
             if p.isdigit():
+                n.attrs.setdefault("host", h)
                 n.attrs.setdefault("port", int(p))
                 if n.attrs.get("tls") is None and int(p) in TLS_PORTS.get(proto, set()):
                     n.attrs["tls"] = True
@@ -680,6 +679,8 @@ def attach(builder, root: Path) -> dict:
 
     attach_redis_es_resources(builder, root, st)
     _attach_http_hosts(builder, node, st)
+    from .sdk_systems import attach_sdk
+    attach_sdk(builder, root, node, cred, st)
 
     # Brokers declared only in compose: a node with no CONNECTS_TO (#158). Skip a service a client fact
     # already turned into the same protocol + host / deployment name.
@@ -834,6 +835,8 @@ def render_external(res: dict, max_items: int = 60) -> str:
             bits.append(f"compose service {a['deployment_name']}" + (f" ({a['image']})" if a.get("image") else ""))
         if a.get("credential_source"):
             bits.append(f"credentials {a['credential_source']}" + (f" @ {a['credential_at']}" if a.get("credential_at") else ""))
+        elif a.get("auth"):
+            bits.append(f"auth {a['auth']}")
         if a.get("tls") is not None:
             bits.append("tls" if a["tls"] else "plaintext")
         if a.get("resource"):

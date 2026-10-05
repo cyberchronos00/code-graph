@@ -10,6 +10,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Cloud and SaaS SDKs (#42, part 2): `boto3`, `@aws-sdk/client-*`, aws-sdk-php, GCS, Azure Blob,
+  Stripe, and OpenAI / Anthropic clients become `external:s3:<bucket-or-env>`,
+  `external:gcs:…`, `external:azure-blob:…`, `external:aws:<service>[:resource]`,
+  `external:saas:stripe` and `external:llm:<provider>`. Laravel `filesystems.php` disks and
+  django-storages backends use the same storage ids for every `Storage::disk` / `default_storage`
+  call. Explicit keys are CREDENTIAL_FROM; the default credential chain is `auth=ambient`.
+  SDK endpoint URLs are not a second `external:http(s)` node. Test callers are left out.
 - Third-party HTTP hosts (#42, part 1): `http` nodes with `origin_kind` other become
   `external:http:<host>:80` / `external:https:<host>:443` graph nodes (or the explicit port) with
   CONNECTS_TO from the calling function (`via` http, `count` when several call sites). Loopback and

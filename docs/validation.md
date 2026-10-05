@@ -1337,3 +1337,15 @@ sends from the helper; `AIOKafkaConsumer(settings.events_topic, group_id=...)` i
 `https-client` fixture: GitHub + Slack (https) and httpbin (http). outline: `updates.getoutline.com`.
 cal.com / saleor / open-webui / immich server: no app-called other-origin hosts in this pass (same-origin /
 unknown / none). Query-time https adapter removed; `cg link` still skips other-origin URLs.
+
+## Cloud / SaaS SDKs as external nodes (#42 part 2)
+
+SDK construction and operations become resource nodes (`external:s3:<bucket-or-env>`,
+`external:gcs:…`, `external:azure-blob:…`, `external:aws:<service>[:resource]`, `external:saas:stripe`,
+`external:llm:<provider>`). Fixtures: `s3-py` (PutObject + ambient creds, explicit keys, SQS, Secrets Manager),
+`gcs-py`, `azure-py`, `stripe-py`, `openai-chat`, `laravel-disk`, `django-storages`. Test-only callers and
+HTTP hosts already attached as `external:http(s)` are not duplicated.
+
+| Corpus | Before | After | Notes |
+|--------|--------|-------|-------|
+| outline 478e812 | 15,551 nodes / 64,832 edges, index 24.54s | 15,552 / 64,843 (+1 node, +11 edges), index 24.12s | one `external:s3:env:AWS_S3_UPLOAD_BUCKET_NAME` (`auth=ambient`, CONFIGURED_BY that env key). 10 CONNECTS_TO from `S3Storage` (`PutObject`, `DeleteObject`, `HeadObject`, `CopyObject` + `DeleteObject` on `moveFile`, `GetObject` on `getFileStream` and `getS3PresignedUrl`, `Upload`, `createPresignedPost`, `S3Client`). No new `external:http(s)` node. |
