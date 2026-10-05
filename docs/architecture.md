@@ -100,7 +100,7 @@ Per-language facts: [python.md](python.md), [php.md](php.md), [ts-frameworks.md]
 | `path` | one shortest chain between two specs |
 
 Override hops are the override relation: `impact` shows `overrides:` and `(via override)`, and `tests` / `reaches` seed the same way.
-With a gate scenario indexed, dependents reached only through gated code sit in a GATED group ([configuration.md](configuration.md#gate-scenarios---gates)).
+With a gate scenario indexed, dependents reached only through gated code sit in a GATED group ([configuration.md](configuration.md#gate-scenarios)).
 Specs: [cli.md](cli.md#query-targets-specs).
 
 ## Cross-repo link

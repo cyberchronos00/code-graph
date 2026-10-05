@@ -1,93 +1,82 @@
-# External systems: databases, caches, brokers, mail, directories, file transfer
+# External systems
 
-Code talks to systems outside the repository: a Postgres server, a Redis cache, an SMTP relay, an LDAP directory, an
-SFTP host, an S3 bucket. The address usually lives in configuration (`DB_HOST`, `DATABASE_URL`, `settings.DATABASES`,
-a docker-compose service), not in the call, so without this layer the graph ends at "reads env DB_HOST" and nobody
-can ask "what talks to the reporting database" or "which systems are reached without TLS". cg models each system as
-one node:
+A Postgres server, Redis, SMTP, LDAP, SFTP or S3 bucket is one node. The address usually lives
+in configuration, not in the call.
 
 ```
-code / connection:<name> / settings module -CONNECTS_TO-> external:<protocol>:<target>
-external:<protocol>:<target> -CONFIGURED_BY-> env:<KEY> | config:<key>
-external:<protocol>:<target> -CREDENTIAL_FROM-> env:<KEY>          (location of the secret, never its value)
+code -CONNECTS_TO-> external:<protocol>:<target>
+external -CONFIGURED_BY-> env:<KEY> | config:<key>
+external -CREDENTIAL_FROM-> env:<KEY>          # where the secret is, never its value
 ```
 
-`target` is `host:port` when the address is known (a literal, a DSN, an `.env.example` value or a docker-compose
-service), `config:<module>.<setting>` for a settings dict that points at the local machine, otherwise `env:<KEY>`
-(the key the code reads). Two repositories pointing at the same address share the node after `cg link`, so
-`reaches external:postgres:db:5432` lists the entry points of both.
+`target` is `host:port` when a literal, a DSN, `.env.example` or a compose service names it;
+`config:<module>.<setting>` for a settings dict aimed at the local machine; otherwise
+`env:<KEY>`. After `cg link`, two repos that name the same address share the node.
 
-## Sources
+| source | what becomes a node |
+|---|---|
+| Laravel `config/database.php` | the default connection, connections models use, custom connections. Unused framework templates are skipped |
+| `READS_ENV` prefixes | `DB_*`, `DATABASE_URL`, `REDIS_*`, `MAIL_*` (only when the mailer is smtp), `MONGO*`, `AMQP_*`, `LDAP_*`, `S3_*`, `KAFKA_*`, … |
+| Python `*settings*` / `*config*` | Django `DATABASES` / `CACHES`, `DATABASE_URL`, `CELERY_BROKER_URL`. sqlite and local-memory caches are not network systems |
+| `.env.example` and compose | non-secret values; compose services with a known image (postgres, redis, kafka broker images, …). A broker no client mentions is still listed, with no CONNECTS_TO |
+| client constructors | Python (`psycopg`, `redis`, `pymongo`, `pika`, `boto3`, …) and Node (`pg`, `ioredis`, `mongoose`, `amqplib`, `knex`, …). A localhost default is not a system |
+| ORM datasources | Prisma `datasource`, TypeORM `DataSource`, Drizzle `dbCredentials`, Laravel tables on `$connection`, PHP `new PDO`, Spring `spring.datasource.url`. sqlite / H2 / HSQLDB / Derby are skipped. The one SQL system in a repo is attached to ORM tables that name none (`via: sole <protocol> system`) |
+| Redis / Elasticsearch | literal key prefixes and `KEY_PREFIX` / `ELASTICSEARCH_INDEX_PREFIX` on `attrs.key_prefixes` / `attrs.indices` |
+| HTTP and SDKs | `external:http(s):<host>:<port>` for a real other-origin host; `external:s3:<bucket>`, `gcs`, `azure-blob`, `aws:<service>`, `saas:stripe`, `llm:<provider>`. Loopback and `${host}` stay unattached. Test-only callers are left out |
+| Laravel disks / django-storages | `s3` / `gcs` / `azure` disks. `Storage::disk` and `default_storage.save` connect to that disk |
 
-| Source | What is read | Confidence |
-|---|---|---|
-| Laravel `config/database.php` connections | the default connection (`DB_CONNECTION` in `.env.example` or the config default), connections used by models / `DB::connection()` (USES_CONNECTION) and custom connections; the framework's unused template connections are skipped. CONNECTS_TO connection → external (op query), CONFIGURED_BY to the config / env node, CREDENTIAL_FROM the password key | exact for a literal host, resolved through `.env.example` / compose, heuristic otherwise |
-| Env keys read by code (`READS_ENV`) | keys grouped by prefix (`DB_*`, `DATABASE_URL`, `POSTGRES_*`, `REDIS_*`, `MAIL_*` / `SMTP_*`, `MONGO*`, `RABBITMQ_*`, `AMQP_*`, `LDAP_*`, `SFTP_*`, `S3_*`, `ELASTICSEARCH_*`, `KAFKA_*` ...): the URL / HOST key gives the address, PORT the port, PASSWORD / SECRET keys the credential. Every code reader gets CONNECTS_TO (op connect). `MAIL_*` counts only when the mailer is smtp; `DB_*` without a driver or scheme takes the one SQL client in the dependencies (package.json, requirements, pyproject) or compose | as above |
-| Python settings | module-level dicts in `*settings*` / `*config*` modules: Django `DATABASES` / `CACHES` (`ENGINE` / `BACKEND` gives the protocol; sqlite, local-memory and file caches are no network system), NetBox-style `DATABASE` / `REDIS` with aliases, values from literals, `os.environ.get("K", default)`, `os.getenv`, `os.environ["K"]`, django-environ `env("K")` and other module dicts; URL settings `DATABASE_URL`, `CELERY_BROKER_URL`, `BROKER_URL`, `REDIS_URL`, `CACHE_URL`, `EMAIL_HOST` | exact / resolved / heuristic |
-| `.env.example`, `.env.sample`, `.env.dist`, `.env.template`, `example.env` | values of non-secret keys; secret keys keep only their location; a DSN password becomes `***` before anything else sees it | |
-| `docker-compose*.yml`, `compose*.yaml` | services with a known image (postgres, mysql / mariadb, redis / valkey, mongo, rabbitmq, elasticsearch / opensearch, memcached, minio, mailpit / mailhog, openldap, nats, Kafka broker images only (`apache`/`bitnami`/`wurstmeister`/`confluentinc` basename `kafka` / `cp-kafka` / `cp-server`, `redpanda`) — not kafka-ui / kafdrop / exporters, mosquitto, clickhouse, cassandra): a host equal to the service name resolves to `service:port` with `deployment_name` and `image`. A broker service (kafka, amqp, nats, redis, mqtt) that no client fact covers is still listed, `source` / `address_source` `compose`, with no CONNECTS_TO | resolved |
-| Python client constructors | `psycopg` / `psycopg2` / `asyncpg` / `pg8000` `connect(host=, port=, dbname=)` or a DSN, `pymysql` / `MySQLdb` / `mysql.connector`, `redis.Redis(host=)` / `redis.from_url(url)`, `pymongo.MongoClient(url)`, `smtplib.SMTP(host, port)` / `SMTP_SSL` (TLS, 465), `ftplib.FTP` / `FTP_TLS`, `ldap3.Server(host)`, `pika` / `aio_pika` / `kombu`, `aiokafka` / `kafka` (kafka-python) / `confluent_kafka` (`bootstrap_servers` / `bootstrap.servers`), `elasticsearch`, `pymemcache`, `boto3.client("s3", endpoint_url=)`, and a client built bare and connected afterwards (`c = paramiko.SSHClient(); c.connect(hostname=)`, `ftp = ftplib.FTP(); ftp.connect(host)`, `self.smtp = smtplib.SMTP()` then `self.smtp.connect(host)` in another method, #103): literal or env-read arguments; CONNECTS_TO from the calling function (op connect, `client` attr); a client left at its localhost default is no system | exact for a literal, otherwise as above |
-| Node client constructors (#103) | `pg` `new Pool({ connectionString | host, port, database })` / `new Client(..)`, `postgres(url)`, `mysql` / `mysql2` `createPool` / `createConnection`, `ioredis` `new Redis(url | port, host | { host })` (also a project subclass: `class RedisAdapter extends Redis` with its `super(..)`, `new this(..)` and `new RedisAdapter(..)`), `redis` `createClient({ url | socket: { host } })`, `nodemailer.createTransport({ host, port, secure, auth: { pass } })`, `mongoose.connect(url)`, `new MongoClient(url)`, `amqplib.connect(url)`, `new Kafka({ brokers })`, `new Sequelize(url | db, user, pw, { host, dialect })`, `knex({ client, connection })`, `ldapjs.createClient({ url })`, `new S3Client({ endpoint })`, `@elastic/elasticsearch`, `connect({ host })` on an `ssh2` / `ssh2-sftp-client` client and `access({ host })` on `basic-ftp`. Arguments are literals, `process.env.X` (`|| 'default'`), env wrappers and parsed env (below), `ConfigService.get('ns.key')` through its `registerAs()` env key, consts, object spreads and class fields; sqlite dialects and localhost defaults are no system | exact for a literal, otherwise as above |
-| TypeScript env wrappers (#103) | `env.X` / `environment.X` (UPPER_CASE keys, outline's `Environment`), and values parsed from `process.env` (`EnvSchema.safeParse(process.env).data`, `plainToInstance(EnvDto, process.env)`, Joi `validate(process.env)`): READS_ENV, `via` `env wrapper` / `env schema`. `process.env.X = ...` is a write, not a read | resolved |
-| Laravel Eloquent tables (#41) | tables from migrations / models attach to the external of their `$connection` (or the default `DB_CONNECTION`), so `impact` on a database reaches model users | resolved |
-| PHP `new PDO($dsn)` / Doctrine DBAL (#41) | `new PDO(...)`, `DriverManager::getConnection([...])`, `EntityManager::create([...])`: DSN literal or env key; PDO `mysql:host=...` form supported; sqlite skipped | exact / heuristic |
-| Redis key prefixes / Elasticsearch indices (#41) | literal and f-string / template key prefixes (`cache:user:{id}` -> `cache:user:`), Django `KEY_PREFIX`, and ES `index=` / `ELASTICSEARCH_INDEX_PREFIX` defaults attach as `attrs.key_prefixes` / `attrs.indices` (and `resource` when there is only one) on the matching redis / elasticsearch external | resolved |
-| Spring `spring.datasource.url` (#41) | `application*.properties` / `*.yml`; embedded H2/HSQLDB/Derby/SQLite skipped; JPA / Exposed tables (`via: spring-data` / `exposed`) attach when present | exact / resolved |
-| TypeORM `new DataSource({ type, url|host })` (#41) | `type` / dialect -> protocol; `url` or `host` from `process.env` / literals; `@Entity` tables get `attrs.system` and CONNECTS_TO | resolved / heuristic |
-| Drizzle `drizzle.config.ts` (#41) | `dialect` / `driver` + `dbCredentials.url` (also through a local `const x = process.env.Y.replace(...)`); `pgTable` / `mysqlTable` / `sqliteTable` in schema files | resolved / heuristic |
-| Kysely / sole SQL system (#41) | when the project has exactly one SQL external (postgres / mysql / mssql / oracle / mongodb) and ORM tables (`Entity`, `Table`, `kysely`, `drizzle`, `knex`, `prisma`) have no system yet, they attach with `via: sole <protocol> system` (Immich: Kysely + `DB_URL`) | heuristic |
-| Prisma `datasource` blocks (#41) | `provider` gives the protocol (postgresql / cockroachdb, mysql, sqlserver, mongodb; sqlite is a local file and is skipped), `url = env("DATABASE_URL")` resolves through `.env.example` / docker-compose like any env key, a literal URL is parsed as a DSN. The schema's model tables get `attrs.system` and CONNECTS_TO the system (`op = table`), so `impact` / `reaches` on the system go through the tables to the code reading and writing them | resolved / heuristic |
-| Model calls (`attrs.llm_calls` from [AI tools](ai-tools.md)) | `external:llm:<provider>` (openai, anthropic, azure-openai, ollama ...) with the `models` called, or `external:llm:<host>:<port>` for a non-local `base_url`; CONNECTS_TO from the calling function, CREDENTIAL_FROM the provider's API-key env var when code reads it; calls from test code are left out | resolved / exact |
-| Third-party HTTP (`http` nodes with origin_kind other) | real `external:http:<host>:80` / `external:https:<host>:443` nodes (or the explicit port; literal origin on the http node). CONNECTS_TO from the calling function (`via` http, `op` request, `count` when that function has several call sites); paths on `attrs.paths`. Loopback hosts (`localhost`, `127.0.0.1`, `::1`, …) and template / unresolved hosts (`${base}`, `{host}`) stay unattached. Origins only called from tests are left out. `cg link` is unchanged: `match_endpoint` still skips `origin_kind` other, and these nodes are not routes | exact |
-| Cloud / SaaS SDKs (#42 part 2) | `external:s3:<bucket-or-env>`, `external:gcs:<bucket-or-env>`, `external:azure-blob:<container-or-env>`, `external:aws:<service>[:resource]` (sqs, secretsmanager, dynamodb, ses), `external:saas:stripe`, `external:llm:<provider>` (the same ids as `attrs.llm_calls`). Python `boto3.client/resource`, `google.cloud.storage` `.bucket`, `azure.storage.blob` `get_container_client`, `stripe.*.create`; JS/TS `@aws-sdk/client-*` commands, `Upload`, `S3Client` (a `this.getBucket()` that returns `env.BUCKET` supplies the bucket), `@google-cloud/storage`, `@azure/storage-blob`, `stripe`, `openai` / `anthropic` chat calls; PHP aws-sdk-php `putObject`, Flysystem `AwsS3V3Adapter`, stripe-php. Resource from `Bucket` / `QueueUrl` / `SecretId` / `TableName` literals or env. CONNECTS_TO `via` = library, `op` = SDK operation. Explicit keys are CREDENTIAL_FROM; a default chain is `auth=ambient`. An SDK endpoint URL is stored as `attrs.endpoint` and is not also an `external:http(s)` node. Callers that are already test nodes are left out | exact / resolved |
-| Laravel disks / django-storages | `config/filesystems.php` disks whose driver is `s3` / `gcs` / `azure`, and Django `STORAGES` / `DEFAULT_FILE_STORAGE` (`S3Boto3Storage`, gcloud, Azure). Every `Storage::disk('name')` and `default_storage.save/open/delete/...` CONNECTS_TO that disk. Bucket from the disk `bucket` / `container` or `AWS_STORAGE_BUCKET_NAME` / `GS_BUCKET_NAME` / `AZURE_CONTAINER` | resolved |
+Confidence is `exact` for a literal host, `resolved` through `.env.example` or compose,
+`heuristic` otherwise. `DB_*` without a driver takes the one SQL client in package.json /
+requirements / pyproject, or the compose service. A Node env wrapper (`env.X`,
+`EnvSchema.safeParse(process.env)`, Joi `validate(process.env)`) is READS_ENV with `via`
+`env wrapper` / `env schema`. `process.env.X =` is a write, not a read.
 
-DSNs: postgres(ql) / pgsql, mysql / mariadb, mssql / sqlserver, oracle, mongodb(+srv), redis / rediss / valkey, amqp(s),
-smtp(s), ldap(s), sftp / ssh / scp, ftp(s), s3, memcached, elasticsearch, nats, kafka (aiokafka,
-kafka-python, confluent-kafka `bootstrap_servers` / `bootstrap.servers`), mqtt(s), imap(s), pop3(s),
-clickhouse, cassandra, http(s) and `jdbc:` prefixes. Default ports come from the protocol (or the TLS scheme:
-`amqps` 5671, `smtps` 465, `ldaps` 636 ...). TLS: true for TLS schemes, `sslmode=require` / `ssl=true` / `tls=true`
-and TLS ports (465, 636, 993 ...), false for the plaintext schemes, unknown otherwise.
+DSNs cover postgres(ql), mysql / mariadb, mssql, oracle, mongodb(+srv), redis / rediss, amqp(s),
+smtp(s), ldap(s), sftp / ssh, ftp(s), elasticsearch, nats, kafka (`bootstrap_servers`),
+mqtt(s), imap, clickhouse, cassandra, http(s) and `jdbc:`. Default ports come from the scheme (
+`amqps` 5671, `smtps` 465, `ldaps` 636). TLS is true for TLS schemes, `sslmode=require` /
+`ssl=true` and ports 465 / 636 / 993; false for plaintext schemes; unknown otherwise.
 
-Node attrs: `protocol`, `target`, `host`, `port`, `confidence`, `address_source` (literal | env-example | compose |
-config | env | code-default) and `address_at`, `address_default` (the loopback / fallback address behind an
-`env:` or `config:` target), `deployment_name` / `image` / `compose_file`, `scheme`, `resource` (database, vhost,
-bucket), `user`, `tls`, `credential_source` (env | literal | ambient) and `credential_at`, `auth` (ambient | explicit) (a key or `file:line`), `library` /
-`connection` (Laravel), `setting` (Python), `protocol_source` (dependencies).
+Python constructors include `psycopg` / `asyncpg`, `pymysql`, `redis.from_url`, `pymongo`,
+`smtplib`, `ldap3`, `pika` / `kombu`, `aiokafka` / `confluent_kafka`, `elasticsearch`,
+`boto3.client("s3")`, and a client built bare then `connect()` 'd (`paramiko`, `ftplib`,
+`SMTP.connect` in another method). Node constructors include `pg` `Pool`, `ioredis` (including
+a project subclass and `super()`), `mysql2`, `mongoose`, `amqplib`, `new Kafka({brokers})`,
+`Sequelize`, `knex`, `ldapjs`, `S3Client`, `ssh2`, `basic-ftp`. sqlite dialects are not
+systems.
 
-## Secrets
+Node attrs: `protocol`, `host`, `port`, `tls`, `resource` (database, bucket),
+`address_source` (literal, env-example, compose, config, env), `credential_source`, `auth` (
+`ambient` or `explicit`).
 
-The graph never stores a secret value: passwords, tokens and the password part of a DSN are dropped when the files
-are read. What is kept is where the credential comes from (`env:DB_PASSWORD`, or `config/database.php:42` for a
-literal), so "which systems use a hard-coded password" is a query (`cg external --source literal`), and the test
-suite checks that the fixture secrets do not appear anywhere in the database file.
+The graph never stores a secret. A DSN password becomes `***` before anything else sees it.
+`cg external --source literal` lists hard-coded addresses or credentials.
 
-## `cg external`
-
-```
-cg external --db graph.db                     # every system with its users, address and credential source
-cg external --db graph.db --protocol redis    # one protocol
-cg external --db graph.db --source literal    # hard-coded addresses or credentials
-cg external --db graph.db --tls-off           # systems known to be reached without TLS
-cg external 'external:postgres:*' --db graph.db --json
+```bash
+cg external --db graph.db
+cg external --protocol redis --tls-off --db graph.db
+cg external 'external:postgres:*' --json --db graph.db
 ```
 
-Per system: the tables stored in it (from an ORM datasource, with the number of functions reading or writing them), the code and connections using it (with file:line and how: connection, env key, setting), the entry
-kinds reaching those users, CONFIGURED_BY / CREDENTIAL_FROM keys, TLS. MCP: `external_systems(pattern?, protocol?,
-source?, tls_off?)`. `reaches external:...` lists the entry points that reach a system, and `impact external:...` /
-`impact table:...` lists the code using it (CONNECTS_TO / USES_CONNECTION / READS_TABLE / WRITES_TABLE /
-MAPS_TO_TABLE as the first hop, then callers) with the entry points above it. A table's impact also covers the code
-that reads or writes only some of its columns (READS_COLUMN / WRITES_COLUMN on the columns it CONTAINS, #103), and
-`impact column:orders.total` lists the users of one column.
+Each system lists its tables, the functions that use it, CONFIGURED_BY / CREDENTIAL_FROM, and
+TLS. MCP: `external_systems(pattern?, protocol?, source?, tls_off?)`. `reaches` and `impact` on
+`external:…`, `table:…` and `column:orders.total` walk CONNECTS_TO, USES_CONNECTION,
+READS_TABLE / WRITES_TABLE and column edges.
+
+`impact` on a database reaches model users through the tables stored in it (ORM `CONNECTS_TO`,
+`op = table`). A table's impact also covers code that reads or writes only some of its columns
+(`READS_COLUMN` / `WRITES_COLUMN` on the columns it `CONTAINS`). `cg link` still skips
+`origin_kind: other` when matching routes; the `external:http(s)` nodes are not routes. An SDK
+endpoint URL is `attrs.endpoint` on the resource node and is not also an `external:http(s)`
+node. Explicit keys are `CREDENTIAL_FROM`; a default credential chain is `auth=ambient`.
+Callers that are already test nodes are left out.
 
 ## Not covered yet
 
-- PHP client constructors (`new PDO($dsn)`): the address must come from configuration. Node clients built from a parameter (`new Redis(options)` where the options
-  come from the caller) or from template strings are not resolved.
-- class-validator DTOs read through a separate validation step, and settings objects passed between functions.
-- Spring `application.yml`, Rails `database.yml`, Kubernetes / Helm / Terraform values, settings built with
-  f-strings (NetBox's `CACHES` from `REDIS`), docker-compose files outside the indexed root.
-- Mail, SMS, push, Firebase and the Kubernetes / Docker Engine APIs (#42 follow-ups). Broker pairing stays #35; SSRF candidates stay #47.
-- A Prisma schema in a sibling workspace package (cal.com's `packages/prisma`, used by `apps/web`) is not found
-  from the app. Prisma models are only read in projects with a TypeScript web framework, and other ORM configs
-  (TypeORM / Sequelize / Knex / Drizzle / Kysely) do not name a system yet.
+- Node clients built from a caller-supplied options object, or from a template string.
+- Spring `application.yml` beyond `spring.datasource.url`, Rails `database.yml`, Helm and
+  Terraform values, compose files outside the root.
+- Mail, SMS, push and the Kubernetes API. Broker pairing is [protocols.md](protocols.md).
+- A Prisma schema in a sibling workspace package is not found from the app.
+
+Corpus notes: [validation-log.md](validation-log.md#external-systems-40).

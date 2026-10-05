@@ -1,214 +1,163 @@
 # Web / native bridges
 
-A hybrid or cross-platform app calls into native code by name: a Capacitor plugin method, a React Native / Expo
-native module method or a Flutter platform channel method. code-graph links each such call to the Kotlin, Java,
-Swift or Objective-C code that receives it on every platform, so `impact`, `downstream`, `tests` and `--platform`
-cross the bridge. Desktop apps cross a process boundary the same way: Electron IPC channels and context-bridge
-members, and Tauri commands ([below](#desktop-process-boundaries-electron-and-tauri)).
+A hybrid app calls native code by name. cg links each call to the Kotlin, Java, Swift or
+Objective-C handler on every platform, so `impact`, `downstream`, `tests` and `--platform`
+cross the bridge. Electron IPC and Tauri commands use the same endpoint model across processes.
 
 ## Model
 
-Every bridge method is an **endpoint** node shared by the sending and the receiving side:
-
 ```
-JS / Dart caller --SENDS_TO--> endpoint:<protocol>:<module>#<method> --RECEIVED_BY--> native handler (per platform)
+JS / Dart caller --SENDS_TO--> endpoint:<protocol>:<module>#<method> --RECEIVED_BY--> native handler
 ```
 
-| protocol | endpoint id | sender | receiver |
+| protocol | id | sender | receiver |
 |---|---|---|---|
-| `capacitor` | `endpoint:capacitor:Echo#echo` | `registerPlugin('Echo')`, `Plugins.Echo`, `Capacitor.Plugins.Echo`, an `@capacitor/*` package export, `Capacitor.nativePromise('Echo', 'echo')` | `@CapacitorPlugin(name = "Echo")` + `@PluginMethod` (Java / Kotlin); a `CAPPlugin` with `jsName` + `CAPPluginMethod` or an Objective-C `CAP_PLUGIN(...)` registration (Swift) |
-| `react-native` | `endpoint:react-native:CalendarModule#createEvent` | `NativeModules.X`, destructuring from `NativeModules`, `TurboModuleRegistry.get[Enforcing]('X')`, `require('./NativeX').default`, Expo `requireNativeModule('X')` (`attrs.api = expo-modules`) | `getName()` modules with `@ReactMethod`, `Native*Spec` overrides (Java / Kotlin); `RCT_EXPORT_MODULE` / `RCT_EXPORT_METHOD` / `RCT_REMAP_METHOD` (Objective-C); `RCT_EXTERN_MODULE` / `RCT_EXTERN_METHOD` mapped to the Swift method; Expo `Name("X")` + `Function` / `AsyncFunction` |
-| `flutter` | `endpoint:flutter:samples.flutter.dev/battery#getBatteryLevel` | `MethodChannel('name').invokeMethod('m')` (also `invokeMapMethod` / `invokeListMethod`), with the channel resolved through locals, fields, statics, top-level constants, getters and `late` fields | the `MethodChannel` / `FlutterMethodChannel` / `methodChannelWithName:` handler: `call.method == "m"`, `when` / `switch` cases, `isEqualToString:` |
-| `flutter-event` | `endpoint:flutter-event:<channel>` | `EventChannel('name').receiveBroadcastStream()` | the channel's `StreamHandler` |
-| `cordova` | `endpoint:cordova:Toast#show` | `cordova.exec(ok, fail, 'Toast', 'show', args)`, `exec(...)` from `require('cordova/exec')` (plugin JS under a `www/` next to `plugin.xml` / `config.xml` is indexed) | a `CordovaPlugin` subclass's `execute`: `"show".equals(action)`, `action.equals(SHOW)`, `case "show":` (Java / Kotlin); `- (void)show:(CDVInvokedUrlCommand*)command` in a `CDVPlugin` (Objective-C), `@objc func show(_ command: CDVInvokedUrlCommand)` (Swift). The service name comes from the `<feature name="Toast">` entry of `plugin.xml` / `config.xml` (else the class name, `heuristic`) |
-| `pigeon` | `endpoint:pigeon:NativeSyncApi#hashAssets` | a Dart call on the generated `@HostApi()` class: a field / variable / parameter typed with it, `Api()`, or a Riverpod `ref.read(p)` / `ref.watch(p)` of `final p = Provider<Api>(...)` | the Kotlin / Java / Swift class implementing the generated interface / protocol (`class Impl : ImplBase(ctx), Api`, `extension Impl: Api`); a method defined in a superclass (`ImplBase`, up to 3 levels) is found there |
+| `capacitor` | `endpoint:capacitor:Echo#echo` | `registerPlugin('Echo')`, `Capacitor.Plugins.Echo`, `nativePromise('Echo', 'echo')` | `@CapacitorPlugin` + `@PluginMethod`; Swift `CAPPlugin` / `CAP_PLUGIN` |
+| `react-native` | `endpoint:react-native:CalendarModule#createEvent` | `NativeModules.X`, `TurboModuleRegistry.get`, Expo `requireNativeModule` | `@ReactMethod` / `Native*Spec`; `RCT_EXPORT_METHOD`; Expo `Function` / `AsyncFunction` |
+| `flutter` | `endpoint:flutter:<channel>#<method>` | `MethodChannel.invokeMethod` (channel resolved through locals, fields, constants) | `call.method == "m"` / `when` / `switch` on that channel |
+| `flutter-event` | `endpoint:flutter-event:<channel>` | `EventChannel.receiveBroadcastStream()` | the channel's `StreamHandler` |
+| `cordova` | `endpoint:cordova:Toast#show` | `cordova.exec(..., 'Toast', 'show', ...)` (`www/` next to `plugin.xml` is indexed) | `execute` comparing `action`, or a `CDVPlugin` method. Service name from `<feature name>` |
+| `pigeon` | `endpoint:pigeon:NativeSyncApi#hashAssets` | a call on the generated `@HostApi()` class, including Riverpod `ref.read` of a `Provider<Api>` | the class that implements the generated interface. Definition files (`package:pigeon/`) supply the API when `*.g.dart` is git-ignored |
 
-Pigeon APIs come from the definition files (a Dart library importing `package:pigeon/` with `@HostApi()` /
-`@FlutterApi()` abstract classes), so they link even when the generated `*.g.dart` / `.g.kt` / `.g.swift` files are
-git-ignored. Calls inside the definition files are not senders.
+`direction = to_app` (the rest are `to_native`): a native `invokeMethod` on a known channel, a
+Pigeon `@FlutterApi()` call, and native events.
 
-**Native → app calls.** Some endpoints go the other way (`attrs.direction = to_app`; the others are `to_native`):
+| event id | from | to |
+|---|---|---|
+| `endpoint:react-native-event:<event>` | `emitDeviceEvent`, `sendEventWithName`, Expo `sendEvent`, a helper that forwards its event-name parameter | `addListener` on `NativeEventEmitter` / `DeviceEventEmitter` / an Expo module |
+| `endpoint:capacitor-event:<Plugin>#<event>` | `notifyListeners("evt")` | `Plugin.addListener` |
 
-- a Flutter `MethodChannel` call from native code, `channel.invokeMethod("m", args)` (Kotlin / Java / Swift,
-  `[channel invokeMethod:@"m" ...]` in Objective-C), on a channel held in a variable or property whose name is known
-  (`channel = MethodChannel(messenger, "name")`; when the file creates exactly one channel, the call is matched to it
-  with `heuristic` confidence). The sender is the enclosing native method (`attrs.platform`), the receiver the Dart
-  `setMethodCallHandler` handler of the same channel: a method reference (`_channel.setMethodCallHandler(_handle)`)
-  or a closure, testing `call.method == 'm'` or `switch (call.method) { case 'm': }` (`side = dart`, `via =
-  setMethodCallHandler (Dart)`).
-- a Pigeon `@FlutterApi()` call from native code: a variable / property holding the generated class
-  (`flutterApi = XFlutterApi(messenger)`, `var api: XFlutterApi?`) and its method calls, or `XFlutterApi(m).f(...)`.
-  The receiver is the Dart class implementing / extending the API.
+Event names may be constants, string enums (`rawValue`, `val event`) or a computed property
+whose every return is a literal. React Native's own events (`keyboardDidShow`) and JS-only
+`DeviceEventEmitter.emit` are not endpoints. `platforms_sending` lists who sends; `missing_on`
+is not computed. No JS listener is `no_listener` (not a check). A listener of an in-repo module
+with no native sender is `no_sender`; a package such as `@capacitor/keyboard` is `external`.
 
-- **native events** (#61): `endpoint:react-native-event:<event>` from React Native native code
-  (`getJSModule(RCTDeviceEventEmitter::class.java).emit("evt", ...)`, `reactContext.emitDeviceEvent("evt", ...)`, a
-  `sendEvent(ctx, "evt", ...)` helper call, a call of any Kotlin / Java function that passes its parameter on as the
-  event name (`sendJSEvent(Events.X.event, map)` with `fun sendJSEvent(eventName: String, ..)` emitting `eventName`),
-  `[self sendEventWithName:@"evt" body:...]`, Swift `sendEvent(withName: "evt", ...)` / `sendEvent(name: "evt")`, Expo
-  `sendEvent("evt", ...)`) to a JS `addListener('evt', cb)` on `new NativeEventEmitter(Module)`,
-  `DeviceEventEmitter` / `NativeAppEventEmitter`, `new EventEmitter(ExpoModule)` or an Expo module handle; and
-  `endpoint:capacitor-event:<Plugin>#<event>` from `notifyListeners("evt", data)` in a Capacitor plugin class to
-  `Plugin.addListener('evt', cb)`. Event names may be constants (`const val EVT = "..."`) or string-valued enum cases (Swift `Event.keyPressed.rawValue` with `enum Event: String`, Kotlin `Events.SAVED.event` with `enum class Events(val event: String)`), a local declared before the call
-  (`let event = self?.visibilityChanged`), or a Swift computed `var listenerEvent: String { switch self { ... } }`
-  whose every return is a string literal (`event.listenerEvent` sends each of them). React Native's own events
-  (`keyboardDidShow`, `hardwareBackPress`, ...) and events the JS side emits itself (`DeviceEventEmitter.emit('x')`,
-  an in-app event bus) are not endpoints.
+`SENDS_TO` (code → endpoint) carries `role = invoke`, `via` (how the module was reached:
+`NativeModules`, `TurboModuleRegistry`, `require`), `module_at` and `external` (the npm
+package when the plugin is outside the repo). A test file emits `TEST_CALLS` with
+`orig = SENDS_TO`, so `tests` finds it and it never counts as a caller. `RECEIVED_BY` carries
+`platform` (`android`, `ios`, `macos`; from `android/`, `ios/`, `macos/`, `androidMain/`, `iosMain/`, else the language) and `via` (the registration form). Both propagate: `impact` on
+a native method lists the JS / Dart senders, and `downstream` from a screen reaches every
+platform. `--platform android` keeps only the Android receivers.
 
-For these endpoints `platforms_sending` lists the platforms that send, and `missing_on` is not computed (the
-receiver is the shared Dart / JS code). An event emitted natively with no JS listener in the repo has
-`no_listener` (shown as "no JS listener found"; not a check: the listener may sit in a library or use a dynamic
-name). A listener without a native sender is `no_sender` when the module is implemented in the repo (a
-`NativeEventEmitter(Module)` of a native module here, a Capacitor plugin whose native code is here), `external` when
-it comes from a package (`@capacitor/keyboard`), and unchecked for `DeviceEventEmitter` listeners of no known module.
+Endpoint attrs: `protocol`, `transport = local`, `namespace` (module / plugin / channel),
+`method`, `platforms_received`, `side`, `checks`, `missing_on`, `external`, `package`,
+`base_method`, `sender_platforms`, `direction` (`to_native` or `to_app`),
+`platforms_sending`.
 
-The ids follow the shared protocol endpoint model of the protocol epic
-([#29](https://github.com/cyberchronos00/code-graph/issues/29) /
-[#31](https://github.com/cyberchronos00/code-graph/issues/31)): `endpoint:<protocol>:<name>` nodes with SENDS_TO
-and RECEIVED_BY edges, so other protocols (IPC, message queues) use the same kinds.
+Java and Objective-C have no language plugin. Their methods are stub nodes (
+`method:<package>.<Class>.<method>`, `method:objc:<Class>.<method>`, `attrs.bridge_stub`).
+The same stub is used when a Kotlin or Swift method was not indexed. Receiver files are
+platform-specific, so `cg platforms` sees them.
 
-- **SENDS_TO** (code → endpoint): `attrs.role = invoke`, `via` (how the module was reached, e.g. `["NativeModules"]`,
-  `["TurboModuleRegistry", "require"]`), `module_at` (where the module object was created), `external` (the npm
-  package of a plugin implemented outside the repo). A call from a test file is a TEST_CALLS edge with
-  `attrs.orig = SENDS_TO`, so `tests` finds it but it never counts as a caller.
-- **RECEIVED_BY** (endpoint → handler): `attrs.platform` (android, ios, macos; from `android/`, `ios/`, `macos/`,
-  `androidMain/`, `iosMain/` paths, else from the language), `via` (the registration form).
-- Both propagate: `impact` on a native method lists the JS / Dart code that sends to it, and `downstream` from a
-  screen reaches the native handlers on every platform. `--platform android` keeps only the Android receivers.
-- Endpoint attrs: `protocol`, `transport = local`, `namespace` (module / plugin / channel), `method`,
-  `platforms_received`, `side` (send, receive, both), `checks`, `missing_on`, `external` + `package`,
-  `base_method`, `sender_platforms`, `direction` (to_native, to_app) and `platforms_sending` (to_app).
+## Electron and Tauri
 
-Receivers in Kotlin and Swift files are the plugin's method nodes. Java and Objective-C files have no language
-plugin yet: their receiving methods become small stub nodes (`method:<package>.<Class>.<method>` for Java,
-`method:objc:<Class>.<method>` for Objective-C, `attrs.bridge_stub`), and the same stub form is used for a Kotlin
-or Swift method the plugin did not index. Receiver files are marked platform-specific, so `cg platforms` and
-`--platform` see them.
+Process role replaces platform: Electron `main` / `preload` / `renderer`; Tauri `webview` /
+`core`.
 
-## Desktop process boundaries: Electron and Tauri
-
-An Electron or Tauri app is one program split over processes. Calls across them use the same endpoint model, with
-the process role (`main`, `preload`, `renderer` for Electron; `webview`, `core` for Tauri) in place of a platform:
-
-| protocol | endpoint id | sender | receiver |
+| protocol | id | sender | receiver |
 |---|---|---|---|
-| `electron-ipc` | `endpoint:electron-ipc:settings:read` (the channel) | `ipcRenderer.invoke` / `send` / `sendSync` / `postMessage` (renderer, preload); `webContents.send`, `event.sender.send`, a `WebFrameMain` `send` (main) | `ipcMain.handle` / `handleOnce` / `on` / `once` (main); `ipcRenderer.on` / `once` (renderer) |
-| `electron-preload` | `endpoint:electron-preload:api#readSettings` | `window.api.readSettings()` (also `globalThis` / `self`, and `const api = window.api; api.readSettings()`) | the member of `contextBridge.exposeInMainWorld('api', {readSettings: ...})` in the preload script |
-| `tauri` | `endpoint:tauri:greet`; plugin commands `endpoint:tauri:plugin:fs\|read_text_file` | `invoke('greet', args)` from `@tauri-apps/api/core` (v2) or `@tauri-apps/api/tauri` (v1), `window.__TAURI__.core.invoke` | the Rust `#[tauri::command] fn greet` (or `#[command]` with `use tauri::command`) |
+| `electron-ipc` | `endpoint:electron-ipc:settings:read` | `ipcRenderer.invoke` / `send`; `webContents.send` | `ipcMain.handle` / `on`; `ipcRenderer.on` |
+| `electron-preload` | `endpoint:electron-preload:api#readSettings` | `window.api.readSettings()` | `contextBridge.exposeInMainWorld('api', {readSettings})` |
+| `tauri` | `endpoint:tauri:greet`; plugins `endpoint:tauri:plugin:fs\|read_text_file` | `invoke('greet')` (`@tauri-apps/api` v1 or v2) | `#[tauri::command] fn greet` |
 
-- Channels are string literals, `const`s or enum members (`ipcMain.handle(IpcEvents.GET_FILES, fn)`). A project
-  wrapper named after the Electron object (`ipcMainManager.handle(...)`, `ipcRendererManager.send(...)`) counts at
-  `heuristic` confidence. A handler outside the project (`ipcMain.on('quit', app.quit)`) makes the registering
-  function the receiver.
-- A listener whose channel is a variable typed as a union of literals (`ipcRenderer.on(table[type], fn)` over a
-  lookup table, a relay `ipcMain.on(name, ...)` over `IpcEvents[]`) receives each member at `heuristic` confidence,
-  but only channels another process sends and that this process does not already receive by name.
-- Handlers registered in test files are not receivers. Inline handlers become function nodes named after the
-  registration (`ipcMain.handle('settings:read')`), so `impact` on the code they call reaches the renderer.
-- Tauri commands are listed in `generate_handler![...]`; a command missing from it gets the check `unregistered`.
-  Commands registered by a plugin crate in the repo (`tauri::plugin::Builder::new("x")`) are
-  `endpoint:tauri:plugin:x|<command>`. A command name registered more than once (the app's own `get` and a
-  plugin's `get`, `set_icon` in two plugins) takes the `generate_handler!` registration closest to the command's file
-  (longest common directory). A `plugin:x|cmd` call to a plugin that is not in the repo is `external`
-  (package `tauri-plugin-x`). A Tauri app without a root `Cargo.toml` has its Rust core indexed from
-  `<app>/src-tauri/Cargo.toml`.
-- `no_receiver` here means the other side is in the repo (some channel / command is received) but not this one.
-  There is no `missing_on`.
-- The module nodes of the files taking part get `attrs.process` (main, preload, renderer, webview, core), and the
-  edges carry `attrs.process` of their side. Endpoint `transport` is `ipc` for `electron-ipc` / `tauri` and
-  `local` for `electron-preload`.
+Channels are string literals, `const`s or enum members (
+`ipcMain.handle(IpcEvents.GET_FILES, fn)`). A project wrapper named after the Electron object (
+`ipcMainManager.handle`, `ipcRendererManager.send`) counts at `heuristic` confidence. A
+handler outside the project (`ipcMain.on('quit', app.quit)`) makes the registering function
+the receiver. A listener whose channel is a variable typed as a union of literals (a lookup
+table, a relay over `IpcEvents[]`) receives each member at `heuristic` confidence, but only
+channels another process sends and that this process does not already receive by name. Handlers
+registered in test files are not receivers. Inline handlers become function nodes named after
+the registration (`ipcMain.handle('settings:read')`), so `impact` on the code they call
+reaches the renderer.
 
-```
+Tauri commands are listed in `generate_handler![...]`. A command missing from it gets
+`unregistered`. Commands registered by a plugin crate in the repo (
+`tauri::plugin::Builder::new("x")`) are `endpoint:tauri:plugin:x|<command>`. A name registered
+more than once (the app's `get` and a plugin's `get`) takes the `generate_handler!`
+registration closest to the command's file (longest common directory). A `plugin:x|cmd` call to
+a plugin that is not in the repo is `external` (package `tauri-plugin-x`). A Tauri app without
+a root `Cargo.toml` has its Rust core indexed from `<app>/src-tauri/Cargo.toml`. `no_receiver`
+here means some other channel or command is received in this repo, but not this one. There is no
+`missing_on`. The module nodes of the files taking part get `attrs.process` (main, preload,
+renderer, webview, core), and the edges carry `attrs.process` of their side. Endpoint
+`transport` is `ipc` for `electron-ipc` / `tauri` and `local` for `electron-preload`.
+
+```text
 $ cg bridges --protocol tauri --db out/app.db      # tests/bridge_fixtures/tauri_app
 tauri: 6 endpoint(s), 4 linked  (external 1, no_receiver 1, unregistered 1)
 tauri:greet  received in: core
     sent by greet (main.ts) @ src/main.ts:4 [exact, webview]
     received by tauri_fixture::greet @ src-tauri/src/main.rs:7 [core, #[tauri::command]]
-tauri:gret  received in: -  ! NO RECEIVER (this app handles other channels / commands, not this one)
-    sent by typo (main.ts) @ src/main.ts:12 [exact, webview]
-tauri:increment  received in: core
-    sent by counter (main.ts) @ src/main.ts:8 [exact, webview]
-    received by tauri_fixture::commands::increment @ src-tauri/src/commands.rs:6 [core, #[tauri::command]]
-tauri:plugin:app-menu|popup  received in: core
-    sent by showMenu (main.ts) @ src/main.ts:24 [exact, webview]
-    received by tauri_fixture::menu::popup @ src-tauri/src/menu.rs:8 [core, #[tauri::command]]
-tauri:plugin:fs|read_text_file  received in: -  ! external (tauri-plugin-fs)
-    sent by readText (main.ts) @ src/main.ts:16 [exact, webview]
-tauri:secret  received in: core  ! NOT REGISTERED (missing from generate_handler!)
-    sent by hidden (main.ts) @ src/main.ts:20 [exact, webview]
-    received by tauri_fixture::commands::secret @ src-tauri/src/commands.rs:16 [core, #[tauri::command]]
+tauri:gret  ! NO RECEIVER (this app handles other commands, not this one)
+tauri:plugin:fs|read_text_file  ! external (tauri-plugin-fs)
+tauri:secret  ! NOT REGISTERED (missing from generate_handler!)
+    received by tauri_fixture::commands::secret @ src-tauri/src/commands.rs:16
 ```
 
 ## Checks
 
 | check | meaning |
 |---|---|
-| `missing_on` | the method is received on some platforms but not on all targets that implement the module (for example a Kotlin `@ReactMethod` without the Objective-C export) |
-| `no_receiver` | the module is implemented in the repo but this method is not |
-| `external` | nothing in the repo implements the module (a published plugin package; `package` names it) |
-| `no_sender` / `test_sender_only` | a native method no JS / Dart code calls (library repos: expected); for an event, a JS listener of a module implemented here that no native code emits |
+| `missing_on` | received on some targets that implement the module, not all |
+| `no_receiver` | the module is in the repo; this method is not |
+| `external` | a published package implements it (`package` names it) |
+| `no_sender` / `test_sender_only` | nothing in app code calls it (expected in a library repo) |
 
-Expected platforms are the project's mobile targets (android, ios; macos only when some bridge module is
-implemented for it). They are narrowed by:
+Expected platforms are android and ios, plus macos when some module is implemented for it.
+Narrowed by `codegenConfig.platforms`, Flutter platform folders next to `pubspec.yaml`, and
+senders that all sit under `Platform.OS === 'android'` (`sender_platforms`). Framework base
+methods (`checkPermissions`, `addListener`, `removeListeners`, Capacitor
+`removeAllListeners`, React Native `getConstants`) are `base_method` and are not checked.
 
-- `codegenConfig.platforms` in the module's `package.json` (a React Native module declared for android only);
-- for Flutter, the platform folders next to the sending app's `pubspec.yaml` (an iOS-only sample app);
-- the senders' own platform conditions: when every call is under `Platform.OS === 'android'` (or another
-  [platform condition](platforms.md)), only those platforms need a receiver (`sender_platforms`);
-- base methods the framework implements on every platform (Capacitor `checkPermissions`, `requestPermissions`,
-  `addListener`, `removeListener`, `removeAllListeners`; React Native `addListener`, `removeListeners`,
-  `getConstants`): `base_method`, no `missing_on` / `no_receiver` / `no_sender`.
-
-A Capacitor project's targets come from `capacitor.config.{ts,js,json}` with `android/` / `ios/` next to it (plus
-web). Members merged onto a module with `Object.assign(NativeModule, { helper })` are JS helpers, not endpoints.
-Local packages (`"x": "file:./libraries/x"` / `link:` dependencies and workspace packages) resolve to their source
-when `node_modules` is not installed, so an app calling a module wrapped in such a package still links. Calls made
-inside a local module directory (an Expo `modules/` wrapper function that calls the native module) are senders only
-when that directory is indexed: list it in `.cg.yaml` `include` (`include: [modules]`).
+Capacitor targets come from `capacitor.config.*` plus `android/` / `ios/` and web.
+`Object.assign(NativeModule, { helper })` is JS, not an endpoint. `file:` / `link:` / workspace
+packages resolve without `node_modules`. A local Expo `modules/` wrapper is a sender only when
+that directory is in `.cg.yaml` `include`.
 
 ## Query
 
-```
+```bash
 cg bridges [PATTERN] [--protocol P] [--unmatched] [--json] --db out/app.db
 ```
 
-`PATTERN` is an endpoint name, a substring or a glob (`Echo#echo`, `Echo`, `samples.flutter.dev/*`). Each
-endpoint lists its senders (with entry points reaching them), test senders and receivers per platform, and the
-checks. Bridge calls whose module, method or event name is not a literal cg can evaluate (`NativeModules[name].f()`,
-`emitter.addListener(evt, cb)`, `cordova.exec(ok, fail, svc, action)`, `notifyListeners(eventName)`, Flutter `channel.invokeMethod(method)` or
-`MethodChannel(name)`) are listed at
-the end as `unresolved` (`stats.bridges.dynamic`: count and up to 20 samples) instead of being dropped silently. The MCP server has the same `bridges(pattern?, protocol?, unmatched?)` tool. `impact`, `downstream`,
-`path` and `tests` accept endpoint ids (`endpoint:react-native:CalendarModule#createEvent`) and native methods
-(`CalendarModule.createEvent`, `com.rnapp.CalendarModule.createEvent`).
+`PATTERN` is a name, substring or glob (`Echo#echo`, `samples.flutter.dev/*`). Dynamic names
+(`NativeModules[name]`, `invokeMethod(method)`, `cordova.exec` with a variable service) are
+listed as `unresolved` (`stats.bridges.dynamic`), not dropped. MCP:
+`bridges(pattern?, protocol?, unmatched?)`. `impact` and `path` accept
+`endpoint:react-native:CalendarModule#createEvent` and `CalendarModule.createEvent`.
 
-```
-$ cg bridges Echo --db out/app.db      # tests/bridge_fixtures/capacitor_app, abridged
+```text
+$ cg bridges Echo --db out/app.db      # tests/bridge_fixtures/capacitor_app
 capacitor: 4 endpoint(s), 2 linked  (no_receiver 1, test_sender_only 1, missing_on 1)
 mobile targets: ios, android
 capacitor:Echo#echo  received on: android, ios
     sent by greet (app.ts) @ src/app.ts:6 [exact]
-    received by com.example.app.EchoPlugin.echo @ android/app/src/main/java/com/example/app/EchoPlugin.java:13 [android, @PluginMethod]  (stub: no language plugin)
-    received by EchoPlugin.echo @ ios/App/App/EchoPlugin.swift:13 [ios, CAPPluginMethod]
-capacitor:Echo#nowhere  received on: -  ! NO NATIVE RECEIVER (the module is implemented here, this method is not)
-    sent by lost (app.ts) @ src/app.ts:15 [exact]
+    received by EchoPlugin.echo @ ios/.../EchoPlugin.swift:13 [ios, CAPPluginMethod]
+    received by com.example.app.EchoPlugin.echo @ android/.../EchoPlugin.java:13 [android, stub]
+capacitor:Echo#nowhere  ! NO NATIVE RECEIVER (the module is implemented here, this method is not)
 capacitor:Echo#vibrate  received on: android  ! MISSING ON ios
-    sent by buzz (app.ts) @ src/app.ts:11 [exact]
 ```
+
+Calls whose module, method or event name is not a literal (`NativeModules[name].f()`,
+`emitter.addListener(evt)`, `cordova.exec` with a variable service,
+`notifyListeners(eventName)`, `channel.invokeMethod(method)`, `MethodChannel(name)`) are
+listed at the end as `unresolved` (`stats.bridges.dynamic`: a count and up to 20 samples).
+`impact`, `downstream`, `path` and `tests` accept endpoint ids (
+`endpoint:react-native:CalendarModule#createEvent`) and native methods (
+`CalendarModule.createEvent`, `com.rnapp.CalendarModule.createEvent`).
 
 ## Not covered yet
 
-- `BasicMessageChannel`; Pigeon `@EventChannelApi`; native UI components (`requireNativeComponent`, view managers,
-  Expo views); React Native new-architecture codegen events (`emitOnX` from a spec's `EventEmitter<T>` member); Swift /
-  Objective-C functions that pass their parameter on as the event name (delegate `sendEvent(name: "evt")` calls are
-  covered); an event name handed to a Java callback (`(eventName, info) -> notifyListeners(eventName, ..)`); Cordova `exec` calls whose service
-  / action come from a variable, and Cordova's `PluginResult` keep-alive callbacks as events.
-- A native `invokeMethod` on a channel passed in from elsewhere (a constructor parameter, a channel created in another
-  file) is skipped unless the file creates exactly one channel.
-- Java and Objective-C are scanned for bridge registrations only (stub receivers, no call graph inside them).
-- Dynamic module or method names are listed as `unresolved`, not linked.
-- Electron: `MessagePort` / `utilityProcess` / `webContents.ipc` messaging, preload event subscriptions mapped through
-  a lookup table on the renderer side (`window.api.addEventListener('run')` to the channel `table['run']`), and
-  `ipcRenderer.removeListener` are not modelled. Tauri: events (`emit` / `listen`), channels, commands invoked from
-  Svelte / Vue templates outside `<script>` blocks the TypeScript extractor does not read (`.svelte` files), and
-  `generate_handler!` built by macros.
+- `BasicMessageChannel`, Pigeon `@EventChannelApi`, native UI components, React Native codegen
+  `emitOnX`.
+- A Java callback that forwards an event name, and a native `invokeMethod` on a channel created
+  in another file (unless this file creates exactly one).
+- Java and Objective-C are scanned for registrations only.
+- Electron `MessagePort`, `utilityProcess`, preload listeners mapped through a renderer lookup
+  table. Tauri `emit` / `listen`, and commands invoked from `.svelte` / `.vue` outside
+  `<script>`.
 
-See [validation.md](validation.md#web--native-bridges) for results on public repositories.
+Public-app results: [validation-log.md](validation-log.md#web--native-bridges).

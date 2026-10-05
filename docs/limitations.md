@@ -15,7 +15,7 @@ Language gaps are on the language pages, linked at the end.
 
 ## Gate scenarios
 
-One scenario per index ([configuration.md](configuration.md#gate-scenarios---gates)).
+One scenario per index ([configuration.md](configuration.md#gate-scenarios)).
 
 - The analysis is per function and context-insensitive. Parameters are TOP, except literal-argument method summaries.
 - A flag passed as data, or stored on a property (`$this->x`), stays live. That is the conservative choice.

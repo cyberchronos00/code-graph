@@ -25,7 +25,6 @@ export const docGroups: DocGroup[] = [
       { slug: 'architecture', title: 'Architecture' },
       { slug: 'schema', title: 'Schema' },
       { slug: 'completeness', title: 'Completeness' },
-      { slug: 'validation', title: 'Validation' },
       { slug: 'limitations', title: 'Limitations' },
       { slug: 'parity', title: 'Parity' },
       { slug: 'value-facts', title: 'Value facts' },
@@ -59,6 +58,8 @@ export const docGroups: DocGroup[] = [
   {
     title: 'Reference',
     items: [
+      { slug: 'validation', title: 'Validation' },
+      { slug: 'validation-log', title: 'Validation log' },
       { slug: 'mcp/sample_outputs', title: 'MCP samples' }
     ]
   }

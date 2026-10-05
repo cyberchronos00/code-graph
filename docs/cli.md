@@ -56,7 +56,7 @@
 | `--max-depth N` | `reaches`, `impact`, `downstream`, `writers`, `readers`, `siblings`, `node`, `stats`, `api-calls`, `tests` | hop cap (`tests`: `0` is any depth) |
 | `--no-paths` | the `--max-depth` commands, plus `routes` | omit evidence chains |
 | `--gate GATE` | the `--max-depth` commands except `tests` | live/gated split; default the scenario that was indexed (`auto`); `none` disables |
-| `--platform TARGET` | `reaches`, `impact`, `downstream`, `path`, `routes`, `search` | one build: `windows`, `linux`, `macos`, `ios`, `android`, `web`. The first line names the filter and how many conditions could not be evaluated. [platforms](platforms.md#filtering-queries---platform) |
+| `--platform TARGET` | `reaches`, `impact`, `downstream`, `path`, `routes`, `search` | one build: `windows`, `linux`, `macos`, `ios`, `android`, `web`. The first line names the filter and how many conditions could not be evaluated. [platforms](platforms.md#queries) |
 | `--max-items N` | list commands (`routes`, `protocols`, `tools`, `external`, `parity`, `platforms`, `plan`, …) | cap listed rows |
 
 `node --json` is a list of `{node, out, in}`. `stats --json` is `{project, root, indexed_at, nodes, edges, nodes_by_kind, edges_by_kind, stats}`.

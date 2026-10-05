@@ -1,143 +1,118 @@
 # Completeness: how far an answer reaches
 
-Every positive cg answer comes with evidence (`file:line` hops and a confidence label). Completeness reporting makes
-the other half explicit: which part of the repository the answer is drawn from, so a "no callers", "no path" or
-"3 of 3 routes" can be relied on when the index is complete, and an agent knows exactly where to fall back to text
-search when it is not. It has three parts, all recorded at index time (`stats.coverage` in the DB meta):
+Every positive answer has evidence (`file:line`, a confidence label). Completeness is the
+other half: which part of the repo that answer was drawn from, so "no callers" is reliable when
+the index is complete, and an agent knows where to fall back to text search when it is not.
 
-1. **File completeness per language**, next to the parser mode.
-2. **Unsupported source types**, by extension or shebang.
-3. **Blind spots**: patterns cg knows it does not model, detected in the indexed repository, with `file:line` samples.
-
-Answers then carry a short `coverage note:` when they could be affected, and every MCP reply carries a machine-readable
-`completeness` object. A repository with no gaps and no blind spots keeps the short output.
+Recorded at index time as `stats.coverage`: file buckets per language, unsupported source
+types, and blind spots (patterns cg does not model, with `file:line` samples). `routes`,
+`impact`, `callers`, `reaches`, `tests_covering` and `plan_check` add one `coverage note:`
+when the answer could be affected. A repo with no gaps keeps the short output. Every MCP reply
+also carries a `completeness` object.
 
 ## File completeness
 
-For each language the plugin reports what happened to every source file it discovered:
+| bucket | meaning | makes an answer partial? |
+|---|---|---|
+| `discovered` | source files under the root (dependency, build and VCS dirs skipped) | |
+| `indexed` | files in the graph | |
+| `parse_failed` | the parser rejected the file | yes |
+| `skipped_oversize` | over the plugin limit (Python 1.5 MB, C/C++ `CODEGRAPH_MAX_FILE_BYTES`) | yes |
+| `unmapped` | parsed, not placed in the module table | yes |
+| `excluded` | the plugin's skip list (Python migrations, PHP `storage/`, generated Dart) | no |
 
-| bucket | meaning |
-|---|---|
-| `discovered` | source files of the language under the indexed root (dependency, build and VCS directories skipped) |
-| `indexed` | files that are in the graph |
-| `parse_failed` | the parser rejected the file (syntax error, encoding) |
-| `skipped_oversize` | over the plugin's size limit (Python 1.5 MB, C/C++ `CODEGRAPH_MAX_FILE_BYTES`) |
-| `unmapped` | parsed, but not placed in the module table: a Python file whose path is not an importable name (`my-scripts/`) or that lies outside the configured source roots ([python.md](python.md)), a `pkg.py` next to a `pkg/` package, a `.rs` file outside every crate's module tree |
-| `excluded` | deliberately left out by the plugin's skip list (Python migrations, PHP `storage/` and `bootstrap/cache/`, generated Dart, directories a plugin does not walk) |
+`unmapped` is a Python file that is not an importable name or sits outside
+[source roots](python.md), a `pkg.py` next to a `pkg/` package, a `.rs` file outside every
+crate, or a `.ts` / `.js` file outside the TS source dirs, `bin` scripts and test trees (hint:
+`.cg.yaml` `include`). Tool configs, `.d.ts` and fixtures inside those dirs are `excluded`.
 
-`excluded` files are a choice, so they never make an answer partial; the other three buckets do. Generated, copied and
-vendored files are not `discovered` at all: they are listed on their own (`generated: N files excluded`, grouped by
-reason), see [generated.md](generated.md). The parser mode stays
-what it was (`exact`, `resolved`, `heuristic`, `scip`, `skipped`), so a language can be `exact` and still incomplete:
+Generated, copied and vendored files are not `discovered`. They are
+`generated: N files excluded`. See [generated.md](generated.md). Parser mode (`exact`,
+`heuristic`, `scip`, …) is independent: a language can be `exact` and still incomplete.
 
 ```console
 $ cg coverage --db out/proj.db
-coverage proj: not fully covered: python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped; qml 1 unsupported; sh 1 unsupported
-  python: 4 files (.py 4) 2 indexed, 1 parse failed, 1 unmapped
-    parse failed: app/bad.py
+coverage proj: not fully covered: python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped
+  python: parse failed: app/bad.py
     unmapped: my-scripts/run.py
-    fix: unmapped .py files are in directories that are not importable module paths (a name with '-' or '.'), outside the detected source roots, or claim a module name another file has; list their roots under python.source_roots in .cg.yaml
-  qml: 1 files (.qml 1) unsupported
-  …
+    fix: list their roots under python.source_roots in.cg.yaml
 ```
 
-The first five paths per bucket are shown; `cg coverage --all-files` (MCP: `coverage(all_files=true)`) lists every
-path, excluded files included. Per-file reports come from the Python, PHP, Dart, Rust, C/C++ and TypeScript /
-JavaScript plugins. TypeScript reads only its source dirs (`src/`, `app/`, the tsconfig's or `package.json`'s), the
-`bin` and test-run scripts outside them, and the test trees: a `.ts` / `.js` file outside all of them was never read
-and is `unmapped` (eslint: `docs/src/`, `tools/`, `Makefile.js`; elk: `config/*.ts`), with a hint to list its
-directory in `.cg.yaml` `include`. Tool configs (`vite.config.ts`, `.eslintrc.js`), test-named files and files the
-program leaves out inside the source dirs (`.d.ts`, fixtures) are `excluded` (#106).
+The first five paths per bucket are shown. `cg coverage --all-files` (MCP
+`coverage(all_files=true)`) lists every path. Per-file reports come from the Python, PHP, Dart,
+Rust, C/C++ and TypeScript plugins.
 
 ## Syntax errors
 
-A file can be indexed and still have parsed with syntax errors: tree-sitter (Swift, Kotlin, Rust, C / C++) recovers
-around an ERROR node, the TypeScript and Dart parsers report diagnostics but still build the file, and a Python or PHP
-file that does not parse is `parse_failed`. Since [#73](https://github.com/cyberchronos00/code-graph/issues/73) each
-plugin records the error line spans per file. After indexing, cg reads the declaration heads in those spans (the whole
-file for a parse failure) and counts as **lost** each one the graph has no node of that name for in that file (a Swift
-`extension` is not counted, its members are). `cg coverage` lists the files, most declarations lost first (5 per
-language; all with `--all-files`):
+tree-sitter (Swift, Kotlin, Rust, C / C++) recovers around an ERROR node. TypeScript and Dart
+report diagnostics and still build the file. A Python or PHP file that does not parse is
+`parse_failed`.
+
+cg counts as **lost** each declaration head in an error span that has no node of that name in
+that file (a Swift `extension` is not counted; its members are). `cg coverage` lists the files,
+most declarations lost first (5 per language; all with `--all-files`):
 
 ```console
 $ cg coverage --db out/app.db
 coverage app: not fully covered: swift 8 heuristic, 2 parsed with syntax errors
-  ...
-  swift: syntax errors in 2 files, 1 declaration lost (declarations and calls there may be missing or misplaced):
+  swift: syntax errors in 2 files, 1 declaration lost:
     Sources/App/Invalid.swift:6 (1 declaration lost: broken:6)
     Tests/AppTests/OrphanTests.swift:4, 9
 ```
 
-`cg coverage --json` has them per language: `syntax_errors` (`[{file, spans, errors, decls_lost, lost, parse_failed}]`,
-up to 500 files), `syntax_error_files`, `parsed_with_errors` (parsed, not failed) and `decls_lost`. The coverage note
-on answers mentions the count, and an answer whose nodes are in such a file is not `complete`: its `completeness` has
-`syntax_errors` (`[{language, file, spans, decls_lost}]`) and the note names the file and its first error line.
+`--json` per language: `syntax_errors` (
+`[{file, spans, errors, decls_lost, lost, parse_failed}]`, up to 500 files),
+`syntax_error_files`, `parsed_with_errors` (parsed, not failed) and `decls_lost`. The coverage
+note mentions the count. An answer whose nodes sit in such a file is not `complete`: its
+`completeness` has `syntax_errors` (`[{language, file, spans, decls_lost}]`) and the note
+names the file and its first error line.
 
 ## Unsupported source types
 
-Files are counted as unsupported source by a generic rule instead of a fixed language list: the extension of a
-programming or scripting language without a plugin (`.go`, `.java`, `.kt`, `.swift`, `.qml`, `.sh`, `.lua`, `.svelte`,
-`.ps1`, …), or a `#!` line naming such an interpreter for extensionless scripts (`bin/release` with
-`#!/usr/bin/env bash` counts as `sh`). Data, markup, config and asset files (`.json`, `.yaml`, `.md`, `.svg`, `.csv`)
-never count, and extensionless launchers of indexed languages (`artisan`, `bin/console`) are not listed.
+A programming extension with no plugin (`.go`, `.java`, `.qml`, `.sh`, `.lua`, `.svelte`,
+…), or a `#!` line naming such an interpreter. Data and markup (`.json`, `.yaml`, `.md`,
+`.svg`) never count. Extensionless launchers of indexed languages (`artisan`, `bin/console`)
+are not listed.
 
 ## Blind spots
 
-Detectors run at index time and record each pattern with a count and `file:line` samples. Route blind spots affect
-every route list and every caller answer in their language. Handler blind spots record the registered functions and
-affect exactly the answers that involve one of them: the function itself (its "no callers" comes from the
-registration) or a caller chain that runs through it (an entry point is missing there). A same-file decorator such as
-`@tool` defined next to its uses is recorded too, since its uses are not calls either.
+Detectors run at index time. A failure is a stderr warning, not a failed index. Each one has a
+positive and a negative fixture in `tests/test_completeness.py`. A decorated function that a
+plugin already made an entry point is not reported.
 
-| kind | category | what is detected | documented limitation |
-|---|---|---|---|
-| `nest_wrapped_route_decorator` | route | NestJS methods using a decorator built with `applyDecorators(Get(...), ...)` or a factory returning `Get(...)` | [TS frameworks](limitations.md) (`applyDecorators`) |
-| `django_dynamic_urlpatterns` | route | `urlpatterns` entries produced by a function call (also `*call()`), a comprehension or a loop | [Python / Django](limitations.md) (URL confs built in loops / functions) |
-| `django_unresolved_include` | route | `include(<expression>)` or a `.urls` target the URL resolver could not follow (a literal include of a package outside the repo is third-party code and is not reported) | [Python / Django](limitations.md) |
-| `express_loop_routes` | route | Express / Fastify / Koa / Hono routes registered in a loop or callback over a list, or with a computed method (`router[m.method](...)`) | [TS frameworks](limitations.md) (dynamic registration) |
-| `laravel_loop_routes` | route | `Route::` calls inside `foreach` / `for` / `while`, `->each(...)` / `->map(...)` or `array_map(...)` | [Laravel](limitations.md) (routes built from data) |
-| `python_decorator_routes` | route | a function with a route decorator (`@app.route`, `@router.get`) that no plugin turned into a route | [Python / Django](limitations.md) (frameworks without a plugin) |
-| `python_decorator_registration` | handler | a function registered through a decorator (`@registry.register`, `@app.task`) with no entry point and no caller besides the decorator's own reference (click / typer / MCP registrations are entry points) | [Python / Django](limitations.md) (registries) |
-| `python_registry_assignment` | handler | `registry[key] = fn` where `fn` has no caller in the graph (a call through the registry, `registry[key](...)`, counts) | [Python / Django](limitations.md) (registries) |
-| `nuxt_unevaluable_import_dirs` | handler | a `nuxt.config` `imports.dirs` entry that is not a literal path or glob, when `.nuxt/` is absent | [TS/Vue/Nuxt](limitations.md) |
+| kind | category | detected |
+|---|---|---|
+| `nest_wrapped_route_decorator` | route | `applyDecorators(Get(...))` or a factory that returns `Get(...)` |
+| `django_dynamic_urlpatterns` | route | `urlpatterns` from a call, a comprehension or a loop |
+| `django_unresolved_include` | route | `include(<expression>)` cg could not follow (a third-party package is not reported) |
+| `express_loop_routes` | route | Express / Fastify / Koa / Hono routes in a loop, or `router[m.method](...)` |
+| `laravel_loop_routes` | route | `Route::` inside `foreach` / `->each` / `array_map` |
+| `python_decorator_routes` | route | `@app.route` / `@router.get` that no plugin turned into a route |
+| `python_decorator_registration` | handler | `@registry.register` with no entry point and no caller (click, typer and MCP are entry points) |
+| `python_registry_assignment` | handler | `registry[key] = fn` and `fn` has no caller |
+| `nuxt_unevaluable_import_dirs` | handler | `imports.dirs` that is not a literal path, when `.nuxt/` is absent |
 
-Detectors look at what the graph already models: a decorated Python function that a plugin made an entry point (a
-django-ninja operation, a Celery task the Django plugin knows) or that has callers is not reported. Each detector has a
-positive and a negative fixture in `tests/test_completeness.py`. A detector that fails never fails the index (it is
-skipped with a warning on stderr).
-
-## Notes on answers
-
-`routes`, `impact`, `callers`, `reaches`, `tests_covering` and `plan_check` (CLI and MCP) add one line when the answer
-could be affected by a blind spot or by files that are not indexed, scoped to the languages, repos and registered
-handlers involved in the answer:
+Route blind spots affect every route list and every caller answer in that language. Handler
+blind spots affect the registered function and chains that run through it.
 
 ```text
 $ cg routes --db out/shop.db
 all routes: 1 indexed (possibly more: 1 unmodelled route registration)
-…
-coverage note: 1 route registration cg does not model (Django urlpatterns built by a function call, comprehension or loop: shop/urls.py:9). There, use your normal search and file reading (an empty cg answer is not proof of absence).
-
-$ cg impact shop.views.list_orders --db out/shop.db
-shop.views.list_orders: no callers found in indexed code (blind spots: 1 unmodelled route registration); …
-coverage note: 1 route registration cg does not model (…: shop/urls.py:9). …
+coverage note: 1 route registration cg does not model (Django urlpatterns built by a function call: shop/urls.py:9).
 ```
 
-Complete answers keep the usual wording (`1 of 1 routes`, `has no recorded callers`) and get no extra line.
+Complete answers keep the usual wording (`1 of 1 routes`, `has no recorded callers`) and get
+no extra line.
 
 ## MCP `completeness`
-
-Every MCP tool reply has structured content `{"result": <the text reply>, "completeness": {...}}` (declared in each
-tool's output schema), so an agent can decide when to fall back to text search without parsing prose:
 
 ```json
 {"complete": false,
  "languages": {"python": {"mode": "exact", "discovered": 4, "indexed": 2, "parse_failed": 1, "unmapped": 1, "complete": false}},
- "unsupported": {"qml": 1, "sh": 1},
- "blind_spots": [{"kind": "django_dynamic_urlpatterns", "category": "route", "language": "python",
-                  "what": "Django urlpatterns built by a function call, comprehension or loop", "count": 1, "sample": "shop/urls.py:9"}]}
+ "unsupported": {"qml": 1},
+ "blind_spots": [{"kind": "django_dynamic_urlpatterns", "category": "route", "count": 1, "sample": "shop/urls.py:9"}]}
 ```
 
-The object is scoped like the text note (`unsupported` appears on whole-index answers such as `coverage` and `stats`).
-On a combined graph, language keys are prefixed with the repo name (`bookstore-api/php`). `coverage(json_output=true)`
-returns the whole-index object as text, for clients that only show text content.
+The object is scoped like the text note. On a combined graph, language keys are prefixed with
+the repo name (`bookstore-api/php`). `coverage(json_output=true)` returns the whole-index
+object as text.
