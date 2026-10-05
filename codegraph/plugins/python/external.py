@@ -51,7 +51,52 @@ def _value(prog, m, e, depth=0):
         if r and r[0] == "var":
             for v, _l, _a in r[1].vars.get(r[2], [])[-1:]:
                 return _value(prog, r[1], v, depth + 1)
+    if isinstance(e, ast.Attribute) and isinstance(e.value, ast.Name):
+        # settings.kafka_url: class field default on the instance's constructor (#158)
+        r = prog.resolve_name(m, e.value.id)
+        if r and r[0] == "var":
+            mod = r[1]
+            vals = mod.vars.get(r[2]) or []
+            call = vals[-1][0] if vals else None
+            if isinstance(call, ast.Call):
+                fn = call.func
+                cname = fn.id if isinstance(fn, ast.Name) else None
+                cls = mod.classes.get(cname) if cname else None
+                if cls is None and cname:
+                    tr = prog.resolve_name(mod, cname)
+                    cls = tr[1] if tr and tr[0] == "type" else None
+                spec = cls.attrs.get(e.attr) if cls is not None else None
+                if spec and spec[0] is not None:
+                    val = spec[0]
+                    if isinstance(val, ast.Call):
+                        nm = val.func.attr if isinstance(val.func, ast.Attribute) else getattr(val.func, "id", "")
+                        if nm in ("Field", "field"):
+                            val = next((k.value for k in val.keywords if k.arg == "default"), None) \
+                                or (val.args[0] if val.args else None)
+                    return _value(prog, cls.module, val, depth + 1)
+        return None
     return None
+
+
+def _dict_key(d, key):
+    if not isinstance(d, ast.Dict):
+        return None
+    for k, v in zip(d.keys, d.values):
+        if isinstance(k, ast.Constant) and k.value == key:
+            return v
+    return None
+
+
+def _kafka_addr(v):
+    """bootstrap 'h:9092' / 'h1:9092,h2:9092' -> (host value, port value or None)."""
+    if not v or v[0] != "lit" or "://" in str(v[1]):
+        return v, None
+    first = str(v[1]).split(",")[0].strip()
+    if ":" in first:
+        h, p = first.rsplit(":", 1)
+        if h and p.isdigit():
+            return ("lit", h), ("lit", p)
+    return ("lit", first), None
 
 
 def _proto(engine: str | None, default):
@@ -143,6 +188,9 @@ CLIENTS = {
     "pika": ("amqp", {"URLParameters", "ConnectionParameters"}),
     "aio_pika": ("amqp", {"connect", "connect_robust"}),
     "kombu": ("amqp", {"Connection"}),
+    "aiokafka": ("kafka", {"AIOKafkaProducer", "AIOKafkaConsumer"}),
+    "kafka": ("kafka", {"KafkaProducer", "KafkaConsumer"}),
+    "confluent_kafka": ("kafka", {"Producer", "Consumer", "AdminClient"}),
     "elasticsearch": ("elasticsearch", {"Elasticsearch", "AsyncElasticsearch"}),
     "pymemcache": ("memcached", {"Client", "PooledClient"}),
     "boto3": ("s3", {"client", "resource"}),
@@ -153,6 +201,7 @@ CONNECT_METHODS = {"connect"}
 TLS_CTORS = {"SMTP_SSL": "465", "FTP_TLS": None}
 URL_KW = ("dsn", "url", "conninfo", "host_url", "endpoint_url", "hosts")
 HOST_KW = ("host", "hostname", "server")
+BOOTSTRAP_KW = ("bootstrap_servers", "bootstrap_server")
 
 
 def _dotted(m, e):
@@ -232,6 +281,14 @@ def client_facts(prog, b, walk_body) -> list:
                         continue
                 url = _kwarg(c, URL_KW)
                 host = _kwarg(c, HOST_KW)
+                if proto == "kafka" and host is None:
+                    bs = _kwarg(c, BOOTSTRAP_KW)
+                    if bs is None and top == "confluent_kafka" and c.args:
+                        bs = _dict_key(c.args[0], "bootstrap.servers")
+                    if isinstance(bs, (ast.List, ast.Tuple)) and bs.elts:
+                        bs = bs.elts[0]
+                    if bs is not None:
+                        host = bs
                 pos = c.args[0] if c.args and top != "boto3" else None
                 if url is None and host is None and pos is not None:
                     pv = _value(prog, m, pos)
@@ -257,8 +314,11 @@ def client_facts(prog, b, walk_body) -> list:
                     if h[0] == "lit" and "://" in h[1]:
                         f["url"] = h
                     else:
+                        kp = None
+                        if proto == "kafka" and h[0] == "lit":
+                            h, kp = _kafka_addr(h)
                         f["host"] = h
-                        pv = _value(prog, m, port) if port is not None else None
+                        pv = kp or (_value(prog, m, port) if port is not None else None)
                         f["port"] = pv if pv and pv[0] in ("lit", "env") else (("lit", TLS_CTORS[last]) if TLS_CTORS.get(last) else None)
                 else:
                     continue

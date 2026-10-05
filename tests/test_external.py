@@ -267,6 +267,63 @@ def test_python_client_constructors(tmp_path):
     assert ("external:postgres:reports.internal.example:5433", "env:REPORTS_PW") in edges(st, "CREDENTIAL_FROM")
 
 
+def test_python_kafka_and_compose_inventory(tmp_path):
+    """#158: aiokafka / kafka-python / confluent, redpanda image, compose-only nats."""
+    comp = read_compose(FX / "shop-kafka")
+    assert comp["redpanda"]["protocol"] == "kafka" and "redpanda" in comp["redpanda"]["image"]
+    assert comp["rabbitmq"]["protocol"] == "amqp" and comp["nats"]["protocol"] == "nats"
+    db = tmp_path / "shop-kafka.db"
+    index_project(FX / "shop-kafka", db, "shop-kafka")
+    st = GraphStore(db)
+    e = ext(st)
+    k = e["external:kafka:redpanda:9092"]
+    assert k["library"] == "aiokafka" and k["address_source"] == "compose"
+    assert k["image"].startswith("redpandadata/redpanda")
+    assert e["external:kafka:env:KAFKA_URL"]["address_source"] == "env"
+    assert e["external:kafka:broker.internal.example:9092"]["library"] == "confluent_kafka"
+    amqp = e["external:amqp:rabbitmq:5672"]
+    assert amqp["library"] == "aio_pika" and amqp["address_source"] == "compose"
+    raw = json.dumps(amqp)
+    assert "s3cret-kafka" not in raw
+    nats = e["external:nats:nats:4222"]
+    assert nats["source"] == "compose" and nats["address_source"] == "compose"
+    ct = edges(st, "CONNECTS_TO")
+    assert ("function:clients.open_kafka", "external:kafka:redpanda:9092") in ct
+    assert ("function:clients.open_amqp", "external:amqp:rabbitmq:5672") in ct
+    assert ("function:clients.open_confluent", "external:kafka:broker.internal.example:9092") in ct
+    assert not any(d == "external:nats:nats:4222" for _, d in ct)
+    r = cli("external", "--db", str(db), "--protocol", "kafka")
+    assert r.returncode == 0 and "redpanda:9092" in r.stdout and "open_kafka" in r.stdout
+    r = cli("external", "--db", str(db), "--protocol", "nats")
+    assert "external:nats:nats:4222" in r.stdout
+
+
+
+def test_compose_kafka_images_ignore_uis(tmp_path):
+    """#158: only real broker images map to kafka — not UIs / sidecars whose names contain kafka."""
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n"
+        "  broker:\n    image: bitnami/kafka:3.7\n"
+        "  apache:\n    image: apache/kafka:3.8.0\n"
+        "  wurst:\n    image: wurstmeister/kafka:2.13-2.8.1\n"
+        "  cp:\n    image: confluentinc/cp-kafka:7.6.0\n"
+        "  cpserver:\n    image: confluentinc/cp-server:7.6.0\n"
+        "  rp:\n    image: vectorized/redpanda:v24.2.1\n"
+        "  ui:\n    image: provectuslabs/kafka-ui:v0.7.2\n"
+        "  drop:\n    image: obsidiandynamics/kafdrop:4.0.1\n"
+        "  exporter:\n    image: danielqsj/kafka-exporter:v1.7.0\n"
+        "  registry:\n    image: confluentinc/cp-schema-registry:7.6.0\n"
+        "  connect:\n    image: confluentinc/cp-kafka-connect:7.6.0\n"
+    )
+    comp = read_compose(tmp_path)
+    assert {s: c["protocol"] for s, c in comp.items()} == {
+        "broker": "kafka", "apache": "kafka", "wurst": "kafka",
+        "cp": "kafka", "cpserver": "kafka", "rp": "kafka",
+    }
+    for bad in ("ui", "drop", "exporter", "registry", "connect"):
+        assert bad not in comp
+
+
 def test_llm_providers_as_externals(tmp_path):
     """#77: model calls (#66 attrs.llm_calls) are CONNECTS_TO external:llm:<provider>; a base_url names the host."""
     (tmp_path / "bot.py").write_text(

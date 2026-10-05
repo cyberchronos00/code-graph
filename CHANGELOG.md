@@ -15,6 +15,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   CONNECTS_TO from the calling function (`via` http, `count` when several call sites). Loopback and
   template hosts stay unattached. `cg external` reads those nodes; the query-time adapter is gone.
   `cg link` still ignores other-origin URLs.
+- Python Kafka clients and compose-only brokers (#158): `aiokafka` / `kafka` (kafka-python) /
+  `confluent_kafka` constructors with `bootstrap_servers` or `bootstrap.servers` become `external:kafka:`
+  (literal `host:port`, env reads, or `settings.<field>` class defaults). Compose images `apache/kafka`,
+  `bitnami/kafka`, `confluentinc/cp-kafka`, `confluentinc/cp-server`, `redpandadata/redpanda`,
+  `vectorized/redpanda`, `wurstmeister/kafka` (and service-name tokens that match only those broker
+  images — not kafka-ui / kafdrop / kafka-exporter / schema-registry). A compose broker (kafka, rabbitmq,
+  nats, redis, mqtt) with no matching client is listed with `source=compose` and no CONNECTS_TO.
 
 ## [0.12.0] - 2026-10-05
 

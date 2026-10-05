@@ -71,11 +71,16 @@ IMAGES = [("postgis", "postgres"), ("postgres", "postgres"), ("pgvector", "postg
           ("mariadb", "mysql"), ("mysql", "mysql"), ("mssql", "mssql"), ("valkey", "redis"), ("redis", "redis"),
           ("mongo", "mongodb"), ("rabbitmq", "amqp"), ("elasticsearch", "elasticsearch"), ("opensearch", "elasticsearch"),
           ("memcached", "memcached"), ("minio", "s3"), ("localstack", "s3"), ("mailhog", "smtp"), ("mailpit", "smtp"),
-          ("maildev", "smtp"), ("openldap", "ldap"), ("nats", "nats"), ("kafka", "kafka"), ("mosquitto", "mqtt"),
+          ("maildev", "smtp"), ("openldap", "ldap"), ("nats", "nats"), ("mosquitto", "mqtt"),
           ("clickhouse", "clickhouse"), ("cassandra", "cassandra")]
+# Exact image basenames for Kafka brokers only — never substring-match UIs/sidecars
+# (kafka-ui, kafdrop, kafka-exporter, schema-registry, kafka-connect, …).
+KAFKA_IMAGES = {"kafka", "cp-kafka", "cp-server", "redpanda"}
 LLM_KEYS = {"openai": ("OPENAI_API_KEY",), "azure-openai": ("AZURE_OPENAI_API_KEY", "AZURE_OPENAI_KEY"),
             "anthropic": ("ANTHROPIC_API_KEY",), "ollama": (), "openai-agents": ("OPENAI_API_KEY",)}
 LOOPBACK = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "host.docker.internal", ""}
+# compose services listed by `cg external` even when no client URL resolves to them (#158)
+COMPOSE_ONLY = {"kafka", "amqp", "nats", "redis", "mqtt"}
 ENV_FILES = (".env.example", ".env.sample", ".env.dist", ".env.template", ".env.defaults", "example.env", "env.example")
 
 
@@ -161,7 +166,12 @@ def read_compose(root: Path) -> dict:
                 continue
             img = str(spec.get("image") or "")
             name = img.rsplit("/", 1)[-1].split(":", 1)[0].lower() or str(svc).lower()
-            proto = next((p for k, p in IMAGES if k in name), None)
+            # Kafka: exact basename only (bitnami/kafka, apache/kafka, wurstmeister/kafka,
+            # confluentinc/cp-kafka|cp-server, redpandadata|vectorized/redpanda).
+            if name in KAFKA_IMAGES:
+                proto = "kafka"
+            else:
+                proto = next((p for k, p in IMAGES if k in name), None)
             if proto is None:
                 continue
             out[str(svc)] = {"protocol": proto, "image": img or None, "port": PORTS.get(proto),
@@ -298,10 +308,11 @@ def attach(builder, root: Path) -> dict:
     # model calls made from test code are fixtures, not systems the application talks to (as for third-party HTTP)
     llm = [n for n in builder.nodes.values() if (n.attrs or {}).get("llm_calls") and not n.attrs.get("test")]
     http_other = any(n.kind == "http" and (n.attrs or {}).get("origin_kind") == "other" for n in builder.nodes.values())
-    if not envs and not conns and not facts and not llm and not http_other:
-        return {}
     ex = read_env_example(root)
     compose = read_compose(root)
+    if not envs and not conns and not facts and not llm and not http_other and not any(
+            c.get("protocol") in COMPOSE_ONLY for c in compose.values()):
+        return {}
     readers: dict = {}
     for e in builder.edges.values():
         if e.kind == "READS_ENV":
@@ -460,8 +471,15 @@ def attach(builder, root: Path) -> dict:
                 if d:
                     # an HTTP endpoint of a client that speaks another protocol over it (boto3 S3 endpoint_url)
                     pr = f["protocol"] if f.get("client") and d["protocol"] in ("http", "https") and f["protocol"] else d["protocol"]
-                    r = (target_of(d["host"], d["port"]), {"address_source": "literal", "address_at": f"{f['file']}:{f['line']}",
-                         **{k: d[k] for k in ("scheme", "resource", "user", "tls") if d.get(k) is not None}}, "exact", pr)
+                    host, port = d["host"], d["port"]
+                    a = {"address_source": "literal", "address_at": f"{f['file']}:{f['line']}",
+                         **{k: d[k] for k in ("scheme", "resource", "user", "tls") if d.get(k) is not None}}
+                    if host and host.lower() in compose:
+                        c = compose[host.lower()]
+                        a.update({"deployment_name": host.lower(), "image": c["image"], "compose_file": c["file"],
+                                  "address_source": "compose"})
+                        port = port or c["port"]
+                    r = (target_of(host, port), a, "exact", pr)
                     if d["has_password"]:
                         r[1].update(credential_source="literal", credential_at=f"{f['file']}:{f['line']}")
                 elif f.get("host_only") and f["protocol"]:
@@ -506,8 +524,14 @@ def attach(builder, root: Path) -> dict:
                 if f"env:{u[1]}" in builder.nodes:
                     builder.add_edge(nid, f"env:{u[1]}", "CREDENTIAL_FROM", None, None, "resolved", secret_kind="url password")
         elif f.get("client"):        # a client constructor in code (#77)
+            src = f["src"]
+            src_n = builder.nodes.get(src)
+            # same rule as #42 HTTP: test-only callers do not attach systems (attach runs before tests_index)
+            if str(src).startswith("test:") or (src_n is not None and (
+                    src_n.kind == "test" or (src_n.attrs or {}).get("test"))):
+                continue
             nid = node(proto, target, {**attrs, "client": f["var"], "library": f["client"], "resource": f.get("resource")}, conf)
-            builder.add_edge(f["src"], nid, "CONNECTS_TO", f["file"], f["line"], conf, op="connect", via=f"client {f['var']}")
+            builder.add_edge(src, nid, "CONNECTS_TO", f["file"], f["line"], conf, op="connect", via=f"client {f['var']}")
         else:
             nid = node(proto, target, {**attrs, "setting": f["var"], "resource": f.get("resource")}, conf)
             builder.add_edge(f["src"], nid, "CONNECTS_TO", f["file"], f["line"], conf, op="configure", via=f"setting {f['var']}")
@@ -656,6 +680,27 @@ def attach(builder, root: Path) -> dict:
 
     attach_redis_es_resources(builder, root, st)
     _attach_http_hosts(builder, node, st)
+
+    # Brokers declared only in compose: a node with no CONNECTS_TO (#158). Skip a service a client fact
+    # already turned into the same protocol + host / deployment name.
+    seen_compose: set = set()
+    for svc, c in compose.items():
+        if id(c) in seen_compose:
+            continue
+        seen_compose.add(id(c))
+        proto = c.get("protocol")
+        if proto not in COMPOSE_ONLY:
+            continue
+        sl = str(svc).lower()
+        if any((a := (n.attrs or {})).get("protocol") == proto and (
+                str(a.get("host") or "").lower() == sl or str(a.get("deployment_name") or "").lower() == sl
+                or str(a.get("target") or "") == sl or str(a.get("target") or "").startswith(sl + ":"))
+               for n in builder.nodes.values() if n.kind == "external"):
+            continue
+        port = c.get("port") or PORTS.get(proto)
+        node(proto, target_of(sl, port), {"source": "compose", "address_source": "compose",
+                         "address_at": c.get("file"), "deployment_name": sl, "image": c.get("image"),
+                         "compose_file": c.get("file"), "host": sl, "port": port}, "resolved")
 
     return {k: v for k, v in st.items() if v} if st["systems"] else {}
 

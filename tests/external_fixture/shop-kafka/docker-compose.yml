@@ -1,0 +1,10 @@
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.2.1
+    ports: ["9092:9092"]
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672"]
+  nats:
+    image: nats:2.10
+    ports: ["4222:4222"]
