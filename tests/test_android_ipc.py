@@ -81,6 +81,20 @@ def test_exposure(db):
     assert sync["exported"] is False
 
 
+def test_exposure_guards(db):
+    from codegraph.core.store import GraphStore
+    from codegraph.protocols.view import collect
+    ep = collect(GraphStore(db[0]))
+    ext = ep[f"endpoint:intent-action:{APP}.ACTION_EXTERNAL"]       # exported, no permission: any app can send it
+    assert ext["guards"] == [] and "unguarded" in ext["checks"]
+    refresh = ep[f"endpoint:intent-action:{APP}.ACTION_REFRESH"]
+    assert refresh["guards"] == ["not exported"] and "unguarded" not in refresh["checks"]
+    bridge = ep[f"endpoint:intent:{APP}.BridgeService"]
+    assert bridge["guards"] == ["permission com.example.app.permission.BIND_BRIDGE"] and "unguarded" not in bridge["checks"]
+    main = ep[f"endpoint:intent:{APP}.MainActivity"]                  # MAIN / LAUNCHER: public by design
+    assert main["guards"] is None and "unguarded" not in main["checks"]
+
+
 def test_aidl(db):
     s, r = _edges(db, "SENDS_TO"), _edges(db, "RECEIVED_BY")
     b = "endpoint:aidl:com.example.bridge.IBridge"

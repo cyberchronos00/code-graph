@@ -10,6 +10,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Child processes (#38, part 3) as `process:<program>` endpoints: application code that starts an in-repo
+  program (Python `subprocess`, Node `spawn` / `fork`, Rust cargo bins, artisan, Dart, Electron `utilityProcess`)
+  sends to the program's entry, and Node `fork` / `utilityProcess` messages are linked both ways
+  (`child.send` -> `process.on('message')`, `process.send` -> `child.on('message')`). Node `worker_threads`
+  `parentPort` messaging joins the `worker` protocol.
+- Android components exported without a permission are flagged `unguarded` in `cg protocols`.
 - Android intents and AIDL (#38, part 3) as `intent:<component>`, `intent-action:<action>` and
   `aidl:<package.IFace>.<method>` endpoints in `cg protocols`: explicit intents (`Intent(ctx, X::class.java)`,
   `ComponentName`) to the component's entry method with the consuming call as `via`, custom actions to manifest

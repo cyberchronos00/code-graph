@@ -29,8 +29,9 @@
                                                   host manifest (`"type": "stdio"`, `"name"`, `"path"`) names.
 
 Message types are heuristic (a sender whose type is unknown reaches only `*` listeners). Electron / Tauri IPC and
-web-to-native bridges are codegraph/bridges.py; Unix sockets, named pipes, D-Bus, Android intents and child processes
-are later parts of #38.
+web-to-native bridges are codegraph/bridges.py; Unix sockets, named pipes and D-Bus codegraph/local_sockets.py, Android
+intents codegraph/android_ipc.py, process starts codegraph/process_runs.py (Node fork / utilityProcess messages:
+`forks` here, protocol `process`; worker_threads `parentPort` joins `worker`).
 """
 from __future__ import annotations
 
@@ -47,6 +48,11 @@ JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", 
 JS_TYPEOF = {"string", "number", "object", "undefined", "function", "boolean", "bigint", "symbol"}
 TYPE_KEYS = ("type", "action", "event", "kind", "messageType", "cmd", "command")
 WORKER_NEW = re.compile(r"\bnew\s+(Shared)?Worker\s*\(")
+# Node child_process.fork / Electron utilityProcess.fork (not cluster.fork, which re-runs the same program)
+PARENT_PORT_ON = re.compile(r"""(?<![\w$.])parentPort\s*[?!]?\.\s*(?:on|once|addListener)\s*\(\s*['"]message['"]\s*,\s*""")
+PARENT_PORT_POST = re.compile(r"""(?<![\w$.])parentPort\s*[?!]?\.\s*postMessage\s*\(""")
+FORK = re.compile(r"(?:(?<![\w$.])|\b(?:child_process|childProcess|cp)\s*\.\s*)fork\s*\(|\butilityProcess\s*\.\s*fork\s*\(")
+DIRNAME_JOIN = re.compile(r"(?:path\s*\.\s*)?(?:join|resolve)\s*\(\s*(?:__dirname|import\.meta\.dirname)\s*,\s*([\s\S]+)\)")
 VITE_WORKER = re.compile(r"""\bimport\s+(\w+)\s+from\s+['"]([^'"]+?)\?(?:shared)?worker(?:&[\w=&]*)?['"]""")
 BC_NEW = re.compile(r"\bnew\s+BroadcastChannel\s*\(")
 POST = re.compile(r"""([\w$][\w$.\[\]'"?!]*?)\s*\??\.\s*postMessage\s*\(""")
@@ -106,12 +112,14 @@ class LocalIpc(Scan):
         for f in self.files:
             t = self.s.text(f)
             if t and any(k in t for k in ("postMessage", "onMessage", "sendMessage", "connect", "onmessage", "Worker",
-                                          "BroadcastChannel", "serviceWorker", "'message'", '"message"')):
+                                          "BroadcastChannel", "serviceWorker", "'message'", '"message"', "fork",
+                                          "parentPort")):
                 if max((len(x) for x in t[:200000].split("\n")), default=0) > 3000:
                     continue                        # minified / bundled
                 texts[f] = t
         self.texts = texts
         self.workers(texts)
+        self.forks(texts)
         self.service_workers(texts)
         self.channels(texts)
         self.windows(texts)
@@ -200,6 +208,33 @@ class LocalIpc(Scan):
         stem = re.sub(r"\.(?:m?js|cjs|ts)$", "", tail)
         hits = [f for f in self.files if re.sub(r"\.\w+$", "", f) == stem or re.sub(r"\.\w+$", "", f).endswith("/" + stem)]
         return hits[0] if len(hits) == 1 else None
+
+    def script_arg(self, f, pos, a0, depth=0):
+        """The in-repo script a Worker / fork argument names: a literal, `new URL('./w.js', import.meta.url)`,
+        `path.join(__dirname, 'w.js')` / `path.resolve(__dirname, 'sub', 'w.js')` (also inside `pathToFileURL(..)` /
+        `require.resolve(..)`), or a constant / local assigned one of these earlier."""
+        a0 = (a0 or "").strip()
+        w = re.fullmatch(r"(?:url\s*\.\s*)?(?:pathToFileURL|fileURLToPath)\s*\(([\s\S]+)\)|require\s*\.\s*resolve\s*\(([\s\S]+)\)", a0)
+        if w:
+            a0 = (w.group(1) or w.group(2)).strip()
+        if depth < 2 and re.fullmatch(r"[A-Za-z_$][\w$]*", a0):
+            src = self.s.text(f) or ""
+            ms = list(re.finditer(rf"\b(?:const|let|var)\s+{re.escape(a0)}\s*(?::[^=]+)?=\s*([^;\n]+)", src[:pos]))
+            if ms:
+                got = self.script_arg(f, ms[-1].start(1), ms[-1].group(1), depth + 1)
+                if got:
+                    return got
+        u = re.fullmatch(r"new\s+URL\s*\(\s*([\s\S]+?)\s*,\s*import\.meta\.url\s*\)", a0)
+        j = DIRNAME_JOIN.fullmatch(a0)
+        if j:
+            parts = [_strlit(x) for x in _args("(" + j.group(1) + ")", 0)]
+            lit = "./" + "/".join(parts) if parts and all(p is not None for p in parts) else None
+        else:
+            lit = _strlit(u.group(1)) if u else _strlit(a0)
+        if lit is None and a0 and not j:
+            v, _c = self.value(f, pos, u.group(1) if u else a0)
+            lit = v if v and "{" not in v else None
+        return self.resolve_script(f, lit) if lit else None
 
     def msg_type(self, file, pos, payload):
         p = (payload or "").strip()
@@ -325,12 +360,7 @@ class LocalIpc(Scan):
                     continue
                 args = _args(src, m.end() - 1)
                 a0 = args[0] if args else ""
-                u = re.fullmatch(r"new\s+URL\s*\(\s*([\s\S]+?)\s*,\s*import\.meta\.url\s*\)", a0.strip())
-                lit = _strlit(u.group(1)) if u else _strlit(a0)
-                if lit is None and a0:
-                    v, _c = self.value(f, m.start(), u.group(1) if u else a0)
-                    lit = v if v and "{" not in v else None
-                script = self.resolve_script(f, lit) if lit else None
+                script = self.script_arg(f, m.start(), a0)
                 if not script:
                     self.miss("worker_script_unresolved", f"{f}:{self.s.line_of(f, m.start())} {a0[:60]}")
                     continue
@@ -357,7 +387,7 @@ class LocalIpc(Scan):
                 for g in self.getters(src, rf"\breturn\s+{re.escape(var)}\s*;?\s*$"):
                     binds[g + "()"] = script
             for var, script in binds.items():
-                rx = re.compile(rf"(?<![\w$.]){re.escape(var).replace(chr(92) + 'this' + chr(92) + '.', '(?:this|self)' + chr(92) + '.')}\s*[?!]?\s*\.\s*(postMessage\s*\(|onmessage\s*=(?!=)|addEventListener\s*\(\s*['\"]message['\"]\s*,)")
+                rx = re.compile(rf"(?<![\w$.]){re.escape(var).replace(chr(92) + 'this' + chr(92) + '.', '(?:this|self)' + chr(92) + '.')}\s*[?!]?\s*\.\s*(postMessage\s*\(|onmessage\s*=(?!=)|(?:addEventListener|on|once|addListener)\s*\(\s*['\"]message['\"]\s*,)")
                 for m in rx.finditer(src):
                     if self.s.masked(f, m.start()):
                         continue
@@ -373,6 +403,64 @@ class LocalIpc(Scan):
         for script in sorted(self.worker_files):
             self.worker_side(script, script, "worker")
 
+    def forks(self, texts):
+        """Node `child_process.fork(script)` and Electron `utilityProcess.fork(script)`: the parent's `child.send(m)` /
+        `child.postMessage(m)` -> `process:<script>`, received by the child's `process.on('message', h)` /
+        `process.parentPort.on('message', h)`; the child's `process.send(m)` / `process.parentPort.postMessage(m)` ->
+        `process:<script>:out`, received by the parent's `child.on('message', h)`. The start itself is linked by
+        process_runs (child_process) or here (utilityProcess)."""
+        scripts = set()
+        for f, src in texts.items():
+            if "fork" not in src:
+                continue
+            node_cp = re.search(r"""['"](?:node:)?child_process['"]""", src) is not None
+            for m in FORK.finditer(src):
+                utility = m.group(0).startswith("utilityProcess")
+                if self.s.masked(f, m.start()) or not (utility or node_cp):
+                    continue
+                if re.search(r"(?:function\s+|\b(?:async\s+)?)$", src[max(0, m.start() - 12):m.start()]) and \
+                        re.match(r"[^)]*\)\s*(?::[^{]*)?\{", src[m.end():m.end() + 200]):
+                    continue                        # a method / function named fork, not a call
+                args = _args(src, m.end() - 1)
+                script = self.script_arg(f, m.start(), args[0] if args else "")
+                if not script:
+                    self.miss("fork_script_unresolved", f"{f}:{self.s.line_of(f, m.start())} {(args or [''])[0][:60]}")
+                    continue
+                scripts.add(script)
+                fn = self.fn_at(f, m.start())
+                if utility and fn:
+                    protocol_send(self.b, "process", script, fn, f, self.s.line_of(f, m.start()), EXACT,
+                                  test=self.is_test(f, fn), role="spawn", how="utilityProcess.fork")
+                    entry = self.module_of(script)
+                    if entry:
+                        self.recv("process", script, entry, script, 0, EXACT, "program entry")
+                var = self.lhs(src, m.start())
+                if not var:
+                    continue
+                rx = re.compile(rf"(?<![\w$.]){re.escape(var)}\s*[?!]?\s*\.\s*(send\s*\(|postMessage\s*\(|(?:on|once|addListener)\s*\(\s*['\"]message['\"]\s*,)")
+                for c in rx.finditer(src, m.end()):
+                    if self.s.masked(f, c.start()):
+                        continue
+                    if c.group(1).startswith(("send", "postMessage")):
+                        self.send("process", script, self.fn_at(f, c.start()), f, c.start(), EXACT, f"child.{c.group(1)[:-1].strip()}")
+                    else:
+                        cb = next(self.listeners(src, re.compile(re.escape(c.group(0))), c.start(), c.end()), (c.start(), ""))[1]
+                        h, _b = self.body_of(f, src, c.start(), cb)
+                        self.recv("process", script + ":out", h, f, c.start(), EXACT, "child.on('message')")
+        for script in sorted(scripts):
+            src = self.s.text(script)
+            if not src:
+                continue
+            on = re.compile(r"""(?<![\w$.])process\s*\.\s*(?:parentPort\s*[?!]?\.\s*)?(?:on|once|addListener)\s*\(\s*['"]message['"]\s*,\s*""")
+            for pos, cb in self.listeners(src, on):
+                if not self.s.masked(script, pos):
+                    h, _b = self.body_of(script, src, pos, cb)
+                    self.recv("process", script, h, script, pos, EXACT, "process.on('message')")
+            for m in re.finditer(r"(?<![\w$.])process\s*\.\s*(?:send\s*\??\.?\s*\(|parentPort\s*[?!]?\.\s*postMessage\s*\()", src):
+                if not self.s.masked(script, m.start()):
+                    self.send("process", script + ":out", self.fn_at(script, m.start()), script, m.start(), EXACT,
+                              "process.send")
+
     def worker_side(self, file, name, how):
         src = self.s.text(file)
         if not src:
@@ -386,6 +474,15 @@ class LocalIpc(Scan):
         for m in re.finditer(r"""(?<![\w$.])(?:self\.|globalThis\.)?postMessage\s*\(""", src):
             if not self.s.masked(file, m.start()):
                 self.send("worker", name + ":out", self.fn_at(file, m.start()), file, m.start(), EXACT, f"{how} postMessage")
+        if "parentPort" in src:                     # Node worker_threads
+            for pos, cb in self.listeners(src, PARENT_PORT_ON):
+                if not self.s.masked(file, pos):
+                    h, _b = self.body_of(file, src, pos, cb)
+                    self.recv("worker", name, h, file, pos, EXACT, "parentPort.on('message')")
+            for m in PARENT_PORT_POST.finditer(src):
+                if not self.s.masked(file, m.start()):
+                    self.send("worker", name + ":out", self.fn_at(file, m.start()), file, m.start(), EXACT,
+                              "parentPort.postMessage")
         if "comlink" in src:
             for m in re.finditer(r"\b(?:Comlink\.)?expose\s*\(\s*([\w$.]+)", src):
                 if not self.s.masked(file, m.start()):

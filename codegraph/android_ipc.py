@@ -299,6 +299,12 @@ class AndroidIpc(Scan):
                     exp = el.get(ANS + "exported")
                     exposure = {"exported": exp == "true" if exp in ("true", "false") else bool(filters),
                                 "permission": el.get(ANS + "permission") or app.get(ANS + "permission")}
+                    # guards (`cg protocols` flags `unguarded`): another app can start an exported component
+                    # unless a permission protects it
+                    exposure["guards"] = ([f"permission {exposure['permission']}"] if exposure["permission"] else
+                                          [] if exposure["exported"] else ["not exported"])
+                    if any(a.get(ANS + "name") == "android.intent.action.MAIN" for f_ in filters for a in f_.findall("action")):
+                        del exposure["guards"]      # the launcher activity: public by design, not checked
                     if fq and tag != "activity-alias":
                         self.exposure.setdefault(fq, exposure)
                     self.mf.append((rel, text, tag, nm, fq, acts, exposure))

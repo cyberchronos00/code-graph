@@ -1108,6 +1108,23 @@ above and the fixture's 4 sends plus the `cg link` pairing of `hooks-ts` `order.
 covers svix, spatie/laravel-webhook-server and hand-signed `fetch` / `requests` senders, event names from a caller's
 argument, and the pairing.
 
+## Child processes, worker_threads and Android exposure (#38 part 3)
+
+| Project | Edges | Notes |
+|---|---|---|
+| pip | 3 SENDS_TO, 2 RECEIVED_BY (`process`) | `tools/protected_pip.py` runs `python -m pip` (to `src/pip/__main__.py`), `tools/release` runs `tools/release/check_version.py` |
+| immich | 1 SENDS_TO, 1 RECEIVED_BY (`process`) | machine-learning `prepared()` runs `python -m immich_ml.sessions.prepare` in a child process (its `__main__` block). The server's `fork(workerFile)` names the worker with a template and stays unlinked |
+| eslint | 1 SENDS_TO, 1 RECEIVED_BY (`worker`) | `lib/eslint/worker.js` `parentPort.postMessage(indexedResults)` -> `worker.once("message", ..)` in `runWorkers`; the worker URL is `pathToFileURL(path.join(__dirname, "./worker.js"))` held in a local |
+| bitwarden-android, element-x-android, nowinandroid | guards only | Manifest components get `permission <name>` / `not exported` guards; `unguarded`: bitwarden `AuthCallbackActivity` and `AutofillCallbackActivity`, element-x the five UnifiedPush connector actions (received from distributor apps). Launcher activities are not checked |
+
+No edge was removed anywhere. Unchanged: electron-fiddle (its `utilityProcess` sample sits in `static/`, which is not
+indexed), socket.io (`cluster.fork()` is not linked), pino and mocha (their forks are in tests), and supervisor,
+mini-redis, tonic, beets, httpie, python-zeroconf, libuv, redis, tokio, flask, express, nodemailer, ws, jayson,
+request, panel, tauri, ktor-samples and capacitor. All 9 new edges outside the fixture were checked against the source
+and were correct. Reviewing the guards found launcher activities flagged `unguarded`, so they are now left unchecked.
+`tests/test_process_ipc.py` covers `tests/process_ipc_fixture` (Python `-m`, Node `spawn` / `fork`, Electron
+`utilityProcess`, fork messages both ways, worker_threads, a spawn in a test that stays a test call).
+
 ## Android intents and AIDL (#38 part 3)
 
 | Project | Edges | Notes |

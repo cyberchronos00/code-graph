@@ -109,11 +109,18 @@ register(Protocol("dbus", "ipc", "D-Bus member <interface>.<member>: proxy call 
 
 # ---- Android intents and AIDL (#38 part 3, codegraph/android_ipc.py)
 register(Protocol("intent", "ipc", "Android explicit intent: Intent(ctx, X::class.java) / ComponentName -> the in-repo "
-                  "component's entry method (onReceive / onStartCommand / onBind / onCreate)"))
+                  "component's entry method (onReceive / onStartCommand / onBind / onCreate); manifest components record "
+                  "their permission (or `not exported`) as a guard", guards=True))
 register(Protocol("intent-action", "ipc", "Android implicit intent by action: Intent(\"com.x.ACTION\") / setAction -> "
-                  "manifest intent-filter or IntentFilter receivers", fanout=True))
+                  "manifest intent-filter or IntentFilter receivers", fanout=True, guards=True))
 register(Protocol("aidl", "ipc", "Android AIDL interface method <package.IFace>.<method>: proxy call -> the IFace.Stub "
                   "implementation"))
+
+# ---- child processes (#38 part 3, codegraph/process_runs.py process_endpoints and codegraph/local_ipc.py)
+register(Protocol("process", "ipc", "Child process running an in-repo program: endpoint:process:<program file or name>; "
+                  "application code that starts it (subprocess / child_process / Command / Process.run) -> the "
+                  "program's entry, and Node fork / utilityProcess messages: child.send -> process.on('message') "
+                  "(<program>), process.send -> child.on('message') (<program>:out)"))
 
 # ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)
 register(Protocol("tcp", "tcp", "Raw TCP socket: connect -> listener on the same port (listen / bind vs connect; "

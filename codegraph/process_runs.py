@@ -326,3 +326,51 @@ class _Scan:
 def apply(project, builder) -> dict:
     """Add the subprocess edges; returns stats (empty when nothing was found)."""
     return _Scan(project, builder).run()
+
+
+# ------------------------------------------------------------------ child processes as endpoints (#38 part 3)
+PROGRAM_HOWS = {"-m", "script", "console script", "node script", "package bin", "cargo bin", "artisan", "dart script",
+                "copied script"}
+
+
+def program_name(n) -> str:
+    """The endpoint name of a program a process start runs: its file (a module / script / `main`), else its name
+    (console scripts, artisan commands)."""
+    a = n.attrs or {}
+    if n.kind == "script" and a.get("group") in ("console_scripts", "gui_scripts"):
+        return n.name
+    if n.kind == "command":
+        return f"artisan {n.name}"
+    return n.file or n.name
+
+
+def process_endpoints(builder) -> dict:
+    """Process starts in application code (the CALLS with `via: subprocess` that plugins/python/subproc.py and the
+    scan above add) as `endpoint:process:<program>`: SENDS_TO from the function that starts it, RECEIVED_BY the
+    program's entry (`__main__` block, module, `main`, command). Starts in tests stay TEST_CALLS only (running the CLI
+    under test is not a process talking to another); `python -c` snippets are calls, not programs."""
+    from .brokers import TEST_FILE
+    from .protocols import protocol_receive, protocol_send
+    from .tests_index import is_test_node
+    st = defaultdict(int)
+    done = set()
+    for e in list(builder.edges.values()):
+        a = e.attrs or {}
+        if e.kind != "CALLS" or a.get("via") != "subprocess" or a.get("how") not in PROGRAM_HOWS:
+            continue
+        src, dst = builder.nodes.get(e.src), builder.nodes.get(e.dst)
+        if src is None or dst is None or is_test_node(src) or TEST_FILE.search(e.file or src.file or ""):
+            continue
+        name = program_name(dst)
+        key = (e.src, name, e.line)
+        if key in done:
+            continue
+        done.add(key)
+        protocol_send(builder, "process", name, e.src, e.file, e.line, e.confidence, role="spawn", how=a.get("how"),
+                      command=a.get("command"))
+        st["spawns"] += 1
+        if ("r", name) not in done:
+            done.add(("r", name))
+            protocol_receive(builder, "process", name, e.dst, dst.file, dst.line, e.confidence, how="program entry")
+            st["programs"] += 1
+    return {k: v for k, v in st.items() if v}

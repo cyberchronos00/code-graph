@@ -327,12 +327,27 @@ that comes from configuration only is counted under `unix_path_unknown` in the i
 
 Receivers of components declared in a manifest carry their exposure: `exported` (the `android:exported` attribute,
 else true when the component has an intent filter, the pre-Android-12 default) and `permission` (the component's
-`android:permission`, else the application's). An exported component without a permission can be started by any app.
+`android:permission`, else the application's). The endpoint records the permission (`permission <name>`) or
+`not exported` as its guard; an exported component without a permission can be started by any app, so `cg protocols`
+flags it `unguarded`. Launcher activities (an `android.intent.action.MAIN` filter) are public by design and are not
+checked.
 
 Methods come from the `.aidl` files (`package`, `interface`, `oneway` methods). Platform actions (`android.*`,
 `com.google.android.*`, `com.google.firebase.*`, `Intent.ACTION_*` and other SDK constants) are not recorded: no
 repository sends them. Content providers (`content://` authorities), `Messenger` services, the `Class` constants given
 to `setClass(ctx, CLASS)`, and intent extras are not covered yet.
+
+## Child processes (#38 part 3)
+
+| protocol | endpoint | senders | receivers |
+|---|---|---|---|
+| `process` | `<program file>` (or a console script / `artisan <command>` name) | application code that starts an in-repo program: the process starts `plugins/python/subproc.py` and `codegraph/process_runs.py` link (`subprocess` with `python -m pkg.mod` / a script / a console script, Node `spawn` / `fork` / `execa` of a project script or `bin`, Rust `Command` of a cargo bin, PHP `artisan`, Dart `Process.run`), with `role: spawn`; Electron `utilityProcess.fork(script)`; the parent's `child.send(m)` / `child.postMessage(m)` on a forked child | the program's entry (`__main__` block, module, `main`, command); the child's `process.on('message', h)` / `process.parentPort.on('message', h)` |
+| `process` | `<program file>:out` | the child's `process.send(m)` / `process.parentPort.postMessage(m)` | the parent's `child.on('message', h)` |
+
+Process starts in tests stay `TEST_CALLS` (via `subprocess`) and get no endpoint; `python -c` snippets are calls,
+not programs. `cluster.fork()` re-runs the same program and is not linked. Node `worker_threads` use the `worker`
+protocol: `new Worker(path.join(__dirname, 'w.js'))` (also through `pathToFileURL(..)` or a local holding the path),
+`worker.on('message', h)` in the parent, `parentPort.on('message', h)` / `parentPort.postMessage(..)` in the worker.
 
 ## Raw TCP / UDP sockets
 

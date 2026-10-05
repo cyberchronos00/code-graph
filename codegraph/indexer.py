@@ -306,6 +306,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (aist := apply_android_ipc(project, builder)):
         aist["seconds"] = round(time.time() - t_ai, 2)
         stats["android_ipc"] = aist
+    # child processes in application code as endpoint:process:<program> (#38 part 3)
+    from .process_runs import process_endpoints
+    if (pe := process_endpoints(builder)):
+        stats["process_endpoints"] = pe
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)
