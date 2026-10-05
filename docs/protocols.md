@@ -315,6 +315,25 @@ heuristic); `unix` and `pipe` match templates. A listener records `mode` when it
 that comes from configuration only is counted under `unix_path_unknown` in the index stats. Abstract sockets
 (`\0name`), socket activation (systemd `.socket` units) and D-Bus service files are not read.
 
+## Android intents and AIDL (#38 part 3)
+
+`codegraph/android_ipc.py` links Android components of one repository (Kotlin, and Java files when they are indexed):
+
+| protocol | endpoint | senders | receivers |
+|---|---|---|---|
+| `intent` | `<component class FQN>` | `Intent(ctx, Foo::class.java)` / `new Intent(ctx, Foo.class)`, `setClass(ctx, Foo::class.java)`, `ComponentName(ctx, Foo::class.java)`, and `ComponentName(pkg, "com.x.Foo")` (passed to a consuming call or `setComponent`) / `setClassName(pkg, ..)` with a literal or constant naming an in-repo class; nothing inside an assertion; `via` is the call that uses the intent (`startActivity`, `startService`, `startForegroundService`, `bindService`, `sendBroadcast`, `PendingIntent.getActivity` / `getBroadcast` / `getService`, ...) | the component's entry method: `onReceive` (receiver); `onStartCommand` / `onBind` (unless it only returns null) / `onHandleIntent` / `onMessageReceived` / `onCreate` (service); `onCreate` (activity); else the class. `component` is the manifest tag, or the superclass |
+| `intent-action` | `<action>` | `Intent("com.x.ACTION")` / `Intent(ACTION_CONST)`, `setAction(..)`, `action = ..` in an `Intent().apply { }` | `<intent-filter><action android:name>` on a manifest receiver / service / activity; `IntentFilter(X)` / `addAction(X)` in code (the file's `onReceive`). Fan-out |
+| `aidl` | `<package.IFace>.<method>` | calls of the interface's methods in code that names `IFace` (`IFace.Stub.asInterface(binder).m()`, `bridge?.m()`, `RemoteCallbackList` items; resolved when called on a receiver, heuristic for bare calls in a lambda), outside the interface's own Stub; mockk `every { }` / `verify { }` and Mockito `when(..)` / `verify(x).` are not calls | `override fun m(..)` in `object : IFace.Stub()` / `class X : IFace.Stub()` / `extends IFace.Stub` |
+
+Receivers of components declared in a manifest carry their exposure: `exported` (the `android:exported` attribute,
+else true when the component has an intent filter, the pre-Android-12 default) and `permission` (the component's
+`android:permission`, else the application's). An exported component without a permission can be started by any app.
+
+Methods come from the `.aidl` files (`package`, `interface`, `oneway` methods). Platform actions (`android.*`,
+`com.google.android.*`, `com.google.firebase.*`, `Intent.ACTION_*` and other SDK constants) are not recorded: no
+repository sends them. Content providers (`content://` authorities), `Messenger` services, the `Class` constants given
+to `setClass(ctx, CLASS)`, and intent extras are not covered yet.
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function
@@ -678,7 +697,7 @@ broker nodes (#40) on the endpoints, the repository's own wrapper classes (their
 
 ## Not covered yet
 
-- Message brokers beyond #35 part 1 (see above) and the rest of local IPC (#38: Android intents, child processes, Dart isolates, XPC); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
+- Message brokers beyond #35 part 1 (see above) and the rest of local IPC (#38: content providers, child processes, Dart isolates, XPC); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
   WebSocket clients (#147).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.

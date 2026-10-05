@@ -1108,6 +1108,28 @@ above and the fixture's 4 sends plus the `cg link` pairing of `hooks-ts` `order.
 covers svix, spatie/laravel-webhook-server and hand-signed `fetch` / `requests` senders, event names from a caller's
 argument, and the pairing.
 
+## Android intents and AIDL (#38 part 3)
+
+| Project | Edges | Notes |
+|---|---|---|
+| bitwarden-android (shallow clone) | 23 SENDS_TO, 18 RECEIVED_BY, 12 TEST_CALLS | `intent`: 12 explicit intents to `MainActivity`, `AuthCallbackActivity`, `AccessibilityActivity` and the autofill / credential activities (factories such as `createAddTotpItemFromAuthenticatorIntent`, tile services through `PendingIntent.getActivity`). `intent-action`: the five `com.x8bit.bitwarden.credentials.ACTION_*` constants sent through `PendingIntent.getActivity` and received by `CredentialProviderActivity.onCreate` from its manifest intent filter (not exported). `aidl`: `IAuthenticatorBridgeService` (7 methods) implemented by the `object : IAuthenticatorBridgeService.Stub()` in the app and called by the `authenticatorbridge` library, `IAuthenticatorBridgeServiceCallback.onAccountsSync` called back through a `RemoteCallbackList`; tests call both through captured mocks |
+| element-x-android | 22 SENDS_TO, 16 RECEIVED_BY | `intent`: notification actions (`PendingIntentCompat.getBroadcast` / `PendingIntent.getBroadcast`) to `NotificationBroadcastReceiver` and `DeclineCallBroadcastReceiver`, `startForegroundService` to `LiveLocationSharingService.onStartCommand`, `CallForegroundService` (its `onBind` only returns null, so `onCreate` receives), `newIntent` factories of activities. `intent-action`: the UnifiedPush `org.unifiedpush.android.connector.*` / `distributor.*` actions received by manifest receivers (exported); the senders are other apps |
+| nowinandroid | 1 SENDS_TO, 1 RECEIVED_BY | `ComponentName(packageName, TARGET_ACTIVITY_NAME)` in `newsPendingIntent` to `MainActivity` |
+
+No edge was removed anywhere. Unchanged: KaMPKit, capacitor, ktor-samples, spring-petclinic-kotlin, grpc-kotlin and the 20
+part 2 corpora run again (supervisor, mini-redis, tonic, beets, httpie, python-zeroconf, libuv, redis, tokio, pip,
+flask, express, nodemailer, ws, jayson, request, mocha, electron-fiddle, panel, tauri). Reviewing two random samples of
+20 found these errors, all fixed before landing: mockk `every { }` / `verify { }` stubs counted as AIDL calls, a
+service whose `onBind` only returns null received at `onBind`, manifest receivers recorded at the Kotlin handler's line
+instead of the `<action>` line, consuming calls opened on an earlier line (`PendingIntent.getActivity(\n ctx, ..,
+Intent(..))`) and `PendingIntentCompat` missing from `via`, and `ComponentName(pkg, name)` values built for an
+assertion or a Robolectric package-manager shadow taken as sends. After those fixes, a third random 20 of the new edges
+were checked: 19 were correct and one had a wrong `via`, read from a comment (`// ... handles setResult/finish`); consuming
+calls now skip comments, strings and coroutine `launch { }` blocks, and that edge reads `launch(mainIntent)`. The `authenticatorbridge` client's calls inside `ServiceConnection` callbacks come from the class
+(`heuristic`): the Kotlin extractor gives the anonymous object's `onServiceConnected` and the private
+`onServiceConnected(binder)` one id. `tests/test_android_ipc.py` covers `tests/android_ipc_fixture` (an app module with a
+manifest, services, receivers and an AIDL `Stub`, and a client module binding to it by `ComponentName(pkg, CONST)`).
+
 ## Unix sockets, named pipes / FIFOs and D-Bus (#38 part 2)
 
 | Project | Edges | Notes |

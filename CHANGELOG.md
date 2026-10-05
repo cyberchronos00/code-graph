@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Android intents and AIDL (#38, part 3) as `intent:<component>`, `intent-action:<action>` and
+  `aidl:<package.IFace>.<method>` endpoints in `cg protocols`: explicit intents (`Intent(ctx, X::class.java)`,
+  `ComponentName`) to the component's entry method with the consuming call as `via`, custom actions to manifest
+  intent filters and `IntentFilter` receivers, and AIDL interface methods from their callers to the `Stub`
+  implementation. Manifest components record `exported` and the guarding `permission`.
 - Unix domain sockets, named pipes / FIFOs and D-Bus (#38, part 2) as `unix:<path>`, `pipe:<name>` and
   `dbus:<interface>.<Member>` endpoints in `cg protocols`: Python socket / asyncio / socketserver /
   multiprocessing / uvicorn / aiohttp / httpx, Node `net` / `http` `socketPath`, Rust std / tokio (also Windows

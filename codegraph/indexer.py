@@ -300,6 +300,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (lsst := apply_local_sockets(project, builder)):
         lsst["seconds"] = round(time.time() - t_ls, 2)
         stats["local_sockets"] = lsst
+    # Android intents and AIDL (#38 part 3)
+    from .android_ipc import apply as apply_android_ipc
+    t_ai = time.time()
+    if (aist := apply_android_ipc(project, builder)):
+        aist["seconds"] = round(time.time() - t_ai, 2)
+        stats["android_ipc"] = aist
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

@@ -107,6 +107,14 @@ register(Protocol("pipe", "ipc", "Windows named pipe (\\\\.\\pipe\\<name>) or FI
 register(Protocol("dbus", "ipc", "D-Bus member <interface>.<member>: proxy call -> service method (zbus, dbus-next, "
                   "dasbus, dbus-python, GDBus, sd-bus); signals are sent by the service", fanout=False))
 
+# ---- Android intents and AIDL (#38 part 3, codegraph/android_ipc.py)
+register(Protocol("intent", "ipc", "Android explicit intent: Intent(ctx, X::class.java) / ComponentName -> the in-repo "
+                  "component's entry method (onReceive / onStartCommand / onBind / onCreate)"))
+register(Protocol("intent-action", "ipc", "Android implicit intent by action: Intent(\"com.x.ACTION\") / setAction -> "
+                  "manifest intent-filter or IntentFilter receivers", fanout=True))
+register(Protocol("aidl", "ipc", "Android AIDL interface method <package.IFace>.<method>: proxy call -> the IFace.Stub "
+                  "implementation"))
+
 # ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)
 register(Protocol("tcp", "tcp", "Raw TCP socket: connect -> listener on the same port (listen / bind vs connect; "
                   "bind address and exposure on the listener)"))
