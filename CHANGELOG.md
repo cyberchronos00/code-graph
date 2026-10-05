@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-05
+
 ### Added
 
 - Workspace linking (#160): `cg link --repo NAME=DB[:role]` merges any number of graphs into one
@@ -40,6 +42,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `vectorized/redpanda`, `wurstmeister/kafka` (and service-name tokens that match only those broker
   images — not kafka-ui / kafdrop / kafka-exporter / schema-registry). A compose broker (kafka, rabbitmq,
   nats, redis, mqtt) with no matching client is listed with `source=compose` and no CONNECTS_TO.
+
+### Changed
+
+- Docs rewritten for scanning: shorter pages (CLI reference 1124 to 177 lines, protocols hub 756 to 183),
+  Kotlin as the language-page template for Swift and Native, install paths as tabs, page-titled link text,
+  and a short "How we validate" page with the full corpus record moved to `docs/validation-log.md`.
+  `tests/test_docs_links.py` fails on file-name link text and dead anchors.
 
 ## [0.12.0] - 2026-10-05
 
@@ -1393,7 +1402,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/cyberchronos00/code-graph/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/cyberchronos00/code-graph/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cyberchronos00/code-graph/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/cyberchronos00/code-graph/compare/v0.10.0...v0.10.1

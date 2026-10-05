@@ -23,7 +23,7 @@ const reasons = [
   {
     icon: 'i-lucide-waypoints',
     title: 'Boundaries',
-    text: 'Routes, calls, tables, config keys and platform edges share one index.'
+    text: 'Routes, calls, tables, config keys and platform edges share one index, across as many repos as you link.'
   }
 ]
 </script>
