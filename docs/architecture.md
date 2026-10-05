@@ -1,320 +1,120 @@
 # Architecture
 
-How code-graph is put together: the codemap, the plugin interface, how queries walk the graph, and the TypeScript/Nuxt and cross-repo pieces.
+An index is a deterministic graph in SQLite. Queries, MCP, and the visual view read that graph.
+What each language extracts lives on its own page. This page is the pipeline and the rules every plugin shares.
 
 ## Invariants
 
-These hold everywhere in the code base; a change that breaks one is a design change, not a bug fix.
+These hold everywhere in the code base. A change that breaks one is a design change.
 
-- **Deterministic edges.** Every edge comes from a parser, the type checker or a named rule, so the same code always
-  gives the same graph.
-- **Edges carry evidence.** The `file:line` of the code that produced them, plus a confidence level (`exact`, `resolved`, `heuristic`).
-- **Static analysis.** The indexer works from source files alone, so it is safe on any checkout: the app, its code
-  and its databases stay untouched.
+- **Deterministic edges.** Every edge comes from a parser, the type checker, or a named rule. The same code gives the same graph.
+- **Edges carry evidence.** The `file:line` that produced the edge, plus a confidence: `exact`, `resolved`, or `heuristic`.
+- **Static analysis.** The indexer reads source files. The app, its code, and its databases stay untouched.
 - **Plans are overlays.** Loading or checking a plan leaves the graph DB unchanged.
-- **Read-only serving.** The MCP server and the visual view only read the graph (except the MCP `index` tool, which
-  rebuilds it from source).
+- **Read-only serving.** MCP and the visual view only read the graph. The MCP `index` tool rebuilds it from source.
 
-## Codemap
+## Index, store, query
 
-```
-codegraph/
-  core/model.py      node/edge kinds, confidence levels, entry-point kinds
-  core/store.py      SQLite schema + writer
-  core/plugin.py     Project, GraphBuilder, LanguagePlugin, FrameworkPlugin
-  core/detect.py     language/framework detection from project files
-  core/paths.py      shared skip lists and .cg.yaml exclude globs as one PathRules object for every walk
-  presets/           curated per-language and per-framework data (auth / secret guards, skip lists, plan settings)
-  plugins/php/       PHP language plugin
-     extractor/extract.php   nikic/php-parser AST -> JSON facts (one PHP process for the whole project)
-     plugin.py               symbol tables, name resolution, type inference, call resolution, hook API
-     gating.py               gate scenarios (feature-flag pruning)
-  plugins/laravel/   Laravel framework plugin (sits on PHP): routes, migrations, models, connections,
-                     config/env, commands, scheduler, jobs, events/listeners, bindings, middleware, Filament,
-                     value facts (values.py)
-  plugins/scip/      generic SCIP importer (any SCIP indexer -> same node ids)
-  plugins/ts/        TypeScript/Vue language plugin
-     extractor/extract.mjs   TS compiler API + @vue/compiler-sfc -> JSON facts (one Node process per project)
-     extractor/fw.mjs        framework-neutral facts for the TS server layers (decorators, router calls, instances, ...)
-     plugin.py               facts -> nodes/edges, client URL normalisation, http endpoint nodes, facts cache
-  plugins/nuxt/      Nuxt framework plugin (sits on TS): .nuxt tsconfig/auto-imports/components, page routes,
-                     layouts, entry kinds, i18n keys
-  plugins/ts/nav.py  Nuxt / Vue NAVIGATES_TO (NuxtLink, RouterLink, router.push, navigateTo, vue-router pages)
-  plugins/native/    shared by Rust and C/C++: SCIP reader (scipread.py), tree-sitter helpers (ts.py), cached
-                     indexer runner (runner.py), cfg/feature/#if gate evaluation (gates.py)
-  plugins/rust/      Rust language plugin: cargo.py (workspace/packages/targets/features), syntax.py (tree-sitter
-                     items, impls, cfg, unsafe, FFI, env, routes), plugin.py (rust-analyzer SCIP -> exact edges,
-                     heuristic resolver fallback, trait dispatch, entry points)
-  plugins/cfamily/   C/C++ language plugin: syntax.py (tree-sitter items, includes, #if regions, getenv, macro
-                     masking), plugin.py (compile database, scip-clang -> exact edges, heuristic fallback,
-                     virtual dispatch, entry points)
-  plugins/python/    Python language plugin (stdlib `ast`, no Python env needed): modules/classes/functions, import
-                     resolution (relative, `__init__` re-exports, aliases), type inference for calls, hook API;
-                     roots.py detects source roots (packaging config, src/lib/python, nested projects, namespace
-                     packages, package parents) and picks one module name per file from the project's imports
-  plugins/django/    Django framework plugin (sits on Python): urls.py (path/re_path/include/namespaces), django-ninja
-                     (NinjaAPI, Router, add_router, operations, auth, Schema/ModelSchema), DRF (routers, ViewSets,
-                     @action, APIView, serializers), models -> tables/columns/relations, ORM reads/writes, settings +
-                     env (os.environ/getenv/django-environ), signals, Celery, Channels, management commands, admin;
-                     shapes.py builds response shapes from returned dict literals / schemas
-  plugins/dart/      Dart language plugin
-     extractor/bin/extract.dart  package:analyzer (parse only, no pub get) -> JSON facts; compiled once to .bin/
-     program.py              libraries/parts/exports, import prefixes, type inference, call resolution
-     http.py                 HTTP client calls (package:http, Dio + BaseOptions, dart:io HttpClient/WebSocket,
-                             Retrofit/Chopper annotations), URL templates, body keys, response parsing
-     models.py               json_serializable / freezed (.g.dart or annotations) and hand-written fromJson/toJson keys
-  plugins/flutter/   Flutter framework plugin (sits on Dart): widgets/State, bloc/cubit events -> handlers -> emitted
-                     states -> UI handling (`state_flow`), Navigator / go_router / auto_route pages, entry kinds
-  plugins/tsweb/     helpers shared by the TS server layers: path templates, route nodes, env/config, ORM tables,
-                     in-repo client -> route links
-  plugins/nest/      NestJS framework plugin (sits on TS): modules, routes, DI, enhancers, jobs/events/messages, CLI
-  plugins/nextjs/    Next.js framework plugin (sits on TS): app + pages router, route handlers, server actions, middleware
-  plugins/express/   Express / Fastify / Koa / Hono plugin (sits on TS): routes, mounting chains, middleware
-  plugins/stubs/     SCIP-indexer recipes for Go and Java (untested stubs)
-  indexer.py         detect -> language plugins (+framework hooks) -> framework contribute -> completeness -> store -> entry tagging
-  config.py          project config file (.cg.yaml at the indexed root): loading, validation, `cg config show`
-  starters.py        starter queries derived from the graph (CLI, MCP, the visual view's landing page)
-  coverage.py        per-language parser mode + file completeness, unsupported source types, scoped completeness of answers
-  blindspots.py      index-time detectors for route / handler registrations no plugin models (file:line samples)
-  link.py            cross-repo link: backend DB + frontend DB -> combined DB with MATCHES_ROUTE edges
-  payload.py         request/response field check for linked calls (client JSON keys vs server schema/shape)
-  query.py           reaches / impact / writers / siblings / downstream / path / api_calls
-  concepts.py        the `resolutions` concept query
-  plans.py           planned-change layer (plan files, checks, verify, baseline)
-  mcp_server.py      MCP stdio server over any graph DB (incl. combined)
-  viz/               local read-only web view (graph.py, server.py, static/)
-  cli.py
-examples/            sample apps, gate scenario, example plan
-tests/               fixtures + tests on the sample apps, MCP end-to-end client
+```text
+source files
+    │  detect languages and frameworks
+    ▼
+language plugin.index()
+    │  framework hooks, then framework.contribute()
+    ▼
+GraphBuilder  →  SQLite (core/store.py)
+    │
+    ├── query.py      reaches, impact, path, writers, readers
+    ├── link.py       frontend DB + backend DB → one DB
+    ├── plans.py      overlay checks (the DB stays unchanged)
+    ├── mcp_server    stdio; read-only except index
+    └── viz/          local read-only web view
 ```
 
-### Plugin interface
+| step | who | result |
+|---|---|---|
+| detect | `core/detect.py`, then `.cg.yaml` `frameworks.add` / `remove` | the active languages and frameworks |
+| index | `LanguagePlugin.index` | syntax nodes, calls, a per-file report |
+| hooks | `FrameworkPlugin.register_hooks` | type rules and fact handlers, before resolution |
+| contribute | `FrameworkPlugin.contribute` | framework nodes and edges |
+| finish | `indexer.py` | completeness, entry tags, the SQLite write |
+
+Marker files include `composer.json`, `package.json`, `Cargo.toml`, `pyproject.toml`, and `Package.swift`.
+Presets in `presets/` supply guard names and skip lists (common, then language, then framework) and are stored in graph meta. `routes` reads them back.
+
+`core/paths.py` is the one skip list and `.cg.yaml` exclude set.
+Every plugin and the coverage scan use it, so the same rules decide what is indexed and what `cg coverage` counts.
+
+`GraphBuilder.add_node(kind, key, …)` gives the id `kind:key`. `add_edge` stores the edge with its evidence.
+
+After `index()`, a plugin may set `self.file_report` (repo-relative paths):
+
+| key | meaning |
+|---|---|
+| `seen` | files that became nodes |
+| `parse_failed` | syntax errors |
+| `skipped_oversize` | over the size limit |
+| `unmapped` | parsed, not placed in the module table |
+| `excluded` | left out by skips or exclude globs |
+| `roots` | directories (ending in `/`) and files the plugin reads |
+
+`coverage.py` buckets every discovered file of that language from the report ([completeness.md](completeness.md)).
+A file missing from `seen` counts as excluded, or as unmapped when the report has `roots` and the file sits under none of them.
+
+## Plugins
 
 ```python
 class LanguagePlugin(ABC):
     name: str
     def detect(self, project: Project) -> bool
-    def index(self, project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict  # stats
+    def index(self, project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict
 
-class FrameworkPlugin(ABC):           # e.g. Laravel on PHP, Nuxt on TypeScript
+class FrameworkPlugin(ABC):    # Laravel on PHP, Django on Python, Nuxt on TypeScript
     name: str; language: str
     def detect(self, project) -> bool
-    def register_hooks(self, lang_ctx) -> None    # before resolution: type rules + fact handlers
-    def contribute(self, project, builder, lang_ctx) -> dict   # after: framework nodes/edges
+    def register_hooks(self, lang_ctx) -> None
+    def contribute(self, project, builder, lang_ctx) -> dict
 ```
 
-- After `index()`, a language plugin may leave a per-file report in `self.file_report`: `{"seen": [...], "parse_failed":
-  [...], "skipped_oversize": [...], "unmapped": [...], "excluded": [...]}` (repo-relative paths). `coverage.py` buckets
-  every discovered file of the language from it ([completeness.md](completeness.md)); a discovered file missing from
-  `seen` counts as excluded, or as unmapped when the report has `roots` (directories ending in `/` and files the
-  plugin reads, as TypeScript gives) and the file is under none of them.
-- `GraphBuilder.add_node(kind, key, name, fqn=, file=, line=, end_line=, module=, doc=, lang=, attrs=)` gives the stable
-  id `kind:key`. `add_edge(src, dst, kind, file=, line=, confidence=)` records the edge with its evidence.
-- The PHP context (`PhpProgram`) offers hooks so frameworks can add language-level knowledge without forking the resolver:
-  - **type rules** map an expression to a type, e.g. `Model::query()` gives `builder:Model`, `$model->relation` gives the
-    related model, `app(X::class)` gives `X`;
-  - **fact handlers** turn resolved facts into framework edges, e.g. `->where('col')` on `builder:Model` produces
-    READS_COLUMN on the model's table and `DB::connection('x')` produces USES_CONNECTION.
-- **SCIP path:** for languages with a SCIP indexer (scip-clang, rust-analyzer, scip-go, scip-typescript, scip-python,
-  scip-java), a `ScipIndexerPlugin(language, markers, command)` wraps the indexer and `plugins/scip/importer.py` maps
-  SCIP symbols to the same `kind:FQN` ids, so framework plugins can attach to them. `index --scip FILE` merges an
-  existing SCIP index into the native graph.
-- **Detection** (`core/detect.py`) looks for marker files: composer.json/artisan (php, laravel; filament via composer
-  require), package.json/tsconfig (js/ts), nuxt.config.* or a `nuxt` dependency (nuxt), vue, Cargo.toml, go.mod,
-  CMakeLists.txt/compile_commands.json, pyproject/requirements, pom.xml/build.gradle.
-- **Setup** (`indexer.setup`): detection, then `.cg.yaml` `frameworks.add` / `remove`, then the presets for the active
-  languages and frameworks (`presets.select`, merged common -> languages -> frameworks). Every plugin and the coverage
-  scan take their directory skips and `exclude` globs from `core/paths.rules(...)`, so one list decides what is
-  indexed and what coverage counts. The applied presets and the config's patterns are stored in the graph meta;
-  `routes` reads them back (`routes.guard_setup`).
+A framework teaches the host resolver, then adds its own nodes.
 
+| hook | example |
+|---|---|
+| type rule | `Model::query()` → `builder:Model`; `app(X::class)` → `X` |
+| fact handler | `->where('col')` on that builder → `READS_COLUMN`; `DB::connection('x')` → `USES_CONNECTION` |
 
-## Rust and C/C++ plugins
+Compiler indexes (rust-analyzer, scip-clang, scip-java, the Swift index) match SCIP occurrences onto the syntax-layer nodes by file, line, and name.
+Ids stay the same in heuristic and exact mode. `cg index --scip FILE` merges an existing index.
+Go and Java have indexer recipes only (`plugins/stubs`).
 
-Both use the same two layers (details and env vars in [native.md](native.md)):
+Per-language facts: [python.md](python.md), [php.md](php.md), [ts-frameworks.md](ts-frameworks.md), [kotlin.md](kotlin.md), [swift.md](swift.md), [native.md](native.md).
 
-1. **Syntax (tree-sitter).** Every definition becomes a node with a stable key: the Rust path or the C++ qualified
-   name, with a file prefix for file-local items. This layer also produces every fact a compiler index doesn't
-   carry: cfg / `#if` regions, `unsafe`, FFI, env reads, routes, attributes, and entry kinds.
-2. **References.** In exact mode, rust-analyzer or scip-clang writes a SCIP index (cached by source fingerprint).
-   Each SCIP definition is matched to a syntax item by (file, line, name), and each reference occurrence is
-   attributed to the innermost item whose range encloses it. The edge kind comes from the target's kind (CALLS,
-   USES_TYPE, ACCESSES_FIELD, USES_VALUE, REFERENCES_FN). Without an index, a scope-aware name resolver
-   (imports / `use`, the module tree, receiver type hints, unique-name fallback) produces the same edges, labelled
-   `heuristic`. Node ids are identical in both modes.
+## Queries
 
-Dispatch: trait and virtual method calls land on the declaring method. IMPLEMENTED_BY / OVERRIDDEN_BY edges then
-fan out to every impl or override, so `reaches` on an impl method includes the callers that go through the trait.
-`impact` reads these hops as the override relation, not as calls: the base method is shown as `overrides:` instead
-of a caller, its callers count `via base`, and `impact` on a base method adds the callers of its overrides
-(`via override`), the calls that a plugin loop or a base-typed value make on the concrete overrides. `tests` and
-`reaches` seed their walk the same way (the override's tests and dependents, marked `via override`). TypeScript
-classes get the same edges from the extractor: EXTENDS / IMPLEMENTS between project classes, OVERRIDDEN_BY from the
-nearest base class member to the override, IMPLEMENTED_BY from a class used with `implements` to the method that
-implements it. Interface members are nodes too (`method:<file>#FeedAPI.fetch`, `attrs.signature`): method
-signatures of every interface / object type alias, function-typed properties of interfaces a project class or
-object literal implements. A call on an interface-typed value (`api.fetch()` with `api: FeedAPI`) targets the member, and
-IMPLEMENTED_BY links it to the class members implementing it: `implements` (also through the class's base classes
-and the interface's `extends`), and structurally (`resolved`, `via: structural`, `at`) where `new X()` is used as
-the interface (a typed variable, an argument, a return value) without `implements` or where a class is passed as
-a value in place of a constructor of the interface (`register(Following)` with `register(c: new () => FeedAPI)`).
-An object literal where the interface is expected (`const api: FeedAPI = { fetch() {..} }`, a factory returning
-one, an argument, `satisfies`) links its function members (`exact`, `via: object_literal`); a union of interfaces
-does not. Mixins (`class Client extends mix(Base).with(Users, Posts)` or `Users(Posts(Base))` with
-`const Users = (b) => class extends b {..}`, merged with `interface Client extends UsersMix, PostsMix`): the mixin
-class members implement the merged interface's members (`resolved`, `via: mixin`, `at` the class). A
-method-to-method container
-binding (Nest `{ provide: Abstract, useClass: Impl }`, Laravel `bind`) is a dispatch hop like IMPLEMENTED_BY: the
-abstract method is shown under `overrides:`, not as a caller of the implementation.
+| command | walk |
+|---|---|
+| `reaches` | propagating edges in reverse; depth recorded; shortest evidence path per dependent (`KIND @file:line [confidence]`); grouped by entry kind and module |
+| `impact` | that walk from a method, stopping at entry points |
+| `writers` / `readers` | `WRITES_*` / `READS_*` edges for a table or a stored property |
+| `siblings` | the same method on sibling types; other users of the same tables, columns, config keys, and connections; co-callers by Jaccard similarity of callee sets |
+| `path` | one shortest chain between two specs |
 
-## How `reaches` works
-1. A recursive CTE walks propagating edges in reverse from the target(s), with an optional minimum confidence, and
-   records the depth.
-2. For each dependent method, a BFS rebuilds the shortest evidence path to the target (each hop has
-   `KIND @file:line [confidence]`).
-3. Results are grouped by entry classification and module, along with the entry points reached. With a gate scenario
-   indexed, dependents that are only reached through gated code are listed in a separate GATED group (see [configuration.md](configuration.md#gate-scenarios---gates)).
+Override hops are the override relation: `impact` shows `overrides:` and `(via override)`, and `tests` / `reaches` seed the same way.
+With a gate scenario indexed, dependents reached only through gated code sit in a GATED group ([configuration.md](configuration.md#gate-scenarios---gates)).
+Specs: [cli.md](cli.md#query-targets-specs).
 
-`impact <method>` is the same reverse walk from a method, stopping at entry points. `writers <table>` lists the
-WRITES_TABLE/COLUMN edges. `siblings <symbol>` lists the same method in sibling classes (same parent, interface or
-trait), other users of the same tables, columns, config keys and connections, and co-callers ranked by Jaccard
-similarity of their callee sets.
+## Cross-repo link
 
-## TypeScript / Vue / Nuxt plugin
-`plugins/ts` (language) + `plugins/nuxt` (framework), behind the same `LanguagePlugin`/`FrameworkPlugin` interface as PHP/Laravel.
+`cg link --backend API.db --frontend WEB.db --db OUT` copies both graphs into one SQLite DB.
+Ids keep their language-specific shapes. `file` gains a repo prefix and `attrs.repo` is set.
+The command adds `MATCHES_ROUTE` from client `http:` endpoints to backend `route:` nodes, then recomputes entry tags over the union.
+`impact`, `downstream`, and `path` then cross both repos.
 
-- **One TS program for the project.** The Nuxt plugin points the extractor at `.nuxt/tsconfig.app.json` (generated by
-  `nuxi prepare`), so `paths` aliases (`~`, `@`, `#imports`) and Nuxt auto-imports (`.nuxt/types/imports.d.ts`: composables,
-  utils, stores, Vue/Nuxt APIs) resolve through the real type checker. Global components come from `.nuxt/types/components.d.ts`.
-  Without `.nuxt` (a clean checkout) it writes stand-ins to a temp directory: a `tsconfig.app.json` with the Nuxt aliases,
-  auto-imports from `composables/` `utils/` `stores/` plus `imports.dirs` / `imports.imports` in `nuxt.config` (and local layers),
-  `types/imports.d.ts` declaring those exports (plus Vue / Nuxt / Pinia built-ins
-  when `node_modules` has them) and `types/components.d.ts` with Nuxt's path-prefixed component names, and warns that
-  `npx nuxi prepare` gives the full picture. The source directory is `srcDir`, else `app/` or `src/` when they hold Nuxt
-  directories, else the root.
-- **Monorepos without a root tsconfig.** When the root has a `package.json` but no `tsconfig.json` / `jsconfig.json`,
-  the tsconfig of each package (a directory with `package.json` and `tsconfig.json`, one level down or under a
-  `packages/`-style directory) joins one program: their file lists are merged, the first package's compiler options
-  are used without `rootDir` / `outDir` / `baseUrl`, each package's `paths` keep absolute targets, and the package
-  directories are the source dirs (`stats.config.package_tsconfigs`).
-- **Plain JavaScript packages.** With no `src/` or `app/`, no package tsconfigs and no config file list to take source
-  dirs from (eslint: `lib/` + `bin/`, no `tsconfig.json`), the `package.json` entry points name them: `main`,
-  `module`, `bin`, `exports` and `files` entries in a sub-directory make that top directory a source dir, one at the
-  root (`index.js`) is a source file; `dist/`-style build output stays skipped. Beside source dirs, a `bin` script
-  outside them (`bin/cli.js` next to `src/`) is a source file, so a test that runs it in a subprocess has a module
-  node to link to (#94). So is a script outside every source dir that a test runs (`spawnSync('node',
-  [path.join(__dirname, '..', 'tools', 'gen.js')])`, `execSync('node scripts/seed.mjs')`; read from the call's
-  literals and the last assignment of a name it passes; scripts inside test trees stay test code; #106). A root
-  `jsconfig.json` alone also enables the TypeScript plugin.
-- **Plain JavaScript without any config (#136).** A project that none of the cases above picks up (no tsconfig /
-  jsconfig, no typescript dependency, no package tsconfigs, no server framework, no Cordova / Laravel asset dirs) is
-  still indexed when it holds JS program files: `.js` / `.mjs` / `.cjs` / `.jsx` files with `require` / `import` /
-  `export` / `module.exports`, looked up three levels deep outside the preset skip dirs, tests, docs, examples,
-  static assets and build output. Build-tool configuration (`webpack.config.js`, `eslint.config.js`, `Gruntfile.js`,
-  `*.min.js`, ...) does not count. The top directories holding them (or `.`) become source dirs of a synthesized
-  `allowJs` program, and the plugin stats say so (`plugins.typescript.program`: `synthesized`, `reason`,
-  `src_dirs`). A root with another language's markers (`pyproject.toml`, `composer.json`, `Cargo.toml`, `go.mod`,
-  ...) gets this program only when its `package.json` declares a `main` / `bin` / `exports` entry that exists, so
-  JS tooling and static files next to a Python / PHP / Rust project start no program. Without a `package.json`,
-  two module files at the root are needed.
-- **TypeScript in a sub-directory of a non-JS repo.** A root with no `package.json` at all (a Swift / Kotlin / Rust /
-  Dart app with a `web/` directory) is handled the same way, with every `tsconfig.json` one or two levels down,
-  `package.json` next to it or not. A PHP or Python backend root (`composer.json`, `pyproject.toml`, `manage.py`,
-  `requirements.txt`, ...) is left out: index its frontend directory on its own and combine the graphs with `cg link`.
-- **Vue SFCs** are parsed with `@vue/compiler-sfc`. Each `.vue` becomes a virtual `X.vue.ts` in the program: `<script>` /
-  `<script setup>` text stays at its original offsets (other bytes blanked, so line numbers are 1:1), and every template
-  expression / `v-on` handler is appended as a stub function (v-for / slot scope variables become `any` params) with a line map back
-  to the template. Component tags become RENDERS edges: `exact` when imported in the SFC, `resolved` via the Nuxt components map;
-  library tags (Nuxt UI `U*`, `NuxtLink`, ...) are counted but not nodes.
-- **Symbol resolution** uses the checker (aliases, re-exports, destructuring `const { fetchX } = useApi()` via the type of the
-  pattern, shorthand properties, Pinia actions through `defineStore` types). Calls go to the declaring function node;
-  references inside a `.vue` are attributed to the component/page node.
-- **Nodes:** `module:<file>`, `page|component|layout|app:<file>.vue` (page `name` = route from file-based routing: `[id]`→`:id`,
-  `index`, `(group)`, `[...slug]`), `composable` (top-level `use*` in `composables/`), `store` (`defineStore`, attrs.store_id),
-  `function|class|type:<file>#<qualified name>` (functions nested in composables are `useX.fn`), all with JSDoc in `doc`.
-  i18n: `i18n:<key>` with `defined_in` (locale files + `<i18n>` SFC blocks); `t()/$t()` literal keys give USES_I18N.
-  `definePageMeta({ layout })` gives USES_LAYOUT (else the default layout).
-- **HTTP calls** (`$fetch`, `useFetch`, `useLazyFetch`, `ofetch`, `fetch`, axios static/instance methods, detected by the
-  callee's type `AxiosInstance`/`AxiosStatic`, so custom API clients wrapping axios are covered): the URL is folded to a
-  template by a deterministic string evaluator (template literals, `+`, consts, `let` initialisers, string-literal-union types
-  (expanded, e.g. `export.${format}` → csv/xlsx), const object maps, function returns, `encodeURIComponent`/`String`/`trim`,
-  `runtimeConfig.X` / `useRuntimeConfig().public.X` / `$config.X` → `{runtimeConfig.X}`, `process.env.X` / `import.meta.env.X`
-  → `{env.X}`, `computed(() => …).value`); unresolvable parts become `{name}` placeholders. The instance's `baseURL` is
-  traced to `axios.create({ baseURL })`, `$fetch.create` / `ofetch.create` / `ky.create` (also through factory functions and
-  Nuxt auto-imports). Config placeholders are then looked up (`plugins/ts/baseurl.py`): real `.env` files and
-  `NUXT_PUBLIC_*` overrides, then the `runtimeConfig` default or a `||` / `??` default in code, then `.env.example`. A
-  found value's path is prefixed to the endpoint (`attrs.base` records value and source); `link` retries without it when
-  the prefixed path matches no route. If the URL depends on a parameter of the enclosing function, it is expanded at each call site
-  (one level, attrs.via_helper). Query/body keys (`params`, `query`, `body`, `data`; object literals, vars and later property
-  assignments, keys set under an `if` flagged `conditional`) go into attrs, and the object keys passed to HTTP-issuing functions
-  are recorded on the CALLS edge (`arg_keys`).
-- **Endpoint nodes:** `http:<METHOD> <path>`: scheme/host and the API origin placeholder are stripped, the query string is dropped.
-  Each HTTP_CALLS edge keeps `url`, `base`, `client`, `expr`, `origin` (`api` = base of an axios instance, `other`, `unknown`,
-  `same-origin`), `query_keys`, `body_keys`.
-- **Realtime and tests:** Echo / pusher-js subscriptions become `channel_sub` nodes; test files (Vitest, Jest, Playwright,
-  Cypress) are extracted with the rest and their edges rewritten to `TEST_*` kinds by `codegraph/tests_index.py`
-  (`page.goto` / `cy.visit` → `TEST_VISITS`). See [channels-and-tests.md](channels-and-tests.md).
-- **Discovery** skips dangling symlinks with a per-file warning and does not follow symlinked directories.
-- **Facts cache:** extractor output is cached in `~/.cache/codegraph/ts/` keyed by the cache version, the extractor code + lockfile,
-  the config, and (path, size, content hash) of every project file outside `node_modules` (incl. `.nuxt` and the lockfile), so
-  any content change re-runs the extractor, even one that keeps the file size and mtime. `CODEGRAPH_NO_CACHE=1` disables it.
-
-## TypeScript server and full-stack frameworks
-`plugins/nest`, `plugins/nextjs` and `plugins/express` sit on the same TS program. `extractor/fw.mjs` emits generic facts
-(decorators with described arguments, router-style calls, instances and their initialisers, exports, directives, env reads),
-and the Python layers turn them into routes, DI edges and entry points. Details, path notation and validation numbers:
-[ts-frameworks.md](ts-frameworks.md).
-
-## Cross-repo link (combined DB)
-`codegraph.cli link --backend out/api.db --frontend out/web.db --db out/graph.db [--report out/api_matches]`
-copies both graphs into one SQLite DB (ids don't collide: PHP and TS ids use different key shapes; `file` gets the repo prefix,
-`attrs.repo` is set) and adds `MATCHES_ROUTE` edges `http:<METHOD> <path>` → `route:<METHOD> <uri>`. All queries then work across
-both repos (`impact` on a controller method lists `ui_page` entry points; `downstream`/`path` from a page go through to tables).
-Entry tagging (`node_entry`, `node_entry_live`) is recomputed over the union; gate predicates are kept.
-
-Matching (deterministic, `codegraph/link.py`):
-- method must match (`ANY`, `GET|HEAD` allowed); routes from `routes/api.php` are also tried with the `/api` prefix;
-- segment by segment: literal = literal; client placeholder ↔ route `{param}`; client literal → route `{param}` (counts as
-  `resolved`); route segment with embedded params (`export.{format}`) matches literals by pattern; a client segment with an
-  embedded placeholder fitting a route literal is `heuristic`; at least one literal segment must agree;
-- best candidate = fewest heuristic fits, then most literal agreements; a tie is reported as ambiguous (heuristic);
-- confidence: `exact` (all segments literal/param-to-param, base traced to the API client), `resolved` (literal into a param),
-  `heuristic` (embedded fits, ties, or the base was not traced: origin `unknown` → suffix match against route URIs);
-- catch-all route segments (`{rest*}` one or more, `{rest*?}` zero or more) absorb the remaining client segments;
-  with origin `unknown`, suffix candidates are ranked by literal agreement before parameter fits;
-- unmatched reasons: dynamic URL, other origin (not the API), same-origin relative URL, method mismatch, no route.
-The report (`.md` + `.json`) lists every endpoint with its call sites, match, confidence and evidence (`routes/api.php:<line>`).
+Matching (`codegraph/link.py`) is deterministic: the method must agree, then each path segment.
+A literal fitted into `{param}` is `resolved`. Catch-alls absorb the tail. The best candidate has the fewest heuristic fits, then the most literal agreements; a tie is ambiguous.
+`exact` means the segments agree and the client base was traced. An unknown origin is a suffix match at `heuristic`. The report lists every endpoint with its match and evidence.
 
 ### Payload / field check
-For every client endpoint with a single route match, `codegraph/payload.py` compares what the client sends and parses with
-what the server declares or returns, and writes the result to the `payload_checks` table of the combined DB (plus a report section):
-- client side: request body keys with types (map literals incl. collection-`if`/spread, `jsonEncode`, `toJson()` of a model,
-  local map writes), and response parsing (keys read from the decoded JSON, `X.fromJson` models with the JSON path they
-  are applied at, e.g. `data.items[]`, status-code checks);
-- server side: ninja `Schema`/`ModelSchema` fields (type, nullability, required, aliases), DRF serializer fields, and
-  response *shapes* derived from the returned dict literals / helpers / `Schema.from_orm` (per status code);
-- issues: `trailing_slash` (ninja does not redirect, so high), `request_missing_required`, `request_unknown_field`,
-  `request_case_mismatch`, `request_type`, `request_nullability` (an explicit `null` vs. an omitted key),
-  `request_body_missing`, `response_missing_key`, `response_case_mismatch`, `response_type`, `response_nullability`,
-  `response_enum_values`, `status_code`. Each carries `file:line` on both sides.
-Error envelopes (`*Error*` models) are compared with every shape, including non-2xx; success models only with 2xx shapes.
 
-## Python / Django plugin
-Parsing uses the stdlib `ast` module (any Python 3 syntax the running interpreter understands); no project environment
-or import of the project is needed. Every `.py` file is parsed first; then `roots.py` chooses the source roots (detected,
-or `python.source_roots` from `.cg.yaml` / `--python-root`) and one canonical module name per file, with the other
-importable names kept as aliases ([python.md](python.md)). Call resolution: local/imported names (relative imports, `__init__` re-exports,
-`import a.b as c`), `self`/`cls` methods with MRO, annotated params/returns, constructor results, `super()`, a few
-container generics; otherwise a unique-method-name fallback labelled `heuristic`. `sync_to_async(f)(...)` and similar wrappers
-count as calls to `f`. Django entry kinds: `http_route` (urls/ninja/DRF), `websocket` (Channels), `queue_job` (Celery
-tasks), `listener` (signal receivers), `management_command` and `admin_panel` (operator).
-
-## Dart / Flutter plugin
-The extractor is a small Dart program using `package:analyzer` in parse-only mode (no `pub get` of the target project,
-no resolution), compiled with `dart compile exe` (rebuilt when the extractor source or lockfile hash changes); its facts are
-cached in `~/.cache/codegraph/dart`, keyed by the cache version, the config and the content hash of every `.dart` / `.yaml` / `.env*` file.
-Resolution is done in Python (`program.py`) from imports (`package:` via every `pubspec.yaml` name, relative, `part`/`part of`,
-`export show/hide`, prefixes). URLs are evaluated statically: string interpolation becomes `{param}`, constants/getters/
-constructor-provided fields are followed, `String.fromEnvironment`/`dotenv` become `{env:NAME}` (values from `.env` files
-are recorded), helper wrappers (`get(path: ...)`) are expanded at their call sites.
-
+For a client endpoint with one route match, `codegraph/payload.py` compares the keys the client sends and parses with the server schema or the returned shape, and writes `payload_checks` (each issue has `file:line` on both sides).
+Ambiguous matches are skipped. Kind names: [schema.md](schema.md).
