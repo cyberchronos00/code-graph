@@ -294,6 +294,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (ipcst := apply_local_ipc(project, builder)):
         ipcst["seconds"] = round(time.time() - t_ipc, 2)
         stats["local_ipc"] = ipcst
+    # Unix domain sockets, named pipes / FIFOs and D-Bus (#38 part 2)
+    from .local_sockets import apply as apply_local_sockets
+    t_ls = time.time()
+    if (lsst := apply_local_sockets(project, builder)):
+        lsst["seconds"] = round(time.time() - t_ls, 2)
+        stats["local_sockets"] = lsst
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

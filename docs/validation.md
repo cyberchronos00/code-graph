@@ -1108,6 +1108,30 @@ above and the fixture's 4 sends plus the `cg link` pairing of `hooks-ts` `order.
 covers svix, spatie/laravel-webhook-server and hand-signed `fetch` / `requests` senders, event names from a caller's
 argument, and the pairing.
 
+## Unix sockets, named pipes / FIFOs and D-Bus (#38 part 2)
+
+| Project | Edges | Notes |
+|---|---|---|
+| zbus (shallow clone) | 37 SENDS_TO, 22 RECEIVED_BY, 27 TEST_CALLS (`dbus`) | `fdo` proxies (`org.freedesktop.DBus.*`, `#[zbus(name = "GetConnectionUnixProcessID")]` kept as written) and interfaces (`Properties.Get` / `Set` / `GetAll`, `ObjectManager.GetManagedObjects`, `Introspectable.Introspect`); signals sent by interfaces (`InterfacesAdded`, `PropertiesChanged`) and received by proxies (`NameAcquired`, `NameOwnerChanged`); the GeoClue client / service fixture crates meet on `org.freedesktop.GeoClue2.*`. Property setters (`set_x`) map to property `X`, `r#match` to `Match`. Interfaces inside `mod tests` and `tests/` are test-only |
+| tokio | 3 SENDS_TO, 4 RECEIVED_BY (`pipe`) | The `named-pipe*` examples: `ServerOptions::new().create(PIPE_NAME)` and `ClientOptions::new().open(PIPE_NAME)` on `r"\\.\pipe\named-pipe-single-client"` constants |
+| tonic | 2 SENDS_TO, 1 RECEIVED_BY (`unix`) | The `uds` example: `UnixListener::bind("/tmp/tonic/helloworld")`, `UnixStream::connect(path)` in a connector closure, and `GreeterClient::connect("unix:///tmp/tonic/helloworld")` |
+| libuv | 1 RECEIVED_BY, 2 test | `uv_pipe_bind(&server, PIPENAME)` in the pipe echo server docs example (the non-Windows `#define` value); tests connecting to a regular file and to a FIFO |
+| nodemailer | 1 test | `socketPath: '/var/run/docker.sock'` in a fetch test |
+
+No edge was removed anywhere. Unchanged: supervisor, redis, ansible, pip, opentelemetry-python, authentik, immich,
+open-webui, mini-redis, alacritty, beets, httpie, python-zeroconf, tauri, panel, coolify, express, flask, ws,
+electron-fiddle, jayson, openai-agents-python, request and mocha. Where these projects use Unix sockets, the path is
+known only at run time: supervisor, redis and alacritty read it from configuration or the command line, ansible
+derives it from a connection hash, and authentik's Rust server connects to gunicorn through
+`fn socket_path() -> PathBuf { temp_dir().join("authentik.sock") }` while gunicorn's bind is set in its config.
+These calls are counted under `unix_path_unknown` (alacritty 4, supervisor 5, ansible 4, authentik 7). Four errors
+found while reviewing the zbus output were fixed before landing: `fn`s nested in an interface method were taken as
+members, property setters became `SetX` members, `r#match` became `R`, and interfaces inside `mod tests` counted as
+application code. After those fixes, a random 20 of the 98 new edges then in libuv, tokio, tonic and zbus were checked by
+hand against the source, and all 20 were correct (tonic's `GreeterClient::connect` edge came later and was checked too). `tests/test_local_sockets.py` covers `tests/local_sockets_fixture`
+(Python socket / asyncio / socketserver / gRPC, Node `net` / `http`, Rust std / tokio / tonic / zbus, a FIFO and a
+named pipe, dbus-next) and `tests/local_sockets_c_fixture` (`sockaddr_un` + `bind` / `connect`).
+
 ## Local IPC in JS / TS (#38 part 1)
 
 | Project | Edges | Notes |

@@ -298,6 +298,23 @@ hands the message to (one level; the callee receives them, `via` the listener; t
 types of worker messages, and manifest exposure facts (`externally_connectable`, `web_accessible_resources`) are not
 recorded yet. Electron / Tauri IPC and web-to-native bridges are `cg bridges` (codegraph/bridges.py).
 
+## Unix domain sockets, named pipes / FIFOs and D-Bus (#38 part 2)
+
+`codegraph/local_sockets.py` links processes on one machine that talk over a socket path, a pipe name or a D-Bus
+member:
+
+| protocol | endpoint | listeners / services | connectors / clients |
+|---|---|---|---|
+| `unix` | `<path>` | Python `socket(AF_UNIX).bind(p)`, `asyncio.start_unix_server(cb, p)` (the callback), `socketserver.Unix*Server(p, Handler)` (`Handler.handle`), `multiprocessing.connection.Listener(p)`, `uvicorn.run(app, uds=p)`, aiohttp `UnixSite`; Node `server.listen(p)` / `.listen({ path })` with a path (a number stays `tcp`); Rust `UnixListener::bind` / `UnixDatagram::bind` (std, tokio); C `bind()` after `strncpy(addr.sun_path, p, ..)` / `snprintf`, `uv_pipe_bind`; PHP `stream_socket_server('unix://p')`; gRPC `server.add_insecure_port('unix:..')` | Python `socket(AF_UNIX).connect(p)`, `asyncio.open_unix_connection(p)`, `multiprocessing.connection.Client(p)`, aiohttp `UnixConnector(path=p)`, httpx `HTTPTransport(uds=p)`; Node `net.connect(p)` / `createConnection({ path })`, `http.request({ socketPath })`; Rust `UnixStream::connect`; C `connect()` after `sun_path`, `uv_pipe_connect`; PHP `stream_socket_client('unix://p')`; gRPC `unix:` targets (`grpc.insecure_channel('unix:///run/x.sock')`, tonic `Endpoint::try_from(..)` / `GreeterClient::connect(..)`) |
+| `pipe` | `<name>` | Windows named pipes `\\.\pipe\<name>`: tokio `ServerOptions::new()..create(p)`, Node `listen(p)`, C `CreateNamedPipe(p)`; FIFOs: `os.mkfifo(p)` / `mkfifo(p)` (the creating function receives) | tokio `ClientOptions::new()..open(p)`, Node `connect(p)`; FIFO writers: `open(p, 'w')`, `os.open(p, os.O_WRONLY)`, C `open(p, O_WRONLY)` / `fopen(p, "w")` on a path some code passes to mkfifo |
+| `dbus` | `<interface>.<Member>` | zbus `#[interface(name = "..")]` impl methods (snake_case -> PascalCase, `#[zbus(name = "..")]`), dbus-next / dasbus `ServiceInterface` `@method()`, dbus-python `@dbus.service.method('iface')`; `#[zbus(signal)]` / `@signal()` members are senders (`role: emit`) | zbus `#[proxy(interface = "..")]` trait methods, dbus-next `call_<member>` on `get_interface('iface')`, dbus-python `dbus.Interface(obj, 'iface').Member()`, GDBus `g_dbus_connection_call(.., "iface", "Member", ..)`, sd-bus `sd_bus_call_method` |
+
+Paths are read from literals, constants (same file, else a unique project constant, also through
+`os.path.join` / `path.join` / pathlib `/`), environment variables (`env:NAME`) and templates (`{run_dir}/app.sock`,
+heuristic); `unix` and `pipe` match templates. A listener records `mode` when its function chmods the path. A path
+that comes from configuration only is counted under `unix_path_unknown` in the index stats. Abstract sockets
+(`\0name`), socket activation (systemd `.socket` units) and D-Bus service files are not read.
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function
@@ -661,7 +678,7 @@ broker nodes (#40) on the endpoints, the repository's own wrapper classes (their
 
 ## Not covered yet
 
-- Message brokers beyond #35 part 1 (see above) and the rest of local IPC (#38: Unix sockets, named pipes, D-Bus, Android intents, child processes, Dart isolates, XPC); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
+- Message brokers beyond #35 part 1 (see above) and the rest of local IPC (#38: Android intents, child processes, Dart isolates, XPC); job queue frameworks beyond Celery / RQ / Dramatiq / Bull / Laravel / Messenger; Socket.IO in `.svelte` / `.vue` files, `ws` / SSE message names, rooms as their own endpoints, Python and Rust
   WebSocket clients (#147).
 - Guards on Bull processors are not recorded on the adapted `job` nodes, so `unguarded` is not checked for them.
 - `schema_mismatch` needs `schema` on both sides; no extractor records message types yet.

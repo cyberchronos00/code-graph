@@ -99,6 +99,14 @@ register(Protocol("extension", "local", "Browser-extension runtime messaging by 
 register(Protocol("native-messaging", "ipc", "Browser native messaging host: connectNative / sendNativeMessage -> the "
                   "in-repo program its host manifest names"))
 
+# ---- Unix domain sockets, named pipes / FIFOs, D-Bus (#38 part 2, codegraph/local_sockets.py)
+register(Protocol("unix", "ipc", "Unix domain socket by path: connect -> the listener bound to that path (literal, "
+                  "constant, env:NAME or a {dir}/x.sock template)", matcher=M.template))
+register(Protocol("pipe", "ipc", "Windows named pipe (\\\\.\\pipe\\<name>) or FIFO by name: open / connect -> the "
+                  "creating server", matcher=M.template))
+register(Protocol("dbus", "ipc", "D-Bus member <interface>.<member>: proxy call -> service method (zbus, dbus-next, "
+                  "dasbus, dbus-python, GDBus, sd-bus); signals are sent by the service", fanout=False))
+
 # ---- raw sockets (#39, codegraph/sockets.py): endpoint:tcp:<port> / endpoint:udp:<port> (env:<KEY> without a value)
 register(Protocol("tcp", "tcp", "Raw TCP socket: connect -> listener on the same port (listen / bind vs connect; "
                   "bind address and exposure on the listener)"))

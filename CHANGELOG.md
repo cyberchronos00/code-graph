@@ -10,6 +10,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Unix domain sockets, named pipes / FIFOs and D-Bus (#38, part 2) as `unix:<path>`, `pipe:<name>` and
+  `dbus:<interface>.<Member>` endpoints in `cg protocols`: Python socket / asyncio / socketserver /
+  multiprocessing / uvicorn / aiohttp / httpx, Node `net` / `http` `socketPath`, Rust std / tokio (also Windows
+  named pipes), C `sun_path` + `bind` / `connect` and libuv, PHP `unix://` streams, gRPC `unix:` targets; FIFOs from mkfifo to their
+  writers; zbus, dbus-next / dasbus, dbus-python, GDBus and sd-bus services, proxies and signals.
 - Local IPC in JS / TS (#38, part 1): Web Workers and SharedWorkers (both directions, comlink), service workers,
   `BroadcastChannel`, `window.postMessage` between windows / iframes (by message type, with the listener's origin
   check as a guard and `target_origin: "*"` on senders), browser-extension runtime / tabs messaging and ports,
