@@ -10,6 +10,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+## [0.12.0] - 2026-10-05
+
+### Added
+
 - Broker helper-parameter names and Kafka consumer constructor topics (#137): `routing_key=queue` inside a
   helper resolves through call-site arguments (module constants); `AIOKafkaConsumer(topic, ...)` /
   `KafkaConsumer(topic, ...)` become receives.
@@ -1358,7 +1362,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/cyberchronos00/code-graph/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/cyberchronos00/code-graph/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/cyberchronos00/code-graph/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/cyberchronos00/code-graph/compare/v0.9.0...v0.10.0
