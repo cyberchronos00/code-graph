@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Broker helper-parameter names and Kafka consumer constructor topics (#137): `routing_key=queue` inside a
+  helper resolves through call-site arguments (module constants); `AIOKafkaConsumer(topic, ...)` /
+  `KafkaConsumer(topic, ...)` become receives.
 - Broker topic / queue names from pydantic-settings and class field defaults (#157): `settings.events_topic`
   / `config.jobs_queue` (and `self.settings.*`) resolve through annotated class field defaults and
   `Field(default=...)`, so producers and consumers share `endpoint:kafka:<topic>` / `endpoint:amqp:queue:<name>`.

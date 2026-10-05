@@ -153,3 +153,14 @@ def test_settings_field_defaults(tmp_path):
     assert (E + "amqp:queue:jobs", "function:bus.worker.on_job") in rb
 
 
+def test_helper_param_and_consumer_ctor(tmp_path):
+    """routing_key=queue through call-site consts; AIOKafkaConsumer(topic, ...) (#137)."""
+    db = tmp_path / "settings-bus2.db"
+    index_project(FX / "settings-bus", db, "settings-bus")
+    st = _edges(db, "SENDS_TO")
+    rb = _edges(db, "RECEIVED_BY")
+    assert (E + "kafka:events", "function:bus.worker.run_events") in rb
+    assert rb[(E + "kafka:events", "function:bus.worker.run_events")][1].get("group") == "settings-bus-workers"
+    assert ("method:bus.tasks.TaskQueue._publish", E + "amqp:queue:jobs.a") in st
+    assert ("method:bus.tasks.TaskQueue._publish", E + "amqp:queue:jobs.b") in st
+    assert (E + "amqp:queue:jobs.a", "method:bus.tasks.TaskQueue.consume_a") in rb

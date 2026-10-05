@@ -1323,3 +1323,9 @@ Edge-only `ddiff` is silent for this step (attrs only). Leftover FPs / missed he
 `endpoint:kafka:events`; `default_exchange.publish(..., routing_key=settings.jobs_queue)` pairs with
 `declare_queue(settings.jobs_queue)` + `consume` on `endpoint:amqp:queue:jobs`. `self.settings.events_topic` on a
 wrapper class resolves the same way.
+
+## Broker helper parameters and consumer constructor topics (#137)
+
+`settings-bus` `TaskQueue._publish(queue, ...)` with callers passing module constants: five / two AMQP queue
+sends from the helper; `AIOKafkaConsumer(settings.events_topic, group_id=...)` is a kafka receive (no separate
+`.subscribe` needed).

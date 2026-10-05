@@ -420,6 +420,50 @@ class Scan:
             return next(iter(pref.items()))
         return None, None
 
+
+    def call_arg_values(self, file, fn, param_index, param_name):
+        """Resolved values passed as `param_name` (or by position) at call sites of `fn` (#137)."""
+        short = re.sub(r".*[.#]", "", fn or "")
+        if not short or short.startswith("<"):
+            return {}
+        vals = {}
+        files = [file] + [f for f in sorted(self.s.files) if f.endswith(".py") and f != file]
+        def_rx = re.compile(r"\b(?:async\s+)?def\s+" + re.escape(short) + r"\s*\(")
+        call_rx = re.compile(r"(?:self\.)?" + re.escape(short) + r"\s*\(")
+        for f in files:
+            t = self.s.text(f)
+            for m in call_rx.finditer(t):
+                if def_rx.search(t[max(0, m.start() - 24):m.end()]):
+                    continue
+                if self.s.masked(f, m.start()):
+                    continue
+                a = _args(t, m.end() - 1)
+                arg = _kw(a, param_name)
+                if arg is None:
+                    pos_args = [x for x in a if not re.match(r"\s*\*?\*?\w+\s*=(?!=)", x)]
+                    if param_index < len(pos_args):
+                        arg = pos_args[param_index]
+                if not arg:
+                    continue
+                v, c = self.value(f, m.start(), arg)
+                if v is not None and not _whole_ph(v):
+                    vals[v] = HEURISTIC if HEURISTIC in (vals.get(v), c) else (c or RESOLVED)
+        return vals
+
+    def param_call_values(self, file, pos, expr):
+        """If `expr` is a parameter of the enclosing function, values from its call sites (#137)."""
+        e = (expr or "").strip()
+        if not re.fullmatch(r"[A-Za-z_]\w*", e):
+            return {}
+        fn, _lo, _hi = self.s.fn_bounds(file, pos)
+        if fn is None:
+            return {}
+        params = self.s.params(file, fn)
+        idx = next((i for i, (pname, _d) in enumerate(params) if pname == e), None)
+        if idx is None:
+            return {}
+        return self.call_arg_values(file, fn, idx, e)
+
     def _tpl(self, file, pos, body, rx, depth):
         out, conf, last = [], RESOLVED, 0
         for m in re.finditer(rx, body):
@@ -798,15 +842,21 @@ class Scan:
                 k1, c2 = self.value(f, pos, key)
                 self.amqp_send(f, pos, e1, k1, HEURISTIC if HEURISTIC in (c1, c2) else RESOLVED, "pika", "basic_publish()")
             elif meth == "publish" and "amqp" in fl and (_kw(a, "routing_key") is not None):
-                k1, c2 = self.value(f, pos, _kw(a, "routing_key"))
+                key_expr = _kw(a, "routing_key")
+                k1, c2 = self.value(f, pos, key_expr)
+                keys = [(k1, c2)] if k1 is not None else list(self.param_call_values(f, pos, key_expr).items())
                 if obj.endswith("default_exchange"):
-                    e1, c1 = "", RESOLVED
+                    e1 = ""
                 else:
-                    e1, c1 = vars_.get(("exchange", obj.split(".")[-1])), RESOLVED
+                    e1 = vars_.get(("exchange", obj.split(".")[-1]))
                     if e1 is None:
                         self.miss("amqp_exchange_unresolved", f"{f}:{self.s.line_of(f, pos)} {obj}")
                         continue
-                self.amqp_send(f, pos, e1, k1, c2, "aio-pika", "exchange.publish()")
+                if not keys:
+                    self.miss("amqp_send_unresolved", f"{f}:{self.s.line_of(f, pos)}")
+                    continue
+                for kv, cv in keys:
+                    self.amqp_send(f, pos, e1, kv, cv, "aio-pika", "exchange.publish()")
             elif meth == "basic_consume" and "amqp" in fl:
                 q = _kw(a, "queue")
                 cb = _kw(a, "on_message_callback") or _kw(a, "consumer_callback")
@@ -866,6 +916,29 @@ class Scan:
                 self.send("redis-stream", v, c, f, pos, "redis-py", "XADD")
             elif meth in ("xreadgroup", "xread") and self.py_proto(fl, obj, kind, ("redis",), meth) == "redis":
                 self.redis_stream_read(f, pos, a, meth)
+        # Constructor topics: AIOKafkaConsumer(topic, ...) / KafkaConsumer(topic, ...) (#137)
+        if "kafka" in fl:
+            for m in re.finditer(r"(?:AIOKafka|Kafka)Consumer\s*\(", src):
+                if self.s.masked(f, m.start()):
+                    continue
+                a = _args(src, m.end() - 1)
+                pos_args = [x for x in a if not re.match(r"\s*\*?\*?\w+\s*=(?!=)", x)]
+                topics = list(pos_args)
+                ts = _kw(a, "topics")
+                if ts:
+                    topics += _list(ts)
+                group = None
+                g = _kw(a, "group_id")
+                if g:
+                    group, _cg = self.value(f, m.start(), g)
+                if group is None:
+                    group = self.py_group(f, src)
+                handler = self.fn_at(f, m.start())
+                for t in topics:
+                    if re.match(r"\s*\{", t) or re.search(r"bootstrap|servers|config", t, re.I):
+                        continue
+                    v, c = self.value(f, m.start(), t)
+                    self.recv("kafka", v, c, f, m.start(), handler, "kafka", "Consumer(...)", group=group)
 
     def py_proto(self, fl, obj, kind, cands, meth=None):
         if kind in ("redis", "mqtt", "nats"):

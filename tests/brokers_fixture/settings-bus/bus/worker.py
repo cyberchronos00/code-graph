@@ -5,10 +5,15 @@ from .config import settings
 
 
 async def run_events() -> None:
-    consumer = AIOKafkaConsumer(bootstrap_servers="localhost:9092")
-    consumer.subscribe([settings.events_topic])
+    consumer = AIOKafkaConsumer(
+        settings.events_topic,
+        bootstrap_servers="localhost:9092",
+        group_id="settings-bus-workers",
+    )
+    await consumer.start()
     async for _msg in consumer:
         pass
+    await consumer.stop()
 
 
 async def run_jobs(channel) -> None:
