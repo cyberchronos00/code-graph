@@ -1263,3 +1263,15 @@ exelban/stats (shallow clone): 1 service (`eu.exelban.Stats.SMC.Helper`, `SMCHel
 `SMCHelper`'s own wrappers were false positives before calls on `self` / `super` were skipped. No corpus here posts
 Darwin notifications; that path is covered by tests/xpc_fixture only. Swift regression set (swift-template,
 Alamofire, Kingfisher, SwiftUIX, isowords, IceCubesApp, bitwarden-ios, element-x-ios): no node or edge changes.
+
+## Prisma datasources as external systems (#41)
+
+umami-software/umami (shallow clone): the `postgresql` datasource's url is in `prisma.config.ts`
+(`env('DATABASE_URL')`), so the system stays `external:postgres:env:DATABASE_URL` (docker-compose sets the URL
+in the service environment, not an `.env.example`). 26 new CONNECTS_TO edges, one per `@@map` table, all checked
+against the schema; `impact` on the system goes from 429 callers / 198 entry points (the code reading
+`DATABASE_URL`) to 564 / 203 through the tables, and 5 sampled new callers (`getTeamWebsiteCount`,
+`updateTeamUser`, `updateReplaySaved`, `canViewBatchWebsites`, the 2FA setup `POST`) all call `prisma.client.<model>`
+directly. The other Prisma schemas in the corpora are sqlite (nest `22-graphql-prisma`) or outside the indexed app
+(cal.com's `packages/prisma`, read by `apps/web` and `apps/api/v2` through a workspace package), so they add
+nothing; no node or edge changes on the regression set.

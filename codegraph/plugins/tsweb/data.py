@@ -59,6 +59,64 @@ def _ensure_column(b: GraphBuilder, table: str, col: str, file=None, line=None) 
     return cid
 
 
+def prisma_files(root: Path) -> list:
+    files = []
+    for pat in ("schema.prisma", "prisma/schema.prisma", "prisma/*.prisma", "prisma/schema/*.prisma", "src/prisma/*.prisma"):
+        files += sorted(root.glob(pat))
+    if not files:
+        files = [p for p in sorted(root.rglob("*.prisma")) if COMMON_SKIP.isdisjoint(p.parts)][:20]
+    return list(dict.fromkeys(files))
+
+
+PRISMA_PROVIDERS = {"postgresql": "postgres", "postgres": "postgres", "cockroachdb": "postgres", "mysql": "mysql",
+                    "sqlserver": "mssql", "mongodb": "mongodb"}
+
+
+def prisma_config_url(root: Path, schema_dir: Path):
+    for d in dict.fromkeys((schema_dir, schema_dir.parent, root)):
+        for name in ("prisma.config.ts", "prisma.config.mts", "prisma.config.js", "prisma.config.mjs"):
+            try:
+                txt = (d / name).read_text()
+            except Exception:
+                continue
+            m = re.search(r"\bdatasource\s*:\s*\{[^}]*?\burl\s*:\s*(?:env\(\s*['\"](\w+)['\"]\s*\)|process\.env\.(\w+)"
+                          r"|process\.env\[\s*['\"](\w+)['\"]\s*\]|['\"]([^'\"]+)['\"])", txt, re.S)
+            if m:
+                k = m.group(1) or m.group(2) or m.group(3)
+                return ("env", k, None) if k else ("lit", m.group(4))
+    return None
+
+
+def prisma_datasources(root: Path, models: dict) -> list:
+    """`datasource db { provider = "postgresql"  url = env("DATABASE_URL") }` -> external facts (#41): the
+    system the schema's models live in. sqlite is a local file, not a system."""
+    out = []
+    for f in prisma_files(root):
+        try:
+            txt = f.read_text()
+        except Exception:
+            continue
+        rel = str(f.relative_to(root))
+        for m in re.finditer(r"^datasource\s+(\w+)\s*\{(.*?)^\}", txt, re.S | re.M):
+            body = re.sub(r"(?m)(^|\s)//[^\n]*", r"\1", m.group(2))   # not the // of a URL
+            pv = re.search(r"^\s*provider\s*=\s*\"([^\"]+)\"", body, re.M)
+            proto = PRISMA_PROVIDERS.get((pv.group(1) if pv else "").lower())
+            if proto is None:
+                continue
+            line = txt[:m.start()].count("\n") + 1
+            uv = re.search(r"^\s*url\s*=\s*(?:env\(\s*\"(\w+)\"\s*\)|\"([^\"]+)\")", body, re.M)
+            url = ("env", uv.group(1), None) if uv and uv.group(1) else ("lit", uv.group(2)) if uv else None
+            if url is None:          # Prisma 7: the url moved to prisma.config.ts (`datasource: { url: env('X') }`)
+                url = prisma_config_url(root, f.parent)
+            # models of the same schema (prisma/schema/*.prisma folders share one datasource)
+            tables = sorted({mm["table"] for mm in models.values() if Path(mm["file"]).parent == Path(rel).parent})
+            if url is None:
+                continue
+            out.append({"datasource": m.group(1), "protocol": proto, "url": url, "file": rel, "line": line,
+                        "var": m.group(1), "module": rel, "library": "prisma", "tables": tables})
+    return out
+
+
 def parse_prisma(root: Path) -> dict:
     """model Name { field Type @map("col") ... @@map("table") } -> {Name: {table, fields: {field: column}, file, line}}"""
     models = {}
@@ -188,6 +246,8 @@ def contribute_data(project: Project, b: GraphBuilder, ctx) -> dict:
             _ensure_column(b, m["table"], col, m["file"], m["line"])
         prisma_by_client[name[0].lower() + name[1:]] = m["table"]
     st["prisma_models"] = len(prisma)
+    if (ds := prisma_datasources(project.root, prisma)):
+        b.external_facts = getattr(b, "external_facts", []) + ds
     drizzle = {}   # instance key -> table
     drizzle_names = {}
     for k, inst in instances.items():

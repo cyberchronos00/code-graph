@@ -399,3 +399,54 @@ def test_python_clients_connected_after_construction(tmp_path):
     assert ("function:jobs.mirror", "external:ftp:env:FTP_HOST") in ct
     assert ("method:jobs.Mailer.open", "external:smtp:relay.internal.example:25") in ct
     assert not any(s == "function:jobs.local" for s, _ in ct)
+
+
+# ---- #41: ORM datasources (Prisma)
+@pytest.fixture(scope="module")
+def prisma_db(tmp_path_factory):
+    d = tmp_path_factory.mktemp("prisma") / "p.db"
+    index_project(FX / "shop-prisma", d, "shop-prisma")
+    return d
+
+
+def test_prisma_datasource_system(prisma_db):
+    st = GraphStore(prisma_db)
+    a = ext(st)["external:postgres:pg.internal:5432"]
+    assert (a["library"], a["datasource"], a["address_source"], a["tls"]) == ("prisma", "db", "env-example", True)
+    assert (a["credential_source"], a["credential_at"]) == ("env", "env:DATABASE_URL")
+    sysof = {r["id"]: json.loads(r["attrs"]).get("system") for r in st.q("SELECT id, attrs FROM nodes WHERE kind='table'")}
+    assert sysof == {"table:orders": "external:postgres:pg.internal:5432", "table:Customer": "external:postgres:pg.internal:5432"}
+    assert ("table:orders", "external:postgres:pg.internal:5432") in edges(st, "CONNECTS_TO")
+    assert b"pr1sma-fixture-pw" not in prisma_db.read_bytes()
+
+
+def test_prisma_impact_and_cli(prisma_db):
+    r = cli("impact", "external:postgres:pg.internal:5432", "--db", str(prisma_db))
+    assert "listOrders" in r.stdout and "GET /orders" in r.stdout
+    r = cli("external", "--db", str(prisma_db))
+    assert "2 tables (prisma datasource db): Customer, orders" in r.stdout
+    r = cli("external", "--db", str(prisma_db), "--json")
+    s = json.loads(r.stdout)["systems"][0]
+    assert s["tables"] == ["table:Customer", "table:orders"] and s["users"] == [] and s["callers"] == 1
+
+
+def test_prisma_sqlite_and_literal(tmp_path):
+    for name, provider, url in (("lite", "sqlite", '"file:./dev.db"'), ("mongo", "mongodb", '"mongodb://mongo.internal:27017/shop"'),
+                                ("cfg", "mysql", None)):
+        p = tmp_path / name
+        (p / "prisma").mkdir(parents=True)
+        (p / "package.json").write_text('{"dependencies": {"express": "^4.19.0", "@prisma/client": "^5.0.0"}}')
+        if url is None:      # Prisma 7: the url lives in prisma.config.ts
+            (p / "prisma.config.ts").write_text("import { defineConfig, env } from 'prisma/config'\n"
+                                                "export default defineConfig({ datasource: { url: env('SHOP_DB_URL') } })\n")
+        (p / "prisma" / "schema.prisma").write_text(f'datasource db {{\n  provider = "{provider}"\n' + (f'  url = {url}\n' if url else '') + '}\n\n'
+                                                    'model User {\n  id Int @id\n  email String\n}\n')
+        (p / "tsconfig.json").write_text("{}")
+        (p / "index.ts").write_text("import { PrismaClient } from '@prisma/client'\nconst prisma = new PrismaClient()\n"
+                                    "export function users() { return prisma.user.findMany() }\n")
+        index_project(p, tmp_path / f"{name}.db", name)
+    assert ext(GraphStore(tmp_path / "lite.db")) == {}                    # a local file, not a system
+    m = ext(GraphStore(tmp_path / "mongo.db"))["external:mongodb:mongo.internal:27017"]
+    assert (m["address_source"], m["library"]) == ("literal", "prisma")
+    c = ext(GraphStore(tmp_path / "cfg.db"))["external:mysql:env:SHOP_DB_URL"]
+    assert (c["address_source"], c["confidence"]) == ("env", "heuristic")

@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Prisma `datasource` blocks as external systems (#41): the provider and `url` (env key or DSN) give
+  `external:<protocol>:<target>`, the schema's tables get `attrs.system` and CONNECTS_TO it, so `impact` on a
+  database reaches the code using its tables; `cg external` lists a system's tables.
 - XPC and Darwin notifications (#38, part 3) in Swift: `NSXPCConnection(machServiceName:)` to the
   `NSXPCListener` delegate (`xpc:<service>`), proxy calls of an in-repo `@objc` XPC protocol to the exported
   object's methods (`xpc:<Protocol>.<method>`), and `CFNotificationCenterPostNotification` to

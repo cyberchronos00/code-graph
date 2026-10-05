@@ -417,7 +417,22 @@ def attach(builder, root: Path) -> dict:
         target, attrs, conf, proto = r
         if attrs.get("address_source") == "env-example" and attrs.get("address_at") in defaults_at:
             attrs = {**attrs, "address_source": "code-default"}
-        if f.get("client"):        # a client constructor in code (#77)
+        if f.get("datasource"):    # an ORM datasource (Prisma): the tables of its models live in the system (#41)
+            nid = node(proto, target, {**attrs, "library": f["library"], "datasource": f["datasource"],
+                                       "declared_at": f"{f['file']}:{f['line']}"}, conf)
+            for t in f["tables"]:
+                tid = f"table:{t}"
+                if tid in builder.nodes:
+                    builder.nodes[tid].attrs.setdefault("system", nid)
+                    builder.add_edge(tid, nid, "CONNECTS_TO", f["file"], f["line"], conf, op="table",
+                                     via=f"{f['library']} datasource {f['datasource']}")
+                    st["tables"] = st.get("tables", 0) + 1
+            if u is not None and u[0] == "env" and attrs.get("credential_in_url"):
+                builder.nodes[nid].attrs.setdefault("credential_source", "env")
+                builder.nodes[nid].attrs.setdefault("credential_at", f"env:{u[1]}")
+                if f"env:{u[1]}" in builder.nodes:
+                    builder.add_edge(nid, f"env:{u[1]}", "CREDENTIAL_FROM", None, None, "resolved", secret_kind="url password")
+        elif f.get("client"):        # a client constructor in code (#77)
             nid = node(proto, target, {**attrs, "client": f["var"], "library": f["client"], "resource": f.get("resource")}, conf)
             builder.add_edge(f["src"], nid, "CONNECTS_TO", f["file"], f["line"], conf, op="connect", via=f"client {f['var']}")
         else:
@@ -427,7 +442,8 @@ def attach(builder, root: Path) -> dict:
         for kk in ([u[1]] if u is not None and u[0] == "env" else []) + ([f["host"][1]] if f.get("host") and f["host"][0] == "env" else []):
             if f"env:{kk}" in builder.nodes:
                 builder.add_edge(nid, f"env:{kk}", "CONFIGURED_BY", None, None, conf)
-            used_keys.add(kk)
+            if not f.get("datasource"):      # the code reading a datasource's key still connects through it
+                used_keys.add(kk)
         pw = f.get("password")
         if pw and pw[0] == "env":
             cred(nid, [pw[1]])
@@ -562,16 +578,21 @@ def external(st, pattern: str | None = None, protocol: str | None = None, source
                       "at": f"{x['file']}:{x['line']}" if x["file"] else None, "confidence": x["confidence"]}
                      for x in st.q("SELECT src, attrs, file, line, confidence FROM edges WHERE dst=? AND kind IN ('CONNECTS_TO','TEST_USES')", (s["id"],))]
             ids = [u["id"] for u in users]
-        callers = set(ids)
+        tables = sorted(u["id"] for u in users if u["id"].startswith("table:"))
+        users = [u for u in users if not u["id"].startswith("table:")]
+        callers = set(ids) - set(tables)
         for x in list(ids):
             if x.startswith("connection:"):
                 callers |= {y["src"] for y in st.q("SELECT src FROM edges WHERE dst=? AND kind='USES_CONNECTION'", (x,))}
+            elif x.startswith("table:"):       # the tables of an ORM datasource (#41): their readers / writers use the system
+                callers |= {y["src"] for y in st.q("SELECT src FROM edges WHERE dst=? AND kind IN "
+                                                   "('READS_TABLE','WRITES_TABLE','MAPS_TO_TABLE')", (x,))}
         entries = {}
         for c in callers:
             for e in st.q("SELECT entry_kind, entry_count FROM node_entry WHERE node_id=?", (c,)):
                 entries[e["entry_kind"]] = entries.get(e["entry_kind"], 0) + e["entry_count"]
         conf = [(x["dst"], x["kind"]) for x in st.q("SELECT dst, kind FROM edges WHERE src=? AND kind IN ('CONFIGURED_BY','CREDENTIAL_FROM')", (s["id"],))]
-        out.append({**s, "users": users, "callers": len(callers), "entry_kinds": entries,
+        out.append({**s, "users": users, "tables": tables, "callers": len(callers), "entry_kinds": entries,
                     "configured_by": sorted({k for k, v in conf if v == "CONFIGURED_BY"}),
                     "credential_from": sorted({k for k, v in conf if v == "CREDENTIAL_FROM"})})
     summ: dict = {}
@@ -606,6 +627,10 @@ def render_external(res: dict, max_items: int = 60) -> str:
             L.append(f"    <- {u['id']}" + (f" @ {u['at']}" if u.get("at") else "") + (f"  ({u['via']})" if u.get("via") else ""))
         if len(s["users"]) > 8:
             L.append(f"    ... {len(s['users']) - 8} more users")
+        if s.get("tables"):
+            L.append(f"    {len(s['tables'])} tables ({a.get('library') or 'orm'} datasource {a.get('datasource') or ''}".rstrip()
+                     + "): " + ", ".join(t[len("table:"):] for t in s["tables"][:8]) + (" ..." if len(s["tables"]) > 8 else "")
+                     + (f"; used by {s['callers']} functions" if s["callers"] else ""))
         if s["configured_by"]:
             L.append("    configured by " + ", ".join(s["configured_by"][:6]))
     if res["selected"] > max_items:
