@@ -132,6 +132,7 @@ class Scan:
         self.used = set()                       # protocols whose library the project imports
         self._enums = None
         self._mods = None
+        self._field_defs = None  # class field defaults (pydantic / dataclass snake_case) (#157)
         self.exch_type = {}                     # exchange name -> direct / topic / fanout / headers
         self.bindings = defaultdict(set)        # queue identity -> {(exchange, key, file, line)}
         self.consumes = []                      # (queue identity, handler, file, line, conf, how, lib)
@@ -319,9 +320,104 @@ class Scan:
         m = re.fullmatch(r"(?:(this|self)\s*(?:\.|->)\s*|\$this->|\$)?([A-Za-z_]\w*)", e)
         if m:
             return self.ident(file, pos, m.group(2), field=bool(m.group(1)) or e.startswith("$this->"), depth=depth)
-        m = re.fullmatch(r"(?:[\w.]*\.)?(?:settings|config|conf|Config|cfg)\.([A-Z][A-Z0-9_]+)", e)
+        m = re.fullmatch(r"(?:[\w.]*\.)?(?:settings|config|conf|Config|cfg)\.([A-Za-z_]\w*)", e)
         if m:
-            return self.ident(file, pos, m.group(1), field=False, depth=depth, globals_only=True)
+            name = m.group(1)
+            if re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", name):
+                return self.ident(file, pos, name, field=False, depth=depth, globals_only=True)
+            return self.settings_field(name, depth)
+        return None, None
+
+
+    def field_defaults(self):
+        """Literal defaults of snake_case class fields (pydantic-settings / BaseModel / dataclass / attrs) (#157)."""
+        if self._field_defs is not None:
+            return self._field_defs
+        out = defaultdict(list)
+        # Indented class-body annotated assignment: `events_topic: str = "events"` / Field(default=...) / field(default=...)
+        rx = re.compile(
+            r"(?m)^[ \t]{1,8}([a-z_][a-z0-9_]*)\s*:\s*[^=\n]+=\s*(.+?)\s*(?:#.*)?$"
+        )
+        field_rx = re.compile(
+            r"""^(?:(?:pydantic\.)?Field|(?:attr(?:\.ib|s)?\.)?ib|(?:dataclasses\.)?field|attrib)\s*\(\s*(?:default\s*=\s*)?"""
+            + r"""(?:['"]([^'"]*)['"]|([A-Z][A-Z0-9_]{2,}))"""
+        )
+        for f in sorted(self.s.files):
+            if not f.endswith(".py") or TEST_FILE.search(f) or "/tests/" in f.replace("\\", "/"):
+                continue
+            t = self.s.text(f)
+            # Prefer settings / config modules; still accept any file that defines a Settings-like class
+            interesting = bool(re.search(r"settings|config|conf", f, re.I)) or bool(
+                re.search(r"\b(?:BaseSettings|BaseModel|dataclass|attrs\.define)\b|\bclass\s+(?:Settings|Config)\b", t)
+            )
+            if not interesting:
+                continue
+            for m in rx.finditer(t):
+                # Skip method bodies: a `def` at the same or outer indent between class and this line is a method
+                line_start = m.start()
+                indent = len(m.group(0)) - len(m.group(0).lstrip())
+                before = t[:line_start]
+                # last `def`/`async def` at indent < field indent means we're inside a method
+                last_def = None
+                for dm in re.finditer(r"(?m)^([ \t]*)(?:async\s+)?def\s+", before):
+                    last_def = dm
+                if last_def is not None and len(last_def.group(1)) < indent and last_def.group(1) != "":
+                    # def inside class (indent > 0) and field is more indented than def -> method body
+                    if len(last_def.group(1)) > 0:
+                        # check there's no class between def and field
+                        mid = before[last_def.end():]
+                        if not re.search(r"(?m)^[ \t]{0," + str(len(last_def.group(1)) + 1) + r"}class\s+", mid):
+                            continue
+                name, rhs = m.group(1), m.group(2).strip().rstrip(",")
+                lit = _strlit(rhs)
+                if lit is None:
+                    fm = field_rx.match(rhs)
+                    if fm:
+                        lit = fm.group(1)
+                        if lit is None and fm.group(2):
+                            # Field(default=SOME_CONST) — resolve via const index later
+                            out[name].append((f, fm.group(2), "const"))
+                            continue
+                if lit is not None:
+                    out[name].append((f, lit, "lit"))
+                else:
+                    env = re.match(
+                        r"""(?:os\.(?:environ\.get|getenv)|getenv)\(\s*['"](\w+)['"]\s*,\s*['"]([^'"]*)['"]""",
+                        rhs,
+                    )
+                    if env:
+                        out[name].append((f, env.group(2), "env"))
+        self._field_defs = out
+        return out
+
+    def settings_field(self, name, depth):
+        """Resolve `settings.<snake_case>` / `config.<snake_case>` from a class field default (#157)."""
+        if depth > 4:
+            return None, None
+        cands = self.field_defaults().get(name, ())
+        vals = {}
+        for f, v, kind in cands:
+            if kind == "const":
+                r = self.ident(f, 0, v, field=False, depth=depth + 1, globals_only=True)
+                if r[0] is not None:
+                    vals[r[0]] = HEURISTIC if HEURISTIC in (vals.get(r[0]), r[1]) else r[1]
+            elif kind == "env":
+                vals[v] = HEURISTIC
+            else:
+                vals[v] = RESOLVED if vals.get(v) != HEURISTIC else HEURISTIC
+        if len(vals) == 1:
+            return next(iter(vals.items()))
+        # Prefer settings/config path files when several modules disagree
+        pref = {}
+        for f, v, kind in cands:
+            if not re.search(r"settings|config|conf", f, re.I):
+                continue
+            if kind == "lit":
+                pref[v] = RESOLVED
+            elif kind == "env":
+                pref[v] = HEURISTIC
+        if len(pref) == 1:
+            return next(iter(pref.items()))
         return None, None
 
     def _tpl(self, file, pos, body, rx, depth):
@@ -789,7 +885,7 @@ class Scan:
                  (r"(?:\w+\.)?declare_queue\s*\(", "amqp_queue"),
                  (r"(?:\w+\.)?app\.topic\s*\(|\bapp\.topic\s*\(", "faust_topic")]
         imports = self.libs_of(f, src)
-        for m in re.finditer(r"(?:(?:self\.)?(\w+)\s*(?::\s*[\w.\[\]| ]+)?=\s*(?:await\s+)?|async\s+with\s+(?:await\s+)?|with\s+)"
+        for m in re.finditer(r"(?:(?:self\.)?(\w+)[ \t]*(?::[ \t]*[\w.\[\]| ]+)?[ \t]*=[ \t]*(?:await[ \t]+)?|async\s+with\s+(?:await\s+)?|with\s+)"
                              r"([\w.]+\s*\([^\n]*)", src):
             rhs = m.group(2)
             for pat, kind in rules:
@@ -804,7 +900,7 @@ class Scan:
                     if var is None:
                         w = re.search(r"\bas\s+(\w+)\s*:", src[m.end():m.end() + 300])
                         var = w.group(1) if w else None
-                    if var:
+                    if var and var not in ("None", "True", "False"):
                         out[var] = kind
                         if kind == "faust_topic":
                             a = _args(rhs, rhs.find("("))

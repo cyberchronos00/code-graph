@@ -613,6 +613,9 @@ Task names are what crosses repos: index both repos and run `cg link`. Endpoint 
   `task_default_queue` changes the default from `celery`.
 - Settings constants (`queue=settings.X`) resolve from `X = "lit"`, or from `os.environ.get("E", "lit")` (heuristic),
   in the same file or in one non-test settings / config module.
+- Broker topic / queue names from pydantic-settings / dataclass field defaults (#157): `settings.events_topic`
+  and `config.jobs_queue` (also `self.settings.*`) resolve from the annotated class field default
+  (`events_topic: str = "events"`) or `Field(default=...)`, so send and receive share one endpoint id.
 - In a Django project the plugin's `job:<task>` nodes (with their DISPATCHES / SCHEDULES and `queue_job` entries)
   stay as they were. The endpoint gets `job_node` and is no entry point itself. A send the plugin already records
   as DISPATCHES is not repeated. `cg protocols` shows one entry, the job node (protocol `celery`), with the twin's

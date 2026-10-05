@@ -137,3 +137,19 @@ def test_rust_lapin_and_rdkafka(dbs):
 def test_kotlin_rust_link(dbs):
     k = _view(dbs["link2"], "kafka")
     assert k["billing.invoices"]["linked"]
+
+
+def test_settings_field_defaults(tmp_path):
+    """pydantic-settings / Field snake_case defaults resolve for kafka + amqp (#157)."""
+    db = tmp_path / "settings-bus.db"
+    index_project(FX / "settings-bus", db, "settings-bus")
+    st = _edges(db, "SENDS_TO")
+    rb = _edges(db, "RECEIVED_BY")
+    assert st[("function:bus.publish.publish_event", E + "kafka:events")][0] == "resolved"
+    assert st[("method:bus.publish.EventBus.publish", E + "kafka:events")][0] == "resolved"  # self.settings.*
+    assert st[("function:bus.publish.publish_audit", E + "kafka:audit.orders")][0] == "resolved"  # Field(default=)
+    assert ("function:bus.publish.publish_job", E + "amqp:queue:jobs") in st
+    assert (E + "kafka:events", "function:bus.worker.run_events") in rb
+    assert (E + "amqp:queue:jobs", "function:bus.worker.on_job") in rb
+
+

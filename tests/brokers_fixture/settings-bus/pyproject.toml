@@ -1,0 +1,4 @@
+[project]
+name = "settings-bus"
+version = "0.1.0"
+dependencies = ["aiokafka", "aio-pika", "pydantic-settings"]

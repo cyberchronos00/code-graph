@@ -1316,3 +1316,10 @@ Shown by `cg external`.
 
 Edge-only `ddiff` is silent for this step (attrs only). Leftover FPs / missed helper-only keys -> follow-up.
 
+## pydantic-settings broker field defaults (#157)
+
+`settings-bus` fixture: `Settings.events_topic = "events"` / `jobs_queue = "jobs"` / `Field(default="audit.orders")`.
+`producer.send_and_wait(settings.events_topic)` and `consumer.subscribe([settings.events_topic])` share
+`endpoint:kafka:events`; `default_exchange.publish(..., routing_key=settings.jobs_queue)` pairs with
+`declare_queue(settings.jobs_queue)` + `consume` on `endpoint:amqp:queue:jobs`. `self.settings.events_topic` on a
+wrapper class resolves the same way.

@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Broker topic / queue names from pydantic-settings and class field defaults (#157): `settings.events_topic`
+  / `config.jobs_queue` (and `self.settings.*`) resolve through annotated class field defaults and
+  `Field(default=...)`, so producers and consumers share `endpoint:kafka:<topic>` / `endpoint:amqp:queue:<name>`.
 - Redis key prefixes and Elasticsearch index names (#41): literal / f-string / template prefixes
   (`cache:user:{id}`) and Django `KEY_PREFIX` become `attrs.key_prefixes` on redis externals; ES `index=`
   literals and index-prefix env defaults become `attrs.indices` (shown by `cg external`).
