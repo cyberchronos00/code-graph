@@ -28,7 +28,7 @@ const clips = [
 
 <template>
   <section class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
-    <p class="font-mono text-xs tracking-[0.18em] text-lime-800 uppercase dark:text-lime-300">
+    <p class="font-mono text-xs tracking-[0.18em] text-cg-lime-800 uppercase dark:text-cg-lime-300">
       In use
     </p>
     <h2 class="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -55,7 +55,7 @@ const clips = [
           </p>
           <NuxtLink
             :to="clip.to"
-            class="mt-3 inline-flex text-sm font-medium text-lime-800 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-700 dark:text-lime-300 dark:focus-visible:outline-lime-300"
+            class="mt-3 inline-flex text-sm font-medium text-cg-lime-800 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cg-lime-700 dark:text-cg-lime-300 dark:focus-visible:outline-cg-lime-300"
           >
             {{ clip.link }}
           </NuxtLink>
@@ -71,7 +71,7 @@ const clips = [
         label="Agent demo"
       />
       <div class="flex flex-col justify-center p-5">
-        <p class="font-mono text-[11px] tracking-[0.16em] text-violet-800 uppercase dark:text-violet-300">
+        <p class="font-mono text-[11px] tracking-[0.16em] text-cg-violet-800 uppercase dark:text-cg-violet-300">
           Secondary
         </p>
         <h3 class="mt-2 text-xl font-semibold text-zinc-900 dark:text-zinc-50">
@@ -82,7 +82,7 @@ const clips = [
         </p>
         <NuxtLink
           to="/docs/mcp"
-          class="mt-4 inline-flex text-sm font-medium text-lime-800 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-700 dark:text-lime-300 dark:focus-visible:outline-lime-300"
+          class="mt-4 inline-flex text-sm font-medium text-cg-lime-800 underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cg-lime-700 dark:text-cg-lime-300 dark:focus-visible:outline-cg-lime-300"
         >
           MCP docs
         </NuxtLink>

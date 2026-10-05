@@ -22,7 +22,7 @@ function onLeave() {
 
 <template>
   <div
-    class="graph-canvas h-full w-full"
+    class="graph-canvas relative h-full w-full"
     @pointermove="onMove"
     @pointerleave="onLeave"
   >

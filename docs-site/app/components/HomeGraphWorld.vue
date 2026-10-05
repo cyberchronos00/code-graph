@@ -1,19 +1,26 @@
 <script setup lang="ts">
-import { onBeforeUnmount, watch } from 'vue'
+import { onBeforeUnmount, onMounted, watch } from 'vue'
 import {
   BufferGeometry,
+  CanvasTexture,
+  Color,
   Float32BufferAttribute,
   Group,
   LineBasicMaterial,
   LineSegments,
   Mesh,
-  MeshStandardMaterial,
+  MeshBasicMaterial,
   Raycaster,
+  ShaderMaterial,
   SphereGeometry,
-  Vector2
+  Sprite,
+  SpriteMaterial,
+  Vector2,
+  Vector3
 } from 'three'
 import { useLoop } from '@tresjs/core'
-import { createHomeGraph, nodeBob, type GraphKind } from '~/utils/home-graph'
+import { cgGraph, linkColor, toneForKind, type GraphKind } from '~/utils/cg-palette'
+import { createHomeGraph, nodeBob } from '~/utils/home-graph'
 
 const props = defineProps<{
   pointerX: number
@@ -21,32 +28,123 @@ const props = defineProps<{
   pointerActive: boolean
 }>()
 
+const VERT = `
+varying vec3 vNormal;
+varying vec3 vView;
+void main() {
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vNormal = normalize(normalMatrix * normal);
+  vView = normalize(-mv.xyz);
+  gl_Position = projectionMatrix * mv;
+}
+`
+
+const FRAG = `
+uniform vec3 uFill;
+uniform vec3 uLine;
+uniform float uFillAlpha;
+uniform float uHot;
+varying vec3 vNormal;
+varying vec3 vView;
+void main() {
+  float nd = max(dot(normalize(vNormal), normalize(vView)), 0.0);
+  float rim = pow(1.0 - nd, 2.85);
+  float edge = smoothstep(0.4, 0.9, rim);
+  float alpha = clamp(uFillAlpha * (1.0 - edge) + edge * (0.86 + uHot * 0.14), 0.0, 1.0);
+  vec3 color = mix(uFill, uLine, edge);
+  gl_FragColor = vec4(color, alpha);
+}
+`
+
 const colorMode = useColorMode()
 const graph = createHomeGraph()
 const group = new Group()
-const sphere = new SphereGeometry(1, 26, 18)
+const sphere = new SphereGeometry(1, 28, 20)
 const raycaster = new Raycaster()
 const ndc = new Vector2()
+const projected = new Vector3()
+
+function auraTexture() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 128
+  canvas.height = 128
+  const ctx = canvas.getContext('2d')!
+  const gradient = ctx.createRadialGradient(64, 64, 6, 64, 64, 64)
+  gradient.addColorStop(0, 'rgba(255,255,255,0)')
+  gradient.addColorStop(0.46, 'rgba(255,255,255,0)')
+  gradient.addColorStop(0.68, 'rgba(255,255,255,0.7)')
+  gradient.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = gradient
+  ctx.fillRect(0, 0, 128, 128)
+  const texture = new CanvasTexture(canvas)
+  texture.needsUpdate = true
+  return texture
+}
+
+const glowMap = auraTexture()
 
 const linkPositions = new Float32Array(graph.links.length * 6)
+const linkColors = new Float32Array(graph.links.length * 6)
 const linkGeometry = new BufferGeometry()
 linkGeometry.setAttribute('position', new Float32BufferAttribute(linkPositions, 3))
-const linkMaterial = new LineBasicMaterial({ transparent: true, depthWrite: false })
+linkGeometry.setAttribute('color', new Float32BufferAttribute(linkColors, 3))
+const linkMaterial = new LineBasicMaterial({
+  vertexColors: true,
+  transparent: true,
+  depthWrite: false,
+  opacity: 0.85
+})
 group.add(new LineSegments(linkGeometry, linkMaterial))
 
 const meshes: Mesh[] = []
-const materials: MeshStandardMaterial[] = []
+const materials: ShaderMaterial[] = []
+const auras: Sprite[] = []
+const auraMaterials: SpriteMaterial[] = []
+
+function shellMaterial(kind: GraphKind, dark: boolean) {
+  const tone = toneForKind(kind, dark)
+  return new ShaderMaterial({
+    uniforms: {
+      uFill: { value: new Color(tone.fill) },
+      uLine: { value: new Color(tone.outline) },
+      uFillAlpha: { value: dark ? cgGraph.fillAlpha.dark : cgGraph.fillAlpha.light },
+      uHot: { value: 0 }
+    },
+    vertexShader: VERT,
+    fragmentShader: FRAG,
+    transparent: true,
+    depthWrite: false,
+    toneMapped: false
+  })
+}
 
 for (const node of graph.nodes) {
-  const material = new MeshStandardMaterial({ metalness: 0.08, roughness: 0.45 })
+  const material = shellMaterial(node.kind, colorMode.value === 'dark')
   const mesh = new Mesh(sphere, material)
   mesh.userData.id = node.id
   mesh.userData.kind = node.kind
   mesh.position.set(node.position[0], node.position[1], node.position[2])
   mesh.scale.setScalar(node.radius)
+  mesh.renderOrder = 2
+  const tone = toneForKind(node.kind, colorMode.value === 'dark')
+  const auraMaterial = new SpriteMaterial({
+    map: glowMap,
+    color: new Color(tone.aura),
+    transparent: true,
+    depthWrite: false,
+    opacity: colorMode.value === 'dark' ? 0.55 : 0.4,
+    toneMapped: false
+  })
+  const aura = new Sprite(auraMaterial)
+  aura.position.copy(mesh.position)
+    aura.scale.setScalar(node.radius * 5.4)
+  aura.renderOrder = 1
+  group.add(aura)
   group.add(mesh)
   meshes.push(mesh)
   materials.push(material)
+  auras.push(aura)
+  auraMaterials.push(auraMaterial)
 }
 
 interface Pulse {
@@ -69,68 +167,67 @@ const pulses: Pulse[] = graph.links
   }))
 
 const pulseMeshes: Mesh[] = []
-const pulseMaterials: MeshStandardMaterial[] = []
+const pulseMaterials: MeshBasicMaterial[] = []
 for (const pulse of pulses) {
-  const material = new MeshStandardMaterial({
-    metalness: 0.05,
-    roughness: 0.28,
+  const material = new MeshBasicMaterial({
+    color: pulse.violet ? cgGraph.edgeData.dark : cgGraph.pulse.dark,
     transparent: true,
-    depthWrite: false
+    depthWrite: false,
+    toneMapped: false
   })
   const mesh = new Mesh(sphere, material)
-  mesh.userData.kind = pulse.violet ? 'pulse-violet' : 'pulse-lime'
-  mesh.scale.setScalar(0.05)
+  mesh.scale.setScalar(0.045)
+  mesh.renderOrder = 3
   group.add(mesh)
   pulseMeshes.push(mesh)
   pulseMaterials.push(material)
 }
 
-function palette(dark: boolean) {
-  return {
-    lime: dark ? '#d9f99d' : '#3f6212',
-    violet: dark ? '#ddd6fe' : '#5b21b6',
-    zinc: dark ? '#f4f4f5' : '#3f3f46',
-    limeEmissive: dark ? '#a3e635' : '#4d7c0f',
-    violetEmissive: dark ? '#a78bfa' : '#6d28d9',
-    zincEmissive: dark ? '#a1a1aa' : '#52525b',
-    emissive: dark ? 0.58 : 0.14,
-    roughness: dark ? 0.36 : 0.5,
-    link: dark ? '#f4f4f5' : '#3f3f46',
-    linkOpacity: dark ? 0.62 : 0.55
-  }
+const labelLayer = document.createElement('div')
+labelLayer.className = 'cg-label-layer'
+const labelEls = new Map<number, HTMLDivElement>()
+
+for (const node of graph.nodes) {
+  if (!node.label) continue
+  const el = document.createElement('div')
+  el.className = 'cg-node-label'
+  el.textContent = node.label
+  labelLayer.appendChild(el)
+  labelEls.set(node.id, el)
 }
 
-function paint(kind: GraphKind | 'pulse-lime' | 'pulse-violet', dark: boolean) {
-  const colors = palette(dark)
-  if (kind === 'violet' || kind === 'pulse-violet') {
-    return { color: colors.violet, emissive: colors.violetEmissive }
-  }
-  if (kind === 'zinc') {
-    return { color: colors.zinc, emissive: colors.zincEmissive }
-  }
-  return { color: colors.lime, emissive: colors.limeEmissive }
+function paintLinks(dark: boolean) {
+  const color = new Color()
+  graph.links.forEach((link, index) => {
+    const a = graph.nodes[link.a]!
+    const b = graph.nodes[link.b]!
+    color.set(linkColor(a.kind, b.kind, dark))
+    linkColors.set([color.r, color.g, color.b, color.r, color.g, color.b], index * 6)
+  })
+  const attr = linkGeometry.getAttribute('color')
+  attr.needsUpdate = true
 }
 
 function applyTheme(dark: boolean) {
-  const colors = palette(dark)
   for (const mesh of meshes) {
-    const material = mesh.material as MeshStandardMaterial
-    const tone = paint(mesh.userData.kind as GraphKind, dark)
-    material.color.set(tone.color)
-    material.emissive.set(tone.emissive)
-    material.emissiveIntensity = colors.emissive
-    material.roughness = colors.roughness
+    const material = mesh.material as ShaderMaterial
+    const tone = toneForKind(mesh.userData.kind as GraphKind, dark)
+    material.uniforms.uFill!.value.set(tone.fill)
+    material.uniforms.uLine!.value.set(tone.outline)
+    material.uniforms.uFillAlpha!.value = dark ? cgGraph.fillAlpha.dark : cgGraph.fillAlpha.light
   }
-  for (const mesh of pulseMeshes) {
-    const material = mesh.material as MeshStandardMaterial
-    const tone = paint(mesh.userData.kind as 'pulse-lime' | 'pulse-violet', dark)
-    material.color.set(tone.color)
-    material.emissive.set(tone.emissive)
-    material.emissiveIntensity = dark ? 0.95 : 0.4
-    material.roughness = colors.roughness
+  for (let i = 0; i < auras.length; i++) {
+    const kind = meshes[i]!.userData.kind as GraphKind
+    auraMaterials[i]!.color.set(toneForKind(kind, dark).aura)
+    auraMaterials[i]!.opacity = dark ? 0.55 : 0.4
   }
-  linkMaterial.color.set(colors.link)
-  linkMaterial.opacity = colors.linkOpacity
+  pulseMaterials.forEach((material, index) => {
+    const violet = pulses[index]!.violet
+    material.color.set(violet
+      ? (dark ? cgGraph.edgeData.dark : cgGraph.edgeData.light)
+      : (dark ? cgGraph.pulse.dark : cgGraph.pulse.light))
+  })
+  paintLinks(dark)
 }
 
 group.scale.setScalar(1.72)
@@ -142,11 +239,15 @@ watch(() => colorMode.value, value => applyTheme(value === 'dark'))
 const positionAttr = linkGeometry.getAttribute('position')
 const { onBeforeRender } = useLoop()
 
+onMounted(() => {
+  const canvas = document.querySelector('.graph-canvas')
+  canvas?.appendChild(labelLayer)
+})
+
 onBeforeRender(({ elapsed, delta, camera }) => {
   const cam = camera.value
   const dt = Math.min(delta, 0.05)
   const dark = colorMode.value === 'dark'
-  const baseEmissive = dark ? 0.58 : 0.14
 
   if (cam) {
     const yaw = elapsed * 0.08 + (props.pointerActive ? props.pointerX * 0.28 : 0)
@@ -164,16 +265,21 @@ onBeforeRender(({ elapsed, delta, camera }) => {
     if (hit) hotId = hit.object.userData.id as number
   }
 
-  for (const mesh of meshes) {
+  for (let i = 0; i < meshes.length; i++) {
+    const mesh = meshes[i]!
     const node = graph.nodes[mesh.userData.id as number]!
     const y = nodeBob(node, elapsed)
     mesh.position.set(node.position[0], y, node.position[2])
     const hot = hotId === node.id
-    const target = node.radius * (hot ? 1.75 : 1)
+    const target = node.radius * (hot ? 1.55 : 1)
     mesh.scale.setScalar(mesh.scale.x + (target - mesh.scale.x) * 0.18)
-    const material = mesh.material as MeshStandardMaterial
-    const next = baseEmissive + (hot ? (dark ? 0.55 : 0.28) : 0)
-    material.emissiveIntensity += (next - material.emissiveIntensity) * 0.2
+    const aura = auras[i]!
+    aura.position.copy(mesh.position)
+    aura.scale.setScalar(mesh.scale.x * 5.4)
+    const material = mesh.material as ShaderMaterial
+    const next = hot ? 1 : 0
+    const hotUniform = material.uniforms.uHot!
+    hotUniform.value += (next - hotUniform.value) * 0.2
   }
 
   graph.links.forEach((link, index) => {
@@ -195,40 +301,46 @@ onBeforeRender(({ elapsed, delta, camera }) => {
       nodeBob(a, elapsed) + (nodeBob(b, elapsed) - nodeBob(a, elapsed)) * t,
       a.position[2] + (b.position[2] - a.position[2]) * t
     )
-    const swell = 0.035 + Math.sin(t * Math.PI) * 0.045
+    const swell = 0.03 + Math.sin(t * Math.PI) * 0.04
     mesh.scale.setScalar(swell)
-    const material = pulseMaterials[index]!
-    material.opacity = 0.25 + Math.sin(t * Math.PI) * 0.75
+    pulseMaterials[index]!.opacity = 0.35 + Math.sin(t * Math.PI) * 0.65
   })
+
+  if (cam && labelLayer.isConnected) {
+    const host = labelLayer.parentElement
+    const width = host?.clientWidth || 1
+    const height = host?.clientHeight || 1
+    cam.updateMatrixWorld()
+    for (const [id, el] of labelEls) {
+      const mesh = meshes[id]!
+      mesh.getWorldPosition(projected)
+      const facing = projected.clone().sub(cam.position).normalize().dot(cam.getWorldDirection(new Vector3()))
+      projected.project(cam)
+      const x = (projected.x * 0.5 + 0.5) * width
+      const y = (-projected.y * 0.5 + 0.5) * height
+      el.style.transform = `translate(-50%, -140%) translate(${x}px, ${y}px)`
+      const fade = Math.min(1, Math.max(0, (facing - 0.35) / 0.4))
+      const onTitle = y < height * 0.56 && x < width * 0.7
+      const onBody = y >= height * 0.56 && y < height * 0.86 && x < width * 0.5
+      const onCopy = onTitle || onBody
+      el.style.opacity = (projected.z > 1 || onCopy) ? '0' : fade.toFixed(3)
+    }
+  }
 })
 
 onBeforeUnmount(() => {
   sphere.dispose()
   linkGeometry.dispose()
   linkMaterial.dispose()
+  glowMap.dispose()
   for (const material of materials) material.dispose()
+  for (const material of auraMaterials) material.dispose()
   for (const material of pulseMaterials) material.dispose()
+  labelLayer.remove()
 })
 </script>
 
 <template>
   <TresPerspectiveCamera :position="[0.4, 0.35, 8.6]" :fov="48" />
-  <TresAmbientLight :intensity="colorMode.value === 'dark' ? 0.32 : 0.92" />
-  <TresDirectionalLight
-    :position="[4.5, 6, 5]"
-    :intensity="colorMode.value === 'dark' ? 0.75 : 1.2"
-  />
-  <TresPointLight
-    :position="[-3.4, 1.6, 2.4]"
-    color="#65a30d"
-    :intensity="colorMode.value === 'dark' ? 8 : 1.6"
-    :distance="16"
-  />
-  <TresPointLight
-    :position="[3.2, -1.2, 2.2]"
-    color="#7c3aed"
-    :intensity="colorMode.value === 'dark' ? 7 : 1.15"
-    :distance="16"
-  />
   <primitive :object="group" />
 </template>

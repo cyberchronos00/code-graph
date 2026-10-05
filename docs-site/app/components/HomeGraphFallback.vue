@@ -1,6 +1,9 @@
 <script setup lang="ts">
-import { createHomeGraph, type GraphKind } from '~/utils/home-graph'
+import { linkColor, toneForKind, type GraphKind } from '~/utils/cg-palette'
+import { createHomeGraph } from '~/utils/home-graph'
 
+const colorMode = useColorMode()
+const dark = computed(() => colorMode.value === 'dark')
 const graph = createHomeGraph()
 
 const points = graph.nodes.map((node) => {
@@ -8,18 +11,29 @@ const points = graph.nodes.map((node) => {
   const scale = 3.5 / depth
   return {
     ...node,
-    x: 390 + node.position[0] * scale * 78,
+    x: 430 + node.position[0] * scale * 78,
     y: 180 - node.position[1] * scale * 72,
     r: Math.max(3.2, node.radius * scale * 78)
   }
 })
 
 const ordered = [...points].sort((a, b) => a.position[2] - b.position[2])
+const labeled = ordered.filter(point => point.label)
+
+function stroke(kind: GraphKind) {
+  return toneForKind(kind, dark.value).outline
+}
 
 function fill(kind: GraphKind) {
-  if (kind === 'lime') return 'var(--node-lime)'
-  if (kind === 'violet') return 'var(--node-violet)'
-  return 'var(--node-zinc)'
+  return toneForKind(kind, dark.value).fill
+}
+
+function aura(kind: GraphKind) {
+  return toneForKind(kind, dark.value).aura
+}
+
+function edge(a: GraphKind, b: GraphKind) {
+  return linkColor(a, b, dark.value)
 }
 </script>
 
@@ -37,33 +51,55 @@ function fill(kind: GraphKind) {
       :y1="points[link.a]!.y"
       :x2="points[link.b]!.x"
       :y2="points[link.b]!.y"
-      stroke="var(--link)"
-      stroke-width="1.2"
+      :stroke="edge(points[link.a]!.kind, points[link.b]!.kind)"
+      stroke-width="1.25"
       stroke-linecap="round"
     />
-    <circle
+    <g
       v-for="point in ordered"
       :key="point.id"
-      :cx="point.x"
-      :cy="point.y"
-      :r="point.r"
-      :fill="fill(point.kind)"
-    />
+    >
+      <circle
+        :cx="point.x"
+        :cy="point.y"
+        :r="point.r * 2.1"
+        :fill="aura(point.kind)"
+        fill-opacity="0.35"
+      />
+      <circle
+        :cx="point.x"
+        :cy="point.y"
+        :r="point.r"
+        :fill="fill(point.kind)"
+        :fill-opacity="dark ? 0.1 : 0.16"
+        :stroke="stroke(point.kind)"
+        stroke-width="1.6"
+      />
+    </g>
+    <g
+      v-for="point in labeled"
+      :key="`${point.id}-label`"
+    >
+      <text
+        :x="point.x"
+        :y="point.y - point.r - 6"
+        text-anchor="middle"
+        class="graph-label"
+      >
+        {{ point.label }}
+      </text>
+    </g>
   </svg>
 </template>
 
 <style scoped>
-.graph-fallback {
-  --node-lime: #3f6212;
-  --node-violet: #5b21b6;
-  --node-zinc: #3f3f46;
-  --link: #71717a;
-}
-
-.dark .graph-fallback {
-  --node-lime: #a3e635;
-  --node-violet: #c4b5fd;
-  --node-zinc: #e4e4e7;
-  --link: #a1a1aa;
+.graph-label {
+  fill: var(--cg-label-ink);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 8px;
+  paint-order: stroke;
+  stroke: var(--cg-label-scrim);
+  stroke-width: 3px;
+  stroke-linejoin: round;
 }
 </style>

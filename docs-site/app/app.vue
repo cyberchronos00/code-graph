@@ -71,7 +71,7 @@ provide('navigation', navigation)
 
 <template>
   <UApp>
-    <NuxtLoadingIndicator color="#84cc16" />
+    <NuxtLoadingIndicator color="#93B600" />
 
     <AppHeader />
 

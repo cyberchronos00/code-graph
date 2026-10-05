@@ -25,7 +25,7 @@ async function copySnippet() {
   <section class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
     <div class="grid gap-8 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-start">
       <div>
-        <p class="font-mono text-xs tracking-[0.18em] text-lime-800 uppercase dark:text-lime-300">
+        <p class="font-mono text-xs tracking-[0.18em] text-cg-lime-800 uppercase dark:text-cg-lime-300">
           Install
         </p>
         <h2 class="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -39,7 +39,7 @@ async function copySnippet() {
             <span class="font-mono text-[11px] tracking-wide text-zinc-500 uppercase">shell</span>
             <button
               type="button"
-              class="rounded-md px-2 py-1 font-mono text-xs text-lime-800 hover:bg-zinc-200/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-700 dark:text-lime-300 dark:hover:bg-zinc-800 dark:focus-visible:outline-lime-300"
+              class="rounded-md px-2 py-1 font-mono text-xs text-cg-lime-800 hover:bg-zinc-200/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cg-lime-700 dark:text-cg-lime-300 dark:hover:bg-zinc-800 dark:focus-visible:outline-cg-lime-300"
               @click="copySnippet"
             >
               {{ copied ? 'Copied' : 'Copy' }}
@@ -59,7 +59,7 @@ async function copySnippet() {
           Details, updates and extractor setup are in
           <NuxtLink
             to="/docs/install"
-            class="font-medium text-lime-800 underline-offset-4 hover:underline dark:text-lime-300"
+            class="font-medium text-cg-lime-800 underline-offset-4 hover:underline dark:text-cg-lime-300"
           >
             Install
           </NuxtLink>.
@@ -67,7 +67,7 @@ async function copySnippet() {
       </div>
 
       <div>
-        <p class="font-mono text-xs tracking-[0.18em] text-lime-800 uppercase dark:text-lime-300">
+        <p class="font-mono text-xs tracking-[0.18em] text-cg-lime-800 uppercase dark:text-cg-lime-300">
           Explore docs
         </p>
         <h2 class="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -79,7 +79,7 @@ async function copySnippet() {
             :key="group.title"
             class="rounded-2xl border border-zinc-200 bg-white/80 p-4 dark:border-zinc-800 dark:bg-zinc-900/70"
           >
-            <h3 class="text-xs font-medium tracking-wide text-lime-800 uppercase dark:text-lime-300">
+            <h3 class="text-xs font-medium tracking-wide text-cg-lime-800 uppercase dark:text-cg-lime-300">
               {{ group.title }}
             </h3>
             <ul class="mt-3 space-y-1.5">
@@ -89,7 +89,7 @@ async function copySnippet() {
               >
                 <NuxtLink
                   :to="`/docs/${item.slug}`"
-                  class="text-sm text-zinc-800 hover:text-lime-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-700 dark:text-zinc-200 dark:hover:text-lime-300 dark:focus-visible:outline-lime-300"
+                  class="text-sm text-zinc-800 hover:text-cg-lime-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cg-lime-700 dark:text-zinc-200 dark:hover:text-cg-lime-300 dark:focus-visible:outline-cg-lime-300"
                 >
                   {{ item.title }}
                 </NuxtLink>

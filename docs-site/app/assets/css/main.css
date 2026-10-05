@@ -3,40 +3,71 @@
 
 @source "../../../../docs/**/*.md";
 
+/* Keep in sync with app/utils/cg-palette.ts */
 @theme static {
   --font-sans: 'Geist', 'Noto Sans JP', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
 
-  --color-cg-lime: #84cc16;
-  --color-cg-lime-deep: #65a30d;
-  --color-cg-lime-bright: #a3e635;
-  --color-cg-violet: #8b5cf6;
-  --color-cg-violet-soft: #c4b5fd;
+  --color-cg-lime-50: #F7FBE8;
+  --color-cg-lime-100: #EBF9CF;
+  --color-cg-lime-200: #DDF5A9;
+  --color-cg-lime-300: #CCED7B;
+  --color-cg-lime-400: #BCE24C;
+  --color-cg-lime-500: #A8D400;
+  --color-cg-lime-600: #93B600;
+  --color-cg-lime-700: #668000;
+  --color-cg-lime-800: #4E6104;
+  --color-cg-lime-900: #2E3B03;
+  --color-cg-lime-950: #1C2301;
+  --color-cg-lime-neon: #CAF902;
+
+  --color-cg-violet-50: #FBF5FF;
+  --color-cg-violet-100: #F6EAFE;
+  --color-cg-violet-200: #EED7FE;
+  --color-cg-violet-300: #E1B7FD;
+  --color-cg-violet-400: #C781F4;
+  --color-cg-violet-500: #B855F0;
+  --color-cg-violet-600: #A600E7;
+  --color-cg-violet-700: #830CB6;
+  --color-cg-violet-800: #5C0D81;
+  --color-cg-violet-900: #3F0B59;
+  --color-cg-violet-950: #2A003A;
+  --color-cg-violet-neon: #A70FEF;
 }
 
 :root {
-  --ui-bg: #fafafa;
-  --ui-bg-muted: #f4f4f5;
-  --ui-bg-elevated: #ffffff;
-  --ui-text: #27272a;
-  --ui-text-muted: #71717a;
-  --ui-text-dimmed: #a1a1aa;
-  --ui-border: #e4e4e7;
-  --cg-lime: #84cc16;
-  --cg-lime-deep: #65a30d;
-  --cg-lime-bright: #a3e635;
-  --cg-violet: #8b5cf6;
-  --cg-violet-soft: #c4b5fd;
+  --ui-bg: #FAFAFA;
+  --ui-bg-muted: #F4F4F5;
+  --ui-bg-elevated: #FFFFFF;
+  --ui-text: #27272A;
+  --ui-text-muted: #71717A;
+  --ui-text-dimmed: #A1A1AA;
+  --ui-border: #E4E4E7;
+  --ui-primary: var(--color-cg-lime-800);
+  --ui-secondary: var(--color-cg-violet-600);
+  --cg-on-lime: #1C2301;
+  --cg-cta-bg: var(--color-cg-lime-500);
+  --cg-cta-bg-hover: var(--color-cg-lime-600);
+  --cg-label-ink: #3F3F46;
+  --cg-label-scrim: #FAFAFA;
+  --cg-label-line: rgba(161, 161, 170, 0.55);
 }
 
 .dark {
-  --ui-bg: #18181b;
-  --ui-bg-muted: #27272a;
-  --ui-bg-elevated: #27272a;
-  --ui-text: #e4e4e7;
-  --ui-text-muted: #a1a1aa;
-  --ui-text-dimmed: #71717a;
-  --ui-border: #3f3f46;
+  --ui-bg: #09090B;
+  --ui-bg-muted: #18181B;
+  --ui-bg-elevated: #18181B;
+  --ui-text: #E4E4E7;
+  --ui-text-muted: #A1A1AA;
+  --ui-text-dimmed: #71717A;
+  --ui-border: #27272A;
+  --ui-primary: var(--color-cg-lime-400);
+  --ui-secondary: var(--color-cg-violet-400);
+  --cg-cta-bg: var(--color-cg-lime-400);
+  --cg-cta-bg-hover: var(--color-cg-lime-300);
+  --cg-label-ink: #E4E4E7;
+  --cg-label-scrim: #09090B;
+  --cg-label-line: rgba(63, 63, 70, 0.95);
 }
 
 html {
@@ -45,13 +76,65 @@ html {
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--cg-lime-deep) 55%, white);
-  color: #18181b;
+  background: color-mix(in oklab, var(--color-cg-lime-600) 55%, white);
+  color: #1C2301;
 }
 
 .dark ::selection {
-  background: color-mix(in oklab, var(--cg-lime) 70%, black);
-  color: #fafafa;
+  background: color-mix(in oklab, var(--color-cg-lime-neon) 70%, black);
+  color: #FAFAFA;
+}
+
+.bg-primary {
+  background-color: var(--cg-cta-bg);
+  --text-color-inverted: var(--cg-on-lime);
+  color: var(--cg-on-lime);
+}
+
+.bg-primary:hover,
+.bg-primary:active {
+  background-color: var(--cg-cta-bg-hover);
+}
+
+.dark .bg-secondary {
+  --text-color-inverted: #09090B;
+  color: #09090B;
+}
+
+.hero-wash {
+  background:
+    radial-gradient(ellipse 42% 36% at 72% 42%, color-mix(in oklab, var(--color-cg-lime-700) 18%, transparent), transparent 70%),
+    radial-gradient(ellipse 32% 28% at 88% 68%, color-mix(in oklab, var(--color-cg-violet-700) 14%, transparent), transparent 70%);
+}
+
+.dark .hero-wash {
+  background:
+    radial-gradient(ellipse 42% 36% at 72% 42%, color-mix(in oklab, var(--color-cg-lime-neon) 16%, transparent), transparent 70%),
+    radial-gradient(ellipse 34% 30% at 86% 70%, color-mix(in oklab, var(--color-cg-violet-neon) 18%, transparent), transparent 70%);
+}
+
+.cg-label-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cg-node-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--cg-label-line);
+  background: color-mix(in oklab, var(--cg-label-scrim) 84%, transparent);
+  color: var(--cg-label-ink);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 .shiki,

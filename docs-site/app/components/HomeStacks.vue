@@ -62,7 +62,7 @@ const stacks = [
 
 <template>
   <section class="mx-auto max-w-6xl px-4 py-16 sm:px-6">
-    <p class="font-mono text-xs tracking-[0.18em] text-lime-800 uppercase dark:text-lime-300">
+    <p class="font-mono text-xs tracking-[0.18em] text-cg-lime-800 uppercase dark:text-cg-lime-300">
       Stacks
     </p>
     <h2 class="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">

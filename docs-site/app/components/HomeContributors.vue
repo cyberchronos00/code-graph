@@ -37,7 +37,7 @@ onMounted(() => {
 
 <template>
   <section class="mx-auto max-w-6xl px-4 pt-16 pb-20 sm:px-6">
-    <p class="font-mono text-xs tracking-[0.18em] text-lime-800 uppercase dark:text-lime-300">
+    <p class="font-mono text-xs tracking-[0.18em] text-cg-lime-800 uppercase dark:text-cg-lime-300">
       People
     </p>
     <h2 class="mt-2 text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -55,7 +55,7 @@ onMounted(() => {
           :href="person.html_url"
           target="_blank"
           rel="noreferrer"
-          class="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white py-1 pr-3 pl-1 text-sm text-zinc-800 hover:border-lime-700/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-lime-300/40 dark:focus-visible:outline-lime-300"
+          class="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white py-1 pr-3 pl-1 text-sm text-zinc-800 hover:border-cg-lime-700/40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cg-lime-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-cg-lime-300/40 dark:focus-visible:outline-cg-lime-300"
         >
           <img
             :src="person.avatar_url"
@@ -79,7 +79,7 @@ onMounted(() => {
         href="https://github.com/cyberchronos00/code-graph/graphs/contributors"
         target="_blank"
         rel="noreferrer"
-        class="font-medium text-lime-800 underline-offset-4 hover:underline dark:text-lime-300"
+        class="font-medium text-cg-lime-800 underline-offset-4 hover:underline dark:text-cg-lime-300"
       >
         View on GitHub
       </a>.

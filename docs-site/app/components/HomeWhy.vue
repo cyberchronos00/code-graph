@@ -30,7 +30,7 @@ const reasons = [
 
 <template>
   <section class="mx-auto max-w-6xl px-4 py-16 sm:px-6">
-    <p class="font-mono text-xs tracking-[0.18em] text-lime-800 uppercase dark:text-lime-300">
+    <p class="font-mono text-xs tracking-[0.18em] text-cg-lime-800 uppercase dark:text-cg-lime-300">
       Why cg
     </p>
     <h2 class="mt-2 max-w-xl text-3xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
@@ -45,7 +45,7 @@ const reasons = [
         <div class="flex items-center justify-between gap-2">
           <UIcon
             :name="reason.icon"
-            class="size-5 text-lime-800 dark:text-lime-300"
+            class="size-5 text-cg-lime-800 dark:text-cg-lime-300"
           />
           <span class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500">
             0{{ index + 1 }}

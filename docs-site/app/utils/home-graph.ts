@@ -6,6 +6,29 @@ export interface GraphNode {
   position: [number, number, number]
   radius: number
   phase: number
+  /** Bookstore example name. Only hubs and a readable subset are labeled. */
+  label?: string
+}
+
+const exampleLabels: Record<GraphKind, string[]> = {
+  lime: [
+    'StockService::reserve',
+    'OrderController::store',
+    'BookController::store',
+    'SyncWarehouseCommand',
+    'useApi',
+    'http:POST /v1/orders',
+    'composables'
+  ],
+  violet: [
+    'connection:warehouse',
+    'table:books'
+  ],
+  zinc: [
+    'page:/reports',
+    'Filament BookResource',
+    'route matches'
+  ]
 }
 
 export interface GraphLink {
@@ -55,6 +78,14 @@ export function createHomeGraph() {
         phase: rand() * Math.PI * 2
       })
     }
+  }
+
+  const labeled: Record<GraphKind, number> = { lime: 0, violet: 0, zinc: 0 }
+  for (const node of nodes) {
+    const names = exampleLabels[node.kind]
+    const index = labeled[node.kind]
+    if (index < names.length) node.label = names[index]
+    labeled[node.kind] = index + 1
   }
 
   const links: GraphLink[] = []
