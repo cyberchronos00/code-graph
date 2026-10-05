@@ -1,241 +1,75 @@
 # Rust, C and C++
 
-code-graph indexes Rust, C and C++ natively. Each language has two modes:
+What Rust, C, and C++ add beyond [install.md](install.md), [CLI specs](cli.md#query-targets-specs), and [schema.md](schema.md): heuristic vs rust-analyzer / scip-clang, the indexer flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
 
-| mode | needs | what you get |
+## Modes
+
+| mode | calls | needs |
 |---|---|---|
-| **exact** (SCIP) | Rust: `rust-analyzer`. C/C++: `scip-clang` plus a `compile_commands.json` | Every definition and reference is resolved by the compiler front end. Edges are `exact`, or `resolved` when they go through a receiver (`x.m()`, `p->f`) or dispatch |
-| **heuristic** (fallback) | only the tree-sitter Python packages | Name-based resolution over a syntax tree. Every resolved reference is labelled `heuristic` |
+| heuristic | name resolution, labelled `heuristic` | tree-sitter (`tree-sitter-rust`, `tree-sitter-c`, `tree-sitter-cpp`) |
+| exact | compiler-resolved references (`exact`, or `resolved` through a receiver, a macro, or dispatch). Node ids stay the syntax layer's | Rust: rust-analyzer. C/C++: scip-clang plus `compile_commands.json` ([Exact mode](#exact-mode)) |
 
-Both modes produce the **same node ids**: the syntactic layer (tree-sitter) defines the nodes, and the SCIP index adds
-or upgrades the edges. A graph built in heuristic mode can therefore be compared with an exact one later.
+The syntax layer also records facts the compiler index does not: crates and modules, entry points, the `pub` surface, `#[cfg]` / `#if` gates, env reads, `unsafe`, FFI, and routes. Kind names: [schema.md](schema.md#node-kinds).
 
-The syntactic layer also adds the facts compilers don't report: crates and modules, entry points, `pub` API
-surface, `#[cfg]` / `#if` gates, environment variable reads, `unsafe`, FFI, and routes.
+## Exact mode
 
-## Install
+Exact mode runs when the indexer is installed. `CODEGRAPH_RUST_SCIP=0` or `CODEGRAPH_C_SCIP=0` forces the heuristic layer. A failed run is named by `cg coverage` (`exact indexer run failed`) and the index stays on the syntax layer. SCIP output is cached under `~/.cache/codegraph/scip/` ([cli.md](cli.md#clean)).
 
-```bash
-.venv/bin/pip install tree-sitter tree-sitter-rust tree-sitter-c tree-sitter-cpp   # required for both modes
-
-# Rust, exact mode
-rustup component add rust-analyzer          # or: https://rust-analyzer.github.io/ (any release since 2024)
-rust-analyzer --version
-
-# C / C++, exact mode: scip-clang (single static binary, Linux x86_64 / macOS arm64)
-curl -fL -o ~/.local/bin/scip-clang \
-  https://github.com/sourcegraph/scip-clang/releases/download/v0.4.0/scip-clang-x86_64-linux   # or ...-arm64-darwin
-chmod +x ~/.local/bin/scip-clang && scip-clang --version
-```
-
-The tools are looked up in `PATH`, then `~/.cargo/bin` (rust-analyzer) and `~/.local/bin` (scip-clang). Override the
-lookup with `CODEGRAPH_RUST_ANALYZER=/path` or `CODEGRAPH_SCIP_CLANG=/path`. SCIP output is cached under
-`<cache root>/scip/` (`~/.cache/codegraph/scip/` by default, [cli.md](cli.md#clean)), keyed by the cache version, the indexer version and the content hash of every source file (and of
-`compile_commands.json` for C/C++), so a re-index with no changes takes seconds and any content change re-runs the indexer.
-Processes that index the same project at the same time (parallel CI jobs, test workers, an MCP `index` next to a CLI
-run) share one indexer run: the first takes a per-key lock and runs rust-analyzer / scip-clang, the others wait and
-read its cached output, so every run gets the exact layer. When an exact indexer is installed but its run fails,
-`cg coverage` says so (`exact indexer run failed (exit N: <last stderr line>); heuristic layer used`).
-
-## Rust
-
-**Detection:** a `Cargo.toml` at the root. Workspaces, packages and targets come from
-`cargo metadata --no-deps --offline`; without cargo, the manifests are read directly.
-
-**Exact mode** runs `rust-analyzer scip <root>`. Build scripts and proc-macros are off by default (safe: nothing
-from the project is executed). `CODEGRAPH_RUST_BUILD_SCRIPTS=1` turns both on, for crates whose items come from
-`build.rs` or derive macros. Cargo features are `all`.
-
-**Node keys** are Rust paths:
-- `crate::module::item`
-- `crate::Type::method` for inherent methods
-- `crate::module::<Type as Trait>::method` for trait impls
-
-Non-library targets are qualified by target: `kv_core[test:roundtrip]::put_then_get`, `kv_core[bench:put]::main`,
-`kv_core[example:basic]::main`, `kv_core[build]::main`. The binary crate is named after the bin target (`kv::main`).
-
-| fact | how it shows up |
+| indexer | how |
 |---|---|
-| crates, modules | `crate:<name>` and `mod:<path>` nodes, CONTAINS edges; `--group by` module in `reaches` output |
-| traits, impls | IMPLEMENTS (type → trait), IMPLEMENTED_BY (trait method → impl method; `resolved` in exact mode, `heuristic` otherwise). Calls on `dyn Trait` or generic `T: Trait` land on the trait method with `dispatch: "trait"`, and propagate to every impl. Impls of external traits (`Default`, `From`, `Display`, `Drop`, a framework's trait) are linked from their Self type (`heuristic`, `via: external_trait`), so they don't show up as dead code |
-| entry points | `main` (bin targets, `#[tokio::main]`, `#[async_std::main]`, `#[actix_web::main]`), `ffi_export` (`#[no_mangle]` / `#[export_name]` functions), `test` (`#[test]`, `#[tokio::test]`, `#[rstest]`, files under `tests/`), `bench`, `example`, `build_script`, `public_api` (items reachable through `pub` from a library crate root, including `pub use` re-exports) |
-| feature gates | `#[cfg(feature = "x")]` on items, statements and inner `#![cfg]` → GATED_BY → `feature:<package>/<feature>`; other cfgs → `cfg:<atom>` (e.g. `cfg:unix`, `cfg:target_os="linux"`). `cfg(test)` marks test code |
-| env | `env!`, `option_env!`, `std::env::var(_os)` (also through `const` names) → READS_ENV → `env:KEY` |
-| unsafe / FFI | USES_UNSAFE → `unsafe:<crate>` (unsafe blocks, `unsafe fn`, `unsafe impl`); `extern "C" { ... }` declarations are `ffi` nodes |
-| routes (bonus) | axum `.route("/p", get(h).post(h2))` and actix/rocket attribute routes → `route:<METHOD> <path>` (entry `http_route`) → ROUTES_TO handler |
-| attribute references | `#[serde(default = "f", with = "m", ...)]`, clap `value_parser = f` → REFERENCES_FN |
-| macro-wrapped items | items inside item-level macro bodies (`cfg_rt! { pub mod rt; ... }`) are indexed when the body parses as Rust |
-| macro-generated tests | a project `macro_rules!` whose rule expands to `#[test] fn $name` (ripgrep's `rgtest!`, table-driven `matches!(name, ..)` tests) gives each invocation a `test` function node named by its first `ident` argument. Calls in the invocation's tokens (the closure) are its calls, and so are the macro body's own path calls (`crate::util::setup(..)`, `via: "test macro body"`), so `cg tests` reaches code under the generated tests |
+| `rust-analyzer scip` | a root `Cargo.toml` (`cargo metadata`, or the manifests if cargo is missing). Build scripts and proc-macros stay off unless `CODEGRAPH_RUST_BUILD_SCRIPTS=1`. Cargo features are `all` |
+| `scip-clang` | a `compile_commands.json` at the root, under `build*/`, `out/`, `cmake-build-*/`, or at `CODEGRAPH_COMPDB`. One database is one configuration |
+| prebuilt index | `CODEGRAPH_RUST_SCIP_FILE` or `CODEGRAPH_C_SCIP_FILE` |
 
-## C and C++
-
-**Detection:** a `compile_commands.json` (at the root, `build*/`, `out/`, `cmake-build-*/`, or `$CODEGRAPH_COMPDB`),
-or C/C++ sources in a repo that is not a Rust, Node, PHP, Go or Python project. `CODEGRAPH_CFAMILY=1` forces the
-plugin on and `=0` turns it off.
-
-**Exact mode** runs scip-clang over a compile database (`compile_commands.json`), which records how each file is
-compiled: include paths, defines and language standard. Generate it with the build system:
-
-| build system | command (in the project root) |
+| still heuristic | why |
 |---|---|
-| CMake | `cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON` (the configure step is enough for most projects) |
-| Meson | `meson setup build` (writes `build/compile_commands.json`) |
-| Make, autotools, others | `bear -- make -j8` (`bear` is in most package managers; this runs a real build) |
-| Bazel | [hedronvision/bazel-compile-commands-extractor](https://github.com/hedronvision/bazel-compile-commands-extractor) |
-| Xcode, MSBuild | export from the IDE, or use the project's CMake build if it has one |
+| indexer missing or `*_SCIP=0` | coverage says so |
+| C/C++ with no compile database | stats `"mode": "heuristic"`. The database comes from the build system (CMake `CMAKE_EXPORT_COMPILE_COMMANDS`, Meson, `bear`) |
+| inactive `#[cfg]` / `#if` | the syntax node stays. Rust re-runs rust-analyzer for other targets the `cfg`s name (`attrs.exact_target`); the rest is `via: cfg-inactive` |
+| files the index omits | those files keep heuristic edges |
 
-The database is found at the root, in `build*/`, `out/` or `cmake-build-*/`, or at `CODEGRAPH_COMPDB`. Generated
-headers (`config.h` and similar) come from the configure step, so run it first; files listed in the database but never
-generated (unity sources) are skipped. Without a database, or without scip-clang, the plugin indexes in heuristic mode
-and the index stats show `"mode": "heuristic"` with the command that generates the database.
-
-```bash
-cg index path/to/project --db out/project.db > out/project.stats.json
-grep -E '"mode"|"nodes"|"edges"|"seconds"' out/project.stats.json      # "mode": "scip" = exact
-
-cg reaches rb_create --db out/project.db              # every dependent, grouped RUNTIME / LIBRARY / DEV
-cg impact Parser::parse --db out/project.db           # callers up to entry points (main, exported API, tests)
-cg path main write_block --db out/project.db          # one call chain with file:line for every hop
-cg reaches define:USE_SSL --db out/project.db         # code under #ifdef USE_SSL, and who reaches it
-cg reaches env:APP_DEBUG --db out/project.db          # who reads this environment variable
-cg reaches src/net/socket.c --db out/project.db       # every dependent of anything in a file
-cg downstream main --db out/project.db                # env keys and #if gates a program touches
-```
-
-Confidence in exact mode: `exact` means clang reported the reference; `resolved` means it went through `.` / `->`, a
-macro expansion (`via_macro`) or virtual dispatch. Calls to a virtual method land on the base method and fan out
-through OVERRIDDEN_BY / IMPLEMENTED_BY to every override, so all overrides are covered. The index reflects one
-configuration (the compile database's defines): code in inactive `#if` branches is still a node from the syntax
-layer, and a gates file with `defines_off` answers "what if FOO were off" (see [gate scenarios](#gate-scenarios)).
-`CODEGRAPH_NO_CACHE=1` forces a fresh scip-clang run; on a fresh run the stats include scip-clang's command, its
-last stderr lines and its summary (`num errored TUs`).
-
-**Unreferenced functions** (no entry point reaches them) are a starting point for dead-code review:
-
-```bash
-.venv/bin/python - <<'PY'
-import sqlite3; c = sqlite3.connect("out/project.db")
-for r in c.execute("""SELECT id, file, line FROM nodes n WHERE kind IN ('function','method')
-                      AND entry_kind IS NULL AND NOT EXISTS (SELECT 1 FROM node_entry e WHERE e.node_id = n.id)
-                      ORDER BY file, line"""): print(*r)
-PY
-```
-
-Confirm each one first: functions stored as pointers at runtime (exact mode records the pointer-taking site as
-REFERENCES_FN), callbacks registered with a library, and code in `#if` branches that were off in the compile database
-can be live.
-
-**Node keys:**
-- functions and methods use their qualified name (`ns::Class::method`, `rb_create`);
-- file-local items get the file prefix (`src/ringbuf.c#rb_lock` for `static`, anonymous namespaces). In heuristic
-  mode a call binds to a `static` function in the calling file first, then to one in a header the file includes,
-  directly or through other headers (`static inline` helpers in `queue.h`);
-- overloads get the parameter types (`format(format_string<T...>)`);
-- same-named functions in different programs get the file prefix (`tools/a.c#main`).
-
-| fact | how it shows up |
-|---|---|
-| translation units, headers | `file:<path>` nodes (`translation_unit`, `header` attrs); INCLUDES edges resolved through the including directory, the compile database's `-I` paths, `include/`, then a unique basename (`heuristic`) |
-| entry points | `main` / `wmain` / `WinMain` (`test`, `example` or `bench` by directory), `test` (gtest/Catch2/doctest/Boost.Test/check `TEST*` macros, `test*` functions in test directories), `bench` (`BENCHMARK`), `public_api` (functions declared with an export macro such as `FOO_API` / `__declspec(dllexport)` / visibility default, or declared in an `include/` header, and not `static`/private) |
-| virtual dispatch | exact mode: scip-clang's override relationships → OVERRIDDEN_BY (base → override) and IMPLEMENTED_BY (pure virtual → implementation), `resolved`; heuristic mode: same-named methods of derived classes, `heuristic`. Calls to virtual methods carry `dispatch: "virtual"` |
-| preprocessor gates | `#if` / `#ifdef` / `#elif` / `#else` regions (include guards and `__cplusplus` excluded) → GATED_BY → `define:<MACRO>` |
-| env | `getenv`, `secure_getenv`, `std::getenv`, `_wgetenv` with a literal key → READS_ENV |
-| macros | function-like macros are `macro` nodes and CALLS targets. References that clang reports at a macro expansion site are kept as `resolved` with `via_macro`; expansions with more than 8 symbols at one site (type-check macros) are dropped |
-
-**Directories skipped** by default: `third_party` (and spellings), `vendor`, `external`, `extern`, `deps`, `_deps`,
-`build*`, `cmake-build*`, `CMakeFiles`, `bazel-out`, `googletest`/`gtest`/`gmock`/`catch2`/`doctest`, `node_modules`,
-dot-directories. To change the list, use
-`CODEGRAPH_EXCLUDE_DIRS=a,b` or `CODEGRAPH_INCLUDE_DIRS=deps`.
-
-## Entry kinds and `reaches` groups
-
-| group | entry kinds |
-|---|---|
-| RUNTIME | `main`, `ffi_export` (plus `http_route` etc. as before) |
-| LIBRARY API | `public_api`: reached only through a library's exported surface |
-| DEV/BUILD-ONLY | `test`, `bench`, `example`, `build_script` |
-
-`reaches` and `impact` group the results by module: the Rust module path, or the directory for C/C++.
-
-## Query specs
-
-| spec | selects |
-|---|---|
-| `kv_core::store::Store::get` | a function, method or type by qualified path (suffix match: `Store::get`, `store::Store::get`) |
-| `MemoryStore::get` | also matches the trait impl `<MemoryStore as Store>::get` |
-| `bus::Handler` | a type and its methods |
-| `rb_create` | a bare function name (then type names) |
-| `src/ringbuf.c`, `crates/kv-core/src/util.rs` | every item defined in a file |
-| `kv_core::store`, `mod:kv_core::store` | every function in a Rust module |
-| `env:KV_DATA_DIR`, `unsafe:kv_core`, `feature:kv-core/fs`, `cfg:unix`, `define:RB_THREADSAFE` | fact nodes |
-
-## Gate scenarios
-
-The same `--gates` file format, with native keys (see [`examples/native.gates.json`](../examples/native.gates.json)):
-
-```json
-{"scenarios": [{"name": "minimal_build",
-  "features_off": ["kv-core/fs"], "features_on": [], "cargo_features": "default",
-  "cfg_true": ["unix"], "cfg_false": ["windows"],
-  "defines_on": ["NDEBUG", "LEVEL=2"], "defines_off": ["RB_THREADSAFE"]}]}
-```
-
-Edges inside a `#[cfg]` item, statement or match arm, or inside a `#if` region, that is false under the scenario get
-the scenario as their gate. `reaches` then reports them under GATED. Unknown atoms stay live (conservative).
-
-## Platform targets
-
-Independently of gate scenarios, every item and reference under a platform `cfg` (`unix`, `windows`, `target_os`,
-`target_family`, ...) or a platform `#if` (`_WIN32`, `__APPLE__`, `__linux__`, `__ANDROID__`, ...) carries the
-targets it is built for, and so do files in `win/`, `unix/`, `posix/`, `darwin/` directories and `*_win.c` /
-`*-unix.c` files. `--platform windows` on `reaches`, `impact`, `downstream` and `path` shows the Windows build;
-`cg platforms divergence` lists functions defined per platform and calls into code that one target does not build.
-In exact mode, rust-analyzer resolves the host's `cfg`, and it runs once more for each other target the `cfg`
-conditions name (up to 3, e.g. Windows and macOS on a Linux host: `cargo.target` = `x86_64-pc-windows-msvc`,
-`aarch64-apple-darwin`): references under those conditions are exact edges with `attrs.exact_target`. What no run
-resolves is added from the syntax layer (`via: cfg-inactive`). Each run costs about as much as the host run on a
-cold cache (cached afterwards like the host index); `rust: {targets: off}` in `.cg.yaml` or
-`CODEGRAPH_RUST_TARGETS=0` turns it off (`cg doctor` shows the setting in effect). See
-[platforms.md](platforms.md).
+`CODEGRAPH_CFAMILY=1` forces the C/C++ plugin and `=0` turns it off. It steps aside in a Cargo, npm, Composer, Go, Python, or Dart repo unless a compile database exists. Generated headers come from the configure step; unity sources listed but not on disk are skipped.
 
 ## Environment variables
 
 | variable | effect |
 |---|---|
-| `CODEGRAPH_RUST_SCIP=0` / `CODEGRAPH_C_SCIP=0` | force heuristic mode |
-| `CODEGRAPH_RUST_ANALYZER`, `CODEGRAPH_SCIP_CLANG` | indexer binary |
-| `CODEGRAPH_RUST_SCIP_FILE`, `CODEGRAPH_C_SCIP_FILE` | use an existing `index.scip` instead of running the indexer |
+| `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0` | force heuristic mode |
+| `CODEGRAPH_RUST_ANALYZER`, `CODEGRAPH_SCIP_CLANG` | indexer binary (`PATH`, then `~/.cargo/bin` or `~/.local/bin`) |
+| `CODEGRAPH_RUST_SCIP_FILE`, `CODEGRAPH_C_SCIP_FILE` | an existing `index.scip` |
 | `CODEGRAPH_RUST_BUILD_SCRIPTS=1` | let rust-analyzer run build scripts and proc-macros |
-| `CODEGRAPH_RUST_TARGETS` | extra rust-analyzer runs per target: `auto` (default: up to 3 targets the `cfg` conditions name), `0` (off), or a list of platforms / triples (`windows,macos`, `aarch64-linux-android`); overrides `.cg.yaml` `rust.targets` |
-| `CODEGRAPH_COMPDB` | path to `compile_commands.json` (or its directory) |
-| `CODEGRAPH_CFAMILY=0/1` | disable / force the C/C++ plugin |
-| `CODEGRAPH_JOBS` | scip-clang worker count |
-| `CODEGRAPH_INDEXER_TIMEOUT` | seconds (default 3600; also the Kotlin scip-java run) |
-| `CODEGRAPH_KOTLIN_SCIP=1`, `CODEGRAPH_KOTLIN_SCIP_FILE`, `CODEGRAPH_SCIP_JAVA` | Kotlin exact mode: run scip-java (it runs the Gradle / Maven build), use an existing index, scip-java binary ([kotlin.md](kotlin.md#exact-mode)) |
-| `CODEGRAPH_SWIFT_INDEX=1`, `CODEGRAPH_SWIFT_INDEX_STORE`, `CODEGRAPH_SWIFT`, `CODEGRAPH_LIBINDEXSTORE` | Swift exact mode: run `swift build --enable-index-store` for a SwiftPM package, use an existing index store (Xcode DerivedData, CI), toolchain and `libIndexStore` paths ([swift.md](swift.md#exact-mode)) |
-| `CODEGRAPH_NO_CACHE=1`, `CODEGRAPH_CACHE` | SCIP cache control (`cg clean` removes entries) |
-| `CODEGRAPH_NO_CARGO=1`, `CODEGRAPH_CARGO` | skip `cargo metadata` / cargo binary |
+| `CODEGRAPH_RUST_TARGETS` | extra rust-analyzer runs: `auto` (default, up to 3 targets the `cfg`s name), `0`, or a platform / triple list (`windows,macos`). Overrides `.cg.yaml` `rust.targets` |
+| `CODEGRAPH_COMPDB` | `compile_commands.json` or its directory |
+| `CODEGRAPH_CFAMILY=0` / `1` | disable or force the C/C++ plugin |
+| `CODEGRAPH_JOBS` | scip-clang workers |
+| `CODEGRAPH_NO_CARGO=1`, `CODEGRAPH_CARGO` | skip `cargo metadata`, or point at the cargo binary |
 | `CODEGRAPH_EXCLUDE_DIRS`, `CODEGRAPH_INCLUDE_DIRS` | C/C++ directory filters (comma-separated names) |
-| `CODEGRAPH_C_MASK_ANNOTATIONS=0` | do not blank annotation macros (`FOO_API`, `FOO_CONSTEXPR`) before parsing |
-| `CODEGRAPH_C_MAX_MACRO_REFS` | max references kept per macro expansion site (default 8) |
-| `CODEGRAPH_MAX_FILE_BYTES` | skip larger C/C++ files (default 30 MB; amalgamations) |
+| `CODEGRAPH_C_MASK_ANNOTATIONS=0` | do not blank annotation macros (`FOO_API`) before parsing |
+| `CODEGRAPH_C_MAX_MACRO_REFS` | references kept per macro expansion site (default 8) |
+| `CODEGRAPH_MAX_FILE_BYTES` | skip larger C/C++ files (default 30 MB) |
+| `CODEGRAPH_NO_CACHE=1`, `CODEGRAPH_INDEXER_TIMEOUT` | fresh indexer run; cap in seconds |
 
-## Validation on public projects
+## Query specs
 
-These numbers come from shallow clones (autumn 2026) on a Linux x86_64 machine, cold cache, exact mode. Precision was spot-checked on
-random samples of 20 CALLS / REFERENCES_FN / USES_TYPE / IMPLEMENTED_BY edges per project (two samples each). Every
-sampled edge was correct. The ones that look odd on the line are references through a macro expansion, an `.await`
-(→ `Future::poll`) or an operator. "Heuristic vs exact" compares the fallback mode's call edges with exact mode's,
-on the same files.
+Qualified paths, `mod:`, source files, and `feature:` / `cfg:` / `define:` / `unsafe:` / `env:` follow [cli.md](cli.md#query-targets-specs). Ids that page does not spell out:
 
-| project | lang | files | index time (indexer) | nodes / edges | heuristic precision / recall vs exact |
-|---|---|---|---|---|---|
-| ripgrep | Rust | 109 | 18 s (14 s) | 5.5k / 25.8k | 90% / 56% |
-| tokio | Rust | 795 | 73 s (65 s) | 13.6k / 70.4k | 71% / 47% |
-| fmt | C++ | 70 | 17 s (15 s) | 5.3k / 24.1k | 68% / 31% |
-| leveldb | C++ | 133 | 3.7 s (2.8 s) | 3.1k / 12.3k | 87% / 50% |
-| curl | C | 1,050 | 19 s (7 s) | 19.2k / 106.6k | 86% / 83% |
-| redis | C | 281 | 12 s (3 s) | 16.2k / 156.1k | 90% / 82% |
+| spec or id | selects |
+|---|---|
+| `kv_core[test:roundtrip]::put_then_get` | a non-library target (`test`, `bench`, `example`, `build`). The bin crate is named for its bin target (`kv::main`) |
+| `crate::module::<Type as Trait>::method` | a trait impl method. A call on `dyn Trait` or `T: Trait` lands on the trait method (`dispatch: "trait"`) and reaches every impl |
+| `src/ringbuf.c#rb_lock` | a file-local item (`static`, an anonymous namespace). Same-named functions in different programs take the file prefix (`tools/a.c#main`). Overloads keep parameter types in the id |
 
-In short, heuristic mode is good enough for orienting in plain C. For Rust and modern C++ (generics, overloads,
-templates, macros) use exact mode.
+`impact` shows a virtual or trait base as `overrides:` (`via base`), not as a caller. `reaches` groups by Rust module or C/C++ directory. Gates use the same file as [configuration.md](configuration.md#gate-scenarios), with native keys `features_off`, `cfg_true`, and `defines_off`: edges under a false `#[cfg]` or `#if` are GATED; unknown atoms stay live.
+
+## Framework facts
+
+| area | what you can query |
+|---|---|
+| Rust entry | `main` (including `#[tokio::main]`, `#[async_std::main]`, `#[actix_web::main]`), `#[no_mangle]` / `#[export_name]` (`ffi_export`), `#[test]` / `#[tokio::test]` / `#[rstest]` and `tests/`, plus `bench`, `example`, `build_script`, and `pub` items from a library root (`public_api`, `pub use` included) |
+| Rust routes | axum `.route("/p", get(h).post(h2))` and actix / rocket attribute routes → `route:<METHOD> <path>` (`http_route`) → `ROUTES_TO` the handler |
+| Rust attrs | `#[serde(default = "f")]` and clap `value_parser = f` → `REFERENCES_FN`. A project `macro_rules!` that expands to `#[test] fn $name` is one `test` node per call (`via: "test macro body"`). Items inside an item-level macro body are indexed when that body parses as Rust |
+| Impls of external traits | `Default`, `From`, `Display`, `Drop`, a framework trait: linked from the Self type (`heuristic`, `via: external_trait`) |
+| C / C++ entry | `main` / `wmain` / `WinMain` (a test, example, or bench directory retags it), gtest / Catch2 / doctest / Boost.Test `TEST*` and `test*` in test dirs, `BENCHMARK`, and an export macro or a non-static declaration in `include/` (`public_api`) |
+| Virtuals | exact: scip-clang → `OVERRIDDEN_BY` / `IMPLEMENTED_BY` (`resolved`). Heuristic: same-named methods on derived classes. The call carries `dispatch: "virtual"` and fans out to every override |
+| Gates and env | `#[cfg(feature = "x")]` → `feature:<package>/<feature>`; other cfgs → `cfg:` (`cfg(test)` marks test code). `#if` / `#ifdef` (not an include guard or `__cplusplus`) → `define:`. `env!`, `option_env!`, `std::env::var`, `getenv` → `env:KEY`. `unsafe` blocks and `unsafe fn` / `impl` → `unsafe:<crate>`; `extern "C"` is an `ffi` node |
+| Macro expansions | a function-like macro is a `macro` node and a `CALLS` target. A clang reference at an expansion is `resolved` with `via_macro`; sites with more symbols than `CODEGRAPH_C_MAX_MACRO_REFS` are dropped |
