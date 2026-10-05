@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- Dart isolates (#38, part 3) as `isolate:<file>#<entry>` endpoints: `Isolate.spawn` / `run` / `spawnUri` and
+  Flutter `compute` to the entry function, and the entry's `SendPort.send` / `Isolate.exit` back to the spawner's
+  `ReceivePort` listener (`<entry>:out`).
 - Child processes (#38, part 3) as `process:<program>` endpoints: application code that starts an in-repo
   program (Python `subprocess`, Node `spawn` / `fork`, Rust cargo bins, artisan, Dart, Electron `utilityProcess`)
   sends to the program's entry, and Node `fork` / `utilityProcess` messages are linked both ways

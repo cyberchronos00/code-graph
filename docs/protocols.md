@@ -349,6 +349,16 @@ not programs. `cluster.fork()` re-runs the same program and is not linked. Node 
 protocol: `new Worker(path.join(__dirname, 'w.js'))` (also through `pathToFileURL(..)` or a local holding the path),
 `worker.on('message', h)` in the parent, `parentPort.on('message', h)` / `parentPort.postMessage(..)` in the worker.
 
+## Dart isolates (#38 part 3)
+
+| protocol | endpoint | senders | receivers |
+|---|---|---|---|
+| `isolate` | `<file>#<entry>` | `Isolate.spawn(entry, msg)`, `Isolate.run(entry)` / `Isolate.run(() => entry(..))`, Flutter `compute(entry, msg)` (role `spawn`); `Isolate.spawnUri(Uri.file('bin/x.dart') / Uri.parse(..), ..)` names that file's `main` | the entry function (a top-level function, or a static method of the spawning class) |
+| `isolate` | `<file>#<entry>:out` | the entry's `port.send(..)` / `Isolate.exit(port, result)` on a `SendPort` parameter | the spawner's port whose `.sendPort` the spawn passes: `port.listen(h)`, `port.handler = h`, `RawReceivePort(h)`, `await for (.. in port)`, `port.first` and other stream reads, `StreamQueue(port)` |
+
+Messages into a running isolate (the entry sends its own `SendPort` back and the parent sends on it) are not
+followed, since the port travels as a message. Isolates a test starts on a test function are skipped.
+
 ## Raw TCP / UDP sockets
 
 `endpoint:tcp:<port>` / `endpoint:udp:<port>` (codegraph/sockets.py), from a source scan of every language with function

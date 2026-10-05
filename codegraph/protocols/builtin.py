@@ -116,6 +116,11 @@ register(Protocol("intent-action", "ipc", "Android implicit intent by action: In
 register(Protocol("aidl", "ipc", "Android AIDL interface method <package.IFace>.<method>: proxy call -> the IFace.Stub "
                   "implementation"))
 
+# ---- Dart isolates (#38 part 3, codegraph/dart_isolates.py)
+register(Protocol("isolate", "local", "Dart isolate on an in-repo entry function: Isolate.spawn / run / spawnUri and "
+                  "compute -> the entry; the entry's SendPort.send / Isolate.exit -> the spawner's ReceivePort "
+                  "listener (<entry>:out)"))
+
 # ---- child processes (#38 part 3, codegraph/process_runs.py process_endpoints and codegraph/local_ipc.py)
 register(Protocol("process", "ipc", "Child process running an in-repo program: endpoint:process:<program file or name>; "
                   "application code that starts it (subprocess / child_process / Command / Process.run) -> the "

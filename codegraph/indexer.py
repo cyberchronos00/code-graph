@@ -306,6 +306,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (aist := apply_android_ipc(project, builder)):
         aist["seconds"] = round(time.time() - t_ai, 2)
         stats["android_ipc"] = aist
+    # Dart isolates (#38 part 3)
+    from .dart_isolates import apply as apply_isolates
+    if (isost := apply_isolates(project, builder)):
+        stats["dart_isolates"] = isost
     # child processes in application code as endpoint:process:<program> (#38 part 3)
     from .process_runs import process_endpoints
     if (pe := process_endpoints(builder)):

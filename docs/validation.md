@@ -1108,6 +1108,17 @@ above and the fixture's 4 sends plus the `cg link` pairing of `hooks-ts` `order.
 covers svix, spatie/laravel-webhook-server and hand-signed `fetch` / `requests` senders, event names from a caller's
 argument, and the pairing.
 
+## Dart isolates (#38 part 3)
+
+| Project | Edges | Notes |
+|---|---|---|
+| dart-lang/samples (shallow clone) | 4 SENDS_TO, 3 RECEIVED_BY | `isolates/bin`: `Isolate.run(() => _readAndParseJson(filename))`, and the long-running service `Isolate.spawn(_readAndParseJsonService, p.sendPort)` whose two `p.send(..)` replies reach `_sendAndReceive` through `StreamQueue(p)` |
+| immich (mobile) | 4 SENDS_TO, 2 RECEIVED_BY | `IsolateWorker.initialize` spawns the static `_isolateEntry`; its `sendPort.send(..)` / `Isolate.exit(sendPort, result)` reach the `RawReceivePort` handler. A test's `compute(_writerTask, path)` is skipped |
+
+Unchanged: flutter-samples, dart_style and grpc-dart. All 13 new edges were checked against the source and were
+correct; reviewing them found the `StreamQueue(port)` reader and test-only isolates, both handled before landing.
+`tests/test_dart_isolates.py` covers `tests/isolate_fixture`.
+
 ## Child processes, worker_threads and Android exposure (#38 part 3)
 
 | Project | Edges | Notes |
