@@ -32,11 +32,15 @@ const { data: surround } = await useAsyncData(`${routePath.value}-surround`, () 
 const title = page.value.seo?.title || page.value.title
 const description = page.value.seo?.description || page.value.description
 
+const socialTitle = `${title} · code-graph`
+
 useSeoMeta({
   title,
-  ogTitle: title,
   description,
-  ogDescription: description
+  ogTitle: socialTitle,
+  twitterTitle: socialTitle,
+  ogDescription: description,
+  twitterDescription: description
 })
 
 const headline = computed(() => findPageHeadline(navigation?.value, page.value?.path))

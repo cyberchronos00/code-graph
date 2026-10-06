@@ -3,10 +3,18 @@ definePageMeta({
   layout: 'landing'
 })
 
+const title = 'code-graph'
+const socialTitle = 'code-graph: see what a change affects'
+const description = 'A deterministic dependency graph for the code you and your agent are about to change.'
+
 useSeoMeta({
-  title: 'code-graph',
+  title,
   titleTemplate: '%s',
-  description: 'A deterministic dependency graph for the code you and your agent are about to change.'
+  description,
+  ogTitle: socialTitle,
+  twitterTitle: socialTitle,
+  ogDescription: description,
+  twitterDescription: description
 })
 </script>
 

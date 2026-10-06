@@ -6,6 +6,12 @@ import { docRoutes } from './app/utils/docs-nav'
 export default defineNuxtConfig({
   modules: ['@nuxt/ui', '@nuxt/content', '@tresjs/nuxt'],
 
+  runtimeConfig: {
+    public: {
+      siteUrl: 'https://code-graph.cyberchronos00.workers.dev'
+    }
+  },
+
   tres: {
     devtools: false
   },

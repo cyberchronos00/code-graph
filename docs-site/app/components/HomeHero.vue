@@ -30,7 +30,7 @@
         </p>
         <h1 class="mt-6 max-w-4xl text-[clamp(3.4rem,8.4vw,6.75rem)] leading-[0.9] font-semibold tracking-[-0.045em] text-zinc-950 dark:text-white">
           See what a
-          <span class="block">change <span class="text-cg-lime-800 dark:text-cg-lime-300">touches</span></span>
+          <span class="block">change <span class="text-cg-lime-800 dark:text-cg-lime-300">affects</span></span>
         </h1>
         <p class="mt-8 max-w-xl text-lg leading-relaxed text-zinc-700 sm:text-xl dark:text-zinc-300">
           code-graph builds a local, deterministic graph of routes, calls, data access and platform boundaries. Ask what reaches a table, connection, config key or method, and follow each hop by file:line.

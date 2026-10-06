@@ -2,7 +2,7 @@
 
 # code-graph
 
-**See everything a change touches before you make it: a local, deterministic dependency graph of routes, calls, tables and config, with `file:line` evidence for every hop.**
+**See everything a change affects before you make it: a local, deterministic dependency graph of routes, calls, tables and config, with `file:line` evidence for every hop.**
 
 For you and your AI agent (CLI + MCP). No LLM in the graph.
 

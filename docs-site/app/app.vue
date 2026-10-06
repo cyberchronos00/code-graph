@@ -4,6 +4,10 @@ import { docGroups } from '~/utils/docs-nav'
 import { toDocsSearchQuery } from '~/utils/docs-search'
 
 const { seo } = useAppConfig()
+const route = useRoute()
+const siteUrl = computed(() => useRuntimeConfig().public.siteUrl.replace(/\/$/, ''))
+const pageUrl = computed(() => `${siteUrl.value}${route.path}`)
+const ogImage = computed(() => `${siteUrl.value}/og.png`)
 
 const { data: rawNavigation } = await useAsyncData('navigation', () => queryCollectionNavigation('docs'))
 
@@ -53,7 +57,8 @@ useHead({
     { name: 'viewport', content: 'width=device-width, initial-scale=1' }
   ],
   link: [
-    { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }
+    { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' },
+    { rel: 'canonical', href: pageUrl }
   ],
   htmlAttrs: {
     lang: 'en'
@@ -62,8 +67,17 @@ useHead({
 
 useSeoMeta({
   titleTemplate: `%s · ${seo?.siteName}`,
-  ogSiteName: seo?.siteName,
-  twitterCard: 'summary'
+  ogSiteName: 'code-graph',
+  ogType: 'website',
+  ogUrl: pageUrl,
+  ogImage,
+  ogImageWidth: 1200,
+  ogImageHeight: 630,
+  ogImageType: 'image/png',
+  ogImageAlt: 'See what a change affects',
+  twitterCard: 'summary_large_image',
+  twitterImage: ogImage,
+  themeColor: '#09090B'
 })
 
 provide('navigation', navigation)

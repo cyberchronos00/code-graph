@@ -26,7 +26,7 @@ coverage: python 32 exact
 ```
 
 ## Ask questions
-### What touches a table
+### What reaches a table
 
 `cg reaches table:store_books --db out/api.db`
 ```text
