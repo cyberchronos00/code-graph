@@ -44,6 +44,8 @@
 | `viz-export MODE SPECS -o OUT` | Self-contained HTML. MODE is `reaches`, `impact`, `downstream`, or `path`. `--sinks`. | [viz](viz.md) |
 | `viz-plan NAME -o OUT` | Self-contained HTML of a plan on the graph. `--plans-dir`. | [plans](plans.md) |
 | `agents ACTION` | Opt-in block in agent guidance files. Previews and asks. `--mcp` also writes the `cg-mcp` server entry. | [mcp](mcp.md) |
+| `hooks install\|uninstall\|status` | Opt-in git hooks that refresh the index after commit, checkout and merge. Nothing is installed by default. | [hooks](#hooks) |
+| `refresh ROOT --db DB` | Re-index when sources changed. `--name`, `--quiet`. Hooks run this in the background. | [hooks](#hooks) |
 | `clean [ROOT]` | Cache entries for one project, `--stale` ones, or `--all`. | [clean](#clean) |
 
 ## Common flags
@@ -179,6 +181,25 @@ Both are labelled `heuristic` in text and in JSON (`confidence`). Neither adds e
 `--target` repeats. `--all` selects all three. With neither, cg acts on the files that already exist, and exits 2 when none exist unless `--mcp` was given. `--dir` is the project root (default `.`).
 
 `--mcp` adds, or on `remove` deletes, one `cg` entry under `mcpServers`: `{"command": "cg-mcp", "args": ["--db", "out/graph.db"]}`. Default path `<dir>/.cursor/mcp.json` (`--mcp-file` overrides). Other keys stay. Invalid JSON is left untouched. [mcp](mcp.md)
+
+## hooks
+
+`install`, `uninstall` and `status` manage one block in `post-commit`, `post-checkout` and `post-merge`. Nothing is installed by default. The block sits between `# >>> cg hooks (managed by cg hooks; edit with cg, not here) >>>` and `# <<< cg hooks <<<`. cg finds that directory with `git rev-parse --git-path hooks`, so `core.hooksPath` and worktrees apply. Linked worktrees share one hooks directory, and it holds one block, so the last `install` decides which root and `--db` it refreshes. A `core.hooksPath` outside the repository (shared by other repositories) gets a note at install time. Not a git repository: exit 2.
+
+A missing hook becomes `#!/bin/sh` plus the block, mode `0755`. An existing shell hook keeps every other byte; the block is inserted immediately after the shebang, so a later `exit 0` cannot skip it. A second `install` replaces that block in place. A hook with no shebang, or a non-shell shebang, is left unchanged and reported as `skipped (not a shell hook)`. `uninstall` removes only the block and restores the original bytes. A file that then contains only the `#!/bin/sh` cg wrote is deleted.
+
+The block never calls `exit`. It backgrounds the refresh, discards its output, and ends with a succeeding command, so git is not blocked and a hook failure cannot fail the git command. `post-checkout` does nothing when `$1` equals `$2` (HEAD unchanged). `CODEGRAPH_NO_HOOKS=1` skips the block ([Configuration](configuration.md#environment-variables)). The command is `'<python>' -m codegraph.cli refresh '<root>' --db '<db>' --quiet` with the Python that ran `cg hooks install`, when that file still exists; otherwise `cg refresh …` when `cg` is on `PATH`. If neither exists, the block does nothing. Run `install` again after moving or recreating that environment.
+
+`cg refresh ROOT --db DB` re-indexes when the checkout changed. Every run touches `<db>.refresh.pending`, then takes `<db>.refresh.lock` (non-blocking `flock`, or `msvcrt.locking` on Windows; the OS releases either if the process dies). If another refresh holds the lock, it prints `refresh already running; marked pending` and exits 0. The holder clears the flag before each pass and runs another pass while it is set again, at most three passes per run, so a burst of checkouts collapses into a few runs and a request that arrives mid-pass is not lost. When the database exists and ROOT is a git repo, cg hashes the path, mtime and size of every file from `git ls-files -c -o --exclude-standard`; if that matches `<db>.refresh.state` (written by the last successful refresh, together with the database's mtime), it prints `up to date` and exits 0. A rename, an added or deleted file, an edit, or a database rewritten by something else (`cg index`) re-indexes. Not a git repo, or a workspace app root outside ROOT: always re-index. Otherwise it indexes into `<db>.refresh.tmp` (root, name and recorded `--python-root` / `--include-generated` flags from the database, or the CLI arguments when the database is new), refuses a 0-node result without replacing the database, then moves the file into place with an atomic rename. A workspace `apps:` list is indexed on that temporary path as well; per-app databases derived from it are moved next to the real `--db`. A combined graph from `cg link` (no `apps:`) is refused and left unchanged. Git's own `GIT_DIR` / `GIT_INDEX_FILE` and similar variables, which git sets for hooks, are ignored, so ROOT is always the repository indexed. The last run is written to `<db>.refresh.log`. Exit 0 means refreshed, up to date, or another refresh holds the lock; a failure or refusal is nonzero, and the hooks ignore it.
+
+| Flag | Meaning |
+|---|---|
+| `--dir` | project root for `hooks` (default `.`) |
+| `--db` | graph file; required for `install`; stored absolute. Required for `refresh` |
+| `--dry-run` | print the diff and write nothing |
+| `--yes` | skip `apply N change(s)? [y/N]` |
+| `--quiet` | `refresh` only: no stdout |
+| `--name` | `refresh` only: project name when the database is new |
 
 ## clean
 

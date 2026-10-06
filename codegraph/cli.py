@@ -241,6 +241,17 @@ def main(argv=None):
     p.add_argument("--mcp-file", help="MCP config path (default: <dir>/.cursor/mcp.json)")
     p.add_argument("--dry-run", action="store_true", help="print the exact changes and write nothing")
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p = sub.add_parser("hooks", help="opt-in: git hooks that refresh the index in the background after commit, checkout and merge")
+    p.add_argument("action", choices=["install", "uninstall", "status"])
+    p.add_argument("--dir", default=".", help="project root (default: current directory)")
+    p.add_argument("--db", help="graph DB (required for install); stored as an absolute path")
+    p.add_argument("--dry-run", action="store_true", help="print the exact changes and write nothing")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p = sub.add_parser("refresh", help="re-index ROOT into DB when sources changed; coalesce concurrent runs")
+    p.add_argument("root")
+    p.add_argument("--db", required=True)
+    p.add_argument("--name", help="project name when DB does not exist yet")
+    p.add_argument("--quiet", action="store_true", help="print nothing on success, skip, or lock")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
              "siblings": "code related to a symbol: class hierarchy, the same method in sibling classes, shared resources, co-callers",
              "writers": "code that writes a table (or column), or a stored property `Type.prop`",
@@ -400,6 +411,12 @@ def main(argv=None):
         from . import agents as AG
         return AG.run(a.action, root=a.dir, targets=a.target, all_targets=a.all, mcp=a.mcp,
                       mcp_file=a.mcp_file, dry_run=a.dry_run, assume_yes=a.yes)
+    if a.cmd == "hooks":
+        from . import hooks as HK
+        return HK.run(a.action, root=a.dir, db=a.db, dry_run=a.dry_run, assume_yes=a.yes)
+    if a.cmd == "refresh":
+        from . import hooks as HK
+        return HK.refresh(a.root, a.db, name=a.name, quiet=a.quiet)
     if getattr(a, "plans_dir", None) is None and a.cmd in ("plan", "serve", "viz-plan", "impact") and getattr(a, "db", None):
         from .plans import resolve_plans_dir
         a.plans_dir = resolve_plans_dir(None, a.db)     # plans.dir of the indexed project's .cg.yaml

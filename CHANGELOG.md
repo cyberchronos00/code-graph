@@ -8,6 +8,13 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Index refresh git hooks (#145, part 1): `cg hooks install`, `uninstall` and `status` add an
+  opt-in block to `post-commit`, `post-checkout` and `post-merge` (nothing is installed by
+  default). `cg refresh` re-indexes in the background, skips an unchanged checkout, refuses a
+  0-node result, and coalesces overlapping runs with a pending flag.
+
 ## [0.13.0] - 2026-10-05
 
 ### Added
