@@ -1,15 +1,16 @@
-"""Process environment: ``CG_*`` names, with ``CODEGRAPH_*`` aliases through 0.18.x.
+"""Process environment: ``CG_*`` names only.
 
-``get`` reads ``os.environ`` on every call. A legacy name that is set produces one stderr
-warning per name per process. ``CG_*`` wins when both are set. ``MCP_TOOLS`` has no legacy
-name (``CODEGRAPH_MCP_TOOLS`` belongs to another project).
+``get`` reads ``os.environ`` on every call. A leftover ``CODEGRAPH_*`` name from this project
+does not affect the value. The first read prints one stderr notice naming each leftover and
+its ``CG_*`` replacement. ``CODEGRAPH_MCP_TOOLS`` belongs to another project and is ignored
+silently.
 """
 from __future__ import annotations
 
 import os
 import sys
 
-# Suffixes this project reads. ``CACHE`` also accepts the older ``CODEGRAPH_CACHE_DIR``.
+# Suffixes this project reads. ``CODEGRAPH_CACHE_DIR`` renames to ``CG_CACHE``.
 SUFFIXES = (
     "CACHE", "CACHE_DIR", "CARGO", "CFAMILY", "COMPDB", "C_MASK_ANNOTATIONS", "C_MAX_MACRO_REFS",
     "C_SCIP", "C_SCIP_FILE", "EXCLUDE_DIRS", "INCLUDE_DIRS", "INDEXER_TIMEOUT", "JOBS",
@@ -19,51 +20,51 @@ SUFFIXES = (
     "RUST_SCIP_FILE", "RUST_TARGETS", "SCIP_CLANG", "SCIP_JAVA", "SWIFT", "SWIFT_INDEX",
     "SWIFT_INDEX_STORE",
 )
-LEGACY = {"CACHE": ("CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR")}
-_NO_LEGACY = frozenset({"MCP_TOOLS"})
-_warned: set[str] = set()
+_NO_LEGACY = frozenset({"MCP_TOOLS", "CACHE_DIR"})
+_noted = False
 
 
-def _legacy_names(name: str) -> tuple[str, ...]:
-    if name in _NO_LEGACY:
-        return ()
-    return LEGACY.get(name, ("CODEGRAPH_" + name,))
+def replacements() -> dict[str, str]:
+    """Old name -> ``CG_*`` name, in suffix order. ``CACHE_DIR`` is ``CG_CACHE``."""
+    out: dict[str, str] = {}
+    for name in SUFFIXES:
+        if name in _NO_LEGACY:
+            continue
+        if name == "CACHE":
+            out["CODEGRAPH_CACHE"] = "CG_CACHE"
+            out["CODEGRAPH_CACHE_DIR"] = "CG_CACHE"
+        else:
+            out["CODEGRAPH_" + name] = "CG_" + name
+    return out
 
 
-def _warn(old: str, new: str, *, both: bool) -> None:
-    if old in _warned:
-        return
-    _warned.add(old)
-    if both:
-        extra = f"{new} is set too and wins; the CODEGRAPH_* names are removed in 0.19.0"
-    else:
-        extra = "the CODEGRAPH_* names are removed in 0.19.0"
-    print(f"cg: {old} is deprecated, use {new} ({extra})", file=sys.stderr)
+def note_removed() -> list[str]:
+    """Print one stderr line when any removed name is set. Returns those old names."""
+    global _noted
+    mapping = replacements()
+    found = [old for old in mapping if old in os.environ]
+    if _noted:
+        return found
+    _noted = True
+    if found:
+        pairs = ", ".join(f"{old} -> {mapping[old]}" for old in found)
+        print(f"cg: ignored removed environment variables: {pairs}", file=sys.stderr)
+    return found
 
 
 def get(name: str, default=None) -> str | None:
-    """``CG_<name>``, else the legacy ``CODEGRAPH_*`` value, else ``default``."""
+    """``CG_<name>`` when set, else ``default``. Removed ``CODEGRAPH_*`` names are ignored."""
+    note_removed()
     new = "CG_" + name
-    legacy = _legacy_names(name)
     if new in os.environ:
-        for old in legacy:
-            if old in os.environ:
-                _warn(old, new, both=True)
         return os.environ[new]
-    found = None
-    for old in legacy:
-        if old in os.environ:
-            _warn(old, new, both=False)
-            if found is None:
-                found = os.environ[old]
-    return default if found is None else found
+    return default
 
 
 def is_set(name: str) -> bool:
-    """True when ``CG_<name>`` or a legacy alias is present in the environment."""
-    if ("CG_" + name) in os.environ:
-        return True
-    return any(old in os.environ for old in _legacy_names(name))
+    """True when ``CG_<name>`` is present in the environment."""
+    note_removed()
+    return ("CG_" + name) in os.environ
 
 
 def flag(name: str) -> bool:
@@ -73,12 +74,5 @@ def flag(name: str) -> bool:
 
 
 def legacy_in_env() -> list[str]:
-    """``CODEGRAPH_*`` names from this project that are present (for ``cg doctor``)."""
-    found: list[str] = []
-    seen: set[str] = set()
-    for name in SUFFIXES:
-        for old in _legacy_names(name):
-            if old in os.environ and old not in seen:
-                seen.add(old)
-                found.append(old)
-    return found
+    """Removed ``CODEGRAPH_*`` names from this project that are present (for ``cg doctor``)."""
+    return note_removed()

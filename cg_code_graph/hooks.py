@@ -42,6 +42,12 @@ _BLOCK = re.compile(re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n?", re.S)
 _SHELLS = {"sh", "bash", "dash", "ksh", "zsh", "ash"}
 _SHEBANG_ONLY = "#!/bin/sh"
 _OLD_CLI = "-m " + "codegraph" + ".cli"
+_OLD_NO_HOOKS = "CODEGRAPH_NO_HOOKS"
+
+
+def _block_outdated(block: str) -> bool:
+    """A 0.17/0.18 block that still checks CODEGRAPH_NO_HOOKS, or the pre-0.17 CLI."""
+    return _OLD_CLI in block or _OLD_NO_HOOKS in block
 
 
 def _sh_quote(text: str) -> str:
@@ -101,7 +107,7 @@ def _block_text(hook: str, root: str, db: str, py: str) -> str:
         f"# cg-root: {root}",
         f"# cg-db: {db}",
         f"# cg-hook: {hook}",
-        'if [ "${CG_NO_HOOKS:-${CODEGRAPH_NO_HOOKS:-}}" != 1 ]; then',
+        'if [ "${CG_NO_HOOKS:-}" != 1 ]; then',
     ]
     if hook == "post-checkout":
         lines.append('  if [ "$1" != "$2" ]; then')
@@ -211,7 +217,7 @@ def _status_line(path: Path, hook: str) -> str:
     found = _BLOCK.search(text)
     if not found:
         return f"{hook}: not installed"
-    if _OLD_CLI in found.group(0):
+    if _block_outdated(found.group(0)):
         return f"outdated hook {hook}: re-run cg hooks install"
     root, db = _meta(text)
     extra = ""
@@ -282,14 +288,14 @@ def run(action: str, root: str = ".", db: str | None = None, dry_run: bool = Fal
 
 
 def outdated_names(root: str | Path) -> list[str]:
-    """Hook names whose cg block still runs the removed `codegraph.cli` module."""
+    """Hook names whose cg block still runs `codegraph.cli` or checks `CODEGRAPH_NO_HOOKS`."""
     hooks = _hooks_dir(Path(root))
     if hooks is None:
         return []
     out = []
     for hook in HOOKS:
         found = _BLOCK.search(_read(hooks / hook))
-        if found and _OLD_CLI in found.group(0):
+        if found and _block_outdated(found.group(0)):
             out.append(hook)
     return out
 

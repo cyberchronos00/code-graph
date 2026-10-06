@@ -410,7 +410,8 @@ def test_hook_prefers_cg_beside_python_and_names_both_switches(tmp_path):
     os.chmod(py, 0o755)
     os.chmod(cg, 0o755)
     text = hooks._block_text("post-commit", str(tmp_path / "root"), str(tmp_path / "g.db"), str(py))
-    assert "${CG_NO_HOOKS:-${CODEGRAPH_NO_HOOKS:-}}" in text
+    assert '${CG_NO_HOOKS:-}' in text
+    assert "CODEGRAPH_NO_HOOKS" not in text
     assert "cg_code_graph.cli" in text
     assert hooks._sh_quote(str(cg)) in text
     repo = tmp_path / "repo"
@@ -456,4 +457,38 @@ def test_outdated_codegraph_hook_is_reported_and_rewritten(tmp_path, monkeypatch
     rewritten = path.read_text(encoding="utf-8")
     assert old not in rewritten
     assert "cg_code_graph.cli" in rewritten
+    assert hooks.outdated_names(repo) == []
+
+
+def test_outdated_codegraph_no_hooks_block_is_rewritten(tmp_path, monkeypatch):
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    _init(repo)
+    block = (
+        f"{hooks.BEGIN}\n"
+        f"# cg-root: {repo}\n"
+        f"# cg-db: {tmp_path / 'g.db'}\n"
+        "# cg-hook: post-commit\n"
+        'if [ "${CG_NO_HOOKS:-${CODEGRAPH_NO_HOOKS:-}}" != 1 ]; then\n'
+        f"  ( cg refresh '{repo}' --db '{tmp_path / 'g.db'}' --quiet "
+        "</dev/null >/dev/null 2>&1 & ) >/dev/null 2>&1\n"
+        "  true\n"
+        "fi\n"
+        f"{hooks.END}\n"
+    )
+    path = _hooks(repo) / "post-commit"
+    path.write_text("#!/bin/sh\n" + block, encoding="utf-8")
+    os.chmod(path, 0o755)
+    lines = []
+    assert hooks.run("status", root=str(repo), out=lines.append) == 0
+    assert "outdated hook post-commit: re-run cg hooks install" in lines
+    assert hooks.outdated_names(repo) == ["post-commit"]
+    from cg_code_graph import doctor
+    text = doctor.render(doctor.report(repo))
+    assert "note: outdated hook post-commit: re-run cg hooks install" in text
+    assert hooks.run("install", root=str(repo), db=str(tmp_path / "g.db"), assume_yes=True,
+                     interpreter=str(tmp_path / "py"), out=lambda *_a: None) == 0
+    rewritten = path.read_text(encoding="utf-8")
+    assert "CODEGRAPH_NO_HOOKS" not in rewritten
+    assert '${CG_NO_HOOKS:-}' in rewritten
     assert hooks.outdated_names(repo) == []

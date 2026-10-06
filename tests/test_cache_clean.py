@@ -21,7 +21,7 @@ V = fsutil.CACHE_VERSION
 
 @pytest.fixture
 def croot(tmp_path, monkeypatch):
-    for k in ("CG_CACHE", "CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR", "XDG_CACHE_HOME", "LOCALAPPDATA"):
+    for k in ("CG_CACHE", "XDG_CACHE_HOME", "LOCALAPPDATA"):
         monkeypatch.delenv(k, raising=False)
     r = tmp_path / "cache"
     monkeypatch.setenv("CG_CACHE", str(r))
@@ -81,7 +81,7 @@ def run(*args, env=None):
 
 
 def test_one_cache_root_for_every_user(tmp_path, monkeypatch):
-    for k in ("CG_CACHE", "CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR", "XDG_CACHE_HOME", "LOCALAPPDATA"):
+    for k in ("CG_CACHE", "XDG_CACHE_HOME", "LOCALAPPDATA"):
         monkeypatch.delenv(k, raising=False)
     cache._migrated = False
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
@@ -90,7 +90,7 @@ def test_one_cache_root_for_every_user(tmp_path, monkeypatch):
     assert runner.cache_dir() == want / "scip"
     assert extractors.cache_root() == want / "extractors"
     monkeypatch.setenv("CODEGRAPH_CACHE_DIR", str(tmp_path / "old-name"))
-    assert cache.root() == tmp_path / "old-name" and runner.cache_dir().parent == tmp_path / "old-name"
+    assert cache.root() == want and runner.cache_dir().parent == want
     monkeypatch.setenv("CG_CACHE", str(tmp_path / "c"))
     assert cache.root() == tmp_path / "c" == extractors.cache_root().parent
     # the TS / Dart / Swift / rust cache users take their directory from the same helper

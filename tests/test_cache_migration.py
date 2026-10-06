@@ -10,7 +10,7 @@ from cg_code_graph.core import cache
 def _reset(monkeypatch):
     cache._migrated = False
     cache._legacy_failure = None
-    for key in ("CG_CACHE", "CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR", "XDG_CACHE_HOME", "LOCALAPPDATA"):
+    for key in ("CG_CACHE", "XDG_CACHE_HOME", "LOCALAPPDATA"):
         monkeypatch.delenv(key, raising=False)
 
 

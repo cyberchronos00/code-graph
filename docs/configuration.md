@@ -152,4 +152,4 @@ Starter cards are built in this order: `serve --presets FILE` or `viz.presets`; 
 | `CG_JAVA_SCIP_FILE` | prebuilt scip-java index. Wins over `CG_KOTLIN_SCIP_FILE` when both are set |
 | `CG_KOTLIN_SCIP=1`, `CG_KOTLIN_SCIP_FILE` | same scip-java run and index as the `CG_JAVA_SCIP*` names. Either opt-in starts the one run ([Kotlin exact mode](kotlin.md#exact-mode)) |
 
-`CODEGRAPH_*` names still work in 0.17.x and 0.18.x with a deprecation warning; they are removed in 0.19.0. `CODEGRAPH_CACHE` and `CODEGRAPH_CACHE_DIR` are read as `CG_CACHE`.
+The `CODEGRAPH_*` names were removed in 0.19.0: rename `CODEGRAPH_<NAME>` to `CG_<NAME>`, and rename `CODEGRAPH_CACHE` and `CODEGRAPH_CACHE_DIR` to `CG_CACHE`.

@@ -471,7 +471,8 @@ def _legacy_lines(r: dict) -> list[str]:
     names = r.get("legacy_env") or []
     if names:
         shown = ", ".join(names)
-        lines.append(f"note: {shown} is set; use the CG_* name (removed in 0.19.0)")
+        lines.append(f"note: {shown} no longer affects cg; rename each CODEGRAPH_* name to CG_* "
+                     "(CODEGRAPH_CACHE and CODEGRAPH_CACHE_DIR become CG_CACHE)")
     leg = r.get("legacy_cache") or None
     if leg:
         if leg.get("path"):

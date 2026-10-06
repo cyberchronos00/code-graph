@@ -8,6 +8,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Removed
+
+- `CODEGRAPH_*` environment names no longer affect settings. Rename `CODEGRAPH_<NAME>` to `CG_<NAME>`. `CODEGRAPH_CACHE` and `CODEGRAPH_CACHE_DIR` become `CG_CACHE`. One stderr notice per run lists the names that are set. A git hook block that still checks `CODEGRAPH_NO_HOOKS` is outdated; `cg hooks status` and `cg doctor` say so, and `cg hooks install` rewrites it to `CG_NO_HOOKS`.
+
 ### Fixed
 
 - PHP outbound HTTP also follows a base URL stored in a config array (`$cfg['base_url']`, `config('services.payments')['base_url']`, `config()->get`, `$app->make('config')->get`, `Config::get`). `rawurlencode` / `urlencode` / `trim` / `strval` / `(string)` / `Str::of` path segments keep their variable name so `cg link` matches them. An empty `.env.example` value shows the env name only, and a relative `Http::get` path does not pick up the app URL unless `baseUrl()` was set.
