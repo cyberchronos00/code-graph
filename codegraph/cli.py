@@ -54,6 +54,27 @@ def _parse_repo(spec: str) -> tuple[str, str, str]:
     return name, rest, role
 
 
+def _add_install_parser(sub, uninstall: bool):
+    from .mcp_install import HOSTS
+    name = "uninstall" if uninstall else "install"
+    help_ = ("remove the cg MCP server entry from a host config" if uninstall else
+             "register the cg MCP server (key cg) in a host config; previews and asks first")
+    p = sub.add_parser(name, help=help_)
+    p.add_argument("--host", action="append", choices=[*HOSTS, "all"],
+                   help="MCP host (repeatable). Default: hosts already present for this scope")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--project", action="store_true", help="project config (default)")
+    g.add_argument("--global", dest="glob", action="store_true", help="user / global config (needs --db)")
+    p.add_argument("--dir", default=".", help="project root (default: current directory)")
+    p.add_argument("--db", help="graph DB. Default for --project: <dir>/out/graph.db. Required for --global")
+    p.add_argument("--tools", help="tool allowlist written as --tools (CG_MCP_TOOLS grammar)")
+    p.add_argument("--portable", action="store_true",
+                   help="write command cg-mcp and --db out/graph.db (for a config committed to git)")
+    p.add_argument("--uninstall", action="store_true", help="remove the entry instead of writing it")
+    p.add_argument("--dry-run", action="store_true", help="print the exact changes and write nothing")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+
+
 def main(argv=None):
     from . import __version__
     ap = argparse.ArgumentParser(prog="cg")
@@ -259,6 +280,8 @@ def main(argv=None):
     p.add_argument("--mcp-file", help="MCP config path (default: <dir>/.cursor/mcp.json)")
     p.add_argument("--dry-run", action="store_true", help="print the exact changes and write nothing")
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    _add_install_parser(sub, uninstall=False)
+    _add_install_parser(sub, uninstall=True)
     p = sub.add_parser("hooks", help="opt-in: git hooks that refresh the index in the background after commit, checkout and merge")
     p.add_argument("action", choices=["install", "uninstall", "status"])
     p.add_argument("--dir", default=".", help="project root (default: current directory)")
@@ -442,6 +465,11 @@ def main(argv=None):
         from . import agents as AG
         return AG.run(a.action, root=a.dir, targets=a.target, all_targets=a.all, mcp=a.mcp,
                       mcp_file=a.mcp_file, dry_run=a.dry_run, assume_yes=a.yes)
+    if a.cmd in ("install", "uninstall"):
+        from .mcp_install import run as run_install
+        return run_install(a.host, scope="global" if a.glob else "project", root=a.dir, db=a.db,
+                           tools=a.tools, portable=a.portable, remove=a.cmd == "uninstall" or a.uninstall,
+                           dry_run=a.dry_run, assume_yes=a.yes)
     if a.cmd == "hooks":
         from . import hooks as HK
         return HK.run(a.action, root=a.dir, db=a.db, dry_run=a.dry_run, assume_yes=a.yes)

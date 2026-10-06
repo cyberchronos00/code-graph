@@ -19,6 +19,8 @@ import inspect
 import sqlite3
 import json
 import os
+import re
+import sys
 import threading
 import time
 from collections import defaultdict
@@ -1391,17 +1393,75 @@ def index(root: str | None = None, gates: str | None = None, repo: str | None = 
         _STALE["key"] = None
 
 
+_CORE_TOOLS = ("explore", "search", "node", "snippet", "impact", "reaches", "callers", "routes",
+                "downstream", "path", "coverage", "index")
+
+
+def _tool_names() -> list[str]:
+    return [t.name for t in server._tool_manager.list_tools()]
+
+
+def apply_tool_allowlist(spec: str) -> list[str]:
+    """Keep only the tools selected by spec and return their names.
+
+    Items are comma- or space-separated. `all` is every tool, `core` is the reading set,
+    a name or fnmatch glob adds tools, and a leading `-` removes them (`all,-plan_*`).
+    Unknown names are warned once on stderr and ignored. An empty selection exits 2.
+    """
+    import fnmatch
+    names = _tool_names()
+    known = set(names)
+    selected: set[str] = set()
+    unknown: list[str] = []
+    for tok in re.split(r"[\s,]+", spec.strip()):
+        if not tok:
+            continue
+        neg = tok.startswith("-")
+        body = tok[1:] if neg else tok
+        if body == "all":
+            matched = set(names)
+        elif body == "core":
+            matched = {n for n in _CORE_TOOLS if n in known}
+        elif any(c in body for c in "*?["):
+            matched = {n for n in names if fnmatch.fnmatch(n, body)}
+            if not matched:
+                unknown.append(body)
+        elif body in known:
+            matched = {body}
+        else:
+            unknown.append(body)
+            matched = set()
+        if neg:
+            selected -= matched
+        else:
+            selected |= matched
+    if unknown:
+        print("cg-mcp: CG_MCP_TOOLS: unknown name(s): " + ", ".join(unknown), file=sys.stderr)
+    kept = [n for n in names if n in selected]
+    if not kept:
+        print("cg-mcp: CG_MCP_TOOLS selects no tools", file=sys.stderr)
+        raise SystemExit(2)
+    for name in names:
+        if name not in selected:
+            server.remove_tool(name)
+    return kept
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="codegraph-mcp")
+    ap = argparse.ArgumentParser(prog="cg-mcp")
     ap.add_argument("--db", default=STATE["db"])
     ap.add_argument("--root")
     ap.add_argument("--gates")
     ap.add_argument("--plans", help="plans directory (default: plans.dir of the project's .cg.yaml, else <repo>/plans)")
+    ap.add_argument("--tools", default=os.environ.get("CG_MCP_TOOLS"),
+                    help="which tools to list (default: the CG_MCP_TOOLS environment variable; unset means all)")
     a = ap.parse_args(argv)
     STATE["plans"] = str(Path(a.plans).resolve()) if a.plans else None
     STATE["db"] = str(Path(a.db).resolve())
     STATE["root"] = a.root
     STATE["gates"] = str(Path(a.gates).resolve()) if a.gates else None
+    if a.tools:
+        apply_tool_allowlist(a.tools)
     server.run("stdio")
 
 

@@ -139,6 +139,7 @@ Starter cards are built in this order: `serve --presets FILE` or `viz.presets`; 
 
 | variable | effect |
 |---|---|
+| `CG_MCP_TOOLS=LIST` | tools `cg-mcp` lists: `core`, names, globs, `-name`. Unset or empty means all ([Choosing tools](mcp.md#choosing-tools)) |
 | `CODEGRAPH_NO_CACHE=1` | disable the TS, Dart and native SCIP caches (keyed by file content) |
 | `CODEGRAPH_NO_HOOKS=1` | git hooks installed by `cg hooks` do nothing for that command ([CLI reference](cli.md#hooks)) |
 | `CODEGRAPH_NO_STALE_CHECK=1` | MCP tool replies skip the staleness `index note:` ([MCP server](mcp.md#staleness)) |

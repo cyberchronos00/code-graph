@@ -372,6 +372,7 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         "tools": tools, "python_modules": {m: _module(m) for m in (*PIP_NAMES, "yaml", "mcp")},
         "modules": imports, "root": str(rootp) if rootp else None, "config_error": cfg_error, "languages": langs,
         **({"project": project_checks(rootp, present)} if rootp is not None else {}),
+        "mcp": _mcp(rootp),
         "update": "uv tool upgrade cg-code-graph  |  pipx upgrade cg-code-graph  |  install.sh --update",
         **({"scip": [scip_health(x) for x in scip]} if scip else {}),
     }
@@ -424,8 +425,16 @@ def render(r: dict) -> str:
                        f"({x['positioned']} with a usable position), {x['definitions']} definitions")
         if x.get("warning"):
             out.append(f"  warning: {x['warning']}")
+    from .mcp_install import render_mcp
+    out.extend(render_mcp(r.get("mcp") or []))
     out.append(f"update: {r['update']}  ({INSTALL_DOC})")
     return "\n".join(out)
+
+
+def _mcp(rootp: Path | None) -> list:
+    """Where cg is registered. Reads host configs and never writes."""
+    from .mcp_install import registrations
+    return registrations(rootp if rootp is not None else Path.cwd())
 
 
 def setup(langs: list[str] | None = None, quiet: bool = False) -> int:

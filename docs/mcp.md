@@ -64,22 +64,53 @@ Where the answer is not complete, use normal search and file reading for that pa
 
 When the working tree has changed since this graph was built, tool replies add one `index note:` line and the structured content includes `stale: true`. The check compares `<db>.refresh.state` (the fingerprint of paths, mtimes and sizes that `cg refresh` stored, plus the database mtime) with the current tree. File contents are not hashed. A database built by `cg index` or the `index` tool has no state file, so any listed file newer than the database counts. Paths come from one `git ls-files` call. The result is cached for 5 seconds. `index` and `doctor` skip the check. A combined graph (`cg link`) is not checked. `CODEGRAPH_NO_STALE_CHECK=1` turns the check off ([Configuration](configuration.md#environment-variables)).
 
-## Client config
+## Install into a host
+
+`cg install` registers this server under the key `cg`. `cg uninstall` removes that entry. Both preview a unified diff and ask before writing (`--yes` skips the prompt, `--dry-run` writes nothing). A second install with the same entry prints `no change (cg already registered)`. The edit affects only the `cg` member, and install then uninstall leaves the file byte-identical.
+
+Two known edges: a file that was already `{}` or `{"mcpServers": {}}` is deleted or collapsed by uninstall, and a TOML file without a final newline gains one.
+
+The command is the absolute `cg-mcp` next to the Python that is running `cg` (so a venv, pipx or uv tool wins over an older `cg-mcp` on `PATH`), and `--db` is the absolute graph path. Project scope also passes `--root`. `--portable` writes the relative entry below instead, for a config committed to git. `--global` without `--db` exits 2: a global entry serves one graph.
 
 ```json
-{"mcpServers": {"code-graph": {
+{"mcpServers": {"cg": {
   "command": "cg-mcp",
   "args": ["--db", "out/graph.db"]}}}
 ```
 
-Add `--gates` and `--plans` when you use them. Relative paths in `args` are resolved against the host's working directory. Point `--db` at the graph for the project you indexed.
+Add `--gates` and `--plans` on the manual command when you use them. An older `code-graph` key whose command is `cg-mcp` is reported at install time; `cg uninstall` removes it. A `code-graph` entry that is not cg is left alone.
 
-`cg agents install` writes a short cg reading-rules block into `AGENTS.md`, `CLAUDE.md` or `.cursor/rules/cg.mdc`. It previews the change and asks before writing. `--mcp` also adds this server entry (default file `.cursor/mcp.json`). `cg agents remove` takes it back out. See `cg agents -h`.
+Codex reads `<root>/.codex/config.toml` only in trusted projects. `cg doctor` lists every host where `cg` (or a cg-owned `code-graph` key) is registered, and says when the command or the database is missing.
+
+| `--host` | project (`--project`, default) | global (`--global`) | docs |
+|---|---|---|---|
+| `cursor` | `<root>/.cursor/mcp.json` | `~/.cursor/mcp.json` | [Cursor](https://cursor.com/docs/context/mcp) |
+| `claude` | `<root>/.mcp.json` | `claude mcp add-json` (user scope; `claude` must be on `PATH`) | [Claude Code](https://code.claude.com/docs/en/mcp) |
+| `claude-desktop` | global only | macOS `~/Library/Application Support/Claude/claude_desktop_config.json`; Windows `%APPDATA%\Claude\claude_desktop_config.json`; no Linux build | [Claude Desktop](https://modelcontextprotocol.io/quickstart) |
+| `vscode` | `<root>/.vscode/mcp.json` (`servers`) | `$COPILOT_HOME/mcp-config.json`, else `~/.copilot/mcp-config.json` | [VS Code](https://code.visualstudio.com/docs/copilot/reference/mcp-configuration) |
+| `windsurf` | global only | `$XDG_CONFIG_HOME/devin/mcp_config.json` (else `~/.config/devin/…`); Windows `%APPDATA%\devin\mcp_config.json` | [Windsurf](https://docs.windsurf.com/windsurf/cascade/mcp) |
+| `codex` | `<root>/.codex/config.toml` | `~/.codex/config.toml` | [Codex](https://developers.openai.com/codex/mcp) |
+| `gemini` | `<root>/.gemini/settings.json` | `~/.gemini/settings.json` | [Gemini CLI](https://geminicli.com/docs/tools/mcp-server) |
+| `zed` | `<root>/.zed/settings.json` | `~/.config/zed/settings.json` (macOS and Linux) | [Zed](https://zed.dev/docs/ai/mcp) |
+
+Without `--host`, cg acts on hosts it can see (the config file or its directory, or `claude` on `PATH` for Claude Code's user scope) and prints `detected: …`. Flags and exit codes: [install](cli.md#install).
+
+`cg agents install` writes a short cg reading-rules block into `AGENTS.md`, `CLAUDE.md` or `.cursor/rules/cg.mdc`. It previews the change and asks before writing. `--mcp` edits only the `cg` entry in `.cursor/mcp.json` (or `--mcp-file`). `cg agents remove` takes it back out. See `cg agents -h`.
+
+## Choosing tools
+
+`CG_MCP_TOOLS` and `cg-mcp --tools` choose which tools are listed. Unset or empty means all of them. Items are separated by commas or spaces:
+
+- `core` is `explore`, `search`, `node`, `snippet`, `impact`, `reaches`, `callers`, `routes`, `downstream`, `path`, `coverage`, `index`
+- a name or an `fnmatch` glob (`plan_*`) adds tools
+- a leading `-` removes them (`all,-plan_*`)
+
+An unknown name is ignored after one warning. If the selection is empty, `cg-mcp` exits 2. Codex `enabled_tools` and Gemini `includeTools` can filter again on the host side. `cg install --tools LIST` stores the same list in the host entry.
 
 ## Suggested agent instructions
 
 ```text
-Before changing code that touches a table, column, DB connection, config key or route, call the code-graph MCP tools:
+Before changing code that affects a table, column, DB connection, config key or route, call the code-graph MCP tools:
 - reaches(<target>) for every function and entry point that depends on it;
 - impact(<Class::method>) before editing a method, and siblings(<Class::method>) for parallel paths;
 - routes(writes="*", unguarded=true) or routes(reaches=[<target>]) for guards;

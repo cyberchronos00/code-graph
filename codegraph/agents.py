@@ -2,11 +2,10 @@
 project's AGENTS.md / CLAUDE.md / Cursor rules. It only ever writes a clearly marked block and
 never writes silently: every run previews the exact changes and asks before writing (--dry-run
 previews without writing, --yes skips the prompt). Re-running replaces the block in place; remove
-deletes it and restores the surrounding bytes. MCP changes touch only the `cg` server entry."""
+deletes it and restores the surrounding bytes. MCP changes affect only the `cg` server entry."""
 from __future__ import annotations
 
 import difflib
-import json
 import re
 from pathlib import Path
 
@@ -62,33 +61,11 @@ def plan_text(path: Path, remove: bool, body: str | None = None) -> dict:
 
 def plan_mcp(path: Path, remove: bool) -> dict:
     """Add / update / remove only the `cg` entry under mcpServers; every other entry and key is
-    kept. Returns action noop when there is nothing to change, or error when the file is not JSON."""
-    old = path.read_text(encoding="utf-8") if path.exists() else ""
-    if old.strip():
-        try:
-            data = json.loads(old)
-        except ValueError as ex:
-            return {"path": str(path), "kind": "mcp", "action": "error", "old": old, "new": old,
-                    "error": f"not valid JSON ({ex}); left unchanged"}
-    else:
-        data = {}
-    if not isinstance(data, dict):
-        return {"path": str(path), "kind": "mcp", "action": "error", "old": old, "new": old,
-                "error": "top level is not a JSON object; left unchanged"}
-    servers = data.get("mcpServers")
-    if not isinstance(servers, dict):
-        servers = {}
-    if remove:
-        if "cg" not in servers:
-            return {"path": str(path), "kind": "mcp", "action": "noop", "old": old, "new": old}
-        servers = {k: v for k, v in servers.items() if k != "cg"}
-        action = "remove"
-    else:
-        action = "update" if "cg" in servers else "insert"
-        servers = {**servers, "cg": MCP_ENTRY}
-    data = {**data, "mcpServers": servers}
-    new = json.dumps(data, indent=2) + "\n"
-    return {"path": str(path), "kind": "mcp", "action": action, "old": old, "new": new}
+    kept. The edit affects only that member's text. Returns action noop when there is nothing to
+    change, or error when the file is not JSON."""
+    from .mcp_install import plan_file
+    return plan_file(path, kind="json", path_keys=["mcpServers"], entry=None if remove else MCP_ENTRY,
+                     remove=remove, delete_empty=False)
 
 
 def preview(plan: dict) -> str:
@@ -96,8 +73,11 @@ def preview(plan: dict) -> str:
     if plan["action"] == "noop" and plan.get("current"):
         return f"{plan['path']}: no change (block up to date)"
     if plan["action"] == "noop":
-        return f"{plan['path']}: no change (block not present)" if plan["kind"] == "text" \
-            else f"{plan['path']}: no change (no cg entry)"
+        if plan["kind"] == "text":
+            return f"{plan['path']}: no change (block not present)"
+        if plan.get("registered"):
+            return f"{plan['path']}: no change (cg already registered)"
+        return f"{plan['path']}: no change (no cg entry)"
     if plan["action"] == "error":
         return f"{plan['path']}: {plan['error']}"
     diff = difflib.unified_diff(plan["old"].splitlines(True), plan["new"].splitlines(True),

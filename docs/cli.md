@@ -46,6 +46,7 @@
 | `viz-export MODE SPECS -o OUT` | Self-contained HTML. MODE is `reaches`, `impact`, `downstream`, or `path`. `--sinks`. | [viz](viz.md) |
 | `viz-plan NAME -o OUT` | Self-contained HTML of a plan on the graph. `--plans-dir`. | [plans](plans.md) |
 | `agents ACTION` | Opt-in block in agent guidance files. Previews and asks. `--mcp` also writes the `cg-mcp` server entry. | [mcp](mcp.md) |
+| `install` / `uninstall` | Register or remove the cg MCP server (key `cg`) in a host config. `--host`, `--global`, `--dry-run`. | [install](#install) |
 | `hooks install\|uninstall\|status` | Opt-in git hooks that refresh the index after commit, checkout and merge. Nothing is installed by default. | [hooks](#hooks) |
 | `refresh ROOT --db DB` | Re-index when sources changed. `--name`, `--quiet`. Hooks run this in the background. | [hooks](#hooks) |
 | `watch ROOT --db DB` | Re-index on save, debounced (`watchfiles` if installed, else polling). Ctrl-C stops. | [watch](#watch) |
@@ -238,7 +239,28 @@ The first selected file in the table order (`AGENTS.md`, else `CLAUDE.md`, else 
 
 `--target` repeats. `--all` selects all three. With neither, cg acts on the files that already exist, and exits 2 when none exist unless `--mcp` was given. `--dir` is the project root (default `.`).
 
-`--mcp` adds, or on `remove` deletes, one `cg` entry under `mcpServers`: `{"command": "cg-mcp", "args": ["--db", "out/graph.db"]}`. Default path `<dir>/.cursor/mcp.json` (`--mcp-file` overrides). Other keys stay. Invalid JSON is left untouched. [mcp](mcp.md)
+`--mcp` adds, or on `remove` deletes, one `cg` entry under `mcpServers`: `{"command": "cg-mcp", "args": ["--db", "out/graph.db"]}`. Default path `<dir>/.cursor/mcp.json` (`--mcp-file` overrides). The entry is edited in place; other keys stay. Invalid JSON is left untouched. [mcp](mcp.md)
+
+## install
+
+`cg install` registers the MCP server under the key `cg`. `cg uninstall` removes it (and a cg-owned legacy `code-graph` entry). Both preview a diff and ask `apply N change(s)? [y/N]` unless `--yes`. `--dry-run` prints the diff and writes nothing.
+
+| flag | meaning |
+|---|---|
+| `--host H` | `cursor`, `claude`, `claude-desktop`, `vscode`, `windsurf`, `codex`, `gemini`, `zed`, or `all`. Repeatable. Default: hosts already detected for the scope |
+| `--project` | project config (default) |
+| `--global` | user config. Requires `--db` (a global entry serves one graph) |
+| `--dir ROOT` | project root (default `.`) |
+| `--db DB` | graph file. Project default: `<dir>/out/graph.db` |
+| `--tools LIST` | allowlist stored as `--tools` ([Choosing tools](mcp.md#choosing-tools)) |
+| `--portable` | `command` `cg-mcp` and `--db out/graph.db`, for a file committed to git |
+| `--uninstall` | remove, on `cg install` |
+| `--dry-run` | print the diff and write nothing |
+| `--yes` | skip the prompt |
+
+Exit 0 on success or when nothing changes. Exit 2 on invalid JSON or TOML (the file is left untouched), a refused host, `--global` without `--db`, or when no host is detected. Exit 1 when the prompt is declined.
+
+`cg uninstall` takes the same flags. See [Install into a host](mcp.md#install-into-a-host).
 
 ## hooks
 

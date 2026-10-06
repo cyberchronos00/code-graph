@@ -8,6 +8,20 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- `cg install` / `cg uninstall` register the cg MCP server (key `cg`) in Cursor, Claude Code,
+  Claude Desktop, VS Code, Windsurf, Codex, Gemini CLI and Zed, project or global, with the
+  absolute `cg-mcp` path. Edits affect only the `cg` entry, and install then uninstall leaves
+  the file byte-identical. `--dry-run`, and `cg doctor` lists where cg is registered (#122).
+- `CG_MCP_TOOLS` / `cg-mcp --tools` choose which MCP tools are listed (`core`, names, globs,
+  `-name`) (#122).
+
+### Changed
+
+- `cg agents --mcp` edits the `cg` entry in place instead of rewriting the file. The MCP
+  server's `--help` says `cg-mcp`.
+
 ## [0.16.0] - 2026-10-06
 
 ### Added
