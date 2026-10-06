@@ -58,7 +58,7 @@ MAX_PATHS = 500      # file paths stored per bucket in the index (counts are alw
 SHOW_PATHS = 5       # shown per bucket by default (`cg coverage --all-files` / coverage(all_files=true) for all)
 HINTS = {
     "php": "install PHP 8.2+ and Composer, then run `cg setup php` (`cg doctor` checks the toolchains)",
-    "typescript": "install Node.js 20+ (with npm), then run `cg setup typescript` (`cg doctor` checks the toolchains)",
+    "typescript": "install Node.js 20+ (with npm) or Bun, or set CODEGRAPH_NODE, then run `cg setup typescript` (`cg doctor` checks the toolchains)",
     "dart": "install the Dart SDK 3.x (`dart` on PATH or $DART), then run `cg setup dart`",
     "rust": "exact mode needs rust-analyzer (`rustup component add rust-analyzer`){layer}",
     "c_cpp": "exact mode needs scip-clang and a compile_commands.json (docs/native.md){layer}",

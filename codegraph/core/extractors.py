@@ -103,10 +103,64 @@ def status(lang: str) -> dict:
     return {"installed": _installed(d, spec), "dir": str(d), "where": "cache"}
 
 
+JS_RUNTIME_MISSING = (
+    "node not installed (the TypeScript extractor needs Node.js 20+ or Bun on PATH, "
+    "or CODEGRAPH_NODE=/path/to/node)"
+)
+
+
+def _runtime_kind(path: str) -> str:
+    """`bun` when the binary (or what a `node` symlink points at, as in Bun images) is Bun, else `node`."""
+    names = (Path(path).name, Path(os.path.realpath(path)).name)
+    return "bun" if any(n.lower().startswith("bun") for n in names) else "node"
+
+
+def _override() -> str | None:
+    v = (os.environ.get("CODEGRAPH_NODE") or "").strip()
+    return os.path.expanduser(v) if v else None
+
+
+def js_runtime() -> dict | None:
+    """Node.js or Bun for the TypeScript extractor.
+
+    ``CODEGRAPH_NODE`` (a name on PATH or a path) wins, then ``node`` on PATH, then ``bun``.
+    """
+    override = _override()
+    if override:
+        path = shutil.which(override)
+        if not path:
+            return None
+        return {"path": path, "kind": _runtime_kind(path), "source": "CODEGRAPH_NODE"}
+    node = shutil.which("node")
+    if node:
+        return {"path": node, "kind": _runtime_kind(node), "source": "PATH"}
+    bun = shutil.which("bun")
+    if bun:
+        return {"path": bun, "kind": "bun", "source": "PATH"}
+    return None
+
+
+def js_runtime_problem() -> str | None:
+    """Why the TypeScript extractor cannot start, or None when a runtime resolves."""
+    override = _override()
+    if override and not shutil.which(override):
+        return (f"CODEGRAPH_NODE={os.environ.get('CODEGRAPH_NODE')} is not an executable on PATH or a path to one "
+                "(set it to a node or bun binary, or unset it to use node / bun from PATH)")
+    if js_runtime() is None:
+        return JS_RUNTIME_MISSING
+    return None
+
+
 def install_command(lang: str, dart: str | None = None) -> list[str]:
     if lang == "typescript":
-        npm = shutil.which("npm") or "npm"
-        return [npm, "ci", "--no-audit", "--no-fund", "--loglevel=error"]
+        npm = shutil.which("npm")
+        if npm:
+            return [npm, "ci", "--no-audit", "--no-fund", "--loglevel=error"]
+        rt = js_runtime()
+        bun = rt["path"] if rt and rt["kind"] == "bun" else shutil.which("bun")
+        if bun:
+            return [bun, "install", "--frozen-lockfile", "--no-progress"]
+        return ["npm", "ci", "--no-audit", "--no-fund", "--loglevel=error"]
     if lang == "php":
         return [shutil.which("composer") or "composer", "install", "--no-dev", "--no-interaction", "--no-progress", "--quiet"]
     return [dart or shutil.which("dart") or "dart", "pub", "get"]
@@ -180,7 +234,8 @@ def prune(dry_run: bool = False) -> list[tuple[Path, int]]:
 
 def _run(cmd: list[str], d: Path, spec: Spec) -> None:
     if not shutil.which(cmd[0]) and not Path(cmd[0]).exists():
-        raise RuntimeError(f"{spec.label} extractor dependencies missing and `{spec.tool}` is not installed")
+        tool = "`npm` (or `bun`)" if spec.tool == "npm" else f"`{spec.tool}`"
+        raise RuntimeError(f"{spec.label} extractor dependencies missing and {tool} is not installed")
     r = subprocess.run(cmd, cwd=d, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"{spec.label} extractor dependency install failed ({' '.join(cmd[:2])} in {d}): "

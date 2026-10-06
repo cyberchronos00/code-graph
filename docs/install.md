@@ -84,6 +84,14 @@ cg doctor
 
 It lists the tools it found, whether extractor dependencies are installed, and for each language whether indexing is exact or heuristic. Pass a project path to check that project. The MCP `doctor` tool prints the same report.
 
+### JavaScript runtime
+
+TypeScript / JavaScript indexing needs Node.js 20+ or Bun (tested with Bun 1.4.2).
+Lookup order: `CODEGRAPH_NODE`, then `node`, then `bun` on PATH.
+Extractor dependencies install with `npm ci`, or `bun install` when npm is missing.
+A Bun-only container (`oven/bun`) needs nothing else.
+`cg doctor` names the runtime it found.
+
 ## Update and uninstall
 
 ::tabs

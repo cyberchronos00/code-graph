@@ -73,7 +73,7 @@ def test_extractor_runs_from_user_cache_without_deps_in_package(tmp_path, monkey
 def test_extractor_install_failure_names_the_tool(tmp_path, monkeypatch):
     _fake_spec(tmp_path, monkeypatch)
     monkeypatch.setattr(extractors, "install_command", lambda lang, dart=None: ["cg-no-such-npm", "ci"])
-    with pytest.raises(RuntimeError, match="`npm` is not installed"):
+    with pytest.raises(RuntimeError, match=r"`npm` \(or `bun`\) is not installed"):
         extractors.ensure("typescript")
 
 

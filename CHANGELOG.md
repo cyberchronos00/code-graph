@@ -16,6 +16,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   and endpoints exporting `GET` / `POST` / … become routes. Coverage counts `.astro` under
   typescript instead of unsupported.
 
+### Fixed
+
+- TypeScript without Node.js (#161): when `node` is not on PATH the extractor runs under `bun`, and
+  `CODEGRAPH_NODE=/path/to/runtime` overrides both. `cg setup typescript` falls back to `bun install`
+  when npm is missing, and `cg doctor` names the runtime it found.
+
 ## [0.14.0] - 2026-10-06
 
 ### Added

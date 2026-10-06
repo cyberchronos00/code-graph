@@ -11,6 +11,7 @@ out/
 !tests/kotlin_mixed_fixture/*.scip
 codegraph/plugins/php/extractor/vendor/
 codegraph/plugins/ts/extractor/node_modules/
+codegraph/plugins/ts/extractor/bun.lock
 codegraph/viz/tools/node_modules/
 codegraph/viz/tools/screenshots/
 examples/plans/*.baseline.json

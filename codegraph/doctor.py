@@ -104,7 +104,8 @@ def _tools() -> dict:
     from .plugins.swift.exact import find_swift
     home = Path.home()
     found = {
-        "node": shutil.which("node"), "npm": shutil.which("npm"), "php": shutil.which("php"),
+        "node": shutil.which(extractors._override() or "node"),
+        "npm": shutil.which("npm"), "bun": shutil.which("bun"), "php": shutil.which("php"),
         "composer": shutil.which("composer"), "dart": find_dart(),
         "rust-analyzer": find_tool("CODEGRAPH_RUST_ANALYZER", ["rust-analyzer"], [home / ".cargo" / "bin"]),
         "cargo": os.environ.get("CODEGRAPH_CARGO") or shutil.which("cargo") or
@@ -143,14 +144,17 @@ def _languages(tools: dict, root: Path | None, cfg: dict) -> list[dict]:
 
     add("python", "exact", "built-in parser (Python ast)")
     st = extractors.status("typescript")
-    if not has("node"):
-        add("typescript", "unavailable", "node not installed (Node.js 20+ runs the TypeScript extractor)",
-            "install Node.js 20+ (https://nodejs.org or your package manager), then `cg setup typescript`")
-    elif not st["installed"] and not has("npm"):
-        add("typescript", "unavailable", "extractor dependencies missing and npm not installed", "install npm, then `cg setup typescript`")
+    rt = extractors.js_runtime()
+    if rt is None:
+        add("typescript", "unavailable", extractors.js_runtime_problem(),
+            "install Node.js 20+ or Bun (or set CODEGRAPH_NODE), then `cg setup typescript`")
+    elif not st["installed"] and not has("npm") and not has("bun"):
+        add("typescript", "unavailable", "extractor dependencies missing and npm not installed",
+            "install npm, then `cg setup typescript`")
     else:
-        add("typescript", "exact", "TypeScript compiler API" + ("" if st["installed"] else
-            "; its npm dependencies install on the first index (or now: `cg setup typescript`)"))
+        add("typescript", "exact", f"TypeScript compiler API (runtime: {rt['kind']} {rt['path']})" + (
+            "" if st["installed"] else "; its npm dependencies install on the first index (or now: `cg setup typescript`)"),
+            runtime={"kind": rt["kind"], "path": rt["path"], "source": rt["source"]})
     st = extractors.status("php")
     if not has("php"):
         add("php", "unavailable", "php not installed (PHP 8.2+ runs the PHP extractor)", "install PHP 8.2+ and Composer, then `cg setup php`")
@@ -434,9 +438,17 @@ def setup(langs: list[str] | None = None, quiet: bool = False) -> int:
         tool = {"typescript": "npm", "php": "composer", "dart": None}[lang]
         need = {"typescript": "node", "php": "php", "dart": None}[lang]
         dart = find_dart() if lang == "dart" else None
-        if (need and not shutil.which(need)) or (tool and not shutil.which(tool) and not extractors.status(lang)["installed"]) \
-                or (lang == "dart" and not dart):
-            msg = f"{lang}: skipped ({'dart' if lang == 'dart' else need if need and not shutil.which(need) else tool} not installed)"
+        if lang == "typescript":
+            rt = extractors.js_runtime()
+            can_install = extractors.status(lang)["installed"] or bool(shutil.which("npm") or shutil.which("bun"))
+            skip = rt is None or not can_install
+            detail = extractors.js_runtime_problem() if rt is None else "npm or bun not installed"
+        else:
+            skip = (need and not shutil.which(need)) or (tool and not shutil.which(tool) and not extractors.status(lang)["installed"]) \
+                or (lang == "dart" and not dart)
+            detail = f"{'dart' if lang == 'dart' else need if need and not shutil.which(need) else tool} not installed"
+        if skip:
+            msg = f"{lang}: skipped ({detail})"
             print(msg, file=sys.stderr)
             rc = rc or (1 if langs else 0)
             continue

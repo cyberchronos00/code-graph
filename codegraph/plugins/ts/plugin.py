@@ -335,10 +335,11 @@ class TypeScriptPlugin(LanguagePlugin):
         return project.exists("package.json") and bool(node_socket_dirs(project.root))   # plain Node net / dgram (#39)
 
     def prerequisite_problem(self, project: Project) -> str | None:
-        if not shutil.which("node"):
-            return "node not installed (Node.js 20+ is needed for the TypeScript extractor)"
-        if not extractors.status("typescript")["installed"] and not shutil.which("npm"):
-            return "TypeScript extractor dependencies missing and npm not installed: install npm, then run `cg setup typescript`"
+        if (p := extractors.js_runtime_problem()):
+            return p
+        if not extractors.status("typescript")["installed"] and not shutil.which("npm") and not shutil.which("bun"):
+            return ("TypeScript extractor dependencies missing and npm (or bun) not installed: "
+                    "install one, then run `cg setup typescript`")
         return None
 
     def ensure_extractor(self) -> Path:
@@ -346,8 +347,9 @@ class TypeScriptPlugin(LanguagePlugin):
         return extractors.ensure("typescript")
 
     def index(self, project: Project, builder: GraphBuilder, frameworks: list[FrameworkPlugin]) -> dict:
-        if not shutil.which("node"):
-            return {"status": "skipped", "reason": "node not installed"}
+        rt = extractors.js_runtime()
+        if rt is None:
+            return {"status": "skipped", "reason": extractors.js_runtime_problem()}
         exdir = self.ensure_extractor()
         ctx = TsContext(project=project)
         # src/ and app/ (SPA / Next / Nuxt 4), and the Laravel + Vite asset dirs; the extractor falls back to the
@@ -409,8 +411,9 @@ class TypeScriptPlugin(LanguagePlugin):
                 out = Path(td) / "facts.json"
                 cfg = {**ctx.extractor_cfg, "out": str(out)}
                 cfgp.write_text(json.dumps(cfg))
-                proc = subprocess.run(["node", "--max-old-space-size=6144", str(exdir / EXTRACTOR.name), "--config", str(cfgp)],
-                                      capture_output=True, text=True)
+                cmd = [rt["path"]] + (["--max-old-space-size=6144"] if rt["kind"] == "node" else []) + [
+                    str(exdir / EXTRACTOR.name), "--config", str(cfgp)]
+                proc = subprocess.run(cmd, capture_output=True, text=True)
                 if proc.returncode != 0:
                     raise RuntimeError(f"ts extractor failed: {proc.stderr[-2000:]}")
                 facts = json.loads(out.read_text())
@@ -422,6 +425,7 @@ class TypeScriptPlugin(LanguagePlugin):
                 cache.note_project(project.root)
         ctx.facts = facts
         facts.setdefault("stats", {})["facts_cache"] = cache_status
+        facts["stats"]["runtime"] = {"kind": rt["kind"], "path": rt["path"]}
         t_extract = time.time() - t0
         for n in facts["nodes"]:
             kind, key = n["id"].split(":", 1)
