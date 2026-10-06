@@ -5,9 +5,9 @@ import { toDocsSearchQuery } from '~/utils/docs-search'
 
 const { seo } = useAppConfig()
 const route = useRoute()
-const siteUrl = computed(() => useRuntimeConfig().public.siteUrl.replace(/\/$/, ''))
-const pageUrl = computed(() => `${siteUrl.value}${route.path}`)
-const ogImage = computed(() => `${siteUrl.value}/og.png`)
+const siteUrl = useRuntimeConfig().public.siteUrl.replace(/\/$/, '')
+const pageUrl = computed(() => `${siteUrl}${route.path}`)
+const ogImage = `${siteUrl}/og.png`
 
 const { data: rawNavigation } = await useAsyncData('navigation', () => queryCollectionNavigation('docs'))
 
