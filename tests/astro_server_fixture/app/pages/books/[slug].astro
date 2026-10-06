@@ -1,0 +1,6 @@
+---
+const { slug } = Astro.params
+if (slug === 'old') return Astro.redirect('/')
+if (!slug) return Astro.rewrite('/404')
+---
+<h1>{slug}</h1>

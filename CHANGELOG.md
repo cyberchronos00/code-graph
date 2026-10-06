@@ -10,7 +10,18 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
-- Astro (#162, part B): template expressions, attribute values and `define:vars` are code at their real lines; islands are RENDERS with `attrs.client`; `<a href>` is navigation; functions in `.astro` files are nodes; `attrs.props` / `attrs.params`. A `.vue` file with no import or export (template only, or a bare `<script setup>`) now resolves when imported, so the import is an IMPORTS edge.
+- Astro (#162): template `{…}` expressions, attribute values and `define:vars` are code at their real
+  lines; islands are RENDERS with `attrs.client`; `<a href>` is navigation; functions in `.astro`
+  files are nodes; file nodes carry `attrs.props` / `attrs.params`. Literal `srcDir`, `base`,
+  `trailingSlash`, `redirects` and `i18n` from `astro.config.*` affect page and route names;
+  middleware is USES_MIDDLEWARE from every page and route; actions are `POST /_actions/<name>`
+  routes called from scripts and forms; `Astro.redirect`, `rewrite` and `context.redirect` are
+  navigation.
+
+### Fixed
+
+- Vue: a `.vue` file with no import or export (template only, or a bare `<script setup>`) now
+  resolves when imported, so the import is an IMPORTS edge.
 
 ## [0.15.0] - 2026-10-06
 

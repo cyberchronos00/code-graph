@@ -73,13 +73,19 @@ the route (`heuristic`); the most specific alignment wins. Method and path only:
 
 An Astro project is detected from an `astro` dependency or an `astro.config.mjs` / `.js` / `.ts` /
 `.mts` / `.cjs` file. Frontmatter between the `---` fences and `<script>` blocks are indexed as
-TypeScript at their real lines in the `.astro` file. `.astro` files are parsed as TSX, so a `<T>x`
-cast or a `<T>() =>` arrow in a `.astro` file is a syntax error.
+TypeScript at their real lines in the `.astro` file, and the template is read too. `.astro` files
+are parsed as TSX, so a `<T>x` cast or a `<T>() =>` arrow in a `.astro` file is a syntax error.
+Literal `srcDir`, `base`, `trailingSlash`, `redirects` and `i18n` are read from `astro.config.*`,
+and routes carry `base`.
 
 | feature | graph |
 |---|---|
-| pages | `src/pages/**.astro` → page (`ui_page`). `index` is `/`, `[slug]` is `{slug}`, `[...rest]` is `{rest*}`. A segment starting with `_` is skipped |
-| endpoints | files under `src/pages/` exporting `GET` / `POST` / … (`ALL` → `ANY`) become routes |
+| pages | `src/pages/**.astro` (or `<srcDir>/pages`) → page (`ui_page`). `index` is `/`, `[slug]` is `{slug}`, `[...rest]` is `{rest*}`. A segment starting with `_` is skipped |
+| endpoints | files under the pages directory exporting `GET` / `POST` / … (`ALL` → `ANY`) become routes |
+| srcDir / base / i18n | literal `srcDir`, `base`, `trailingSlash` and `i18n` from `astro.config.*`. Routes carry `base`. A locale segment sets `attrs.locale`; otherwise the default locale when `prefixDefaultLocale` is false |
+| redirects | config entries become redirect pages (an external destination is only `attrs.redirect`), and `Astro.redirect` / `rewrite` / `context.redirect` are NAVIGATES_TO |
+| middleware | USES_MIDDLEWARE from every page and route, in `sequence` order |
+| actions | `POST /_actions/<name>` routes (nested: `shelf.clear`), plus CALLS from `actions.x()` calls and `<form action={actions.x}>` in any `.astro` file |
 | components | `<Card />` → RENDERS. Imports from `.ts` and other `.astro` files resolve |
 | template | `{…}` expressions, attribute values and `define:vars` are code at their real lines; `is:raw` children are text |
 | islands | `client:load` / `idle` / `visible` / `media` / `only` and `server:defer` → RENDERS `attrs.client` / `client_value` / `server`; React/Preact `.tsx`, Vue `.vue` |
@@ -120,5 +126,6 @@ carries `branch` and `branch_line`.
 - Express middleware order is known inside one file. Dynamic `require(path)` is not followed.
 - Untyped JavaScript resolves when the checker can see the object literal or the CommonJS
   export.
-- Astro `.md` / `.mdx` pages, content collections, middleware, actions and a custom `srcDir` are
-  not read. `.svelte` islands are not resolved.
+- Astro `.md` / `.mdx` pages and content collections are not read, and `.svelte` islands are not
+  resolved. Computed config values, `injectRoute` from integrations, and i18n `domains` /
+  `fallback` are not read.

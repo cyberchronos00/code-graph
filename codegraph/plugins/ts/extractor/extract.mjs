@@ -1266,6 +1266,9 @@ for (const sf of sourceFiles) {
         name = node.name.text; kind = 'store'; body = init
       } else if (!qual && (wrapped = wrapperOf(init, node))) { name = node.name.text; kind = 'function'; body = wrapped }
       else if (!qual && ts.isObjectLiteralExpression(init)) { ts.forEachChild(init, c => visit(c, node.name.text, parentId, true)); return }
+    } else if (ts.isPropertyAssignment(node) && qual && node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) && ts.isCallExpression(unwrap(node.initializer))
+               && ts.isIdentifier(unwrap(node.initializer).expression) && unwrap(node.initializer).expression.text === 'defineAction') {
+      ts.forEachChild(node, c => visit(c, qual ? `${qual}.${node.name.text}` : node.name.text, parentId, true)); return
     } else if (ts.isPropertyAssignment(node) && inObj && node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) && ts.isObjectLiteralExpression(unwrap(node.initializer))) {
       ts.forEachChild(node, c => visit(c, qual ? `${qual}.${node.name.text}` : node.name.text, parentId, true)); return
     } else if ((ts.isMethodDeclaration(node) || ts.isPropertyAssignment(node)) && node.name && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) {
@@ -2828,9 +2831,70 @@ function routerBinding(id) {
     return !!(decl && ts.isVariableDeclaration(decl) && decl.initializer && isRouterRecv(decl.initializer))
   } catch { return false }
 }
+function astroBag() {
+  return astroBag.xs || (astroBag.xs = [])
+}
+function astroLitArgs(node) {
+  return (node.arguments || []).map(a => {
+    const u = unwrap(a)
+    return u && ts.isStringLiteralLike(u) ? u.text : null
+  })
+}
+function astroActionPath(expr) {
+  let e = unwrap(expr)
+  if (!e) return null
+  if (ts.isPropertyAccessExpression(e) && e.name.text === 'orThrow') e = unwrap(e.expression)
+  const parts = []
+  while (e && ts.isPropertyAccessExpression(e)) { parts.unshift(e.name.text); e = unwrap(e.expression) }
+  if (!parts.length || !e || !ts.isIdentifier(e) || e.text !== 'actions') return null
+  if (!FW.importSource || FW.importSource(e) !== 'astro:actions') return null
+  return parts.join('.')
+}
+function astroContentFn(name) {
+  return name === 'getRelativeLocaleUrl' || name === 'getAbsoluteLocaleUrl' || name === 'getRelativeLocaleUrlList'
+    || name === 'getCollection' || name === 'getEntry' || name === 'getEntries' || name === 'getLiveCollection'
+    || name === 'getLiveEntry' || name === 'render'
+}
+function recordAstro(node, cur, r, line) {
+  if (!cfg.astro) return
+  const args = astroLitArgs(node)
+  if (ts.isNewExpression(node)) {
+    const callee = unwrap(node.expression)
+    const a0 = node.arguments && unwrap(node.arguments[0])
+    const a1 = node.arguments && node.arguments[1] && unwrap(node.arguments[1])
+    const recv = a1 && ts.isPropertyAccessExpression(a1) ? unwrap(a1.expression) : null
+    if (callee && ts.isIdentifier(callee) && callee.text === 'URL' && a0 && ts.isStringLiteralLike(a0) && a0.text.startsWith('/')
+        && recv && ts.isIdentifier(recv) && recv.text === 'Astro' && /^(url|site)$/.test(a1.name.text))
+      astroBag().push({ src: cur, file: r, line, fn: 'url', args })
+    return
+  }
+  if (!ts.isCallExpression(node)) return
+  const callee = unwrap(node.expression)
+  if (ts.isPropertyAccessExpression(callee) && callee.name.text === 'callAction') {
+    const recv = unwrap(callee.expression)
+    const path = node.arguments[0] && astroActionPath(node.arguments[0])
+    if (recv && ts.isIdentifier(recv) && recv.text === 'Astro' && path)
+      astroBag().push({ src: cur, file: r, line, fn: 'action', how: 'callAction', args, path })
+  }
+  const path = astroActionPath(callee)
+  if (path) astroBag().push({ src: cur, file: r, line, fn: 'action', args, path })
+  // only the astro:i18n / astro:content functions (`render` and `getEntry` are common names elsewhere)
+  if (callee && ts.isIdentifier(callee) && astroContentFn(callee.text) && FW.importSource && /^astro:(i18n|content)$/.test(FW.importSource(callee) || ''))
+    astroBag().push({ src: cur, file: r, line, fn: callee.text, args })
+}
+function isParamBinding(id) {
+  const sym = checker.getSymbolAtLocation(id); const d = sym && (sym.declarations || [])[0]
+  let n = d; while (n && ts.isBindingElement(n)) n = n.parent && n.parent.parent
+  return !!(n && ts.isParameter(n))
+}
 function navCall(node, callee) {
   if (!ts.isCallExpression(node) || !node.arguments.length) return null
   if (ts.isIdentifier(callee) && callee.text === 'navigateTo') return { via: 'navigateTo', arg: node.arguments[0] }
+  if (cfg.astro && ts.isPropertyAccessExpression(callee) && /^(redirect|rewrite)$/.test(callee.name.text)) {
+    const recv = unwrap(callee.expression)
+    if (ts.isIdentifier(recv) && (recv.text === 'Astro' || isParamBinding(recv))) return { via: callee.name.text, arg: node.arguments[0] }
+  }
+  if (cfg.astro && ts.isIdentifier(callee) && /^(redirect|rewrite)$/.test(callee.text) && isParamBinding(callee)) return { via: callee.text, arg: node.arguments[0] }
   const verb = ts.isIdentifier(callee) ? callee.text : (ts.isPropertyAccessExpression(callee) ? callee.name.text : '')
   if (verb !== 'push' && verb !== 'replace') return null
   const via = verb === 'replace' ? 'replace' : 'push'
@@ -2908,6 +2972,7 @@ function handleCall(node, cur, sf, r, encFn) {
   }
   const nav = navCall(node, callee)
   if (nav) navSites.push({ src: cur, file: r, line, via: nav.via, locs: routeLocs(nav.arg, 0) })
+  recordAstro(node, cur, r, line)
   if (cname === 'definePageMeta' && node.arguments[0]) {
     const o = unwrap(node.arguments[0]); const m = {}
     const lay = objProp(o, 'layout'); if (lay && ts.isStringLiteralLike(unwrap(lay))) m.layout = unwrap(lay).text
@@ -3287,7 +3352,7 @@ stats.seconds_fw_facts = tFw / 1000
 stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
 stats.config = { tsconfig: noConfig ? null : (parsed.packageConfigs ? null : rel(tsconfigPath)), root_files: rootNames.length,
   ...(parsed.packageConfigs ? { package_tsconfigs: parsed.packageConfigs } : {}) }
-fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, nav_sites: navSites, vue_routes: vueRoutes, fw: fwFacts,
+fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, nav_sites: navSites, vue_routes: vueRoutes, astro_calls: cfg.astro ? (astroBag.xs || []) : undefined, fw: fwFacts,
   subscriptions, bridges, bridge_receivers: bridgeReceivers.filter(b => !(b.protocol === 'react-native-event' && jsEmitted.has(b.module))), bridge_dynamic: bridgeDynamic, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
   skipped_links: [...new Set(skippedLinks)].sort(),
   // for `cg coverage` (#106): the files analysed, and the roots they come from (source dirs, source files, test trees);

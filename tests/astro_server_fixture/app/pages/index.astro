@@ -1,0 +1,17 @@
+---
+import { actions } from 'astro:actions'
+import { getRelativeLocaleUrl } from 'astro:i18n'
+const result = Astro.getActionResult(actions.addBook)
+const jaHome = getRelativeLocaleUrl('ja', 'about')
+---
+<form method="POST" action={actions.addBook}>
+  <input name="title" />
+</form>
+<p>{result?.data}</p>
+<a href={jaHome}>日本語</a>
+<script>
+  import { actions } from 'astro:actions'
+  document.querySelector('button')?.addEventListener('click', async () => {
+    await actions.shelf.clear()
+  })
+</script>
