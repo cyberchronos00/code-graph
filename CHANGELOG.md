@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-10-07
+
 ### Fixed
 
 - TypeScript and JavaScript indexing failed on pip installs in 0.19.0 because the extractor cache missed a module; a broken cache is rebuilt.
@@ -1535,7 +1537,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.19.1...HEAD
+[0.19.1]: https://github.com/cyberchronos00/code-graph/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/cyberchronos00/code-graph/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/cyberchronos00/code-graph/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/cyberchronos00/code-graph/compare/v0.16.0...v0.17.0
