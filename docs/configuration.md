@@ -141,5 +141,6 @@ Starter cards are built in this order: `serve --presets FILE` or `viz.presets`; 
 |---|---|
 | `CODEGRAPH_NO_CACHE=1` | disable the TS, Dart and native SCIP caches (keyed by file content) |
 | `CODEGRAPH_NO_HOOKS=1` | git hooks installed by `cg hooks` do nothing for that command ([CLI reference](cli.md#hooks)) |
+| `CODEGRAPH_NO_STALE_CHECK=1` | MCP tool replies skip the staleness `index note:` ([MCP server](mcp.md#staleness)) |
 | `CODEGRAPH_CACHE=DIR` | cache root (else `$CODEGRAPH_CACHE_DIR`, `%LOCALAPPDATA%\codegraph` on Windows, `$XDG_CACHE_HOME/codegraph`, `~/.cache/codegraph`). `cg clean` empties it ([clean](cli.md#clean)) |
 | `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0`, `CODEGRAPH_COMPDB`, `CODEGRAPH_CFAMILY`, … | Rust / C / C++ options ([environment variables](native.md#environment-variables)) |

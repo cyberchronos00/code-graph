@@ -14,6 +14,11 @@ commands, output and the graph schema; such changes are listed under **Changed**
   opt-in block to `post-commit`, `post-checkout` and `post-merge` (nothing is installed by
   default). `cg refresh` re-indexes in the background, skips an unchanged checkout, refuses a
   0-node result, and coalesces overlapping runs with a pending flag.
+- Index freshness (#145, part 2): `cg watch` re-indexes on save (debounced; `watchfiles` when
+  installed, otherwise git polling) and stops on Ctrl-C. MCP tool replies add one `index note:`
+  line and `stale: true` when the tree changed since the graph was built (cached for 5s).
+  A database that lives inside the checkout, and its refresh sidecars, no longer keep
+  `cg refresh` from reporting `up to date`.
 
 ## [0.13.0] - 2026-10-05
 

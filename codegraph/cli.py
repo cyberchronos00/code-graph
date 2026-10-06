@@ -252,6 +252,14 @@ def main(argv=None):
     p.add_argument("--db", required=True)
     p.add_argument("--name", help="project name when DB does not exist yet")
     p.add_argument("--quiet", action="store_true", help="print nothing on success, skip, or lock")
+    p = sub.add_parser("watch", help="re-index ROOT into DB when files change; Ctrl-C stops")
+    p.add_argument("root")
+    p.add_argument("--db", required=True)
+    p.add_argument("--name", help="project name when DB does not exist yet")
+    p.add_argument("--debounce", type=float, default=1.0, help="seconds to wait for writes to settle (default 1)")
+    p.add_argument("--interval", type=float, default=2.0, help="polling interval in seconds (default 2, minimum 0.2)")
+    p.add_argument("--poll", action="store_true", help="poll with git instead of watchfiles")
+    p.add_argument("--quiet", action="store_true", help="pass --quiet to each refresh")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
              "siblings": "code related to a symbol: class hierarchy, the same method in sibling classes, shared resources, co-callers",
              "writers": "code that writes a table (or column), or a stored property `Type.prop`",
@@ -417,6 +425,11 @@ def main(argv=None):
     if a.cmd == "refresh":
         from . import hooks as HK
         return HK.refresh(a.root, a.db, name=a.name, quiet=a.quiet)
+    if a.cmd == "watch":
+        from . import watch as W
+        return W.watch(a.root, a.db, name=a.name, debounce=max(0.0, a.debounce), interval=max(0.2, a.interval),
+                       backend="poll" if a.poll else "auto", quiet=a.quiet,
+                       out=lambda m: print(m, flush=True))      # live progress when stdout is a file or pipe
     if getattr(a, "plans_dir", None) is None and a.cmd in ("plan", "serve", "viz-plan", "impact") and getattr(a, "db", None):
         from .plans import resolve_plans_dir
         a.plans_dir = resolve_plans_dir(None, a.db)     # plans.dir of the indexed project's .cg.yaml

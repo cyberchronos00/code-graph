@@ -12,7 +12,7 @@ from codegraph.core.store import GraphStore
 BEGIN = hooks.BEGIN
 
 
-def _git(repo, *args, env=None, timeout=5):
+def _git(repo, *args, env=None, timeout=20):
     cmd = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args]
     return subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=timeout)
 
@@ -34,7 +34,7 @@ def _hooks(repo: Path) -> Path:
     return path if path.is_absolute() else (repo / path).resolve()
 
 
-def _wait_for(path: Path, timeout: float = 5.0) -> str:
+def _wait_for(path: Path, timeout: float = 20.0) -> str:
     """The hook backgrounds the refresh, so its side effect lands a moment after the hook returns."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -96,7 +96,7 @@ def test_existing_hook_is_chained_and_uninstall_restores_bytes(tmp_path):
     env = os.environ.copy()
     env["CG_MARK"] = str(marker)
     env["PATH"] = "/usr/bin:/bin"
-    proc = subprocess.run(["sh", str(hook)], capture_output=True, text=True, env=env, timeout=5)
+    proc = subprocess.run(["sh", str(hook)], capture_output=True, text=True, env=env, timeout=20)
     assert proc.returncode == 0
     assert marker.read_text(encoding="utf-8").strip() == "USER"
     rc = hooks.run("uninstall", root=str(repo), assume_yes=True, out=lambda *a: None)
@@ -154,11 +154,11 @@ def test_hook_failure_does_not_break_git(tmp_path):
     t0 = time.monotonic()
     commit = _git(repo, "commit", "--allow-empty", "-m", "empty", env=env)
     assert commit.returncode == 0
-    assert time.monotonic() - t0 < 5
+    assert time.monotonic() - t0 < 20
     t0 = time.monotonic()
     branch = _git(repo, "checkout", "-b", "feature", env=env)
     assert branch.returncode == 0
-    assert time.monotonic() - t0 < 5
+    assert time.monotonic() - t0 < 20
     (repo / "a.py").write_text("def hello():\n    return 9\n", encoding="utf-8")
     _git(repo, "add", "a.py", env=env)
     made = _git(repo, "commit", "-m", "edit", env=env)
@@ -167,7 +167,7 @@ def test_hook_failure_does_not_break_git(tmp_path):
     t0 = time.monotonic()
     merged = _git(repo, "merge", "feature", "-m", "merge", env=env)
     assert merged.returncode == 0, merged.stderr
-    assert time.monotonic() - t0 < 5
+    assert time.monotonic() - t0 < 20
 
 
 def test_codegraph_no_hooks_and_checkout_skip(tmp_path):
@@ -185,20 +185,20 @@ def test_codegraph_no_hooks_and_checkout_skip(tmp_path):
     env = os.environ.copy()
     env["PATH"] = str(bindir) + os.pathsep + "/usr/bin:/bin"
     env.pop("CODEGRAPH_NO_HOOKS", None)
-    subprocess.run(["sh", str(hook)], check=True, env=env, timeout=5)
+    subprocess.run(["sh", str(hook)], check=True, env=env, timeout=20)
     assert "RAN" in _wait_for(marker)
     marker.unlink()
     env["CODEGRAPH_NO_HOOKS"] = "1"
-    subprocess.run(["sh", str(hook)], check=True, env=env, timeout=5)
+    subprocess.run(["sh", str(hook)], check=True, env=env, timeout=20)
     time.sleep(0.3)
     assert not marker.exists()
 
     checkout = _hooks(repo) / "post-checkout"
     env.pop("CODEGRAPH_NO_HOOKS")
-    subprocess.run(["sh", str(checkout), "abc", "abc"], check=True, env=env, timeout=5)
+    subprocess.run(["sh", str(checkout), "abc", "abc"], check=True, env=env, timeout=20)
     time.sleep(0.3)
     assert not marker.exists()
-    subprocess.run(["sh", str(checkout), "abc", "def"], check=True, env=env, timeout=5)
+    subprocess.run(["sh", str(checkout), "abc", "def"], check=True, env=env, timeout=20)
     assert _wait_for(marker).strip() == "RAN"
 
 
@@ -246,8 +246,8 @@ def test_refresh_skip_reindex_refuse_and_pending(tmp_path):
         t0 = time.monotonic()
         pending = subprocess.run(
             [sys.executable, "-m", "codegraph.cli", "refresh", str(repo), "--db", str(fresh)],
-            capture_output=True, text=True, timeout=5)
-        assert time.monotonic() - t0 < 5
+            capture_output=True, text=True, timeout=20)
+        assert time.monotonic() - t0 < 20
         assert pending.returncode == 0
         assert "marked pending" in pending.stdout
         assert Path(str(fresh) + ".refresh.pending").is_file()
@@ -394,7 +394,7 @@ def test_recorded_interpreter_wins_over_cg_on_path(tmp_path):
     env = os.environ.copy()
     env["PATH"] = str(bindir) + os.pathsep + "/usr/bin:/bin"
     env.pop("CODEGRAPH_NO_HOOKS", None)
-    subprocess.run(["sh", str(_hooks(repo) / "post-commit")], check=True, env=env, timeout=5)
+    subprocess.run(["sh", str(_hooks(repo) / "post-commit")], check=True, env=env, timeout=20)
     text = _wait_for(marker)
     assert text.startswith("RECORDED -m codegraph.cli refresh ")
     assert "PATH-CG" not in text

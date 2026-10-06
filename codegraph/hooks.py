@@ -291,17 +291,24 @@ def _listed_files(root: Path) -> list[str] | None:
     return out
 
 
-def _fingerprint(root: Path) -> str | None:
-    """Hash of (path, mtime_ns, size) for every file `git ls-files -c -o --exclude-standard` lists, or
-    None when git fails. Taken before indexing, so an edit made while the index runs changes it; a
-    rename, an add, a delete or an edit changes it too."""
-    if not _git_ok(root):
-        return None
-    rels = _listed_files(root)
-    if rels is None:
-        return None
+def _db_artifact(root: Path, rel: str, db: str | None) -> bool:
+    """True for the graph DB and its sidecars (`<db>`, `<db>.*`, `<db>-*`), so a DB inside ROOT
+    does not change the fingerprint every time refresh rewrites it."""
+    if not db:
+        return False
+    skip = str(Path(db).resolve())
+    try:
+        abs_p = str((root / rel).resolve())
+    except OSError:
+        abs_p = str(root / rel)
+    return abs_p == skip or abs_p.startswith(skip + ".") or abs_p.startswith(skip + "-")
+
+
+def _fingerprint_of(root: Path, rels: list[str], db: str | None = None) -> str:
     h = hashlib.sha1()
     for rel in sorted(rels):
+        if _db_artifact(root, rel, db):
+            continue
         try:
             st = (root / rel).lstat()
             sig = f"{st.st_mtime_ns} {st.st_size}"
@@ -309,6 +316,71 @@ def _fingerprint(root: Path) -> str | None:
             sig = "missing"
         h.update(rel.encode("utf-8", "surrogateescape") + b"\0" + sig.encode() + b"\0")
     return h.hexdigest()
+
+
+def _fingerprint(root: Path, db: str | None = None) -> str | None:
+    """Hash of (path, mtime_ns, size) for every file `git ls-files -c -o --exclude-standard` lists, or
+    None when git fails. Taken before indexing, so an edit made while the index runs changes it; a
+    rename, an add, a delete or an edit changes it too. `db` and its sidecars are left out."""
+    if not _git_ok(root):
+        return None
+    rels = _listed_files(root)
+    if rels is None:
+        return None
+    return _fingerprint_of(root, rels, db)
+
+
+def _state_matches(db: str, snapshot: str | None) -> bool:
+    """True when `<db>.refresh.state` records this snapshot and the database's current mtime."""
+    if snapshot is None:
+        return False
+    state_path = Path(db + ".refresh.state")
+    if not state_path.is_file():
+        return False
+    try:
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        mtime = os.stat(db).st_mtime_ns
+    except (OSError, ValueError):
+        return False
+    return isinstance(saved, dict) and saved.get("files") == snapshot and saved.get("db_mtime_ns") == mtime
+
+
+def staleness(root: str | Path, db: str) -> bool | None:
+    """True when the working tree changed since `db` was built. None when the DB is missing or
+    empty, ROOT is not a git repo, or git fails. One `git ls-files` and one lstat per file."""
+    db_path = Path(db)
+    try:
+        if not db_path.is_file() or db_path.stat().st_size == 0:
+            return None
+        db_mtime = db_path.stat().st_mtime_ns
+    except OSError:
+        return None
+    rootp = Path(root)
+    if not _git_ok(rootp):
+        return None
+    rels = _listed_files(rootp)
+    if rels is None:
+        return None
+    db_abs = str(db_path.resolve())
+    state_path = Path(db_abs + ".refresh.state")
+    saved = None
+    if state_path.is_file():
+        try:
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = None
+    if isinstance(saved, dict) and saved.get("db_mtime_ns") == db_mtime and isinstance(saved.get("files"), str):
+        return _fingerprint_of(rootp, rels, db_abs) != saved["files"]
+    for rel in rels:
+        if _db_artifact(rootp, rel, db_abs):
+            continue
+        try:
+            st = (rootp / rel).lstat()
+        except OSError:
+            continue
+        if st.st_mtime_ns > db_mtime:
+            return True
+    return False
 
 
 @contextlib.contextmanager
@@ -452,7 +524,7 @@ def _refresh_once(root: Path, db: str, name: str | None, quiet: bool, out) -> in
                 out(f"refresh failed: {ex}")
             return 1
         apps = cfg.get("apps") or None
-        snapshot = _fingerprint(index_root)
+        snapshot = _fingerprint(index_root, db)
         if apps and snapshot is not None:      # an app root outside the checkout is not in the fingerprint
             from .apps import app_path
             for a in apps:
@@ -461,18 +533,12 @@ def _refresh_once(root: Path, db: str, name: str | None, quiet: bool, out) -> in
                 except ValueError:
                     snapshot = None
                     break
-        if db_exists and same_tree and snapshot is not None and state_path.is_file():
-            try:
-                saved = json.loads(state_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                saved = None
-            if isinstance(saved, dict) and saved.get("files") == snapshot \
-                    and saved.get("db_mtime_ns") == os.stat(db).st_mtime_ns:
-                _log(db, [f"start {stamp}", f"end {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",
-                          "status up to date"])
-                if not quiet:
-                    out("up to date")
-                return 0
+        if db_exists and same_tree and _state_matches(db, snapshot):
+            _log(db, [f"start {stamp}", f"end {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",
+                      "status up to date"])
+            if not quiet:
+                out("up to date")
+            return 0
         if meta.get("repos") and not apps:
             msg = ("refresh refused: the database is a combined graph (cg link); re-index it with the "
                    "MCP index tool or cg link. The graph is unchanged")

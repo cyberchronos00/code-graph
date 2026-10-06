@@ -24,6 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+watch = ["watchfiles>=0.21"]
 
 [project.scripts]
 cg = "codegraph.cli:main"

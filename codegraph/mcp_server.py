@@ -20,6 +20,7 @@ import sqlite3
 import json
 import os
 import threading
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Annotated, Any
@@ -141,12 +142,50 @@ def _coverage_note() -> str:
         return ""
 
 
+_STALE = {"key": None, "at": 0.0, "note": ""}
+_STALE_TTL = 5.0
+_STALE_NOTE = ("index note: files changed since this graph was built; answers may be stale "
+               "(run the index tool, or cg refresh ROOT --db DB).")
+
+
+def _stale_note(tool_name: str) -> str:
+    """One line when the working tree changed since the DB was built. Cached for 5s. Empty when
+    the check does not apply or anything goes wrong (never raises)."""
+    if tool_name in ("index", "doctor") or os.environ.get("CODEGRAPH_NO_STALE_CHECK") == "1":
+        return ""
+    try:
+        key = (STATE["db"], STATE["root"])
+        now = time.monotonic()
+        if _STALE["key"] == key and (now - _STALE["at"]) < _STALE_TTL:
+            return _STALE["note"]      # cache hit: no DB open, no git call
+        note = ""
+        db = STATE["db"]
+        if os.path.isfile(db) and os.path.getsize(db) > 0:
+            store = GraphStore(db)
+            try:
+                meta = store.meta()
+            finally:
+                store.db.close()
+            root = STATE["root"] or meta.get("root")
+            if root and not meta.get("repos"):
+                from .hooks import staleness
+                if staleness(root, db):
+                    note = _STALE_NOTE
+        _STALE["key"] = key
+        _STALE["at"] = now
+        _STALE["note"] = note
+        return note
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 class ToolReply(TypedDict):
     """Structured content of every tool reply: the text reply plus machine-readable completeness."""
     result: str
     completeness: dict[str, Any]
     platform: NotRequired[dict[str, Any]]     # the --platform filter a reply applied (target, excluded, unevaluated)
     overrides: NotRequired[dict[str, Any]]    # impact: the override relation of the targets ({overrides, overridden_by})
+    stale: NotRequired[bool]                  # true when the working tree changed since the graph was built
 
 
 # scope of the answer a tool is producing, set by the tool while it runs (see _scope); read by the tool() wrapper
@@ -228,6 +267,10 @@ def _run(fn, args, kwargs) -> tuple[str, dict]:
         claims_all = cn.startswith("coverage: every source file")
         if cn and not ((scoped or "coverage note:" in txt) and claims_all):
             txt = txt.rstrip() + "\n" + cn
+    note = _stale_note(fn.__name__)
+    if note:
+        txt = txt.rstrip() + "\n" + note
+        comp["_extra"] = {**(comp.get("_extra") or {}), "stale": True}
     return _rel_text(txt), comp
 
 
@@ -1302,9 +1345,12 @@ def index(root: str | None = None, gates: str | None = None, repo: str | None = 
     indexed with --include-generated or .cg.yaml sets generated.include."""
     from .config import ConfigError
     try:
-        return _index(root, gates, repo)
-    except ConfigError as ex:
-        return f"index refused: {ex}; the graph is unchanged"
+        try:
+            return _index(root, gates, repo)
+        except ConfigError as ex:
+            return f"index refused: {ex}; the graph is unchanged"
+    finally:
+        _STALE["key"] = None
 
 
 def main(argv=None):

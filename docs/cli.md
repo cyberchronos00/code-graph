@@ -46,6 +46,7 @@
 | `agents ACTION` | Opt-in block in agent guidance files. Previews and asks. `--mcp` also writes the `cg-mcp` server entry. | [mcp](mcp.md) |
 | `hooks install\|uninstall\|status` | Opt-in git hooks that refresh the index after commit, checkout and merge. Nothing is installed by default. | [hooks](#hooks) |
 | `refresh ROOT --db DB` | Re-index when sources changed. `--name`, `--quiet`. Hooks run this in the background. | [hooks](#hooks) |
+| `watch ROOT --db DB` | Re-index on save, debounced (`watchfiles` if installed, else polling). Ctrl-C stops. | [watch](#watch) |
 | `clean [ROOT]` | Cache entries for one project, `--stale` ones, or `--all`. | [clean](#clean) |
 
 ## Common flags
@@ -200,6 +201,23 @@ The block never calls `exit`. It backgrounds the refresh, discards its output, a
 | `--yes` | skip `apply N change(s)? [y/N]` |
 | `--quiet` | `refresh` only: no stdout |
 | `--name` | `refresh` only: project name when the database is new |
+
+The database file and its sidecars (`<db>`, `<db>.*` and `<db>-*`, including `-wal` and `.refresh.*`) are left out of the fingerprint, so a database that lives inside ROOT and is not gitignored still reports `up to date` on the next run.
+
+## watch
+
+`cg watch ROOT --db DB` runs the same refresh as the git hooks, once at start and again when sources change. Install the optional backend with `pip install "cg-code-graph[watch]"`. Without it, cg polls the git fingerprint (`--poll` forces that path). Polling needs a git repository and exits 2 otherwise.
+
+`.gitignore` applies because a refresh runs only when the `git ls-files` fingerprint changes. `watchfiles` also skips `vendor`, `build`, `dist`, `target`, `out`, `.next`, `.nuxt` and `.dart_tool`, and both backends ignore the database and its sidecars. Polling waits until two checks `--debounce` seconds apart see the same fingerprint (at most 30s) and then refreshes once. Before each refresh, cg waits while `git rev-parse --git-path index.lock` exists (a branch switch), so a checkout is one refresh. If files change while a refresh runs, one more refresh follows, then cg waits for the next change. The run shares `<db>.refresh.lock` with `cg hooks`. Ctrl-C prints `watch stopped` and exits 0.
+
+| Flag | Meaning |
+|---|---|
+| `--db` | graph file (required) |
+| `--name` | project name when the database is new |
+| `--debounce` | seconds to let writes settle (default 1) |
+| `--interval` | polling interval in seconds (default 2, minimum 0.2) |
+| `--poll` | poll with git instead of `watchfiles` |
+| `--quiet` | pass `--quiet` through to each refresh |
 
 ## clean
 

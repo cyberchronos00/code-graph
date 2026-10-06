@@ -58,6 +58,10 @@ Paths in replies are repo-relative. An empty result says why and suggests the ne
 
 Where the answer is not complete, use normal search and file reading for that part. Sample replies: [MCP sample outputs](mcp/sample_outputs.md).
 
+## Staleness
+
+When the working tree has changed since this graph was built, tool replies add one `index note:` line and the structured content includes `stale: true`. The check compares `<db>.refresh.state` (the fingerprint of paths, mtimes and sizes that `cg refresh` stored, plus the database mtime) with the current tree. File contents are not hashed. A database built by `cg index` or the `index` tool has no state file, so any listed file newer than the database counts. Paths come from one `git ls-files` call. The result is cached for 5 seconds. `index` and `doctor` skip the check. A combined graph (`cg link`) is not checked. `CODEGRAPH_NO_STALE_CHECK=1` turns the check off ([Configuration](configuration.md#environment-variables)).
+
 ## Client config
 
 ```json
