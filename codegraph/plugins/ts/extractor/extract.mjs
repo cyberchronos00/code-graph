@@ -442,6 +442,7 @@ function buildVirtualVue(file) {
   const lm = {}
   let out = text
   stubs.forEach(([code, line], i) => { lm[baseLines + 1 + i] = line; out += '\n' + code.replace(/\n/g, ' ') })
+  out += '\nexport {}'
   const i18nKeys = []
   for (const cb of d.customBlocks || []) {
     if (cb.type !== 'i18n') continue
@@ -480,36 +481,137 @@ function astroFrontmatter(src) {
   const c = close.exec(src)
   return c ? { start, end: Math.max(start, c.index), tpl: c.index + 4 } : { start, end: src.length, tpl: src.length }
 }
+const ASTRO_STUB = /^__tpl(?:c|nav)?_\d+$/   // generated template stub names in a .astro virtual file
+const astroRender = new Map()   // `${virtual}#__tplc_N` -> {client, client_value, server}
+const astroDefineVars = new Map() // abs .astro path -> sorted define:vars key names
+// end offset (exclusive) of the template expression starting at src[i] === '{', parsed by TypeScript as a TSX
+// JSX expression child (strings, template literals and nested JSX inside it are handled); -1 when it does not close
+// HTML comments inside JSX in an expression are not JSX: blank them, keeping offsets and newlines
+const astroNoComments = t => t.includes('<!--') ? t.replace(/<!--[\s\S]*?(?:-->|$)/g, m => m.replace(/[^\n]/g, ' ')) : t
+function astroExprEnd(src, i) {
+  for (const len of [240, 4000, 60000, Infinity]) {   // most expressions are short: parse a small window first
+    const chunk = astroNoComments(src.slice(i, i + len))
+    const sf = ts.createSourceFile('x.tsx', '<>' + chunk, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    const st = sf.statements[0]
+    const fr = st && ts.isExpressionStatement(st) && st.expression
+    const je = fr && ts.isJsxFragment(fr) && fr.children[0]
+    // errors at 0-1 are about the synthetic `<>` (never closed when later template text is not JSX)
+    if (je && (ts.isJsxExpression(je)) && sf.text[je.end - 1] === '}' && !(sf.parseDiagnostics || []).some(d => d.start >= 2 && d.start < je.end)) return i + je.end - 2
+    if (i + len >= src.length) break
+  }
+  return -1
+}
+function astroStubOk(code) {
+  const sf = ts.createSourceFile('x.tsx', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX)
+  return !(sf.parseDiagnostics || []).length
+}
+function astroObjectKeys(expr) {
+  const sf = ts.createSourceFile('x.tsx', '(' + expr + ')', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const st = sf.statements[0]
+  let e = st && ts.isExpressionStatement(st) ? st.expression : null
+  while (e && ts.isParenthesizedExpression(e)) e = e.expression
+  if (!e || !ts.isObjectLiteralExpression(e)) return []
+  const keys = []
+  for (const p of e.properties) {
+    if (ts.isShorthandPropertyAssignment(p) && ts.isIdentifier(p.name)) keys.push(p.name.text)
+    else if ((ts.isPropertyAssignment(p) || ts.isMethodDeclaration(p)) && p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) keys.push(p.name.text)
+  }
+  return keys
+}
 function buildVirtualAstro(file) {
   let src
   try { src = fs.readFileSync(file, 'utf8') } catch (e) { process.stderr.write(`codegraph: skipping ${rel(file)}: ${e.code || e}\n`); return '' }
   const keep = []
   const fm = astroFrontmatter(src)
   if (fm) keep.push([fm.start, fm.end])
-  // one pass over the template: comments, <script> / <style> (an unclosed one runs to the end) and component tags
   const stubs = []
-  let n = 0, line = 1, at = 0
-  const lineAt = i => { for (; at < i; at++) if (src.charCodeAt(at) === 10) line++; return line }
-  const re = /<!--[\s\S]*?(?:-->|$)|<(script|style)\b([^>]*)>([\s\S]*?)(?:<\/\1\s*>|$)|<([A-Z][\w$]*)/g
-  re.lastIndex = fm ? fm.tpl : 0
-  let m
-  while ((m = re.exec(src))) {
-    if (m[1] === 'script' && astroScriptKept(m[2])) {
-      const s = m.index + 1 + m[1].length + m[2].length + 1
-      keep.push([s, s + m[3].length])
-    } else if (m[4]) {
-      stubs.push([`function __tplc_${n++}() { return typeof ${m[4]} }`, lineAt(m.index)])
-      stats.template_stubs++
-      stats.template_component_tags++
-    }
+  const defKeys = []
+  let n = 0
+  const starts = [0]
+  for (let k = src.indexOf('\n'); k >= 0; k = src.indexOf('\n', k + 1)) starts.push(k + 1)
+  const lineAt = i => { let lo = 0, hi = starts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= i) lo = mid; else hi = mid - 1 } return lo + 1 }
+  const vp = file + '.ts'
+  const dropped = () => { stats.astro_expr_dropped = (stats.astro_expr_dropped || 0) + 1 }
+  const UNQUOTED = /[^\s>]+/y
+  let i = fm ? fm.tpl : 0
+  const addExpr = (s, e) => {
+    const body = astroNoComments(src.slice(s, e))
+    const code = `function __tpl_${n} () { return (<>${body}</>) }`
+    if (!astroStubOk(code)) { dropped(); return }
+    n++
+    stubs.push([code, lineAt(s)]); stats.template_stubs++
   }
+  while (i < src.length) {
+    const c = src[i]
+    if (src.startsWith('<!--', i)) { const e = src.indexOf('-->', i + 4); i = e < 0 ? src.length : e + 3; continue }
+    if (c === '{') { const e = astroExprEnd(src, i); if (e < 0) { i++; continue } addExpr(i, e); i = e; continue }
+    if (c === '<' && /[A-Za-z]/.test(src[i + 1] || '')) {
+      const tm = /^<([A-Za-z][\w$.:-]*)/.exec(src.slice(i, i + 200))
+      if (!tm) { i++; continue }
+      const tag = tm[1]
+      let j = i + tm[0].length
+      const attrs = []   // [name, value|null, start]
+      // attributes: name, name="v", name='v', name={expr}, {expr} / {...spread}
+      while (j < src.length && src[j] !== '>' && !(src[j] === '/' && src[j + 1] === '>')) {
+        if (/\s/.test(src[j])) { j++; continue }
+        if (src[j] === '{') { const e = astroExprEnd(src, j); if (e < 0) { j++; continue } addExpr(j, e); j = e; continue }
+        const am = /^[^\s=>\/{]+/.exec(src.slice(j, j + 200))
+        if (!am) { j++; continue }
+        const name = am[0]; const as = j; j += name.length
+        let value = null
+        if (src[j] === '=') {
+          j++
+          if (src[j] === '"' || src[j] === "'") { const q = src[j]; const e = src.indexOf(q, j + 1); value = src.slice(j + 1, e < 0 ? src.length : e); j = e < 0 ? src.length : e + 1 }
+          else if (src[j] === '{') { const e = astroExprEnd(src, j); if (e < 0) { j++; continue }
+            if (name === 'define:vars') defKeys.push(...astroObjectKeys(src.slice(j + 1, e - 1)))
+            if (tag === 'a' && name === 'href') {
+              const code = `function __tplnav_${n} () { return __cgNav("href", (${astroNoComments(src.slice(j + 1, e - 1))})) }`
+              if (astroStubOk(code)) { n++; stubs.push([code, lineAt(j)]) } else dropped()
+            } else addExpr(j, e)
+            j = e }
+          else { UNQUOTED.lastIndex = j; const vm = UNQUOTED.exec(src); value = vm ? vm[0] : ''; j += value.length }
+        }
+        attrs.push([name, value, as])
+      }
+      const selfClosing = src[j] === '/'
+      const attrText = src.slice(i + tm[0].length, j)
+      j = src[j] === '>' ? j + 1 : j + 2
+      // <script> / <style> bodies (lower case: `<Script>` is a component) and `is:raw` children are not template
+      // code; a self-closing tag has no body
+      const raw = tag === 'script' || tag === 'style' || attrs.some(a => a[0] === 'is:raw')
+      if (raw && !selfClosing) {
+        const cm = new RegExp(`</${tag.replace(/[.$]/g, '\\$&')}\\s*>`, 'g'); cm.lastIndex = j
+        const cl = cm.exec(src)
+        const end = cl ? cl.index : src.length
+        if (tag === 'script' && astroScriptKept(attrText)) keep.push([j, end])
+        i = cl ? end + cl[0].length : src.length
+        if (tag === 'script' || tag === 'style') continue
+      }
+      if (/^[A-Z]/.test(tag)) {
+        const client = attrs.find(a => a[0].startsWith('client:'))
+        const server = attrs.find(a => a[0].startsWith('server:'))
+        const name = tag.split('.')[0]
+        const rec = {}
+        if (client) { rec.client = client[0].slice(7); if (client[1]) rec.client_value = client[1] }
+        if (server) rec.server = server[0].slice(7)
+        if (client || server) astroRender.set(`${vp}#__tplc_${n}`, rec)
+        stubs.push([`function __tplc_${n++}() { return typeof ${name} }`, lineAt(i)])
+        stats.template_stubs++; stats.template_component_tags++
+      }
+      if (tag === 'a') { const h = attrs.find(a => a[0] === 'href' && a[1] != null); if (h && internalHref(h[1])) sfcNav.push({ file: rel(file), line: lineAt(h[2]), via: 'href', raw: h[1] }) }
+      if (!(raw && !selfClosing)) i = j
+      continue
+    }
+    i++
+  }
+  if (defKeys.length) astroDefineVars.set(file, [...new Set(defKeys)].sort())
   const text = blank(src, keep)
   const baseLines = text.split('\n').length
   const lm = {}
-  let out = text
-  stubs.forEach(([code, l], i) => { lm[baseLines + 1 + i] = l; out += '\n' + code })
+  let out = text, vl = baseLines
+  for (const [code, l] of stubs) { const parts = code.split('\n'); parts.forEach((_, k) => { lm[vl + 1 + k] = l + k }); vl += parts.length; out += '\n' + code }
   out += '\nexport {}'
-  lineMaps.set(file + '.ts', lm)
+  lineMaps.set(vp, lm)
   return out
 }
 for (const f of astroFiles) virtual.set(f + '.ts', buildVirtualAstro(f))
@@ -520,7 +622,7 @@ const origGetSourceFile = host.getSourceFile.bind(host)
 const origFileExists = host.fileExists.bind(host)
 const origReadFile = host.readFile.bind(host)
 host.getSourceFile = (fn, lang, onErr, should) => virtual.has(fn)
-  ? ts.createSourceFile(fn, virtual.get(fn), lang, true, ts.ScriptKind.TS)
+  ? ts.createSourceFile(fn, virtual.get(fn), lang, true, fn.endsWith('.astro.ts') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
   : origGetSourceFile(fn, lang, onErr, should)
 host.fileExists = fn => virtual.has(fn) || origFileExists(fn)
 host.readFile = fn => virtual.has(fn) ? virtual.get(fn) : origReadFile(fn)
@@ -1111,8 +1213,32 @@ for (const sf of sourceFiles) {
   fileNode.set(real, fid)
   nodes.push({ id: fid, kind: SFC_RE.test(real) ? fk : 'module', name: r, file: r, line: 1, end_line: sf.getLineAndCharacterOfPosition(sf.end).line + 1, attrs: { file_kind: fk, ...(isTestSf ? { test: true } : {}) } })
   modNode.set(fid, nodes[nodes.length - 1])
-  if (SFC_RE.test(real)) continue // SFC: references are attributed to the file node
+  if (real.endsWith('.astro')) {
+    const props = new Set(), params = new Set()
+    const acc = (e, k) => { e = unwrap(e); return e && ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === 'Astro' && e.name.text === k }
+    const w = n => {
+      if ((ts.isInterfaceDeclaration(n) || ts.isTypeAliasDeclaration(n)) && n.name.text === 'Props' && n.parent === sf) {
+        const ms = ts.isInterfaceDeclaration(n) ? n.members : (ts.isTypeLiteralNode(n.type) ? n.type.members : [])
+        for (const m of ms) if (m.name && (ts.isIdentifier(m.name) || ts.isStringLiteral(m.name))) props.add(m.name.text)
+      }
+      if (ts.isVariableDeclaration(n) && n.initializer && ts.isObjectBindingPattern(n.name))
+        for (const [k, set] of [['props', props], ['params', params]]) if (acc(n.initializer, k))
+          for (const el of n.name.elements) { const nm = el.propertyName || el.name; if (ts.isIdentifier(nm)) set.add(nm.text) }
+      if (ts.isPropertyAccessExpression(n) && acc(n.expression, 'params')) params.add(n.name.text)
+      if (ts.isPropertyAccessExpression(n) && acc(n.expression, 'props')) props.add(n.name.text)
+      ts.forEachChild(n, w)
+    }
+    w(sf)
+    const at = nodes[nodes.length - 1].attrs
+    if (props.size) at.props = [...props].sort()
+    if (params.size) at.params = [...params].sort()
+    const dv = astroDefineVars.get(real)
+    if (dv && dv.length) at.define_vars = dv
+  }
+  if (SFC_RE.test(real) && !real.endsWith('.astro')) continue // Vue SFC: references stay on the file node; .astro functions are nodes
+  const astroVirtual = real.endsWith('.astro')
   const visit = (node, qual, parentId, inObj) => {
+    if (astroVirtual && ts.isFunctionDeclaration(node) && node.name && ASTRO_STUB.test(node.name.text)) { ts.forEachChild(node, c => visit(c, qual, parentId, inObj)); return }
     let name = null, kind = null, body = null, wrapped = null
     if (!qual && !inObj && ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
         && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)
@@ -2464,7 +2590,7 @@ function bridgeModuleOf(e, depth) {
 function branchOf(node, sf) {
   let prev = node, x = node.parent
   const lab = (t) => t.replace(/\s+/g, ' ').slice(0, 80)
-  const at = (n) => sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1
+  const at = (n) => lineOf(n, sf)
   while (x && !ts.isFunctionLike(x) && !ts.isSourceFile(x) && !ts.isClassLike(x)) {
     if (ts.isIfStatement(x) && prev !== x.expression) {
       const c = `if (${x.expression.getText(sf)})`
@@ -2492,13 +2618,30 @@ function edgeKindFor(targetId, isCall) {
 }
 
 for (const sf of sourceFiles) { const real = realFile(sf); optionsFields(sf, rel(real), fileNode.get(real)) }
+const astroGsp = new Map(astroFiles.length ? nodes.filter(n => n.file && n.file.endsWith('.astro') && n.id.endsWith('#getStaticPaths')).map(n => [n.id, n]) : [])
+function jsxIslandAttrs(el) {
+  const out = {}
+  for (const a of (el && el.attributes && el.attributes.properties) || []) {
+    if (!ts.isJsxAttribute(a) || !a.name || !ts.isJsxNamespacedName(a.name)) continue
+    const ns = a.name.namespace.text, nm = a.name.name.text
+    if (ns === 'client') {
+      out.client = nm
+      if (a.initializer && ts.isStringLiteral(a.initializer)) out.client_value = a.initializer.text
+    } else if (ns === 'server') out.server = nm
+  }
+  return out
+}
 for (const sf of sourceFiles) {
   const real = realFile(sf), r = rel(real), fid = fileNode.get(real)
-  const isVue = SFC_RE.test(real)
+  const isVue = SFC_RE.test(real), isAstro = real.endsWith('.astro')
+  if (fid && fid.startsWith('page:') && isAstro) {
+    const g = astroGsp.get(`function:${r}#getStaticPaths`)
+    if (g) addEdge(fid, g.id, 'CALLS', r, g.line, 'exact', { via: ['astro'] })
+  }
   const stack = [fid]
   const fnStack = []
   const visit = node => {
-    const own = !isVue && declId.get(node)
+    const own = (!isVue || real.endsWith('.astro')) && declId.get(node)
     if (own) stack.push(own)
     const isFnNode = ts.isFunctionLike(node)
     if (isFnNode) fnStack.push(node)
@@ -2506,6 +2649,14 @@ for (const sf of sourceFiles) {
     if (ts.isVariableDeclaration(node) && node.initializer && cur) stateDecl(node, cur, sf, r)
     if (ts.isIdentifier(node) && stateNames.has(node.text) && cur) stateRef(node, cur, sf, r)
     if (ts.isPropertyAccessExpression(node) && optNames.has(node.name.text) && cur) optionsRef(node, cur, sf, r)
+    // .astro: `<a href>` inside a template expression (`{posts.map(p => <a href={`/blog/${p.slug}`}>)}`) is navigation,
+    // like a top-level one (the scanner handles those)
+    if (isAstro && ts.isJsxAttribute(node) && node.initializer && ts.isIdentifier(node.name) && node.name.text === 'href'
+        && ts.isIdentifier(node.parent.parent.tagName) && node.parent.parent.tagName.text === 'a') {
+      const v = node.initializer
+      if (ts.isStringLiteral(v)) { if (internalHref(v.text)) navSites.push({ src: cur, file: r, line: lineOf(node, sf), via: 'href', locs: [{ kind: 'path', value: v.text, conf: 'exact' }] }) }
+      else if (ts.isJsxExpression(v) && v.expression) navSites.push({ src: cur, file: r, line: lineOf(node, sf), via: 'href', locs: routeLocs(v.expression, 0) })
+    }
     // imports
     if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       const ms = checker.getSymbolAtLocation(node.moduleSpecifier)
@@ -2586,8 +2737,8 @@ for (const sf of sourceFiles) {
           if (['function', 'composable', 'method', 'store', 'component', 'page', 'layout'].includes(k)) {
             const tplTag = isVue && isTemplateLine(node, sf) && /^__tplc_/.test(enclosingFnName(node))
             const jsxTag = node.parent && (ts.isJsxOpeningElement(node.parent) || ts.isJsxSelfClosingElement(node.parent)) && node.parent.tagName === node
-            if (jsxTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['jsx', ...t.via], ...(branchOf(node.parent, sf) || {}) })
-            else if (tplTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['template', ...t.via] })
+            if (jsxTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['jsx', ...t.via], ...(branchOf(node.parent, sf) || {}), ...(real.endsWith('.astro') ? jsxIslandAttrs(node.parent) : {}) })
+            else if (tplTag) addEdge(cur, t.id, 'RENDERS', r, lineOf(node, sf), t.conf === 'exact' ? 'exact' : 'resolved', { via: ['template', ...t.via], ...(astroRender.get(`${sf.fileName}#${enclosingFnName(node)}`) || {}) })
             else if (!['component', 'page', 'layout'].includes(k)) addEdge(cur, t.id, edgeKindFor(t.id), r, lineOf(node, sf), t.conf, { ref: true, via: t.via.length ? t.via : undefined, template: isVue && isTemplateLine(node, sf) || undefined })
           }
         }

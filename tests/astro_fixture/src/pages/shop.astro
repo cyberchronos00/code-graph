@@ -1,0 +1,29 @@
+---
+import Base from '../layouts/Base.astro'
+import Counter from '../components/Counter.tsx'
+import Toggle from '../components/Toggle.vue'
+import { formatPrice, slugify } from '../lib/format'
+import { listBooks } from '../lib/books'
+function label(cents: number): string {
+  return 'Price: ' + formatPrice(cents)
+}
+const accent = 'teal'
+const showMore = listBooks().length > 0
+---
+<Base title={slugify('Shop')}>
+  <ul>
+    {listBooks().map((b) => (
+      <li title="{not code}">{label(b.cents)}</li>
+    ))}
+  </ul>
+  <Counter client:load start={1} />
+  <Toggle client:visible on={true} />
+  {showMore && <Counter client:only="react" start={2} />}
+  <a href="/books/dune">Dune</a>
+  <a href={`/books/${slugify('x')}`}>X</a>
+  <a href="https://astro.build">Astro</a>
+  <p>{"}"} it's {accent > 'a' ? 'yes' : 'no'}</p>
+</Base>
+<style define:vars={{ accent, price: formatPrice(500) }}>
+  ul { color: var(--accent); }
+</style>

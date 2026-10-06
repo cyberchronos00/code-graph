@@ -8,6 +8,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Astro (#162, part B): template expressions, attribute values and `define:vars` are code at their real lines; islands are RENDERS with `attrs.client`; `<a href>` is navigation; functions in `.astro` files are nodes; `attrs.props` / `attrs.params`. A `.vue` file with no import or export (template only, or a bare `<script setup>`) now resolves when imported, so the import is an IMPORTS edge.
+
 ## [0.15.0] - 2026-10-06
 
 ### Added
