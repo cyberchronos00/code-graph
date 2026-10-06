@@ -54,6 +54,8 @@ const EXCLUDE_FILES = new Set(cfg.exclude_files || [])
 const GENERATED_REL = cfg.generated_re ? new RegExp(cfg.generated_re) : null
 const excludedRel = r => !!(EXCLUDE_REL && EXCLUDE_REL.test(r)) || (!included(r.replace(/\/$/, '')) && (!!(GENERATED_REL && GENERATED_REL.test(r)) || EXCLUDE_FILES.has(r)))
 const SRC_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/
+const SFC_RE = /\.(vue|astro)$/
+const SFC_TS_RE = /\.(vue|astro)\.ts$/
 // test code (Vitest / Jest / Playwright / Cypress): indexed as test nodes unless cfg.index_tests === false; kept out of
 // the application graph by the indexer (TEST_* edges)
 const INDEX_TESTS = cfg.index_tests !== false
@@ -65,7 +67,7 @@ const isTestRel = r => TEST_FILE_RE.test(r) || /(^|\/)__tests__\//.test(r) || TE
 // ---------- file kinds (from the framework plugin: [[prefix, kind], ...]) ----------
 function fileKind(r) {
   for (const [prefix, kind] of cfg.kinds || []) if (r.startsWith(prefix)) return kind
-  return r.endsWith('.vue') ? 'component' : 'module'
+  return SFC_RE.test(r) ? 'component' : 'module'
 }
 
 // ---------- global components (Nuxt .nuxt/types/components.d.ts) ----------
@@ -327,14 +329,15 @@ if (INDEX_TESTS) {
   if (found.size) process.stderr.write(`codegraph: scripts the tests run: ${[...found].map(rel).sort().join(', ')}\n`)
 }
 const vueFiles = allFiles.filter(f => f.endsWith('.vue'))
-const vueSet = new Set(vueFiles)
+const astroFiles = allFiles.filter(f => f.endsWith('.astro'))
+const vueSet = new Set([...vueFiles, ...astroFiles])
 
 // ---------- virtual sources for .vue ----------
 const virtual = new Map()       // virtual path -> text
 const lineMaps = new Map()      // virtual path -> {virtualLine(1-based): origLine}
 const sfcInfo = new Map()
 const sfcI18n = {}             // rel vue path -> keys defined in <i18n> blocks       // vue abs path -> {templateTags:[...], pageMeta}
-const stats = { vue_files: vueFiles.length, ts_files: 0, template_stubs: 0, template_component_tags: 0,
+const stats = { vue_files: vueFiles.length, astro_files: astroFiles.length, ts_files: 0, template_stubs: 0, template_component_tags: 0,
   sfc_errors: 0, components_global: 0, components_imported: 0, components_external: 0, components_unknown: 0, unknown_tags: {} }
 const sfcNav = []               // static <NuxtLink to> / <RouterLink to> / <a href>
 function internalHref(v) {
@@ -458,6 +461,59 @@ function buildVirtualVue(file) {
 }
 for (const f of vueFiles) virtual.set(f + '.ts', buildVirtualVue(f))
 
+// .astro: frontmatter and <script> bodies stay at their real offsets; component tags become
+// __tplc_ stubs with a line map. `export {}` makes a frontmatter with no import/export a module.
+function astroScriptKept(attrs) {
+  const m = /\btype\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i.exec(attrs || '')
+  if (!m) return true
+  const t = (m[1] || m[2] || m[3] || '').trim()
+  return /^(?:module|text\/javascript|text\/typescript)$/i.test(t)
+}
+// frontmatter: `---` on the first line, up to the next line starting with `---` (an empty one included); an
+// unclosed fence runs to the end of the file, as in the Astro compiler
+function astroFrontmatter(src) {
+  const open = /^\s*---[ \t]*\r?\n/.exec(src)
+  if (!open) return null
+  const start = open[0].length
+  const close = /\n---/g
+  close.lastIndex = start - 1
+  const c = close.exec(src)
+  return c ? { start, end: Math.max(start, c.index), tpl: c.index + 4 } : { start, end: src.length, tpl: src.length }
+}
+function buildVirtualAstro(file) {
+  let src
+  try { src = fs.readFileSync(file, 'utf8') } catch (e) { process.stderr.write(`codegraph: skipping ${rel(file)}: ${e.code || e}\n`); return '' }
+  const keep = []
+  const fm = astroFrontmatter(src)
+  if (fm) keep.push([fm.start, fm.end])
+  // one pass over the template: comments, <script> / <style> (an unclosed one runs to the end) and component tags
+  const stubs = []
+  let n = 0, line = 1, at = 0
+  const lineAt = i => { for (; at < i; at++) if (src.charCodeAt(at) === 10) line++; return line }
+  const re = /<!--[\s\S]*?(?:-->|$)|<(script|style)\b([^>]*)>([\s\S]*?)(?:<\/\1\s*>|$)|<([A-Z][\w$]*)/g
+  re.lastIndex = fm ? fm.tpl : 0
+  let m
+  while ((m = re.exec(src))) {
+    if (m[1] === 'script' && astroScriptKept(m[2])) {
+      const s = m.index + 1 + m[1].length + m[2].length + 1
+      keep.push([s, s + m[3].length])
+    } else if (m[4]) {
+      stubs.push([`function __tplc_${n++}() { return typeof ${m[4]} }`, lineAt(m.index)])
+      stats.template_stubs++
+      stats.template_component_tags++
+    }
+  }
+  const text = blank(src, keep)
+  const baseLines = text.split('\n').length
+  const lm = {}
+  let out = text
+  stubs.forEach(([code, l], i) => { lm[baseLines + 1 + i] = l; out += '\n' + code })
+  out += '\nexport {}'
+  lineMaps.set(file + '.ts', lm)
+  return out
+}
+for (const f of astroFiles) virtual.set(f + '.ts', buildVirtualAstro(f))
+
 // ---------- compiler host ----------
 const host = ts.createCompilerHost(options, true)
 const origGetSourceFile = host.getSourceFile.bind(host)
@@ -483,8 +539,8 @@ function resolveVuePath(spec, containing) {
 }
 host.resolveModuleNameLiterals = (lits, containing, redirected, opts) => lits.map(l => {
   const spec = l.text
-  const containingReal = containing.endsWith('.vue.ts') ? containing.slice(0, -3) : containing
-  if (spec.endsWith('.vue')) {
+  const containingReal = SFC_TS_RE.test(containing) ? containing.slice(0, -3) : containing
+  if (SFC_RE.test(spec)) {
     const p = resolveVuePath(spec, containingReal)
     if (p) return { resolvedModule: { resolvedFileName: p + '.ts', extension: ts.Extension.Ts, isExternalLibraryImport: false } }
   }
@@ -515,12 +571,12 @@ const projectSf = sf => {
   const fn = sf.fileName
   let v = projectSfMemo.get(fn)
   if (v !== undefined) return v
-  const real = fn.endsWith('.vue.ts') ? fn.slice(0, -3) : fn
+  const real = SFC_TS_RE.test(fn) ? fn.slice(0, -3) : fn
   v = testFiles.has(real) || (!sourceSkipped(rel(real)) && (srcFiles.has(real) || srcDirs.some(d => real.startsWith(d + path.sep))) && !SKIP_FILE.test(real) && !real.endsWith('.d.ts') && !(SKIP_REL && SKIP_REL.test(rel(real))) && !excludedRel(rel(real)))
   projectSfMemo.set(fn, v)
   return v
 }
-const realFile = sf => sf.fileName.endsWith('.vue.ts') ? sf.fileName.slice(0, -3) : sf.fileName
+const realFile = sf => SFC_TS_RE.test(sf.fileName) ? sf.fileName.slice(0, -3) : sf.fileName
 function lineOf(node, sf = node.getSourceFile()) {
   const l = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1
   const lm = lineMaps.get(sf.fileName)
@@ -1006,7 +1062,7 @@ const implementedIfaces = new Set()
     else if (classOfValue(n)) for (const d of ctorIfaces(n)) addIface(d)
     ts.forEachChild(n, walk)
   }
-  for (const sf of sourceFiles) if (!realFile(sf).endsWith('.vue')) walk(sf)
+  for (const sf of sourceFiles) if (!SFC_RE.test(realFile(sf))) walk(sf)
 }
 const isFnType = t => t && (ts.isFunctionTypeNode(t) || (ts.isParenthesizedTypeNode(t) && isFnType(t.type)))
 // members of an interface / object type alias: `method:<file>#Iface.member` (attrs.signature; no body). A call on an
@@ -1037,25 +1093,25 @@ for (const sf of sourceFiles) {
     const txt = sf.text
     testFramework = /@playwright\/test/.test(txt) ? 'playwright' : /from ['"]vitest['"]/.test(txt) ? 'vitest' : /\bcy\./.test(txt) ? 'cypress' : /@jest\/globals|jest\./.test(txt) ? 'jest' : 'test'
   }
-  if (!real.endsWith('.vue')) stats.ts_files++
+  if (!SFC_RE.test(real)) stats.ts_files++
   if (sf.parseDiagnostics && sf.parseDiagnostics.length) {   // the parser recovers; count files that needed recovery
     stats.syntax_error_files = (stats.syntax_error_files || 0) + 1
     if ((stats.syntax_error_samples ||= []).length < 5) stats.syntax_error_samples.push(r)
     // error lines per file for `cg coverage` (#73); in a .vue file only those of its <script> blocks (the template
     // stubs are appended after the file's own lines)
     let maxLine = Infinity
-    if (real.endsWith('.vue')) { try { maxLine = fs.readFileSync(real, 'utf8').split('\n').length } catch (e) { maxLine = 0 } }
+    if (SFC_RE.test(real)) { try { maxLine = fs.readFileSync(real, 'utf8').split('\n').length } catch (e) { maxLine = 0 } }
     const lines = [...new Set(sf.parseDiagnostics.map(d => sf.getLineAndCharacterOfPosition(d.start || 0).line + 1))]
       .filter(l => l <= maxLine).slice(0, 20)
     const se = (stats.syntax_errors ||= {})
     if (lines.length && Object.keys(se).length < 500) se[r] = lines.map(l => [l, l])
   }
-  const fid = real.endsWith('.vue') ? `${fk}:${r}` : `module:${r}`
+  const fid = SFC_RE.test(real) ? `${fk}:${r}` : `module:${r}`
   usedIds.add(fid)
   fileNode.set(real, fid)
-  nodes.push({ id: fid, kind: real.endsWith('.vue') ? fk : 'module', name: r, file: r, line: 1, end_line: sf.getLineAndCharacterOfPosition(sf.end).line + 1, attrs: { file_kind: fk, ...(isTestSf ? { test: true } : {}) } })
+  nodes.push({ id: fid, kind: SFC_RE.test(real) ? fk : 'module', name: r, file: r, line: 1, end_line: sf.getLineAndCharacterOfPosition(sf.end).line + 1, attrs: { file_kind: fk, ...(isTestSf ? { test: true } : {}) } })
   modNode.set(fid, nodes[nodes.length - 1])
-  if (real.endsWith('.vue')) continue // SFC: references are attributed to the component node
+  if (SFC_RE.test(real)) continue // SFC: references are attributed to the file node
   const visit = (node, qual, parentId, inObj) => {
     let name = null, kind = null, body = null, wrapped = null
     if (!qual && !inObj && ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer
@@ -1293,7 +1349,7 @@ function resolveSymbol(sym, conf = 'exact', via = []) {
     if (sym.flags & ts.SymbolFlags.Alias) {
       const ad = (sym.declarations || [])[0]
       const imp = ad && (ts.isImportClause(ad) ? ad.parent : (ts.isImportSpecifier(ad) ? ad.parent.parent.parent : null))
-      if (imp && ts.isImportDeclaration(imp) && imp.moduleSpecifier.text.endsWith('.vue')) {
+      if (imp && ts.isImportDeclaration(imp) && SFC_RE.test(imp.moduleSpecifier.text)) {
         const ms = checker.getSymbolAtLocation(imp.moduleSpecifier); const sd = ms && (ms.declarations || [])[0]
         if (sd && ts.isSourceFile(sd) && fileNode.has(realFile(sd))) return { id: fileNode.get(realFile(sd)), conf, via: [...via, 'import'] }
       }
@@ -1850,7 +1906,7 @@ const callSites = []
   // structural: `new X()` where an interface type is expected (`const api: FeedAPI = new X()`, an argument, a return
   // value) and X does not declare `implements` it
   for (const sf of sourceFiles) {
-    if (realFile(sf).endsWith('.vue') || !sf.text.includes('new ')) continue
+    if (SFC_RE.test(realFile(sf)) || !sf.text.includes('new ')) continue
     const r = rel(realFile(sf))
     const done = new Set()
     const walk = n => {
@@ -1880,7 +1936,7 @@ const callSites = []
   // constructor of an interface is expected (`register(FollowingFeedAPI)`): structurally, as for `new X()`
   let nol = 0
   for (const sf of sourceFiles) {
-    if (realFile(sf).endsWith('.vue')) continue
+    if (SFC_RE.test(realFile(sf))) continue
     const r = rel(realFile(sf))
     const done = new Set()
     const walk = n => {
@@ -2438,7 +2494,7 @@ function edgeKindFor(targetId, isCall) {
 for (const sf of sourceFiles) { const real = realFile(sf); optionsFields(sf, rel(real), fileNode.get(real)) }
 for (const sf of sourceFiles) {
   const real = realFile(sf), r = rel(real), fid = fileNode.get(real)
-  const isVue = real.endsWith('.vue')
+  const isVue = SFC_RE.test(real)
   const stack = [fid]
   const fnStack = []
   const visit = node => {

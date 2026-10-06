@@ -14,6 +14,7 @@
 // Values are described, never executed: {s} string (URL-template folded by evalStr), {n}, {b}, {arr}, {obj},
 // {fn,node,body}, {ref,key,node}, {call,node,args,recv,ret}, {new,node,args}, {require,module,exp}, {expr}.
 import nodePath from 'node:path'
+const SFC_RE = /\.(vue|astro)$/
 const ROUTE_VERBS = new Set(['get', 'post', 'put', 'patch', 'delete', 'del', 'head', 'options', 'all', 'any', 'ws'])   // ws: express-ws / Elysia
 const ROUTER_METHODS = new Set([...ROUTE_VERBS, 'use', 'lazyUse', 'route', 'register', 'mount', 'basePath', 'prefix',
   'setGlobalPrefix', 'enableVersioning', 'useGlobalGuards', 'useGlobalInterceptors', 'useGlobalPipes', 'useGlobalFilters',
@@ -435,7 +436,7 @@ export function collectFrameworkFacts(X) {
 
   // ---------- classes ----------
   for (const sf of sourceFiles) {
-    if (realFile(sf).endsWith('.vue')) continue
+    if (SFC_RE.test(realFile(sf))) continue
     const visit = n => {
       if ((ts.isClassDeclaration(n) || ts.isClassExpression(n)) && declId.has(n)) {
         const c = { id: declId.get(n), name: n.name ? n.name.text : null, file: rel(realFile(sf)), line: lineOf(n, sf),
@@ -516,7 +517,7 @@ export function collectFrameworkFacts(X) {
   function classOf(n) { for (let p = n.parent; p; p = p.parent) if (ts.isClassLike(p)) return declId.get(p) || null; return null }
 
   for (const sf of sourceFiles) {
-    const real = realFile(sf), r = rel(real), fid = fileNode.get(real), isVue = real.endsWith('.vue')
+    const real = realFile(sf), r = rel(real), fid = fileNode.get(real), isVue = SFC_RE.test(real)
     const mod = { directives: [], server_fns: [], method_checks: [] }
     for (const st of sf.statements) {
       if (ts.isExpressionStatement(st) && ts.isStringLiteral(st.expression)) mod.directives.push(st.expression.text); else break
@@ -696,7 +697,7 @@ export function collectFrameworkFacts(X) {
   const bindCalls = []
   if (paramFns.size) {
     for (const sf of sourceFiles) {
-      if (realFile(sf).endsWith('.vue')) continue
+      if (SFC_RE.test(realFile(sf))) continue
       const r = rel(realFile(sf))
       const v = node => {
         if (ts.isCallExpression(node) && node.arguments.length) {
@@ -913,12 +914,12 @@ export function collectFrameworkFacts(X) {
   // files to scan: the ones importing a client module, and the ones importing a file that declares a client subclass
   const stems = new Set()
   for (const sf of sourceFiles) {
-    if (realFile(sf).endsWith('.vue') || !MOD_RE.test(sf.text)) continue
+    if (SFC_RE.test(realFile(sf)) || !MOD_RE.test(sf.text)) continue
     for (const st of sf.statements) if (ts.isClassDeclaration(st) && clientClass(st)) stems.add(nodePath.basename(realFile(sf)).replace(/\.[cm]?[jt]sx?$/, ''))
   }
   const SUB_RE = stems.size ? new RegExp(`['"][^'"]*\\b(${[...stems].map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(\\.[cm]?[jt]sx?)?['"]`) : null
   for (const sf of sourceFiles) {
-    if (realFile(sf).endsWith('.vue') || !(MOD_RE.test(sf.text) || (SUB_RE && SUB_RE.test(sf.text)))) continue
+    if (SFC_RE.test(realFile(sf)) || !(MOD_RE.test(sf.text) || (SUB_RE && SUB_RE.test(sf.text)))) continue
     const real = realFile(sf), r = rel(real), fid = fileNode.get(real)
     const v = node => {
       const isNew = ts.isNewExpression(node), isCall = ts.isCallExpression(node)
@@ -964,7 +965,7 @@ export function collectFrameworkFacts(X) {
     return {}
   }
   for (const sf of sourceFiles) {
-    if (realFile(sf).endsWith('.vue') || !sf.text.includes('@modelcontextprotocol/sdk')) continue
+    if (SFC_RE.test(realFile(sf)) || !sf.text.includes('@modelcontextprotocol/sdk')) continue
     const r = rel(realFile(sf))
     const v = node => {
       if (ts.isNewExpression(node) && isServerNew(node)) mcpServers.push({ file: r, line: lineOf(node, sf), name: serverName(node) })

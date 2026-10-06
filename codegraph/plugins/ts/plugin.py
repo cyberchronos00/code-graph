@@ -319,7 +319,9 @@ class TypeScriptPlugin(LanguagePlugin):
 
     def detect_configured(self, project: Project) -> bool:
         """The projects indexed before #136: a tsconfig / jsconfig, or one of the plain-JS special cases."""
-        if project.exists("tsconfig.json") or project.exists("jsconfig.json") or "typescript" in (project.detected.get("languages") or {}):
+        if (project.exists("tsconfig.json") or project.exists("jsconfig.json")
+                or "typescript" in (project.detected.get("languages") or {})
+                or "astro" in (project.detected.get("frameworks") or {})):
             return True
         if project.exists("package.json") and cordova_www_dirs(project.root):
             return True     # a Cordova plugin / app: plain JS under www/ calling cordova.exec (#61)

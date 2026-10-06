@@ -1,0 +1,13 @@
+---
+import Base from '../../layouts/Base.astro'
+import { findBook, listBooks } from '../../lib/books'
+import { slugify } from '../../lib/format'
+export function getStaticPaths() {
+  return listBooks().map((b) => ({ params: { slug: slugify(b.title) } }))
+}
+const { slug } = Astro.params
+const book = findBook(slug!)
+---
+<Base title={book?.title ?? 'Not found'}>
+  <h1>{book?.title}</h1>
+</Base>

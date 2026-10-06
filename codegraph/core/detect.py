@@ -51,6 +51,9 @@ def detect(root: Path) -> dict:
     deps = _pkg_deps(root)
     if "nuxt" in deps or any((root / n).exists() for n in ("nuxt.config.ts", "nuxt.config.js")):
         fw["nuxt"] = {"version": deps.get("nuxt")}
+    if "astro" in deps or any((root / n).exists() for n in (
+            "astro.config.mjs", "astro.config.js", "astro.config.ts", "astro.config.mts", "astro.config.cjs")):
+        fw["astro"] = {"version": deps.get("astro")}
     if "vue" in deps:
         fw["vue"] = {"version": deps.get("vue")}
     from ..plugins.tsweb.common import SERVER_DEPS   # TS / JS servers (NestJS, Next.js, Express / Koa / Fastify / Hono ...)

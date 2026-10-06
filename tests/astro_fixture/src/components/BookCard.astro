@@ -1,0 +1,11 @@
+---
+import { formatPrice } from '../lib/format'
+import type { Book } from '../lib/books'
+interface Props { book: Book }
+const { book } = Astro.props
+const price = formatPrice(book.cents)
+---
+<article>
+  <h2>{book.title}</h2>
+  <p>{price}</p>
+</article>

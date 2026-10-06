@@ -16,7 +16,7 @@ from pathlib import Path
 # source extensions per language plugin (key = plugin name in stats["plugins"])
 SUPPORTED = {
     "php": (".php",),
-    "typescript": (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue"),
+    "typescript": (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".astro"),
     "python": (".py",),
     "dart": (".dart",),
     "rust": (".rs",),
@@ -33,7 +33,7 @@ UNSUPPORTED = {
     ".pl": "perl", ".pm": "perl", ".clj": "clojure", ".erl": "erlang", ".hrl": "erlang", ".hs": "haskell", ".fs": "fsharp",
     ".fsx": "fsharp", ".groovy": "groovy", ".r": "r", ".jl": "julia", ".zig": "zig", ".sol": "solidity",
     ".qml": "qml", ".sh": "sh", ".bash": "sh", ".zsh": "sh", ".ksh": "sh", ".fish": "fish", ".ps1": "powershell",
-    ".psm1": "powershell", ".bat": "batch", ".cmd": "batch", ".svelte": "svelte", ".astro": "astro",
+    ".psm1": "powershell", ".bat": "batch", ".cmd": "batch", ".svelte": "svelte",
     ".coffee": "coffeescript", ".elm": "elm", ".ml": "ocaml", ".mli": "ocaml", ".nim": "nim", ".cr": "crystal",
     ".rkt": "racket", ".tcl": "tcl", ".vb": "visual-basic", ".cu": "cuda", ".cuh": "cuda", ".gd": "gdscript",
     ".hx": "haxe", ".pas": "pascal", ".f90": "fortran", ".f95": "fortran", ".adb": "ada", ".ads": "ada", ".vala": "vala",

@@ -69,6 +69,20 @@ backend. A traced `baseURL` is exact. `process.env` and generated clients align 
 the route (`heuristic`); the most specific alignment wins. Method and path only: routes carry
 `body_fields`, calls carry `body_keys`, and nothing compares them yet.
 
+## Astro
+
+An Astro project is detected from an `astro` dependency or an `astro.config.mjs` / `.js` / `.ts` /
+`.mts` / `.cjs` file. Frontmatter between the `---` fences and `<script>` blocks are indexed as
+TypeScript at their real lines in the `.astro` file.
+
+| feature | graph |
+|---|---|
+| pages | `src/pages/**.astro` → page (`ui_page`). `index` is `/`, `[slug]` is `{slug}`, `[...rest]` is `{rest*}`. A segment starting with `_` is skipped |
+| endpoints | files under `src/pages/` exporting `GET` / `POST` / … (`ALL` → `ANY`) become routes |
+| components | `<Card />` → RENDERS. Imports from `.ts` and other `.astro` files resolve |
+| getStaticPaths | `attrs.get_static_paths` when the frontmatter exports it; the function is not evaluated |
+| is:inline | `<script is:inline>` sets `attrs.inline_scripts` to the count |
+
 ## Stored fields
 
 `field:<file>#<Class>.<name>` (`property: stored`) for a non-static class property whose
@@ -100,3 +114,6 @@ carries `branch` and `branch_line`.
 - Express middleware order is known inside one file. Dynamic `require(path)` is not followed.
 - Untyped JavaScript resolves when the checker can see the object literal or the CommonJS
   export.
+- Astro template expressions are not code yet (only component tags), and functions declared in
+  a `.astro` file are not nodes of their own: their calls count for the file. `.md` / `.mdx` pages,
+  content collections, islands, middleware, actions and a custom `srcDir` are not read.

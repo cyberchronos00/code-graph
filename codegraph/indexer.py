@@ -26,12 +26,13 @@ from .plugins.flutter.plugin import FlutterPlugin
 from .plugins.nest.plugin import NestPlugin
 from .plugins.nextjs.plugin import NextPlugin
 from .plugins.express.plugin import ExpressPlugin
+from .plugins.astro.plugin import AstroPlugin
 from .plugins.kotlin.plugin import KotlinPlugin
 from .plugins.swift.plugin import SwiftPlugin
 
 LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), KotlinPlugin(), SwiftPlugin(),
                     *SCIP_PLUGINS]
-FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FastAPIPlugin(), FlaskPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin()]
+FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FastAPIPlugin(), FlaskPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin(), AstroPlugin()]
 
 
 def _crash_site(ex: BaseException) -> str | None:

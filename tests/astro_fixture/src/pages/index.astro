@@ -1,0 +1,13 @@
+---
+import Base from '../layouts/Base.astro'
+import BookCard from '../components/BookCard.astro'
+import { listBooks } from '../lib/books'
+const books = listBooks()
+---
+<Base title="Books">
+  {books.map((b) => <BookCard book={b} />)}
+</Base>
+<script>
+  import { formatPrice } from '../lib/format'
+  console.log(formatPrice(100))
+</script>

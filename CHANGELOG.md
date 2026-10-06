@@ -8,6 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Astro (#162, part 1): `.astro` frontmatter and `<script>` blocks are indexed as TypeScript
+  at their real lines. Imports between `.astro` and `.ts` files resolve, and `<Card />` is a
+  RENDERS edge. Files under `src/pages/` become pages (`/`, `/books/{slug}`, `/docs/{rest*}`),
+  and endpoints exporting `GET` / `POST` / … become routes. Coverage counts `.astro` under
+  typescript instead of unsupported.
+
 ## [0.14.0] - 2026-10-06
 
 ### Added

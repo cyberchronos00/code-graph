@@ -61,7 +61,7 @@ Comments in the file are the meanings. Flags and env vars that override a key:
 | `apps` | `cg index --no-apps` indexes the root as one project |
 | `rust.targets` | `CODEGRAPH_RUST_TARGETS` (takes precedence; [Rust, C and C++](native.md)) |
 
-`include` walks only the path down to those directories; `exclude` still applies inside them. `skip_dirs.keep` also lets a walk into a hidden directory such as `.storybook`. `frameworks` names include `laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `express` (aliases such as `nestjs`, `next`, `fastify`, `drf` work). `platforms.targets` accepts `windows`, `linux`, `macos`, `ios`, `android`, `web`; `unix` and `native` work in `platforms.paths`. Details: [Python](python.md), [Generated files](generated.md), [Platforms](platforms.md).
+`include` walks only the path down to those directories; `exclude` still applies inside them. `skip_dirs.keep` also lets a walk into a hidden directory such as `.storybook`. `frameworks` names include `laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `astro`, `express` (aliases such as `nestjs`, `next`, `fastify`, `drf` work). `platforms.targets` accepts `windows`, `linux`, `macos`, `ios`, `android`, `web`; `unix` and `native` work in `platforms.paths`. Details: [Python](python.md), [Generated files](generated.md), [Platforms](platforms.md).
 
 The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` and the MCP server read plans, auth patterns and presets from the DB without repeating the flags.
 
