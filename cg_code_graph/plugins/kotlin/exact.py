@@ -1,11 +1,13 @@
 """Kotlin exact layer: compiler-resolved references from a scip-java SCIP index (SemanticDB compiler plugin).
 
 Where the index comes from, in order:
-  1. a `--scip` file whose documents include Kotlin sources (consumed here, not by the generic SCIP importer);
-  2. $CG_KOTLIN_SCIP_FILE;
-  3. running scip-java on the Gradle / Maven build when $CG_KOTLIN_SCIP=1 (opt-in: indexing runs the build,
+  1. a `--scip` file whose documents include this plugin's language (`.kt` / `.kts` or `.java`);
+  2. $CG_JAVA_SCIP_FILE (a missing path is an error and does not fall through);
+  3. $CG_KOTLIN_SCIP_FILE;
+  4. one scip-java run when $CG_JAVA_SCIP=1 or $CG_KOTLIN_SCIP=1 (opt-in: indexing runs the build,
      which executes the project's build scripts, and writes build/ output into the project). The run is cached
-     like the Rust / C indexers (cg_code_graph/plugins/native/runner.py).
+     once per project root, like the Rust / C indexers (cg_code_graph/plugins/native/runner.py), and both plugins
+     read it.
 Without an index the heuristic layer stays; `stats["scip"]` says why (no JDK, no scip-java, not opted in, the run
 failed), and `cg coverage` reports it.
 
@@ -19,10 +21,11 @@ overlap of both layers is kept as precision / recall of the heuristic layer agai
 (`stats["exact_vs_heuristic"]`).
 
 Mixed Kotlin / Java modules: the Java documents of the same index (scip-java indexes both) are imported too, since
-the generic SCIP importer skips an index this layer consumed. Java classes and methods become `java` nodes (ids from
-the generic importer's symbol mapping, cg_code_graph/plugins/scip/importer.py), Kotlin -> Java and Java -> Kotlin / Java
-calls and constructor calls become exact edges, the Java caller being the innermost Java method / class around the
-reference (SCIP enclosing ranges). `stats["java"]` counts them.
+the generic SCIP importer skips an index this layer consumed. Classes, methods, constructors and fields use the Java
+plugin's node ids (`method:pkg.Foo.bar`, `constructor:pkg.Foo.<init>`, `field:pkg.Foo.x`), not a parallel
+`method:pkg.Foo::bar` id. When the Java plugin already created the node, this layer only records the symbol. Kotlin ->
+Java and Java -> Kotlin / Java calls and constructor calls become exact edges, the Java caller being the innermost
+Java method / class around the reference (SCIP enclosing ranges). `stats["java"]` counts them.
 """
 from __future__ import annotations
 
@@ -46,12 +49,72 @@ FACADE = re.compile(r"(?<=/)\w+Kt#(?=[^#]+\.$)")   # the JVM facade class of a K
 ACCESSOR = re.compile(r"[gs]et[A-Z]\w*")                # a property accessor's JVM name
 
 
-def _has_kotlin_docs(path: str) -> bool:
+_LANG_EXT = {"kotlin": (".kt", ".kts"), "java": (".java",)}
+_FINGERPRINT_SKIP = {
+    ".git", "build", "target", ".gradle",
+    "node_modules", "out", ".idea",
+}
+
+
+def _has_lang_docs(path: str, lang: str) -> bool:
     try:
         idx = scipread.load(path)
     except Exception:
         return False
-    return any(p.endswith((".kt", ".kts")) for p in idx.docs)
+    return any(p.endswith(_LANG_EXT[lang]) for p in idx.docs)
+
+
+def _consume(project, path: str, lang: str) -> None:
+    consumed = project.options.setdefault("scip_consumed", [])
+    if path not in consumed:
+        consumed.append(path)
+    by = project.options.setdefault("scip_consumed_by", {})
+    langs = by.setdefault(path, [])
+    if lang not in langs:
+        langs.append(lang)
+
+
+def jvm_fingerprint_files(root: Path) -> list[str]:
+    """Sources and build files both plugins hash, so one project root shares one runner-cache entry."""
+    out = []
+    if not root.is_dir():
+        return out
+    for dp, dns, fns in os.walk(root):
+        dns[:] = sorted(d for d in dns if d not in _FINGERPRINT_SKIP and not d.startswith("."))
+        rel = os.path.relpath(dp, root).replace(os.sep, "/")
+        rel = "" if rel == "." else rel
+        for f in sorted(fns):
+            if f.endswith((".java", ".kt", ".kts", ".xml", ".toml", ".properties")) or f in BUILD_FILES:
+                out.append(f"{rel}/{f}" if rel else f)
+    return out
+
+
+def java_major(java: str) -> int | None:
+    """Major version of a `java` binary (`1.8` is 8), or None when the binary does not print one."""
+    try:
+        r = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.search(r'version "(?:1\.)?(\d+)', (r.stderr or "") + (r.stdout or ""))
+    return int(m.group(1)) if m else None
+
+
+_BUILD_JDK = re.compile(
+    r"(?:sourceCompatibility|targetCompatibility|jvmTarget|maven\.compiler\.(?:source|target|release)|"
+    r"java\.version|release)\s*[=:>]\s*['\"]?(1\.8|8|11)\b")
+
+
+def declared_build_jdk(root: Path) -> int | None:
+    """8 or 11 when a root build file sets the compilation JDK to one scip-java does not support."""
+    for f in ("pom.xml", "build.gradle", "build.gradle.kts", "gradle.properties"):
+        try:
+            t = (root / f).read_text(errors="replace")
+        except OSError:
+            continue
+        m = _BUILD_JDK.search(t)
+        if m:
+            return 8 if m.group(1) in ("1.8", "8") else 11
+    return None
 
 
 def find_java() -> str | None:
@@ -61,13 +124,34 @@ def find_java() -> str | None:
     return shutil.which("java")
 
 
-def find_index(project, files: list[str]) -> tuple[Path | None, dict]:
-    """(SCIP path or None, info). info["status"] explains a missing index."""
+def find_index(project, files: list[str], lang: str = "kotlin") -> tuple[Path | None, dict]:
+    """(SCIP path or None, info). info["status"] explains a missing index.
+
+    `--scip` is chosen per language (a file with `.kt` / `.kts` documents for Kotlin, `.java` for Java).
+    A prebuilt file or a scip-java run is shared: `CG_JAVA_SCIP_FILE` wins over `CG_KOTLIN_SCIP_FILE` when
+    both are set; either `CG_JAVA_SCIP=1` or `CG_KOTLIN_SCIP=1` starts the one run, cached per project root.
+    The second plugin reads that result instead of starting another build.
+    """
     for s in project.options.get("scip") or []:
-        if _has_kotlin_docs(s):
-            consumed = project.options.setdefault("scip_consumed", [])
-            consumed.append(s)
+        if _has_lang_docs(s, lang):
+            _consume(project, s, lang)
             return Path(s), {"source": "--scip", "path": str(s)}
+    shared = project.options.get("jvm_scip_shared")
+    if shared is not None:
+        path, info = shared
+        return path, dict(info)
+    path, info = _find_shared(project, files)
+    project.options["jvm_scip_shared"] = (path, dict(info))
+    return path, dict(info)
+
+
+def _find_shared(project, files: list[str]) -> tuple[Path | None, dict]:
+    """The prebuilt index or the one scip-java run both JVM plugins share."""
+    java_file = cg_env("JAVA_SCIP_FILE")
+    if java_file:
+        if Path(java_file).exists():
+            return Path(java_file), {"source": "CG_JAVA_SCIP_FILE", "path": java_file}
+        return None, {"status": f"CG_JAVA_SCIP_FILE={java_file} does not exist"}
     pre = cg_env("KOTLIN_SCIP_FILE")
     if pre:
         if Path(pre).exists():
@@ -82,10 +166,20 @@ def find_index(project, files: list[str]) -> tuple[Path | None, dict]:
     if not java:
         return None, {"status": "no JDK (java not on PATH, JAVA_HOME unset)"}
     if not tools:
+        if cg_env("JAVA_SCIP") == "1" or cg_env("KOTLIN_SCIP") == "1":
+            return None, {"status": "scip-java not installed; CG_JAVA_SCIP=1 / CG_KOTLIN_SCIP=1 left exact mode off "
+                                    "(install.sh --with java, JDK 17, 21 or 25)"}
         return None, {"status": "scip-java not installed (docs/kotlin.md#exact-mode)"}
-    if cg_env("KOTLIN_SCIP") != "1":
+    if cg_env("KOTLIN_SCIP") != "1" and cg_env("JAVA_SCIP") != "1":
         return None, {"status": "scip-java found but not run: indexing runs the Gradle / Maven build (the project's "
-                                "build scripts); set CG_KOTLIN_SCIP=1 or pass --scip", "indexer": tools[0]}
+                                "build scripts); set CG_KOTLIN_SCIP=1 or CG_JAVA_SCIP=1 or pass --scip",
+                      "indexer": tools[0]}
+    major = java_major(java)
+    if major is not None and major < 17:
+        status = f"JDK too old (found {major}; scip-java needs JDK 17, 21 or 25)"
+        if major in (8, 11):
+            status += "; unsupported Java 8/11 build JDK"
+        return None, {"status": status, "indexer": tools[0]}
     env = dict(os.environ)          # the JDK found for the run, without changing this process's environment
     jbin = str(Path(java).parent)
     if jbin not in env.get("PATH", "").split(os.pathsep):
@@ -95,11 +189,11 @@ def find_index(project, files: list[str]) -> tuple[Path | None, dict]:
     andr = android_modules(root)
     if len(tools) > 1:              # several scip-java releases: the one whose compiler plugin fits the build first
         tools.sort(key=lambda t: not _supports(_generation(t), kv))
-    srcs = list(files) + [b for b in BUILD_FILES if (root / b).exists()]
+    srcs = jvm_fingerprint_files(root) or list(files)
     timeout = int(cg_env("INDEXER_TIMEOUT", "3600"))
     attempts = []
     for i, tool in enumerate(tools):
-        key = runner.fingerprint(root, srcs, f"scip-java|{tool}|{runner.tool_version(tool, ('version',))}")
+        key = runner.fingerprint(root, srcs, scip_cache_extra(tool, java, root, build))
         path, info = runner.run_cached("kotlin", key, [tool, "index"], root, "--output", timeout, out_flag_style="eq",
                                        env=env, notes=r"incompatible|^e: |^error: |Could not resolve|"
                                                       r"SDK location not found|NoSuchMethodError|AbstractMethodError|"
@@ -142,11 +236,24 @@ def find_index(project, files: list[str]) -> tuple[Path | None, dict]:
     if andr:
         hint += (f"; Android modules ({', '.join(andr[:5])}) need the Android SDK (ANDROID_HOME) and scip-java's "
                  "Gradle plugin compiles no Android variant")
+    bjdk = declared_build_jdk(root)
+    if bjdk in (8, 11):
+        hint += f"; unsupported Java {bjdk} build JDK (scip-java indexes with JDK 17, 21 or 25)"
     info["status"] = ("scip-java run failed (" + info.get("error", "?") + (f": {last[:160]}" if last else "")
                       + ")" + hint)
     if len(attempts) > 1:
         info["attempts"] = attempts
     return None, info
+
+
+def scip_cache_extra(tool: str, java: str, root: Path, build: str) -> str:
+    """Cache-key material besides the sources: the scip-java binary, the JDK, and the build tool.
+
+    A different JDK or a switch between Maven and Gradle must miss the cache. The source list already
+    hashes the build files themselves.
+    """
+    return (f"scip-java|{tool}|{runner.tool_version(tool, ('version',))}"
+            f"|jdk={java}|{java_major(java)}|build={build}|bjdk={declared_build_jdk(root)}")
 
 
 def scip_java_candidates() -> list[str]:
@@ -203,8 +310,8 @@ def _supports(gen: int, kv: tuple | None) -> bool:
 
 
 def _note_rank(line: str) -> int:
-    if re.search(r"is incompatible with the current|NoSuchMethodError|AbstractMethodError|SDK location not found|"
-                 r"prefer settings repositories", line):
+    if re.search(r"JDK too old|unsupported Java (?:8|11)|is incompatible with the current|NoSuchMethodError|"
+                 r"AbstractMethodError|SDK location not found|prefer settings repositories", line):
         return 0
     return 1 if "incompatible" in line and "Deprecated Gradle" not in line else 2
 
@@ -359,6 +466,16 @@ class ExactLayer:
                     dst = sym.get(o.symbol)
                     if dst is None and java:     # a top-level Kotlin function seen from Java: `pkg/FileKt#f().`
                         dst = sym.get(FACADE.sub("", o.symbol))
+                    if dst is None and java:     # @file:JvmName("WidgetKit") does not end in `Kt`
+                        dst = self._jvm_name_facade(o.symbol, sym)
+                    if dst is None and java:
+                        acc = self._java_accessor(o.symbol)
+                        if acc is not None:
+                            src = self._owner(owners, rel, o.line + 1)
+                            if src is not None and src != acc[0]:
+                                self._upgrade(src, acc[0], acc[1], rel, o.line + 1)
+                                st["java"]["references"] += 1
+                            continue
                     kind = "CALLS"
                 if dst is None:
                     if java:
@@ -391,37 +508,113 @@ class ExactLayer:
             "recall": round(agree / len(exact), 3) if exact else None,
             # candidate edges (receiver type unknown, one per same-name method, #83) are compared on their own
             "candidate_edges": len(self.candidates), "candidate_agree": len(self.candidates & exact)}
-        seen = set(getattr(self.p, "file_report", {}).get("seen") or covered)
+        rep = getattr(self.p, "file_report", None) or {}
+        seen = set(getattr(self.p, "_seen_files", None) or rep.get("seen") or covered)
         st["scip_files"] = len({f for f in covered & seen if f.endswith(".kt")})
         return True
 
+    def _java_accessor(self, symbol: str) -> tuple[str, str] | None:
+        from ..java.exact import kotlin_accessor_target
+        return kotlin_accessor_target(symbol, self.b.nodes)
+
+    def _upgrade(self, src: str, dst: str, kind: str, file: str, line: int) -> None:
+        """Replace a heuristic property edge in a covered file with the exact accessor edge."""
+        key = (src, dst, kind, file, line, None)
+        e = self.b.edges.get(key)
+        if e is not None:
+            e.confidence = EXACT
+            e.attrs["source"] = "scip"
+            return
+        self.b.add_edge(src, dst, kind, file, line, EXACT, source="scip", binding="kotlin-accessor")
+
+    def _jvm_name_facade(self, symbol: str, sym: dict) -> str | None:
+        """`pkg/JvmName#fn().` → the top-level `pkg/fn().` when `JvmName` is a Kotlin file's JVM facade."""
+        dd = scipread.descriptors(symbol)
+        if not dd or not dd[1]:
+            return None
+        names = [n for n in dd[1] if n[1] != ")"]
+        if len(names) < 2 or names[-1][1] != "(" or names[-2][1] != "#":
+            return None
+        facade = names[-2][0]
+        if not any(n.lang == "kotlin" and n.kind == "file" and n.attrs.get("jvm_name") == facade
+                   for n in self.b.nodes.values()):
+            return None
+        return sym.get(symbol.replace(f"/{facade}#", "/", 1))
+
     def _java_nodes(self, jdocs: dict, sym: dict, st: dict) -> dict:
-        """Nodes for the Java classes / methods the index defines (added to `sym`); returns their owner ranges."""
-        from ..scip.importer import to_node
-        js = st["java"] = {"documents": len(jdocs), "classes": 0, "methods": 0, "references": 0,
+        """Map Java symbols onto the Java plugin's node ids (added to `sym`); returns their owner ranges.
+
+        A node the Java plugin already created is reused. One that exists only in the index (the Java plugin did
+        not index that file) is added with the same id scheme, including fields.
+        """
+        from ..java.exact import bind_java_symbol, is_anon_id, java_ids
+        js = st["java"] = {"documents": len(jdocs), "classes": 0, "methods": 0, "fields": 0, "references": 0,
                            "references_external": 0}
         owners = defaultdict(list)
         for rel, doc in jdocs.items():
-            fid = self.b.add_node("file", f"java:{rel}", name=rel, file=rel, line=1, lang="java")
+            fid = f"file:java:{rel}"
+            if fid not in self.b.nodes:
+                self.b.add_node("file", f"java:{rel}", name=rel, file=rel, line=1, lang="java")
             for o in doc.occs:
                 if not (o.roles & scipread.DEFINITION) or o.symbol.endswith((")", "]")):
                     continue
-                n = to_node(o.symbol, "java")
-                if not n or n[0] not in ("class", "method") or n[2] == "<init>":
+                mapped = bind_java_symbol(o.symbol, self.b.nodes, rel, o.line + 1)
+                if mapped is None:
+                    raw = java_ids(o.symbol)
+                    if raw and is_anon_id(raw[0]):
+                        continue
+                    mapped = raw
+                if not mapped:
                     continue
-                kind, key, name = n
+                nid, kind = mapped
+                if is_anon_id(nid):
+                    continue
+                if kind == "package":
+                    sym[o.symbol] = nid
+                    continue
+                if kind == "constructor":
+                    sym[o.symbol] = nid
+                    sl, el = (o.enclosing[0] + 1, o.enclosing[1] + 1) if o.enclosing else (o.line + 1, o.line + 1)
+                    owners[rel].append((sl, el, 0, nid))
+                    continue
+                if kind == "enum_case":
+                    sym[o.symbol] = nid
+                    if nid not in self.b.nodes:
+                        key = nid.split(":", 1)[1]
+                        self.b.add_node("enum_case", key, name=key.rsplit(".", 1)[-1], fqn=key, file=rel,
+                                        line=o.line + 1, lang="java", attrs={"scip_symbol": o.symbol, "source": "scip"})
+                    continue
+                if kind == "class":
+                    js["classes"] += 1
+                elif kind == "method":
+                    js["methods"] += 1
+                elif kind == "field":
+                    js["fields"] += 1
+                else:
+                    continue
                 sl, el = (o.enclosing[0] + 1, o.enclosing[1] + 1) if o.enclosing else (o.line + 1, o.line + 1)
-                pkg = key.rsplit(".", 1)[0] if kind == "class" and "." in key else None
-                nid = self.b.add_node(kind, key, name=name, fqn=key, file=rel, line=o.line + 1, end_line=el,
-                                      lang="java", module=pkg, attrs={"scip_symbol": o.symbol, "source": "scip"})
+                fresh = nid not in self.b.nodes
+                key = nid.split(":", 1)[1]
+                name = key.rsplit(".", 1)[-1]
+                pkg = key.rsplit(".", 1)[0] if "." in key else None
+                self.b.add_node(kind, key, name=name, fqn=key, file=rel, line=o.line + 1, end_line=el,
+                                lang="java", module=pkg, attrs={"scip_symbol": o.symbol, "source": "scip"})
                 sym[o.symbol] = nid
-                js["classes" if kind == "class" else "methods"] += 1
-                parent = f"class:{key.split('::')[0]}" if kind == "method" else None
-                outer = to_node(o.symbol[:o.symbol.rstrip('#').rfind('#') + 1], "java") if kind == "class" else None
-                if parent is None and outer and outer[0] == "class" and outer[1] != key:
-                    parent = f"class:{outer[1]}"
-                self.b.add_edge(parent or fid, nid, "CONTAINS", rel, o.line + 1, EXACT)
-                owners[rel].append((sl, el, 1 if kind == "class" else 0, nid))
+                if fresh:
+                    parent = None
+                    if kind != "class" and "." in key:
+                        parent = f"class:{key.rsplit('.', 1)[0]}"
+                    elif kind == "class" and key.count(".") >= 1:
+                        outer = f"class:{key.rsplit('.', 1)[0]}"
+                        if outer in self.b.nodes:
+                            parent = outer
+                    self.b.add_edge(parent or fid, nid, "CONTAINS", rel, o.line + 1, EXACT)
+                if kind in ("class", "method"):
+                    owners[rel].append((sl, el, 1 if kind == "class" else 0, nid))
+            if rel not in owners:
+                for n in self.b.nodes.values():
+                    if n.lang == "java" and n.file == rel and n.kind in ("method", "constructor", "class") and n.line:
+                        owners[rel].append((n.line, n.end_line or n.line, 1 if n.kind == "class" else 0, n.id))
             owners.setdefault(rel, [])
         return owners
 

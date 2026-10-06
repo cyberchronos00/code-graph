@@ -25,7 +25,7 @@ Full scoreboards, timings and the "other corpora unchanged" notes are in
 | Generated files | Capacitor copies and OpenAPI / protoc output excluded; `cg coverage` lists them | [Generated](validation-log.md#generated-and-copied-files) |
 | Platforms | ripgrep, alacritty, libuv, curl, dart-lang/http, localsend, social-app | [Platforms](validation-log.md#platform-specific-code) |
 | Kotlin / Swift | heuristic calls, then scip-java and the Swift index store | [Kotlin](validation-log.md#kotlin), [Swift](validation-log.md#swift) |
-| Spring | spring-petclinic: 17/17 heuristic routes (PetController class prefix included); exact mode is still coming in #164 | [Java](java.md#spring) |
+| Spring | spring-petclinic: 17/17 heuristic routes (PetController class prefix included). Exact-mode figures are from the original run (scip-java 0.13.1, JDK 21, `--build-tool=maven`, which runs `mvn clean verify -DskipTests` and cleans build caches), not re-measured in this tree: 50/50 Java files in the index, 364 definitions matched and 4 unmatched. A sample of 20 heuristic `CALLS` edges, sorted by source then target, agrees with the exact edges on 19; the full heuristic call set the exact layer compares agrees on 324 of 328 (precision 0.988, recall 0.973) | [Java](java.md#spring) |
 | Bridges | Capacitor, React Native, Flutter, Cordova, Pigeon, Electron, Tauri | [Bridges](validation-log.md#web--native-bridges) |
 | Protocols | Socket.IO, WS/SSE, webhooks, IPC, sockets, gRPC, GraphQL, jobs, brokers | [Protocols](validation-log.md#protocol-links-shared-endpoint-model-31) |
 | TS frameworks | immich, Nest samples, Ghost, dub, Next examples, realworld `cg link` | [TS frameworks](validation-log.md#typescript--javascript-frameworks) |

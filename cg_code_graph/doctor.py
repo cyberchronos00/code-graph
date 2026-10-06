@@ -224,16 +224,34 @@ def _languages(tools: dict, root: Path | None, cfg: dict) -> list[dict]:
             "set CG_KOTLIN_SCIP=1 (or pass --scip index.scip)")
     else:
         add("kotlin", "exact", "scip-java on the Gradle / Maven build")
-    # Java (heuristic now; exact mode reuses the Kotlin scip-java install later)
+    # Java exact mode is the same scip-java run as Kotlin (CG_JAVA_SCIP or CG_KOTLIN_SCIP).
+    jdk_major = None
+    if has("java"):
+        from .plugins.kotlin.exact import java_major
+        jdk_major = java_major(tools["java"]["path"])
+    jdk_note = f"; JDK {jdk_major}" if jdk_major else ""
     if not ts_ok or not _module("tree_sitter_java"):
         add("java", "unavailable", "tree-sitter grammar missing", _pip("tree_sitter", "tree_sitter_java"))
+    elif env.get("JAVA_SCIP_FILE") or env.get("KOTLIN_SCIP_FILE"):
+        which = "CG_JAVA_SCIP_FILE" if env.get("JAVA_SCIP_FILE") else "CG_KOTLIN_SCIP_FILE (shared with Kotlin)"
+        add("java", "exact", which + jdk_note)
     elif not has("scip-java") or not has("java"):
         miss = " and ".join(t for t in ("scip-java", "java") if not has(t))
-        add("java", "heuristic", f"tree-sitter-java; {miss} not found (exact mode comes later, #164)",
-            "install.sh --with java  (JDK 17+ and scip-java, same install as --with kotlin)")
+        why = f"tree-sitter-java; {miss} not found{jdk_note}"
+        if jdk_major is not None and jdk_major < 17:
+            why += " (scip-java needs JDK 17, 21 or 25)"
+        add("java", "heuristic", why,
+            "install.sh --with java  (JDK 17+ and scip-java via coursier), then CG_JAVA_SCIP=1")
+    elif jdk_major is not None and jdk_major < 17:
+        extra = "; unsupported Java 8/11 build JDK" if jdk_major in (8, 11) else ""
+        add("java", "heuristic", f"JDK too old (found {jdk_major}; scip-java needs JDK 17, 21 or 25){extra}",
+            "install JDK 17, 21 or 25, then CG_JAVA_SCIP=1")
+    elif env.get("JAVA_SCIP") != "1" and env.get("KOTLIN_SCIP") != "1":
+        add("java", "heuristic", "scip-java found but not run: it runs the Gradle / Maven build (the project's build scripts)"
+            + jdk_note,
+            "set CG_JAVA_SCIP=1 (or CG_KOTLIN_SCIP=1; one run serves both) or pass --scip index.scip")
     else:
-        add("java", "heuristic", "tree-sitter-java; JDK and scip-java found (exact mode comes later, #164)",
-            "heuristic indexing does not run the build; exact mode will be opt-in, like Kotlin")
+        add("java", "exact", "scip-java on the Gradle / Maven build" + jdk_note)
     # Swift
     if not ts_ok or not _module("tree_sitter_swift"):
         add("swift", "unavailable", "tree-sitter grammar missing", _pip("tree_sitter", "tree_sitter_swift"))
@@ -453,7 +471,7 @@ def _legacy_lines(r: dict) -> list[str]:
     names = r.get("legacy_env") or []
     if names:
         shown = ", ".join(names)
-        lines.append(f"note: {shown} is set; use the CG_* name (removed in 0.18.0)")
+        lines.append(f"note: {shown} is set; use the CG_* name (removed in 0.19.0)")
     leg = r.get("legacy_cache") or None
     if leg:
         if leg.get("path"):
@@ -531,7 +549,7 @@ def _setup_java(quiet: bool) -> int:
     else:
         print("java: no JDK found. Install JDK 17+ (17, 21 or 25; https://adoptium.net).", file=sys.stderr)
     if tools:
-        print(f"java: scip-java found ({tools[0]}). Exact mode is coming in #164 and stays opt-in, because it runs the build.")
+        print(f"java: scip-java found ({tools[0]}). Exact mode stays opt-in, because it runs the build: CG_JAVA_SCIP=1")
     else:
         print("java: scip-java not found. install.sh --with java installs it (the same path as --with kotlin).",
               file=sys.stderr)

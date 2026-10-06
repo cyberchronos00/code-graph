@@ -1,0 +1,28 @@
+
+1
+	scip-java0.0.0-SNAPSHOTfile:///tmp/jex/ Ê
+src/main/java/demo/Use.javaO;scip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#BZ RFscip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#`<init>`().BV@scip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#go().BZ F<scip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Blocal 0BRQGscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#`<init>`().Blocal 0BNDscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add(+1).B^
+;scip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#(2Use:"java*public class Useh
+Fscip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#`<init>`().(	2<init>:"java*public Use()a
+@scip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#go().(2go:"java*public int go()`
+local 0(=2c:"java*Calc cB@scip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#go()."javaä
+src/main/java/demo/Calc.javaP<scip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#BZ VBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#value.BR]Gscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#`<init>`().BZ local 0BRLBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#value.Blocal 0BXBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add().B	Z	 local 1B	R	LBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#value.B
+local 1B
+ZDscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add(+1).BZ local 2BRlocal 3BRLBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add().Blocal 2Blocal 3BXBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Inner#BZ YMscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Inner#`<init>`().B_Iscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Inner#bump().BZ 	F<scip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Blocal 4BRlocal 4BLBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add().Ba
+<scip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#(2Calc:"java*public class Calcg
+Bscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#value.(2value:"java*public int values
+Gscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#`<init>`().(	2<init>:"java*public Calc(int value)l
+local 02value:"java*	int valueBGscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#`<init>`().j
+Bscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add().(2add:"java*public int add(int x)_
+local 12x:"java*int xBBscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add().s
+Dscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add(+1).(2add:$"java*public int add(int x, int y)a
+local 22x:"java*int xBDscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add(+1).a
+local 32y:"java*int yBDscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#add(+1).p
+Bscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Inner#(2Inner:!"java*public static class Innerq
+Mscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Inner#`<init>`().(	2<init>:"java*public Inner()t
+Iscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Inner#bump().(2bump:"java*public int bump(Calc c)g
+local 42c:"java*Calc cBIscip-java maven maven/demo/java-exact-fixture 1.0 demo/Calc#Inner#bump()."javaÏ
+%src/main/java/demo/OnlyHeuristic.javaYEscip-java maven maven/demo/java-exact-fixture 1.0 demo/OnlyHeuristic#BZ \Pscip-java maven maven/demo/java-exact-fixture 1.0 demo/OnlyHeuristic#`<init>`().B`Jscip-java maven maven/demo/java-exact-fixture 1.0 demo/OnlyHeuristic#go().BZ PFscip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#`<init>`().BJ@scip-java maven maven/demo/java-exact-fixture 1.0 demo/Use#go().B|
+Escip-java maven maven/demo/java-exact-fixture 1.0 demo/OnlyHeuristic#(2OnlyHeuristic:""java*public class OnlyHeuristic|
+Pscip-java maven maven/demo/java-exact-fixture 1.0 demo/OnlyHeuristic#`<init>`().(	2<init>:"java*public OnlyHeuristic()k
+Jscip-java maven maven/demo/java-exact-fixture 1.0 demo/OnlyHeuristic#go().(2go:"java*public int go()"java

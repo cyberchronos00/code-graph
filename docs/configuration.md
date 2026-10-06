@@ -147,5 +147,8 @@ Starter cards are built in this order: `serve --presets FILE` or `viz.presets`; 
 | `CG_CACHE=DIR` | cache root (else `%LOCALAPPDATA%\cg` on Windows, `$XDG_CACHE_HOME/cg`, `~/.cache/cg`). `cg clean` empties it ([clean](cli.md#clean)) |
 | `CG_NODE=PATH` | JavaScript runtime for the TypeScript extractor (Node.js or Bun; a path or a name on PATH); else `node`, then `bun` on PATH ([Installing and updating cg](install.md#javascript-runtime)) |
 | `CG_RUST_SCIP=0`, `CG_C_SCIP=0`, `CG_COMPDB`, `CG_CFAMILY`, … | Rust / C / C++ options ([environment variables](native.md#environment-variables)) |
+| `CG_JAVA_SCIP=1` | run scip-java on the Gradle / Maven build (opt-in; it runs the build and can clean build caches). One run per project root, shared with Kotlin ([Java exact mode](java.md#exact-mode)) |
+| `CG_JAVA_SCIP_FILE` | prebuilt scip-java index. Wins over `CG_KOTLIN_SCIP_FILE` when both are set |
+| `CG_KOTLIN_SCIP=1`, `CG_KOTLIN_SCIP_FILE` | same scip-java run and index as the `CG_JAVA_SCIP*` names. Either opt-in starts the one run ([Kotlin exact mode](kotlin.md#exact-mode)) |
 
-`CODEGRAPH_*` names still work in 0.17.x with a deprecation warning; they are removed in 0.18.0. `CODEGRAPH_CACHE` and `CODEGRAPH_CACHE_DIR` are read as `CG_CACHE`.
+`CODEGRAPH_*` names still work in 0.17.x and 0.18.x with a deprecation warning; they are removed in 0.19.0. `CODEGRAPH_CACHE` and `CODEGRAPH_CACHE_DIR` are read as `CG_CACHE`.

@@ -1,4 +1,4 @@
-"""CG_* environment names and the CODEGRAPH_* aliases (removed in 0.18.0)."""
+"""CG_* environment names and the CODEGRAPH_* aliases (removed in 0.19.0)."""
 import cg_code_graph.core.env as env
 
 
@@ -14,7 +14,7 @@ def test_old_name_only_warns_once(monkeypatch, capsys):
     assert env.get("JOBS") == "2"
     err = capsys.readouterr().err
     assert err.count("CODEGRAPH_JOBS is deprecated, use CG_JOBS") == 1
-    assert "removed in 0.18.0" in err
+    assert "removed in 0.19.0" in err
     assert "is set too and wins" not in err
 
 

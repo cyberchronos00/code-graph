@@ -302,7 +302,8 @@ class KotlinPlugin(LanguagePlugin):
         self.classes: dict[str, Decl] = {}
         self.class_short: dict[str, list[Decl]] = defaultdict(list)
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
-        self.calls: list[tuple] = []          # (owner_id, name, receiver, line, file obj, decl)
+        self.calls: list[tuple] = []
+        self.unresolved_calls: list[tuple] = []          # (owner_id, name, receiver, line, file obj, decl)
         self.call_branch: dict = {}           # (owner_id, line, name) -> {branch, branch_line} (#88)
         # properties with a custom accessor, `by lazy` or a delegate are nodes (#89); kept out of by_name / members so
         # a call `x()` never binds to one
@@ -384,13 +385,34 @@ class KotlinPlugin(LanguagePlugin):
         self._emit_http()
         self._link_navs()
         self._manifests(project)
-        self.file_report = {"seen": [kf.rel for kf in kfiles] + failed, "parse_failed": failed, "syntax_errors": errs}
-        mode = self._exact(project, files)
+        self._seen_files = [kf.rel for kf in kfiles] + failed
+        self.file_report = {"seen": self._seen_files, "parse_failed": failed, "syntax_errors": errs}
         st = dict(self.st)
-        st.update({"mode": mode, "files": len(kfiles), "kt_files": sum(1 for kf in kfiles if kf.rel.endswith(".kt")),
+        st.update({"mode": "heuristic", "files": len(kfiles),
+                   "kt_files": sum(1 for kf in kfiles if kf.rel.endswith(".kt")),
                    "declarations": len(self.decls),
                    "seconds": round(time.time() - t0, 2)})
+        self._exported_stats = st
+        project.options["kotlin_plugin"] = self
+        project.options["kotlin_files"] = files
+        # Exact mode runs after the Java plugin when this tree has .java files, so Kotlin → Java
+        # heuristic edges exist before the exact layer replaces the ones the index covers.
+        from ..java.plugin import source_files as java_sources
+        if not java_sources(project.root, project):
+            self._finish_exact(project, files, st)
         return st
+
+    def _finish_exact(self, project: Project, files: list[str], st: dict) -> None:
+        if getattr(self, "_exact_done", False):
+            return
+        self._exact_done = True
+        mode = self._exact(project, files)
+        st["mode"] = mode
+        for k in ("exact_vs_heuristic", "scip_documents", "scip_files", "scip_defs_matched", "scip_defs_unmatched",
+                  "scip_defs_unmatched_samples", "scip_references", "scip_refs_external", "java", "scip",
+                  "interop_kotlin_to_java", "calls_resolved", "calls_unresolved"):
+            if k in self.st:
+                st[k] = self.st[k]
 
     def _exact(self, project: Project, files: list[str]) -> str:
         """The scip-java layer when an index is available (cg_code_graph/plugins/kotlin/exact.py), else heuristic."""
@@ -422,9 +444,18 @@ class KotlinPlugin(LanguagePlugin):
         self.st["scip"] = info
         return mode
 
+    def _jvm_name(self, kf: KFile) -> str:
+        m = re.search(rb'@file\s*:\s*JvmName\s*\(\s*"([^"]+)"', kf.src)
+        if m:
+            return m.group(1).decode()
+        return Path(kf.rel).stem + "Kt"
+
     def _file_node(self, kf: KFile) -> str:
+        attrs = {"jvm_name": self._jvm_name(kf)}
+        if kf.test:
+            attrs["test"] = True
         return self.b.add_node("file", f"kotlin:{kf.rel}", name=kf.rel, file=kf.rel, line=1, lang="kotlin",
-                               module=kf.package or None, attrs={"test": True} if kf.test else {})
+                               module=kf.package or None, attrs=attrs)
 
     def _header(self, kf: KFile):
         for c in kf.tree.root_node.children:
@@ -1499,6 +1530,7 @@ class KotlinPlugin(LanguagePlugin):
             self._how = self._recv = None
             targets = self._targets(name, recv, kf, decl)
             if not targets:
+                self.unresolved_calls.append((owner, name, recv, line, kf, decl))
                 self.st["calls_unresolved"] += 1
                 continue
             how = {"binding": self._how} if self._how else {}

@@ -75,7 +75,9 @@ HINTS = {
              "CG_SWIFT_INDEX_STORE to an existing index store (docs/swift.md#exact-mode)",
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
     "java": "heuristic mode (tree-sitter syntax layer, receiver-type call resolution){layer}. "
-            "scip-java exact mode is coming in #164 (JDK 17+; `cg setup java` or `install.sh --with java`)",
+            "For compiler-resolved references set CG_JAVA_SCIP=1 (or CG_KOTLIN_SCIP=1; one scip-java run serves both) "
+            "or pass `--scip index.scip`. install.sh --with java installs scip-java (JDK 17, 21 or 25). "
+            "docs/java.md#exact-mode",
 }
 # tree-sitter modules of the syntax layer per language: the hint names the ones missing (none: no install hint, #75)
 LAYER_MODULES = {"rust": ("tree_sitter", "tree_sitter_rust"), "c_cpp": ("tree_sitter", "tree_sitter_c", "tree_sitter_cpp"),
@@ -277,8 +279,14 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
                      + f" ({sc['skipped_modules'][0]['reason']})")
         return "exact", f"scip-java index ({sc.get('source', 'scip')}){part}"
     if lang == "java" and mode == "heuristic":
-        return "heuristic", ("tree-sitter syntax layer with receiver-type call resolution; "
-                             "scip-java exact mode is coming in #164")
+        why = (st.get("scip") or {}).get("status") if isinstance(st.get("scip"), dict) else None
+        return "heuristic", ("tree-sitter syntax layer with receiver-type call resolution; no compiler index"
+                             + (f": {why}" if why else ""))
+    if lang == "java" and mode == "scip":
+        sc = st.get("scip") if isinstance(st.get("scip"), dict) else {}
+        n, k = st.get("scip_files"), st.get("files")
+        part = f"; {k - n} of {k} Java files not in the index keep heuristic calls" if n is not None and k and n < k else ""
+        return "exact", f"scip-java index ({sc.get('source', 'scip')}){part}"
     if lang == "typescript" and st.get("program_files") == 0 and not st.get("nodes"):
         return "not_indexed", "the TypeScript plugin ran but found no source files (tsconfig include / source dirs)"
     return "exact", None
@@ -357,17 +365,6 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
                 other[lang]["reason"] = st.get("reason")
             elif "status" not in st:
                 other[lang]["status"] = "exact"  # a SCIP indexer ran
-    kj = ((plugins.get("kotlin") or {}).get("java") or {})
-    if kj.get("documents"):
-        # Kotlin exact mode already imported these documents. Keep that status when the Java
-        # heuristic plugin also indexed the same files.
-        for e in langs:
-            if e["language"] == "java":
-                e["status"] = "scip"
-                e["reason"] = (f"{kj['documents']} Java file(s) imported from the Kotlin build's "
-                               "scip-java index (Kotlin exact mode)")
-                e.pop("hint", None)
-                break
     for o in other.values():
         if o["status"] == "unsupported":
             if scip_imported and o["language"] in ("go", "java"):

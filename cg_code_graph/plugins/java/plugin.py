@@ -19,7 +19,7 @@ five names: a candidate edge each). A known type that is not in the project is n
 EXTENDS / IMPLEMENTS and IMPLEMENTED_BY / OVERRIDDEN_BY are heuristic too.
 
 Spring facts are extracted by ``cg_code_graph/plugins/jvm/spring.py`` from ``Decl.annotations`` and these trees.
-Part C should replace `_exact` and keep these ids. This part does not run scip-java.
+Exact mode (`CG_JAVA_SCIP` / a shared scip-java index) maps compiler symbols onto these ids.
 """
 from __future__ import annotations
 
@@ -183,20 +183,45 @@ class JavaPlugin(LanguagePlugin):
         self._hierarchy()
         from ..jvm import spring as spring_mod
         spring_mod.finish(self, jfiles, "java")
-        mode = self._exact(project, files)
+        from ..jvm.interop import link_kotlin_to_java
+        kp = project.options.get("kotlin_plugin")
+        if kp is not None:
+            link_kotlin_to_java(kp, self)
         self.file_report = {"seen": [jf.rel for jf in jfiles] + failed, "parse_failed": failed, "syntax_errors": errs}
+        mode = self._exact(project, files)
+        if kp is not None:
+            kp._finish_exact(project, project.options.get("kotlin_files") or [], kp._exported_stats)
         st = dict(self.st)
         st.update({"mode": mode, "files": len(jfiles), "declarations": len(self.decls),
                    "seconds": round(time.time() - t0, 2)})
         return st
 
     def _exact(self, project: Project, files: list[str]) -> str:
-        """Part C: opt-in scip-java (reuse kotlin.exact.find_java / scip_java_candidates) mapped onto these ids.
-
-        A `--scip` file is still imported by the generic importer until that lands. One scip-java run
-        should serve Java and Kotlin together.
-        """
-        return "heuristic"
+        """Opt-in scip-java (shared with Kotlin) mapped onto these ids. Files the index misses stay heuristic."""
+        from ..kotlin.exact import find_index
+        from .exact import ExactLayer
+        t1 = time.time()
+        path, info = find_index(project, files, lang="java")
+        mode = "heuristic"
+        if path is not None:
+            sst: dict = {}
+            try:
+                layer = ExactLayer(self)
+                if layer.apply(path, sst):
+                    mode = "scip"
+                else:
+                    info["status"] = "the SCIP index has no Java documents"
+            except Exception as e:          # a corrupt / foreign index must not lose the heuristic graph
+                info["status"] = f"SCIP import failed ({type(e).__name__}: {e})"
+            for k in ("exact_vs_heuristic", "scip_documents", "scip_files", "scip_defs_matched", "scip_defs_unmatched",
+                      "scip_defs_unmatched_samples", "scip_references", "scip_refs_external"):
+                if k in sst:
+                    self.st[k] = sst[k]
+            if sst.get("scip_warning"):
+                info["warning"] = sst["scip_warning"]
+        info["seconds"] = round(time.time() - t1, 2)
+        self.st["scip"] = info
+        return mode
 
     def _file_node(self, jf: JFile) -> str:
         attrs = {"test": True} if jf.test else {}
@@ -517,6 +542,14 @@ class JavaPlugin(LanguagePlugin):
             self._how = None
             targets = self._targets(name, recv, jf, decl)
             if not targets:
+                from ..jvm.interop import java_to_kotlin
+                ty = None
+                if recv is not None:
+                    ty, _how = self._recv_type(recv, jf, decl)
+                if java_to_kotlin(self.b, name, rtext, ty, jf.package, jf.imports, jf.star, owner, jf.rel, line):
+                    self.st["calls_resolved"] += 1
+                    self.st["interop_java_to_kotlin"] += 1
+                    continue
                 self.st["calls_unresolved"] += 1
                 continue
             how = {"binding": self._how} if self._how else {}

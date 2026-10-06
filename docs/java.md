@@ -43,7 +43,29 @@ Calls (`CALLS`) bind in this order:
 
 ## Exact mode
 
-Coming in #164. It will reuse the Kotlin scip-java runner (one opt-in run for a mixed build, JDK 17+) and map compiler symbols onto the ids above. `cg setup java` and `install.sh --with java` install that toolchain today and print the JDK 17+ hint. A `--scip` file still imports Java documents through the generic importer until then. `CG_KOTLIN_SCIP` is unchanged.
+Opt-in, because it runs the build. scip-java runs Gradle `clean compileTestJava compileTestKotlin compileTestKotlinJvm` or Maven `clean verify -DskipTests`, and its own docs warn that this cleans build caches. The JDK that runs the build must be 17, 21, or 25. Java 8 and 11 are unsupported build JDKs. A JDK older than 17 cannot start scip-java.
+
+One scip-java run per project root is cached (`~/.cache/cg/scip`; `CG_NO_CACHE=1` forces a run; `CG_INDEXER_TIMEOUT` caps it). The Java and Kotlin plugins both read that index.
+
+| source | when it is used |
+|---|---|
+| `--scip FILE` | documents include `.java` (this plugin) or `.kt` / `.kts` (the Kotlin plugin). A mixed index is used by both. Go and other languages still use the generic importer |
+| `CG_JAVA_SCIP_FILE` | a prebuilt index. Wins over `CG_KOTLIN_SCIP_FILE` when both are set |
+| `CG_KOTLIN_SCIP_FILE` | the same prebuilt index, when `CG_JAVA_SCIP_FILE` is unset |
+| `CG_JAVA_SCIP=1` or `CG_KOTLIN_SCIP=1` | either name starts the one run. `CG_KOTLIN_SCIP` keeps working for Kotlin-only trees |
+
+Symbols map onto the ids in [What is extracted](#what-is-extracted): packages, nested classes, anonymous classes (`$anon` becomes `Foo.1` or `Foo.method.1`), enum cases, constructors `<init>`, fields, and generic methods. Overload disambiguators (`add(+1)`) collapse onto the shared method id. Exact `CALLS`, constructor `INSTANTIATES`, and field `REFERENCES` replace the heuristic call edges in files the index covers. A file the index misses stays heuristic, and `cg coverage` says how many. From Java, `FooKt.bar()`, `@file:JvmName`, `Foo.Companion.x()`, `@JvmStatic`, and `getX` / `isX` / `setX` map to the Kotlin node. `cg doctor`'s java row names scip-java, the JDK, and the opt-in: `install.sh --with java`, then `CG_JAVA_SCIP=1`.
+
+## Kotlin interop
+
+Heuristic mode resolves calls across the two plugins:
+
+- Kotlin → Java through an import or the same package (`orders.find(id)` when `orders` is a Java `OrderService`).
+- Java → Kotlin: `FooKt.bar()` for a top-level function, including `@file:JvmName("Foo")`; `Foo.Companion.x()`; `@JvmStatic` called as `Foo.x()`; `getX()` / `setX()` / `isX()` on a Kotlin property, as `READS_PROP` / `WRITES_PROP` or `CALLS` with `property: read|write`, the same edges the Kotlin layer uses.
+
+Exact mode maps the Java documents of the shared index onto these ids, including fields. The Kotlin layer does not create a second node for the same Java symbol.
+
+In `examples/bookstore-spring`, `OrderEvents.onPlaced` calls Java `OrderService.place`, so `cg impact table:store_books` lists the Kotlin listener.
 
 ## Spring
 
@@ -69,5 +91,5 @@ Kotlin projects keep the same routes, guards, and tables as before. Exposed tabl
 - An inferred lambda parameter (`xs.forEach(x -> x.line())`) has no type, so that call falls through to a unique-name match and can edge every project method of that name.
 - A field chain `a.b.c()` binds `c` when each field's type is a project class. A call chain does the same from return types.
 - Gradle `build.gradle.kts` and `settings.gradle.kts` are Kotlin sources. The Kotlin plugin already treats `.kts` as Kotlin, so a mixed tree counts those scripts as Kotlin, not Java.
-- Android XML layouts are not read. Exact call edges are coming in #164. See [Kotlin](kotlin.md) for the Kotlin side of a mixed repo.
+- Android XML layouts are not read. See [Kotlin](kotlin.md) for the Kotlin side of a mixed repo and the shared scip-java run.
 - Spring WebFlux functional routes (`RouterFunctions.route()`), reactive repositories beyond the forms above, Micronaut, Quarkus, Jakarta servlets, and JDBC / `JdbcTemplate` raw SQL are not extracted.

@@ -1,7 +1,7 @@
 """The per-user cache: where it lives, what is in it, and `cg clean`.
 
 Root (one lookup for every user: extractors, SCIP outputs, parse caches, the Swift build directory):
-$CG_CACHE (older names still work through 0.17.x; see core/env.py), else
+$CG_CACHE (older names still work through 0.18.x; see core/env.py), else
 %LOCALAPPDATA%\\cg on Windows, else $XDG_CACHE_HOME/cg, else ~/.cache/cg. The first use of that
 default moves a leftover `codegraph` directory to `cg` and drops `swift-build/` (SwiftPM build
 directories embed absolute paths). An explicit cache path is used as given and is not moved.

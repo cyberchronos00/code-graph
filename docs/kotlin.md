@@ -25,7 +25,7 @@ A scip-java index replaces name-based call edges. Ids stay the syntax layer's, s
 |---|---|
 | `cg index --scip index.scip` | Kotlin documents go to this plugin, not the generic SCIP importer |
 | `CG_KOTLIN_SCIP_FILE` | a prebuilt index |
-| `CG_KOTLIN_SCIP=1` | cg runs `scip-java index` (cache `~/.cache/cg/scip`; `CG_NO_CACHE=1` forces a run; `CG_INDEXER_TIMEOUT` caps it) |
+| `CG_KOTLIN_SCIP=1` | cg runs `scip-java index` (cache `~/.cache/cg/scip`; `CG_NO_CACHE=1` forces a run; `CG_INDEXER_TIMEOUT` caps it). `CG_JAVA_SCIP=1` starts the same run; one project root is indexed once and both plugins read it |
 
 | scip-java | Kotlin (Gradle builds checked) | install |
 |---|---|---|
@@ -35,7 +35,7 @@ A scip-java index replaces name-based call edges. Ids stay the syntax layer's, s
 
 cg reads the version the build declares, tries the matching release first, then the next if the compiler plugin does not load. Index stats record `kotlin_version`, `indexer`, and failed `attempts`. `cg doctor <project>` names the release that fits. `install.sh --with kotlin` installs the supported pair (Windows: `cg doctor`).
 
-Java in that index becomes `java` nodes with exact Kotlin ↔ Java and Java → Java calls, including `AppKt.build()`. Without the index, `.java` files are indexed by the [Java](java.md) plugin (heuristic). A `--scip` file that this layer does not consume still imports Java documents through the generic importer. Java exact mode is coming in #164. Spring facts for both languages are extracted by the shared JVM module `cg_code_graph/plugins/jvm/spring.py` ([Java](java.md#spring)). Stats `exact_vs_heuristic` is precision (heuristic call edges the compiler confirms) and recall (compiler edges the heuristic layer had found). Property read / write edges stay and are left out of that pair; a property read is not a call in the SCIP index.
+Java in that index becomes `java` nodes with the [Java plugin's ids](java.md#what-is-extracted) (`method:pkg.Foo.bar`, not `method:pkg.Foo::bar`), including fields, and exact Kotlin ↔ Java and Java → Java calls, including `AppKt.build()`, a `@file:JvmName` facade, `Foo.Companion.x()`, `@JvmStatic`, and `getX` / `isX` / `setX` on a Kotlin property. The two layers do not create a second node for the same Java symbol. Without the index, `.java` files are indexed by the [Java](java.md) plugin (heuristic), and Kotlin → Java calls resolve through imports and the same package; Java → Kotlin calls resolve `FooKt.bar()`, `Foo.Companion.x()`, `@JvmStatic`, and `getX` / `setX` / `isX` ([Java interop](java.md#kotlin-interop)). A `--scip` file with Java documents is consumed by the Java plugin. Go and other languages still use the generic importer. Spring facts for both languages are extracted by the shared JVM module `cg_code_graph/plugins/jvm/spring.py` ([Java](java.md#spring)). Stats `exact_vs_heuristic` is precision (heuristic call edges the compiler confirms) and recall (compiler edges the heuristic layer had found). Property read / write edges stay and are left out of that pair; a property read is not a call in the SCIP index.
 
 | still heuristic | why |
 |---|---|

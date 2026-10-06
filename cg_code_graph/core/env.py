@@ -1,4 +1,4 @@
-"""Process environment: ``CG_*`` names, with ``CODEGRAPH_*`` aliases through 0.17.x.
+"""Process environment: ``CG_*`` names, with ``CODEGRAPH_*`` aliases through 0.18.x.
 
 ``get`` reads ``os.environ`` on every call. A legacy name that is set produces one stderr
 warning per name per process. ``CG_*`` wins when both are set. ``MCP_TOOLS`` has no legacy
@@ -13,7 +13,8 @@ import sys
 SUFFIXES = (
     "CACHE", "CACHE_DIR", "CARGO", "CFAMILY", "COMPDB", "C_MASK_ANNOTATIONS", "C_MAX_MACRO_REFS",
     "C_SCIP", "C_SCIP_FILE", "EXCLUDE_DIRS", "INCLUDE_DIRS", "INDEXER_TIMEOUT", "JOBS",
-    "KOTLIN_SCIP", "KOTLIN_SCIP_FILE", "LIBINDEXSTORE", "MAX_FILE_BYTES", "NODE", "NO_CACHE",
+    "JAVA_SCIP", "JAVA_SCIP_FILE", "KOTLIN_SCIP", "KOTLIN_SCIP_FILE", "LIBINDEXSTORE",
+    "MAX_FILE_BYTES", "NODE", "NO_CACHE",
     "NO_CARGO", "NO_HOOKS", "NO_STALE_CHECK", "RUST_ANALYZER", "RUST_BUILD_SCRIPTS", "RUST_SCIP",
     "RUST_SCIP_FILE", "RUST_TARGETS", "SCIP_CLANG", "SCIP_JAVA", "SWIFT", "SWIFT_INDEX",
     "SWIFT_INDEX_STORE",
@@ -34,9 +35,9 @@ def _warn(old: str, new: str, *, both: bool) -> None:
         return
     _warned.add(old)
     if both:
-        extra = f"{new} is set too and wins; the CODEGRAPH_* names are removed in 0.18.0"
+        extra = f"{new} is set too and wins; the CODEGRAPH_* names are removed in 0.19.0"
     else:
-        extra = "the CODEGRAPH_* names are removed in 0.18.0"
+        extra = "the CODEGRAPH_* names are removed in 0.19.0"
     print(f"cg: {old} is deprecated, use {new} ({extra})", file=sys.stderr)
 
 

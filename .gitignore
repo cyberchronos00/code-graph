@@ -9,6 +9,8 @@ out/
 *.scip
 !tests/kotlin_exact_fixture/index.scip
 !tests/kotlin_mixed_fixture/*.scip
+!tests/java_exact_fixture/index.scip
+!tests/kotlin_java_mixed_fixture/index.scip
 cg_code_graph/plugins/php/extractor/vendor/
 cg_code_graph/plugins/ts/extractor/node_modules/
 cg_code_graph/plugins/ts/extractor/bun.lock

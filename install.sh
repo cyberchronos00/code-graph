@@ -200,7 +200,7 @@ with_kotlin() {
       else rm -f "$sj13.part"; say "$label: scip-java $SCIP_JAVA_13 checksum mismatch, not installed"; fi
     fi
   fi
-  say "$label: exact mode runs the project's Gradle / Maven build; opt in per run with CG_KOTLIN_SCIP=1 (Java exact mode is coming in #164)"
+  say "$label: exact mode runs the project's Gradle / Maven build; opt in per run with CG_KOTLIN_SCIP=1 or CG_JAVA_SCIP=1 (one scip-java run serves both)"
 }
 
 with_swift() {

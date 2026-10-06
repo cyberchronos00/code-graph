@@ -8,5 +8,6 @@ class OrderEvents(private val orders: OrderService) {
     @EventListener
     fun onPlaced(event: OrderPlaced) {
         orders.find(event.id)
+        orders.place(Order())
     }
 }

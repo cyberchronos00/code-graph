@@ -208,11 +208,18 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     for fw in frameworks:
         if f"{fw.language}/{fw.name}" not in stats["plugins"]:
             stats["plugins"][f"{fw.language}/{fw.name}"] = {"status": "detected; language plugin not active"}
+    kp = project.options.get("kotlin_plugin")
+    if kp is not None and not getattr(kp, "_exact_done", False):
+        kp._finish_exact(project, project.options.get("kotlin_files") or [], kp._exported_stats)
     if scip:
         from .plugins.scip.importer import import_scip
         for s in scip:
             if s in (project.options.get("scip_consumed") or []):
-                stats["plugins"][f"scip:{s}"] = {"status": "imported by the Kotlin plugin (exact layer)"}
+                who = (project.options.get("scip_consumed_by") or {}).get(s) or ["kotlin"]
+                names = [w.capitalize() for w in who]
+                word = "plugin" if len(names) == 1 else "plugins"
+                stats["plugins"][f"scip:{s}"] = {
+                    "status": f"imported by the {' and '.join(names)} {word} (exact layer)"}
                 continue
             stats["plugins"][f"scip:{s}"] = import_scip(s, builder)
     # generated / copied / vendored files: out of the graph (default) or labelled (attrs.generated)

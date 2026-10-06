@@ -139,12 +139,11 @@ def test_bookstore_spring_example_and_android_link(tmp_path):
     entries = {(e["entry_kind"], e["name"]) for e in imp["entry_points"]}
     assert ("http_route", "POST /api/orders") in entries
     assert ("scheduled", "run") in entries
-    # OrderEvents.onPlaced calls Java OrderService.find. That call stays unresolved until part C,
-    # so the listener is an entry node and is not an impact entry point of store_books.
+    # OrderEvents.onPlaced calls Java OrderService.place, which reads store_books.
     assert con.execute(
         "SELECT entry_kind FROM nodes WHERE id='method:com.example.bookstore.order.OrderEvents.onPlaced'"
     ).fetchone()["entry_kind"] == "listener"
-    assert ("listener", "onPlaced") not in entries
+    assert ("listener", "onPlaced") in entries
     assert ("class:com.example.bookstore.pricing.PricingService",
             "class:com.example.bookstore.pricing.DefaultPricingService") in {
         (r["src"], r["dst"]) for r in con.execute("SELECT src, dst FROM edges WHERE kind='BOUND_TO'")}

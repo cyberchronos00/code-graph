@@ -46,37 +46,40 @@ def test_java_documents_imported(tmp_path, isolated):
     assert k["java"]["documents"] == 1
     assert k["java"]["classes"] == 2 and k["java"]["methods"] == 5
     nodes = {i: (kind, lang) for i, kind, lang in con.execute("select id, kind, lang from nodes")}
-    for nid in ("class:demo.Formatter", "class:demo.Formatter.Box", "method:demo.Formatter::bold",
-                "method:demo.Formatter.Box::make", "file:java:src/main/java/demo/Formatter.java"):
+    for nid in ("class:demo.Formatter", "class:demo.Formatter.Box", "method:demo.Formatter.bold",
+                "method:demo.Formatter.Box.make", "file:java:src/main/java/demo/Formatter.java"):
         assert nodes[nid][1] == "java", nid
+    assert not any("::" in i for i in nodes)
     assert not any(i.endswith("::<init>") for i in nodes)
+    # one node per Java symbol: the Java plugin id, not a second SCIP id
+    assert sum(1 for i in nodes if i == "method:demo.Formatter.bold") == 1
     contains = _edges(con, "CONTAINS")
     assert ("class:demo.Formatter", "class:demo.Formatter.Box") in contains
-    assert ("class:demo.Formatter.Box", "method:demo.Formatter.Box::make") in contains
+    assert ("class:demo.Formatter.Box", "method:demo.Formatter.Box.make") in contains
 
 
 def test_cross_language_edges_exact(tmp_path, isolated):
     _, con = _index(tmp_path, scip=[str(SCIP)])
     calls, inst = _edges(con, "CALLS"), _edges(con, "INSTANTIATES")
     # Kotlin -> Java
-    assert calls[("function:demo.summary", "method:demo.Formatter::bold")] == "exact"
-    assert calls[("function:demo.summary", "method:demo.Formatter::area")] == "exact"
+    assert calls[("function:demo.summary", "method:demo.Formatter.bold")] == "exact"
+    assert calls[("function:demo.summary", "method:demo.Formatter.area")] == "exact"
     assert inst[("function:demo.summary", "class:demo.Formatter")] == "exact"
     # Java -> Kotlin (interface method, overloaded method, constructors, a top-level function through its facade)
-    assert calls[("method:demo.Formatter::area", "method:demo.Shape.area")] == "exact"
-    assert calls[("method:demo.Formatter::fresh", "method:demo.Registry.add")] == "exact"
-    assert inst[("method:demo.Formatter::fresh", "class:demo.Registry")] == "exact"
-    assert inst[("method:demo.Formatter::fresh", "class:demo.Circle")] == "exact"
-    assert calls[("method:demo.Formatter::built", "function:demo.build")] == "exact"
+    assert calls[("method:demo.Formatter.area", "method:demo.Shape.area")] == "exact"
+    assert calls[("method:demo.Formatter.fresh", "method:demo.Registry.add")] == "exact"
+    assert inst[("method:demo.Formatter.fresh", "class:demo.Registry")] == "exact"
+    assert inst[("method:demo.Formatter.fresh", "class:demo.Circle")] == "exact"
+    assert calls[("method:demo.Formatter.built", "function:demo.build")] == "exact"
     # Java -> Java, the caller being the innermost method (a nested class's)
-    assert calls[("method:demo.Formatter::area", "method:demo.Formatter::bold")] == "exact"
-    assert inst[("method:demo.Formatter.Box::make", "class:demo.Formatter")] == "exact"
+    assert calls[("method:demo.Formatter.area", "method:demo.Formatter.bold")] == "exact"
+    assert inst[("method:demo.Formatter.Box.make", "class:demo.Formatter")] == "exact"
 
 
 def test_coverage_reports_java_imported(tmp_path, isolated):
     st, _ = _index(tmp_path, scip=[str(SCIP)])
     j = _cov(st, "java")
-    assert j["status"] == "scip" and "Kotlin exact mode" in j["reason"]
+    assert j["status"] == "exact" and "scip-java index (--scip)" in j["reason"]
     assert _cov(st, "kotlin")["status"] == "exact"
     assert st["plugins"]["kotlin"]["scip"]["source"] == "--scip"
 
