@@ -10,6 +10,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Added
 
+- `explore` (#122, part 1): a question or a spec resolves to a few symbols, then one answer
+  returns their source, entry points, call paths and blast radius within a token budget.
+  MCP tool `explore` and `cg explore`.
 - Index refresh git hooks (#145, part 1): `cg hooks install`, `uninstall` and `status` add an
   opt-in block to `post-commit`, `post-checkout` and `post-merge` (nothing is installed by
   default). `cg refresh` re-indexes in the background, skips an unchanged checkout, refuses a

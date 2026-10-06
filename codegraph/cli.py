@@ -244,6 +244,12 @@ def main(argv=None):
     p.add_argument("--context", type=int, default=0, help="extra lines of context around the symbol (default 0)")
     p.add_argument("--max-lines", type=int, default=200, help="cap the printed body (default 200); extra lines are noted")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("explore", help="question or spec → source, entry points, call paths and blast radius")
+    p.add_argument("query", help="a free-text question, a source file, or a symbol spec")
+    p.add_argument("--db", required=True)
+    p.add_argument("--budget", type=int, default=3000, help="token budget (clamped to 500..20000, default 3000)")
+    p.add_argument("--max-symbols", type=int, default=4, help="how many symbols to expand (default 4)")
+    p.add_argument("--json", action="store_true")
     p = sub.add_parser("agents", help="opt-in: add cg usage guidance (and the cg MCP entry) to AGENTS.md / CLAUDE.md / Cursor rules; previews and asks first")
     p.add_argument("action", choices=["install", "update", "remove", "show"])
     p.add_argument("--dir", default=".", help="project root (default: current directory)")
@@ -427,6 +433,11 @@ def main(argv=None):
         res = Q.snippet(GraphStore(a.db), a.spec, context=a.context, max_lines=a.max_lines)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_snippet(res))
         return 0 if res.get("status") == "ok" else 1
+    if a.cmd == "explore":
+        from . import explore as EX
+        res = EX.explore(GraphStore(a.db), a.query, budget_tokens=a.budget, max_symbols=a.max_symbols)
+        print(json.dumps(res, indent=1, default=str) if a.json else EX.render_explore(res))
+        return 0 if res.get("symbols") else 1
     if a.cmd == "agents":
         from . import agents as AG
         return AG.run(a.action, root=a.dir, targets=a.target, all_targets=a.all, mcp=a.mcp,

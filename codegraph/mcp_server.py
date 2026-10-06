@@ -2,7 +2,7 @@
 
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
-Tools: reaches, impact, callers, siblings, writers, readers, roundtrip, lint_async_state, routes, node, search, stats, starters, index, downstream, path,
+Tools: explore, reaches, impact, callers, siblings, writers, readers, roundtrip, lint_async_state, routes, node, search, stats, starters, index, downstream, path,
 api_calls, resolutions, channels, bridges, protocol_links, llm_tools, external_systems, tests_covering, affected, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (`cg link`, any number of repos) to query across repos (pages -> routes -> tables).
@@ -40,6 +40,7 @@ server = MCPServer(
     instructions=(
         "Code graph of a project: classes, functions, routes, commands, jobs, pages, DB tables/columns, connections, "
         "config/env keys, each edge with file:line evidence and a confidence (exact / resolved / heuristic). Stacks: "
+        "For a broad question ('how does X work') start with `explore`: source, entry points, call paths and blast radius in one call. "
         "Laravel, Django (django-ninja, DRF), FastAPI/Starlette, Flask, NestJS, Next.js, Express/Fastify/Koa/Hono, Nuxt/Vue, Flutter/Dart, Rust, C, C++. "
         "Check the blast radius before editing: `reaches` lists everything that depends on a symbol/column/connection "
         "(grouped runtime / library / operator / UI / dev / gated), `impact` gives callers up to entry points, `siblings` "
@@ -131,7 +132,7 @@ EMPTY_MARKERS = ("no method matches", "no symbol matches", "not found:", "no nod
                  "nothing depends", "no writers recorded", "no table ", "no path", "no forward path",
                  "has no recorded callers", "no callers found in indexed code", "no direct callers", "no siblings found", "no routes, tables", "no indexed test reaches",
                  "nothing matched the spec", "no channel matches", "no broadcast channels", "no bridge endpoint matches",
-                 "no web / native bridge calls")
+                 "no web / native bridge calls", "explore: nothing matched")
 
 
 def _coverage_note() -> str:
@@ -882,6 +883,20 @@ def search(name: str, kind: str | None = None, limit: int = 20, platform: str | 
     st = _st()
     pf, _ = _platform(st, platform)
     return Q.render_search(Q.search(st, name, kind=kind, limit=limit, platform=pf))
+
+
+@tool
+def explore(query: str, budget_tokens: int = 3000, max_symbols: int = 4) -> str:
+    """Start here for a broad question ("how does X work") or a spec you have not pinned down.
+    Resolves a few symbols and returns their source, entry points, call paths and blast radius
+    in one call, inside budget_tokens. Prefer this over impact, downstream, path and snippet
+    until you know which symbol matters. The reply ends with the fine-grained calls to run next.
+    max_symbols caps how many matches are expanded (default 4)."""
+    from . import explore as EX
+    st = _st()
+    res = EX.explore(st, query, budget_tokens=budget_tokens, max_symbols=max_symbols)
+    _scope([s["id"] for s in res["symbols"]])
+    return EX.render_explore(res)
 
 
 @tool

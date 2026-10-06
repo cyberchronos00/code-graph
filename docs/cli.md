@@ -22,6 +22,7 @@
 | `routes` | Guards, what the route reaches, and frontend callers on a linked graph. | [routes and guards](#routes-and-guards) |
 | `search NAME` | Nodes by name or FQN substring, plus middleware / guard / auth names. `--kind`, `--limit`. | `cg search -h` |
 | `snippet SPEC` | Source from the index: `path:start-end`, then numbered lines. `--context`, `--max-lines` (default 200). Ambiguous name lists candidates and exits nonzero. | [specs](#query-targets-specs) |
+| `explore QUERY` | Question or spec → source, entry points, call paths, blast radius in one answer. `--budget`, `--json`. | [explore](#explore) |
 | `node SPEC` | Location, fqn, platforms, attrs, and edges (one site, with a count). | `cg node -h` |
 | `stats` | Project, languages, coverage line, node and edge counts. | `cg stats -h` |
 | `writers SPEC` | Writers of a table, a column, or a stored property `Type.prop` (Swift, Kotlin, Python, TypeScript, PHP). | `cg writers -h` |
@@ -169,6 +170,33 @@ Both are labelled `heuristic` in text and in JSON (`confidence`). Neither adds e
 
 - `roundtrip` pairs a write of a stored property through a lossy transform with a read that seeds UI state (path: write, lossy call, property, read, seed, each with `file:line`). MCP tool: `roundtrip(prop)`.
 - `lint async-state` runs all four rules unless `--rules` lists a subset. MCP tool: `lint_async_state`.
+
+## explore
+
+`cg explore` answers a question in one call: matching symbols, then entry points, call paths, blast radius and source. The same answer is the MCP tool `explore` ([MCP server](mcp.md)).
+
+Resolution, in order:
+
+- A spec that matches 1 to `--max-symbols` nodes wins (a node id, `catalog.api.place_order`, or `POST /api/orders/`). A bare word that only names a test fixture or a module falls through to the word match.
+- A token that is a source file (`catalog/api.py`) uses the symbols defined in that file.
+- Otherwise the words are stemmed and matched. `module`, `file`, `field`, `column`, `constant` and test nodes (tests, and code in test files such as `conftest.py`) are left out. A word in a symbol's own name counts more than one found only in its module path; the highest scores are kept.
+
+Sections:
+
+- **entry points** — up to six per symbol, with kind, name and confidence (`exact`, `resolved`, `heuristic`).
+- **call paths** — the path from the first entry point, then a path between resolved symbols. A hop is `-KIND[confidence @ file:line]->`.
+- **blast radius** — callers, tables written and read, env keys, jobs and connections, each with a confidence label.
+- **source** — numbered lines, grouped by file, inside the token budget. A cut-off body ends with a `snippet(...)` hint; symbols that did not fit are listed the same way.
+- **next** — the fine-grained calls to run after this answer.
+
+The default budget is 3000 tokens (about 4 characters each), clamped to 500..20000. Header, entry points, call paths, blast radius and next steps come first; when they alone would not fit, the lowest-ranked symbols are dropped and listed under **next** as `explore(...)` calls. Source fills what remains. The last line is `budget: used/limit tokens`. Nothing matched exits 1.
+
+| flag | |
+|---|---|
+| `--budget N` | token budget (default 3000, clamped to 500..20000) |
+| `--max-symbols N` | symbols to expand (default 4) |
+| `--json` | print the result object |
+| `--db DB` | graph database (required) |
 
 ## affected
 
