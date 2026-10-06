@@ -12,6 +12,7 @@ import path from 'node:path'
 import ts from 'typescript'
 import { parse as parseSFC } from '@vue/compiler-sfc'
 import { collectFrameworkFacts } from './fw.mjs'
+import { collectReactRouter } from './rr.mjs'
 
 const t0 = Date.now()
 const cfg = JSON.parse(fs.readFileSync(process.argv[process.argv.indexOf('--config') + 1], 'utf8'))
@@ -3355,7 +3356,14 @@ for (const sf of sourceFiles) {
   v(sf)
 }
 for (const s of sfcNav) navSites.push({ src: null, file: s.file, line: s.line, via: s.via, locs: [{ kind: 'path', value: s.raw, conf: 'exact' }] })
+const rrFacts = collectReactRouter({
+  ts, checker, sourceFiles, rel, realFile, lineOf, declId, resolveSymbol, unwrap, objProp, routeLocs, isFn, varInit,
+  returnExprs, fileNode, testFiles, cfg,
+})
+for (const s of rrFacts.nav) navSites.push(s)
+for (const a of rrFacts.forms) apiCalls.push(a)
 stats.nav_sites = navSites.length
+stats.rr_routes = rrFacts.routes.length
 stats.vue_routes = vueRoutes.length
 stats.nodes = nodes.length
 stats.edges = edges.length
@@ -3374,7 +3382,7 @@ stats.seconds_fw_facts = tFw / 1000
 stats.fw_facts = fwFacts ? { classes: fwFacts.classes.length, calls: fwFacts.calls.length, member_calls: fwFacts.member_calls.length, env: fwFacts.env.length, budget_left: fwFacts.budget_left } : null
 stats.config = { tsconfig: noConfig ? null : (parsed.packageConfigs ? null : rel(tsconfigPath)), root_files: rootNames.length,
   ...(parsed.packageConfigs ? { package_tsconfigs: parsed.packageConfigs } : {}) }
-fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, nav_sites: navSites, vue_routes: vueRoutes, astro_calls: cfg.astro ? (astroBag.xs || []) : undefined, fw: fwFacts,
+fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i18n: i18nUses, fallbacks, sfc_i18n: sfcI18n, page_meta: pageMeta, nav_sites: navSites, vue_routes: vueRoutes, rr_routes: rrFacts.routes, astro_calls: cfg.astro ? (astroBag.xs || []) : undefined, fw: fwFacts,
   subscriptions, bridges, bridge_receivers: bridgeReceivers.filter(b => !(b.protocol === 'react-native-event' && jsEmitted.has(b.module))), bridge_dynamic: bridgeDynamic, visits, test_files: [...testFiles].map(rel).sort(), config_defaults: configDefaults,
   skipped_links: [...new Set(skippedLinks)].sort(),
   // for `cg coverage` (#106): the files analysed, and the roots they come from (source dirs, source files, test trees);

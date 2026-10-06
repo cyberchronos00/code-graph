@@ -36,7 +36,14 @@ def page_pattern(route: str) -> str:
     r = re.sub(r":(\w+)\?", r"{\1?}", r)
     r = re.sub(r":(\w+)", r"{\1}", r)
     r = re.sub(r"\[\.\.\.(\w+)\]", r"{\1*}", r)
-    return re.sub(r"\[(\w+)\]", r"{\1}", r)
+    r = re.sub(r"\[(\w+)\]", r"{\1}", r)
+    segs = []
+    for seg in r.split("/"):
+        if seg in ("*", "(.*)", "(.*)*"):
+            segs.append("{wildcard*?}")
+        else:
+            segs.append(seg)
+    return "/".join(segs)
 
 
 def resolve_visits(builder) -> int:

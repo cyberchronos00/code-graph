@@ -1,6 +1,6 @@
 # TypeScript / JavaScript frameworks
 
-What NestJS, Next.js, Astro and Express-style routers add on top of the TypeScript plugin. They share
+What NestJS, Next.js, Astro, Express-style routers and React Router / Remix add on top of the TypeScript plugin. They share
 one program with the Nuxt layer, so aliases and types go through the checker. Plain JavaScript
 (CommonJS or ESM, with or without `jsconfig.json`) is indexed with `allowJs`. Samples:
 `examples/bookstore-nest`, `bookstore-next`, `bookstore-express`. Without a root tsconfig, the
@@ -46,7 +46,24 @@ Detect: `next` or `next.config.*`.
 | server actions | `'use server'` → `route:ACTION <file>#<fn>`. Client components CALLS them |
 | middleware | `middleware.ts` / `proxy.ts` `config.matcher` → USES_MIDDLEWARE (`resolved`). A regex or no matcher links every route (`heuristic`) |
 | clients | `fetch`, axios, `ky` (+ `ky.create({prefixUrl})`), `ofetch` / `$fetch` (+ `.create`), `useSWR(key)`, OpenAPI `this.request({path, method})` and `__request(OpenAPI, {method, url})`. Same-repo calls are MATCHES_ROUTE (`attrs.in_repo`) |
+| links | `<Link href>` from `next/link` → NAVIGATES_TO (`via: link`), beside `router.push` / `replace` |
 | config | static `basePath`; literal `rewrites` as `uri_variants`. `NEXT_PUBLIC_*` (and `VITE_`, `NUXT_PUBLIC_`, `REACT_APP_`, `EXPO_PUBLIC_`, `PUBLIC_`) is `attrs.public` |
+
+## React Router and Remix
+
+Detect: `react-router`, `react-router-dom`, `@react-router/*` or `@remix-run/*` in `package.json`, or
+`react-router.config.*`, or `app/routes.ts`. Framework mode when `@react-router/dev` or `@remix-run/dev`
+is present. A literal `appDirectory` in `react-router.config.*` is the app directory (default `app`).
+Sample: `examples/bookstore-react-router`.
+
+| feature | graph |
+|---|---|
+| code routers | `createBrowserRouter` / `createHashRouter` / `createMemoryRouter` / `useRoutes`, and `<Routes>` / `<Route>` (also `createRoutesFromElements`). Nested `children`, `index`, `path` joined with the parent. `page:react-router:<path>` (`attrs.route` in colon form, `uri`, `framework: react-router`, `router: code`, entry `ui_page`) RENDERS `element` / `Component`. `lazy: () => import(...)` resolves the module |
+| file routes | `app/routes.ts` helpers `route` / `index` / `layout` / `prefix`, and `flatRoutes()` file conventions (`books.$id`, `_index`, `$` splat, `_` pathless layouts, `($param)` optional segments, `[.]` escapes, `route.tsx` folders). `page:<file>` like Next.js, `attrs.router: framework`, page line 1 |
+| layouts | `root.tsx` and layout routes → `layout:` (`ui_global`). Pages USES_LAYOUT. Framework id `layout:<file>`. Code layout id `layout:react-router:<path>` |
+| loaders | Framework mode: `loader` → `route:GET <uri>`, `action` → `route:POST <uri>`, ROUTES_TO the function (entry `http_route`). The same action also gets `route:PUT` / `route:PATCH` / `route:DELETE` when a form or fetcher uses that method. The page CALLS them (`via: loader` / `action`). `clientLoader` / `clientAction` stay CALLS and are not routes. A code-router loader / action is a client CALLS only |
+| navigation | `<Link to>`, `<NavLink to>`, `<Navigate to>`, `navigate()` from `useNavigate()` (including an import or local alias), and `redirect()` → NAVIGATES_TO (`via` `link` / `navigate` / `redirect`). A relative `to` resolves against the route module that owns the call, including `..`. `navigate(-1)` is a history delta and is ignored. A template literal with a param becomes `{param}`. A miss stays in `nav_unresolved` (coverage). Next.js `<Link href>` uses the same JSX handling |
+| forms | `<Form>`, `fetcher.Form`, `fetcher.load` / `fetcher.submit`, `useSubmit()` → `http:<METHOD> <uri>` + HTTP_CALLS. The default method is GET. An omitted action is the current route URL. A relative action resolves the same way as `to`. `<Form method="delete">` (and put / patch) matches the action route. Framework mode matches these to the loader / action route (MATCHES_ROUTE, `attrs.in_repo`). A Next.js app that only depends on `react-router` and has no routes is not reported as React Router |
 
 ## Express, Koa, Fastify, Hono, Elysia
 
@@ -147,6 +164,10 @@ carries `branch` and `branch_line`.
   `SetMetadata` systems are not entry points.
 - Next `pageExtensions`, MDX-only pages, i18n `locales` and `generateStaticParams` are not
   applied. Regex middleware matchers are heuristic.
+- Remix v1 nested-folder routes and `remix.config.js` `routes()` are not read. Route-module
+  `meta`, `links`, `headers`, `shouldRevalidate` and `ErrorBoundary` are not nodes. Generated
+  `+types` and Vite options other than a literal `appDirectory` are not read. A component that
+  forwards `to` through props is not a link. TanStack Router and Expo Router are separate.
 - Express middleware order is known inside one file. Dynamic `require(path)` is not followed.
 - Untyped JavaScript resolves when the checker can see the object literal or the CommonJS
   export.

@@ -56,3 +56,15 @@ def test_readme_languages_appear_on_home_and_in_docs():
 
     assert missing_stacks == [], "\n".join(missing_stacks)
     assert missing_docs == [], "\n".join(missing_docs)
+
+
+def test_framework_lists_include_react_router():
+    """TypeScript framework lists name React Router and Remix."""
+    row = next(line for line in README.read_text(encoding="utf-8").splitlines()
+               if line.startswith("| ![TypeScript]"))
+    assert "React Router / Remix" in row
+    stacks = STACKS.read_text(encoding="utf-8")
+    assert "React Router" in stacks and "Remix" in stacks
+    page = (ROOT / "docs" / "ts-frameworks.md").read_text(encoding="utf-8")
+    assert "React Router and Remix" in page
+    assert "touches" not in page.lower()

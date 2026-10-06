@@ -44,7 +44,7 @@ server = MCPServer(
         "Code graph of a project: classes, functions, routes, commands, jobs, pages, DB tables/columns, connections, "
         "config/env keys, each edge with file:line evidence and a confidence (exact / resolved / heuristic). Stacks: "
         "For a broad question ('how does X work') start with `explore`: source, entry points, call paths and blast radius in one call. "
-        "Laravel, Django (django-ninja, DRF), FastAPI/Starlette, Flask, NestJS, Next.js, Express/Fastify/Koa/Hono, Nuxt/Vue, Flutter/Dart, Rust, C, C++. "
+        "Laravel, Django (django-ninja, DRF), FastAPI/Starlette, Flask, NestJS, Next.js, Express/Fastify/Koa/Hono/Elysia, Nuxt/Vue, React Router / Remix, Flutter/Dart, Rust, C, C++. "
         "Check the blast radius before editing: `reaches` lists everything that depends on a symbol/column/connection "
         "(grouped runtime / library / operator / UI / dev / gated), `impact` gives callers up to entry points, `siblings` "
         "finds parallel code that usually needs the same change, `writers` shows who writes a table, `routes` lists routes "

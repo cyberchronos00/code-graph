@@ -1,0 +1,5 @@
+{
+  "name": "next-rr-used",
+  "private": true,
+  "dependencies": { "next": "^15.0.0", "react": "^19.0.0", "react-router-dom": "^6.28.0" }
+}

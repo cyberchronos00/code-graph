@@ -358,6 +358,9 @@ class TypeScriptPlugin(LanguagePlugin):
         ctx.extractor_cfg = {"root": str(project.root), "tsconfig": "tsconfig.json", "kinds": [],
                              "src_dirs": ["src", "app"] + [d for d in LARAVEL_ASSET_DIRS if (project.root / d).is_dir()]
                              + cordova_www_dirs(project.root)}
+        from .react_router import extractor_cfg as rr_extractor_cfg
+        if (rr := rr_extractor_cfg(project.root)):
+            ctx.extractor_cfg["react_router"] = rr
         pkg_cfgs = sub_tsconfigs(project.root)
         if pkg_cfgs:
             ctx.extractor_cfg["package_tsconfigs"] = pkg_cfgs
@@ -633,6 +636,8 @@ class TypeScriptPlugin(LanguagePlugin):
         if ctx.synthesized_js:
             # no tsconfig / jsconfig: the file set comes from these directories (#136)
             st["program"] = {"synthesized": True, "reason": "no tsconfig.json / jsconfig.json", "src_dirs": ctx.synthesized_js}
+        from .react_router import apply_react_router
+        st["react_router"] = apply_react_router(builder, project, facts)
         from .nav import apply_nav
         st["navigation"] = apply_nav(builder, facts)
         return st
@@ -655,7 +660,7 @@ def facts_fingerprint(root, cfg: dict) -> str:
     of every project file outside node_modules (.nuxt and the project lockfile included, so `nuxi prepare` or a
     dependency bump invalidates it). Content, not mtime: a same-size edit with a restored mtime is a miss."""
     h = hashlib.sha256(f"cg-cache-v{fsutil.CACHE_VERSION}\n".encode())
-    for f in (EXTRACTOR, EXTRACTOR_DIR / "fw.mjs", EXTRACTOR_DIR / "package-lock.json"):
+    for f in (EXTRACTOR, EXTRACTOR_DIR / "fw.mjs", EXTRACTOR_DIR / "rr.mjs", EXTRACTOR_DIR / "package-lock.json"):
         h.update(f.read_bytes() if f.exists() else b"")
     # generated stand-in types live in a fresh temp dir per run; their content follows from the project files
     c = {k: v for k, v in cfg.items() if not (cfg.get("generated_types") and k in ("tsconfig", "components_dts"))}

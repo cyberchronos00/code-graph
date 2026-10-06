@@ -417,6 +417,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     finally:
         gst.db.close()
     stats["starters_seconds"] = round(time.time() - t_st, 2)
+    from .plugins.ts.react_router import reconcile_detection
+    reconcile_detection(project, plan, stats)
     stats["coverage"]["setup"] = {"frameworks": sorted(plan["frameworks"]), "presets": plan["presets"],
                                   "config": cfg.get("file")}
     if pl:       # per-target coverage: what each declared target builds, conditions left unevaluated

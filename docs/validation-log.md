@@ -1368,3 +1368,11 @@ Moved from the TS frameworks page. Shallow clones, `CODEGRAPH_NO_CACHE=1`, 8-cor
 
 Spot-checks were done by hand against the source (decorators, router files, file-system routes). The "found" counts
 come from the graph (`SELECT count(*) FROM nodes WHERE kind='route'` etc.).
+
+React Router / Remix (shallow clones, `CG_NO_CACHE=1`). Counts are pages, layouts, `route:` nodes and
+NAVIGATES_TO edges.
+
+| project (revision) | pages | layouts | routes | NAVIGATES_TO | notes |
+|---|---|---|---|---|---|
+| remix-run/react-router-templates `default/` (067adb3) | 1 | 1 | 0 | 0 | `app/routes.ts` is `index("routes/home.tsx")` inside a `root.tsx` layout. Home has no loader, so no `route:` node. `welcome.tsx` is a component, not a route |
+| remix-run/indie-stack (56abb93, archived Remix v2) | 8 | 2 | 12 | 11 | `flatRoutes` file conventions: `_index`, `notes.$noteId`, `notes._index` (so `notes.tsx` is a layout). 2 navigation sites stay unresolved. 5 form / fetcher calls match an in-repo loader or action |

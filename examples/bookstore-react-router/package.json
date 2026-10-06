@@ -1,0 +1,13 @@
+{
+  "name": "bookstore-react-router",
+  "private": true,
+  "description": "Fictional React Router v7 bookstore storefront used by code-graph's tests (not meant to run).",
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router": "^7.0.0"
+  },
+  "devDependencies": {
+    "@react-router/dev": "^7.0.0"
+  }
+}

@@ -59,6 +59,10 @@ def detect(root: Path) -> dict:
         fw["astro"] = {"version": deps.get("astro")}
     if "vue" in deps:
         fw["vue"] = {"version": deps.get("vue")}
+    from ..plugins.ts.react_router import is_react_router
+    if is_react_router(root):
+        ver = deps.get("react-router") or deps.get("react-router-dom") or deps.get("@remix-run/react")
+        fw["react-router"] = {"version": ver} if ver else {}
     from ..plugins.tsweb.common import SERVER_DEPS   # TS / JS servers (NestJS, Next.js, Express / Koa / Fastify / Hono ...)
     for name, pkgs in SERVER_DEPS.items():
         hit = [d for d in pkgs if d in deps]

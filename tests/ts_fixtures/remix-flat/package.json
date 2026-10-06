@@ -1,0 +1,6 @@
+{
+  "name": "remix-flat",
+  "private": true,
+  "dependencies": { "react": "^19.0.0", "@remix-run/react": "^2.15.0" },
+  "devDependencies": { "@remix-run/dev": "^2.15.0" }
+}
