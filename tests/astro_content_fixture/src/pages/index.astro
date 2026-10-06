@@ -1,0 +1,7 @@
+---
+import { getEntry } from 'astro:content'
+import { recentPosts } from '../lib/posts'
+const ada = await getEntry('authors', 'ada')
+const posts = await recentPosts()
+---
+<p>{ada?.data.name}: {posts.length}</p>

@@ -2879,8 +2879,30 @@ function recordAstro(node, cur, r, line) {
   const path = astroActionPath(callee)
   if (path) astroBag().push({ src: cur, file: r, line, fn: 'action', args, path })
   // only the astro:i18n / astro:content functions (`render` and `getEntry` are common names elsewhere)
-  if (callee && ts.isIdentifier(callee) && astroContentFn(callee.text) && FW.importSource && /^astro:(i18n|content)$/.test(FW.importSource(callee) || ''))
-    astroBag().push({ src: cur, file: r, line, fn: callee.text, args })
+  if (callee && ts.isIdentifier(callee) && astroContentFn(callee.text) && FW.importSource && /^astro:(i18n|content)$/.test(FW.importSource(callee) || '')) {
+    const col = astroCollectionOf(node.arguments[0])
+    astroBag().push({ src: cur, file: r, line, fn: callee.text, args, ...(col ? { collection: col } : {}) })
+  }
+}
+// collection named by a content call's first argument: 'blog', { collection: 'blog', id }, or an array of those
+function astroCollectionOf(arg) {
+  const a = arg && unwrap(arg)
+  if (!a) return null
+  if (ts.isStringLiteralLike(a)) return a.text
+  if (ts.isObjectLiteralExpression(a)) {
+    for (const p of a.properties) {
+      if (ts.isPropertyAssignment(p) && p.name && (ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name)) && p.name.text === 'collection') {
+        const v = unwrap(p.initializer)
+        return v && ts.isStringLiteralLike(v) ? v.text : null
+      }
+    }
+    return null
+  }
+  if (ts.isArrayLiteralExpression(a) && a.elements.length) {
+    const names = new Set(a.elements.map(e => ts.isSpreadElement(e) ? null : astroCollectionOf(e)))
+    return names.size === 1 && !names.has(null) ? [...names][0] : null
+  }
+  return null
 }
 function isParamBinding(id) {
   const sym = checker.getSymbolAtLocation(id); const d = sym && (sym.declarations || [])[0]

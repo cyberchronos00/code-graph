@@ -16,7 +16,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
   `trailingSlash`, `redirects` and `i18n` from `astro.config.*` affect page and route names;
   middleware is USES_MIDDLEWARE from every page and route; actions are `POST /_actions/<name>`
   routes called from scripts and forms; `Astro.redirect`, `rewrite` and `context.redirect` are
-  navigation.
+  navigation. `.md` / `.mdx` / `.html` files under `pages/` are pages, with YAML or TOML
+  frontmatter layouts, Markdown links and MDX imports; content collections from
+  `content.config.ts` (or the legacy `content/config.ts`) are `table` nodes read through
+  `getCollection` / `getEntry` / `getEntries` / `render`, with `reference()` relations.
 
 ### Fixed
 

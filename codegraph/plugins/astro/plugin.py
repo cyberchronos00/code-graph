@@ -11,6 +11,8 @@
   redirects    config entries become redirect pages; Astro.redirect, rewrite and context.redirect are navigation
   middleware   onRequest is USES_MIDDLEWARE from every page and route, in sequence order
   actions      POST /_actions/<name> routes, plus CALLS from actions.x() and <form action={actions.x}>
+  markdown     .md / .mdx / .html pages under pages/ (frontmatter layout is RENDERS; MDX imports and calls)
+  collections  content.config.ts (or legacy content/config.ts) -> table nodes; getCollection / getEntry / render read them
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ from ..nuxt.plugin import _JS
 from ..tsweb.common import HTTP_VERBS, add_route, finish, fw_facts, merge_extractor_cfg, register, pkg_deps
 
 CONFIG_FILES = ("astro.config.mjs", "astro.config.js", "astro.config.ts", "astro.config.mts", "astro.config.cjs")
-_PAGE_EXT = (".astro", ".mts", ".mjs", ".ts", ".js")
+_PAGE_EXT = (".markdown", ".mdown", ".mdwn", ".mkdn", ".mdx", ".astro", ".html", ".mts", ".mjs", ".mkd", ".md", ".ts", ".js")
 _GSP = re.compile(r"export\s+(?:async\s+)?function\s+getStaticPaths\b|export\s+const\s+getStaticPaths\b")
 _FM_OPEN = re.compile(r"\ufeff?\s*---[ \t]*\r?\n")
 _INLINE = re.compile(r"<script\b([^>]*)>", re.I)
@@ -424,6 +426,9 @@ class AstroPlugin(FrameworkPlugin):
             elif fn == "url" and args and isinstance(args[0], str) and args[0].startswith("/"):
                 sites.append({"src": call.get("src"), "file": call.get("file"), "line": call.get("line"), "via": "url",
                               "locs": [{"kind": "path", "value": args[0], "conf": "exact"}]})
+        # Markdown pages before the base prefix (their links are sites too) and before middleware (it covers them)
+        from .content import contribute_content
+        contribute_content(project, b, ac, calls, sites, st)
         if base:
             for site in sites:
                 for loc in site.get("locs") or []:

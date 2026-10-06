@@ -94,6 +94,8 @@ and routes carry `base`.
 | functions | functions in a `.astro` file are nodes; the page CALLS `getStaticPaths` |
 | getStaticPaths | `attrs.get_static_paths` when the frontmatter exports it; the function is not evaluated |
 | is:inline | `<script is:inline>` sets `attrs.inline_scripts` to the count |
+| markdown pages | `.md` / `.mdx` / `.html` under `pages/` → page. Frontmatter (`---` YAML or `+++` TOML) `layout` → RENDERS. Root-relative Markdown links → NAVIGATES_TO. MDX imports, `<X />` and calls of imported functions |
+| collections | `content.config.ts` / legacy `content/config.ts` → `table` nodes with `attrs.collection`, loader, base and entries. `getCollection` / `getEntry` / `getEntries` (imported from `astro:content`) → READS_TABLE from the calling function or page; `render` → READS_TABLE when the file reads one collection. `reference()` → HAS_RELATION |
 
 ## Stored fields
 
@@ -126,6 +128,8 @@ carries `branch` and `branch_line`.
 - Express middleware order is known inside one file. Dynamic `require(path)` is not followed.
 - Untyped JavaScript resolves when the checker can see the object literal or the CommonJS
   export.
-- Astro `.md` / `.mdx` pages and content collections are not read, and `.svelte` islands are not
-  resolved. Computed config values, `injectRoute` from integrations, and i18n `domains` /
-  `fallback` are not read.
+- Astro `.svelte` islands are not resolved. MDX expressions resolve by imported name (`resolved`),
+  not by the type checker, and only relative or root-relative imports. Content reads need a literal
+  collection name (a `reference()` value passed to `getEntry` is not followed); relative Markdown
+  links, Markdoc, custom loaders' entries and MDX inside collection entries are not read. Computed
+  config values, `injectRoute` from integrations, and i18n `domains` / `fallback` are not read.
