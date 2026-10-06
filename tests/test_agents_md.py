@@ -14,4 +14,4 @@ def test_agents_md_matches_package_source():
 def test_block_wraps_text_with_markers():
     b = agent_rules.block()
     assert b.startswith(agent_rules.BEGIN_MARK) and b.rstrip().endswith(agent_rules.END_MARK)
-    assert agent_rules.TEXT in b
+    assert agent_rules.project_text() in b

@@ -20,18 +20,18 @@ MCP_ENTRY = {"command": "cg-mcp", "args": ["--db", "out/graph.db"]}
 _CORE = re.compile(re.escape(AR.BEGIN_MARK) + r".*?" + re.escape(AR.END_MARK), re.S)
 
 
-def _core_text() -> str:
+def _core_text(body: str | None = None) -> str:
     """The managed block without a trailing newline (BEGIN … END)."""
-    return AR.block().rstrip("\n")
+    return AR.block(body).rstrip("\n")
 
 
-def plan_text(path: Path, remove: bool) -> dict:
+def plan_text(path: Path, remove: bool, body: str | None = None) -> dict:
     """Decide the new content of one guidance file. action: insert | update | remove | noop.
     Everything outside the marked block is preserved; a re-run replaces the block in place and
     remove restores the bytes the matching insert added (for newline-terminated files)."""
     old = path.read_text(encoding="utf-8") if path.exists() else ""
     m = _CORE.search(old)
-    core = _core_text()
+    core = _core_text(body)
     if remove:
         if not m:
             return {"path": str(path), "kind": "text", "action": "noop", "old": old, "new": old}
@@ -46,6 +46,8 @@ def plan_text(path: Path, remove: bool) -> dict:
         return {"path": str(path), "kind": "text", "action": "remove", "old": old, "new": new}
     if m:
         new = old[:m.start()] + core + old[m.end():]
+        if new == old:                                   # a re-run with nothing to change
+            return {"path": str(path), "kind": "text", "action": "noop", "old": old, "new": old, "current": True}
         return {"path": str(path), "kind": "text", "action": "update", "old": old, "new": new}
     if not old:
         new = core + "\n"
@@ -91,6 +93,8 @@ def plan_mcp(path: Path, remove: bool) -> dict:
 
 def preview(plan: dict) -> str:
     """A unified diff of one plan (the exact proposed change), or a one-line note for noop/error."""
+    if plan["action"] == "noop" and plan.get("current"):
+        return f"{plan['path']}: no change (block up to date)"
     if plan["action"] == "noop":
         return f"{plan['path']}: no change (block not present)" if plan["kind"] == "text" \
             else f"{plan['path']}: no change (no cg entry)"
@@ -103,7 +107,14 @@ def preview(plan: dict) -> str:
 
 
 def build_plans(root: Path, targets: list[str], mcp: bool, mcp_file: str | None, remove: bool) -> list[dict]:
-    plans = [plan_text(root / TARGETS[t], remove) for t in targets]
+    # Primary is the first selected target in TARGETS order; it gets the full block.
+    # Every other selected file gets a pointer inside the same markers.
+    ordered = [t for t in TARGETS if t in targets]
+    primary = ordered[0] if ordered else None
+    plans = []
+    for t in targets:
+        body = None if t == primary else AR.pointer_text(TARGETS[primary], t)
+        plans.append(plan_text(root / TARGETS[t], remove, body))
     if mcp:
         plans.append(plan_mcp(Path(mcp_file) if mcp_file else root / DEFAULT_MCP_FILE, remove))
     return plans

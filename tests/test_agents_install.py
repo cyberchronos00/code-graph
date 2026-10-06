@@ -2,6 +2,8 @@
 and the cg MCP entry, with pre-existing content preserved byte-for-byte."""
 import json
 
+import pytest
+
 from codegraph import agents, agent_rules
 
 
@@ -121,3 +123,118 @@ def test_default_targets_detect_existing(tmp_path):
 def test_nothing_selected_returns_2(tmp_path):
     rc = agents.run("install", root=str(tmp_path), out=lambda *a: None)
     assert rc == 2
+
+
+def _marked_bodies(root):
+    bodies = []
+    for name in agents.TARGETS.values():
+        p = root / name
+        if not p.exists():
+            continue
+        text = p.read_text()
+        start = text.index(agent_rules.BEGIN_MARK) + len(agent_rules.BEGIN_MARK)
+        end = text.index(agent_rules.END_MARK)
+        bodies.append(text[start:end])
+    return bodies
+
+
+def test_all_writes_one_full_block_and_two_pointers(tmp_path):
+    lines = []
+    rc = agents.run("install", root=str(tmp_path), all_targets=True, dry_run=True, out=lines.append)
+    assert rc == 0
+    out = "\n".join(lines)
+    assert out.count("# Reading this codebase with cg") == 1
+    assert out.count("[insert]") == 3
+    assert "@AGENTS.md" in out
+    agents.run("install", root=str(tmp_path), all_targets=True, assume_yes=True, out=lambda *a: None)
+    inside = "".join(_marked_bodies(tmp_path))
+    assert len(inside) < 1600
+    assert (tmp_path / "AGENTS.md").read_text().count("# Reading this codebase with cg") == 1
+    assert "# Reading this codebase with cg" not in (tmp_path / "CLAUDE.md").read_text()
+    assert "# Reading this codebase with cg" not in (tmp_path / ".cursor/rules/cg.mdc").read_text()
+
+
+def test_full_block_pins_pypi_not_editable():
+    from codegraph import __version__
+
+    major, minor, *_rest = __version__.split(".")
+    expected = f"pip install 'cg-code-graph>={major}.{minor}'"
+    body = agent_rules.project_text()
+    assert expected in body
+    assert "cg-mcp" in body
+    assert "pip install -e" not in body
+    assert len(body) <= 1000
+
+
+def test_claude_and_cursor_pointers_name_agents(tmp_path):
+    agents.run("install", root=str(tmp_path), all_targets=True, assume_yes=True, out=lambda *a: None)
+    claude = (tmp_path / "CLAUDE.md").read_text()
+    cursor = (tmp_path / ".cursor/rules/cg.mdc").read_text()
+    assert "@AGENTS.md" in claude
+    assert "AGENTS.md" in cursor
+    assert "@AGENTS.md" not in cursor
+
+
+def test_all_migrates_stale_full_block_to_pointer(tmp_path):
+    stale = agent_rules.BEGIN_MARK + "\nOLD STALE RULES\n" + agent_rules.END_MARK
+    f = _write(tmp_path / "CLAUDE.md", "X-TOP\n\n" + stale + "\n\nY-BOTTOM\n")
+    lines = []
+    rc = agents.run("install", root=str(tmp_path), all_targets=True, assume_yes=True, out=lines.append)
+    assert rc == 0
+    joined = "\n".join(lines)
+    assert "CLAUDE.md" in joined and "[update]" in joined
+    out = f.read_text()
+    assert "OLD STALE RULES" not in out
+    assert "@AGENTS.md" in out
+    assert out.count(agent_rules.BEGIN_MARK) == 1
+    assert out.startswith("X-TOP\n\n") and out.endswith("\n\nY-BOTTOM\n")
+    for name in agents.TARGETS.values():
+        assert (tmp_path / name).read_text().count(agent_rules.BEGIN_MARK) == 1
+
+
+def test_single_target_is_full_block_pair_names_primary(tmp_path):
+    agents.run("install", root=str(tmp_path), targets=["claude"], assume_yes=True, out=lambda *a: None)
+    assert "# Reading this codebase with cg" in (tmp_path / "CLAUDE.md").read_text()
+    agents.run("install", root=str(tmp_path), targets=["claude", "cursor"], assume_yes=True,
+               out=lambda *a: None)
+    assert "# Reading this codebase with cg" in (tmp_path / "CLAUDE.md").read_text()
+    cursor = (tmp_path / ".cursor/rules/cg.mdc").read_text()
+    assert "CLAUDE.md" in cursor
+    assert "# Reading this codebase with cg" not in cursor
+
+
+def test_remove_after_all_restores_bytes(tmp_path):
+    orig_a = "# keep agents\n"
+    orig_c = "# keep claude\n"
+    _write(tmp_path / "AGENTS.md", orig_a)
+    _write(tmp_path / "CLAUDE.md", orig_c)
+    agents.run("install", root=str(tmp_path), all_targets=True, assume_yes=True, out=lambda *a: None)
+    created = tmp_path / ".cursor/rules/cg.mdc"
+    assert agent_rules.BEGIN_MARK in created.read_text()
+    agents.run("remove", root=str(tmp_path), all_targets=True, assume_yes=True, out=lambda *a: None)
+    assert (tmp_path / "AGENTS.md").read_text() == orig_a
+    assert (tmp_path / "CLAUDE.md").read_text() == orig_c
+    assert agent_rules.BEGIN_MARK not in created.read_text()
+
+
+def test_rerun_is_a_noop(tmp_path):
+    agents.run("install", root=str(tmp_path), all_targets=True, assume_yes=True, out=lambda *a: None)
+    before = {n: (tmp_path / n).read_text() for n in agents.TARGETS.values()}
+    lines = []
+    rc = agents.run("install", root=str(tmp_path), all_targets=True, dry_run=True, out=lines.append)
+    assert rc == 0
+    assert sum("no change (block up to date)" in ln for ln in lines) == 3
+    assert not any("[update]" in ln for ln in lines)
+    lines = []
+    assert agents.run("install", root=str(tmp_path), all_targets=True, out=lines.append,
+                      input_fn=lambda *_: pytest.fail("prompted on a no-op re-run")) == 0
+    assert "nothing to do" in lines
+    assert {n: (tmp_path / n).read_text() for n in agents.TARGETS.values()} == before
+
+
+@pytest.mark.parametrize("version,expected", [("0.14.0", "cg-code-graph>=0.14"), ("1.2.3rc1", "cg-code-graph>=1.2"),
+                                              ("0.15.0.dev2", "cg-code-graph>=0.15"), ("10.20", "cg-code-graph>=10.20")])
+def test_pin_is_major_minor(monkeypatch, version, expected):
+    import codegraph
+    monkeypatch.setattr(codegraph, "__version__", version)
+    assert agent_rules.pin() == expected

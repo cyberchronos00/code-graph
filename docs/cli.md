@@ -226,7 +226,9 @@ At most `--max-targets` symbols are walked (default 200, `0` for no cap). The te
 
 ## agents
 
-`install` and `update` write one block between `<!-- BEGIN cg agent rules … -->` and `<!-- END cg agent rules -->`. Bytes outside it stay. `remove` deletes the block. `show` and `--dry-run` print the diff only. Otherwise cg prints the diff and asks `apply N change(s)? [y/N]`; `--yes` skips that. A second run replaces the block in place.
+`install` and `update` write one block between `<!-- BEGIN cg agent rules … -->` and `<!-- END cg agent rules -->`. Bytes outside it stay. `remove` deletes the block. `show` and `--dry-run` print the diff only. Otherwise cg prints the diff and asks `apply N change(s)? [y/N]`; `--yes` skips that. A second run replaces the block in place; when nothing would change it reports `no change (block up to date)` and writes nothing.
+
+The first selected file in the table order (`AGENTS.md`, else `CLAUDE.md`, else the Cursor rule) gets the full block. The others get a one-line pointer inside the same markers. The block pins `pip install 'cg-code-graph>=MAJOR.MINOR'` (the published package). Re-running converts an old full copy into a pointer when that file is no longer primary.
 
 | `--target` | file |
 |---|---|

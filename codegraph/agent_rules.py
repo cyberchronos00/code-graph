@@ -1,8 +1,8 @@
 """Canonical "how to read this codebase with cg" guidance.
 
-Single source for this repo's AGENTS.md and for the blocks that `cg agents` installs into a
-project's AGENTS.md / CLAUDE.md / Cursor rules, so the wording never drifts. TEXT is the body;
-wrap it between BEGIN_MARK and END_MARK to get a block that can be replaced in place."""
+TEXT is this repository's contributor guide (`document()` writes AGENTS.md). PROJECT_TEXT
+(`project_text()`) is the short block `cg agents` installs into an application repo. Pointers
+for extra targets use the same markers so a later run can swap a full block for a pointer."""
 
 BEGIN_MARK = "<!-- BEGIN cg agent rules (managed by `cg agents`; edit cg, not here) -->"
 END_MARK = "<!-- END cg agent rules -->"
@@ -52,6 +52,48 @@ def document() -> str:
     return TEXT
 
 
-def block() -> str:
-    """The marked block `cg agents` writes into a project file; replaced in place on re-run."""
-    return BEGIN_MARK + "\n" + TEXT + END_MARK + "\n"
+def pin() -> str:
+    """Published package floor: ``cg-code-graph>=MAJOR.MINOR`` from ``codegraph.__version__``."""
+    import re
+
+    from . import __version__
+
+    m = re.match(r"(\d+)\.(\d+)", __version__)
+    return f"cg-code-graph>={m.group(1)}.{m.group(2)}" if m else "cg-code-graph"
+
+
+def project_text() -> str:
+    """Short guidance installed into application repos (at most 1,000 characters)."""
+    p = pin()
+    return f"""\
+# Reading this codebase with cg
+
+`cg` indexes this repo into a code graph. Look code up by symbol instead of opening whole files.
+
+    pip install '{p}'                       # provides `cg` and `cg-mcp`
+    cg index . --db out/graph.db              # re-run after large changes
+    cg search <name> --db out/graph.db        # find a symbol: file:line
+    cg snippet <symbol> --db out/graph.db     # just its source, numbered
+    cg impact <symbol> --db out/graph.db      # callers up to routes / jobs / pages
+    cg affected --base main --db out/graph.db # tests and entry points a change reaches
+
+`<symbol>` is a name, an FQN, `Class.method` or a node id. The MCP server (`cg-mcp --db out/graph.db`)
+offers the same queries as tools. `cg <command> -h` lists flags; pipe long output through `head`.
+"""
+
+
+def pointer_text(primary_file: str, target: str) -> str:
+    """One- or two-line pointer (at most 200 characters) at a non-primary target."""
+    if target == "claude" and primary_file == "AGENTS.md":
+        return "cg (code graph) guidance: @AGENTS.md\n"
+    return (
+        f"cg (code graph) guidance is in {primary_file}: "
+        f"cg search / snippet / impact <symbol> --db out/graph.db.\n"
+    )
+
+
+def block(body: str | None = None) -> str:
+    """Markers around ``body`` (default ``project_text()``); replaced in place on re-run."""
+    if body is None:
+        body = project_text()
+    return BEGIN_MARK + "\n" + body + END_MARK + "\n"

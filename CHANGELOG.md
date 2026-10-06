@@ -27,6 +27,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
   files for a runner. MCP tool `affected`. A file or module spec in `cg tests` covers every
   symbol defined in that file.
 
+### Changed
+
+- `cg agents install` (#155): the block pins the published package at the installed major.minor
+  (`pip install 'cg-code-graph>=0.14'`) instead of `pip install -e .`, is much shorter (at most
+  1,000 characters), and only the first selected file gets it; the others get a one-line pointer
+  (`@AGENTS.md` in `CLAUDE.md`). Re-running turns an old full copy into a pointer; a re-run with
+  nothing to change writes nothing.
+
 ### Fixed
 
 - TypeScript: a `src/` (or `app/`, `lib/`, `web/`) `tsconfig.json` without its own `package.json`
