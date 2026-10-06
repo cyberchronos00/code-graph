@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-07
+
 ### Fixed
 
 - Android bridge receivers in `.java` files are scanned again after the Java plugin indexes those files. Capacitor `@CapacitorPlugin` and React Native `@ReactMethod` handlers link to the Java method node.
@@ -1513,7 +1515,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/cyberchronos00/code-graph/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/cyberchronos00/code-graph/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/cyberchronos00/code-graph/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/cyberchronos00/code-graph/compare/v0.14.0...v0.15.0
