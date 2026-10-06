@@ -34,7 +34,7 @@ KINDS = {
     "nuxt_unevaluable_import_dirs": ("handler", "typescript",
                                      "Nuxt imports.dirs entry that is not a literal path or glob"),
     "vue_unresolved_navigation": ("route", "typescript",
-                                  "Nuxt / Vue navigation target that matches no page or several pages"),
+                                  "Nuxt / Vue / Astro navigation target that matches no page or several pages"),
 }
 
 

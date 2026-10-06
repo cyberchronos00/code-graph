@@ -213,6 +213,9 @@ def test_coverage_counts():
     assert ts["excluded"] == 1
     assert ts["files_complete"]
     assert "astro.config.mjs" in ts.get("paths", {}).get("excluded", [])
+    # `<a href={jaHome}>` is a variable: unresolved navigation, under a label that names Astro
+    nav = [b for b in built()["stats"]["coverage"]["blind_spots"] if b["kind"] == "vue_unresolved_navigation"]
+    assert nav and "Astro" in json.dumps(nav[0])
 
 
 ROOT_PROJECT = {
