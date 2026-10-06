@@ -3,7 +3,9 @@
 What NestJS, Next.js and Express-style routers add on top of the TypeScript plugin. They share
 one program with the Nuxt layer, so aliases and types go through the checker. Plain JavaScript
 (CommonJS or ESM, with or without `jsconfig.json`) is indexed with `allowJs`. Samples:
-`examples/bookstore-nest`, `bookstore-next`, `bookstore-express`.
+`examples/bookstore-nest`, `bookstore-next`, `bookstore-express`. Without a root tsconfig, the
+program is the per-package `tsconfig.json` next to a `package.json` one or two levels down, plus
+a `tsconfig.json` in `src/`, `app/`, `lib/` or `web/` without one.
 
 Several layers can run on one project. The shared post-pass (env, ORM tables, in-repo links)
 runs once, after the last of them. Extractor facts are described values; the Python plugins

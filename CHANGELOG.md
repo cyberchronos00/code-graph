@@ -27,6 +27,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
   files for a runner. MCP tool `affected`. A file or module spec in `cg tests` covers every
   symbol defined in that file.
 
+### Fixed
+
+- TypeScript: a `src/` (or `app/`, `lib/`, `web/`) `tsconfig.json` without its own `package.json`
+  is indexed when the root has a `package.json` but no `tsconfig.json` / `jsconfig.json`; per-package
+  configs one or two levels down are still taken (#153).
+
 ## [0.13.0] - 2026-10-05
 
 ### Added

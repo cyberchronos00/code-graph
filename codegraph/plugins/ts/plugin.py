@@ -107,6 +107,8 @@ LARAVEL_ASSET_DIRS = ("resources/js", "resources/ts", "resources/assets/js", "re
 PKG_SKIP = {"node_modules", "dist", "build", "out", "coverage", "vendor", "Pods", "DerivedData", "example", "examples",
             "e2e", "test", "tests", "__tests__", "fixtures", "templates", "android-template", "ios-pods-template",
             "ios-spm-template"}
+# first-level dirs whose tsconfig.json is a program even without package.json (#153)
+SRC_TSCONFIG_DIRS = ("src", "app", "lib", "web")
 
 
 # a PHP / Python backend at the root: its frontend directory is indexed on its own and combined with `cg link`
@@ -129,7 +131,8 @@ def sub_tsconfigs(root: Path) -> list[str]:
 def package_tsconfigs(root: Path, need_package_json: bool = True) -> list[str]:
     """A monorepo without a root tsconfig.json / jsconfig.json (lerna / nx / npm workspaces with per-package configs,
     e.g. Capacitor and its plugins): the tsconfig.json of each package (a directory holding package.json and
-    tsconfig.json) one or two levels down. The extractor indexes them as one program, like a solution config."""
+    tsconfig.json) one or two levels down, plus a tsconfig.json in a first-level src/, app/, lib/ or web/ without
+    its own package.json. The extractor indexes them as one program, like a solution config."""
     root = Path(root)
     if (root / "tsconfig.json").is_file() or (root / "jsconfig.json").is_file():
         return []
@@ -146,8 +149,9 @@ def package_tsconfigs(root: Path, need_package_json: bool = True) -> list[str]:
             return []
 
     for d in subdirs(root):
-        if pkg(d):
-            out.append(d)
+        src_cfg = need_package_json and d.name in SRC_TSCONFIG_DIRS and (d / "tsconfig.json").is_file()
+        if pkg(d) or src_cfg:
+            out.append(d)                                 # src/ covers its subdirs; do not scan deeper
         elif not (d / "package.json").is_file():          # packages/<name>, libs/<name>
             out += [x for x in subdirs(d) if pkg(x)]
     return [str((d / "tsconfig.json").relative_to(root)) for d in out][:200]
