@@ -13,11 +13,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
 from sample import build, PLANS, EXTRACTOR_DEPS, needs_php  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph import query as Q, routes as R, plans as P  # noqa: E402
-from codegraph.concepts import resolutions, render_resolutions  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import query as Q, routes as R, plans as P  # noqa: E402
+from cg_code_graph.concepts import resolutions, render_resolutions  # noqa: E402
 
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 _S: dict = {}
 
 
@@ -25,7 +25,7 @@ def db(name: str) -> GraphStore:
     if name in ("api", "combined"):
         return GraphStore(build()[name])
     if name not in _S:
-        from codegraph.indexer import index_project
+        from cg_code_graph.indexer import index_project
         root = {"nest": ROOT / "examples" / "bookstore-nest", "express": ROOT / "examples" / "bookstore-express",
                 "django": ROOT / "examples" / "bookstore-django", "access": ROOT / "tests" / "django_access_fixture"}[name]
         p = Path(tempfile.mkdtemp(prefix="codegraph-routes-")) / f"{name}.db"
@@ -171,7 +171,7 @@ def test_writers_impact_path_empty_explain():
 
 def test_cli_path_exit_code_and_message():
     d = build()["api"]
-    p = subprocess.run([sys.executable, "-m", "codegraph.cli", "path", "SalesReportService::remove", "ReportController::destroy",
+    p = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "path", "SalesReportService::remove", "ReportController::destroy",
                         "--db", str(d)], cwd=ROOT, capture_output=True, text=True)
     assert p.returncode == 1 and p.stdout.startswith("no path")
 

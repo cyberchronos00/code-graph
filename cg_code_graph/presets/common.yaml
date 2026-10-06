@@ -1,0 +1,66 @@
+# Built-in knowledge every project gets, before the language and framework presets and the project's .cg.yaml.
+# Format (every preset file): name, kind (common | language | framework), docs, then any of the sections below.
+#   auth / secret     guard names that count as user auth / as a shared-secret or signature check (`cg routes`)
+#   skip_dirs         directory names that never hold project source: dependencies, build output, caches, tool state
+# Lists are merged in order common -> language -> framework -> .cg.yaml -> command-line flags.
+name: common
+kind: common
+docs: docs/configuration.md#presets
+auth:
+  # Name-based fallback for every stack: matched against the guard name split into lower-case word tokens joined by
+  # "_" (ApiKeyGuard -> api_key_guard, auth:api -> auth_api, IsAuthenticated -> is_authenticated), so
+  # AuditLogInterceptor does not count as "login".
+  token_pattern: '(^|_)(auth|authn|authz|authed|authenticate[ds]?|authentication|authori[sz](e[ds]?|ation|er)|login|logged|jwt|token|session|sanctum|passport|bearer|api_key|permissions?|permission_[a-z]+|admin|staff|superuser|can|roles?|acl|verified|protected|protect|require_user|current_user|oauth[a-z0-9]*|oidc|saml|clerk|firebase_auth)(_|$)'
+secret:
+  # shared-secret / signature verification (webhooks, signed URLs): the caller proves it knows a secret, not who it is
+  token_pattern: '(^|_)(signed|signature|signatures|hmac|secret|webhook_secret)(_|$)|(^|_)verify(_[a-z0-9]+)*_webhooks?(_|$)|(^|_)webhooks?(_[a-z0-9]+)*_(verify|verified|verification|signature|secret|hmac)(_|$)'
+# skipped by every directory walk (language plugins, extractors, the coverage scan)
+skip_dirs: [.git, node_modules, __pycache__]
+# the coverage scan (`cg coverage`: which source files exist) also skips these dependency / build / IDE directories
+scan_skip_dirs: [vendor, target, build, dist, .codegraph, .dart_tool, .venv, venv, .tox, .mypy_cache, .pytest_cache, .next, .output,
+                 out, .gradle, .idea, Pods, .build, .swiftpm, DerivedData, Carthage]
+# generated files (cg_code_graph/core/generated.py): kept out of the graph by default and listed by `cg coverage`
+generated:
+  # framework build output directories (names at any depth) -> reason
+  build_dirs:
+    .nuxt: Nuxt build output (.nuxt/)
+    .output: Nitro / Nuxt build output (.output/)
+    .next: Next.js build output (.next/)
+    .svelte-kit: SvelteKit build output (.svelte-kit/)
+    .docusaurus: Docusaurus build output (.docusaurus/)
+    dist: build output (dist/)
+    build: build output (build/)
+  # paths written by tools (gitignore-style globs) -> reason
+  paths:
+    "**/Flutter/ephemeral/**": Flutter tool output (ephemeral/)
+    "**/flutter/ephemeral/**": Flutter tool output (ephemeral/)
+  # file names written by code generators (globs on the file name) -> generator
+  files:
+    "*.g.dart": build_runner output (*.g.dart)
+    "*.freezed.dart": freezed output (*.freezed.dart)
+    "*.gr.dart": auto_route output (*.gr.dart)
+    "*.mocks.dart": mockito output (*.mocks.dart)
+    "*.config.dart": injectable output (*.config.dart)
+    "generated_plugin_registrant.*": Flutter plugin registrant
+    "GeneratedPluginRegistrant.*": Flutter plugin registrant
+    "*.pb.dart": protoc output (Dart)
+    "*.pbenum.dart": protoc output (Dart)
+    "*.pbjson.dart": protoc output (Dart)
+    "*.pbgrpc.dart": protoc output (Dart)
+    "*.pbserver.dart": protoc output (Dart)
+    "*_pb2.py": protoc output (Python)
+    "*_pb2_grpc.py": protoc output (Python)
+    "*.pb.go": protoc output (Go)
+    "*_grpc.pb.go": protoc output (Go)
+    "*_pb.ts": protoc output (TypeScript)
+    "*_pb.js": protoc output (JavaScript)
+    "*_grpc_pb.ts": protoc output (TypeScript)
+    "*_grpc_pb.js": protoc output (JavaScript)
+    "*.pb.swift": protoc output (Swift)
+    "*.grpc.swift": protoc output (Swift)
+    "R.generated.swift": R.swift output
+    "*.pb.cc": protoc output (C++)
+    "*.pb.h": protoc output (C++)
+    "*.grpc.pb.cc": protoc output (C++)
+    "*.grpc.pb.h": protoc output (C++)
+    "*.pb.rs": protoc output (Rust)

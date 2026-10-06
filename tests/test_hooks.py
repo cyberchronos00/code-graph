@@ -6,8 +6,8 @@ import sys
 import time
 from pathlib import Path
 
-from codegraph import hooks
-from codegraph.core.store import GraphStore
+from cg_code_graph import hooks
+from cg_code_graph.core.store import GraphStore
 
 BEGIN = hooks.BEGIN
 
@@ -184,17 +184,17 @@ def test_codegraph_no_hooks_and_checkout_skip(tmp_path):
     hook = _hooks(repo) / "post-commit"
     env = os.environ.copy()
     env["PATH"] = str(bindir) + os.pathsep + "/usr/bin:/bin"
-    env.pop("CODEGRAPH_NO_HOOKS", None)
+    env.pop("CG_NO_HOOKS", None)
     subprocess.run(["sh", str(hook)], check=True, env=env, timeout=20)
     assert "RAN" in _wait_for(marker)
     marker.unlink()
-    env["CODEGRAPH_NO_HOOKS"] = "1"
+    env["CG_NO_HOOKS"] = "1"
     subprocess.run(["sh", str(hook)], check=True, env=env, timeout=20)
     time.sleep(0.3)
     assert not marker.exists()
 
     checkout = _hooks(repo) / "post-checkout"
-    env.pop("CODEGRAPH_NO_HOOKS")
+    env.pop("CG_NO_HOOKS")
     subprocess.run(["sh", str(checkout), "abc", "abc"], check=True, env=env, timeout=20)
     time.sleep(0.3)
     assert not marker.exists()
@@ -206,7 +206,7 @@ def test_refresh_skip_reindex_refuse_and_pending(tmp_path):
     repo = tmp_path / "repo"
     _init(repo)
     db = tmp_path / "graph.db"
-    cmd = [sys.executable, "-m", "codegraph.cli", "refresh", str(repo), "--db", str(db)]
+    cmd = [sys.executable, "-m", "cg_code_graph.cli", "refresh", str(repo), "--db", str(db)]
     first = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     assert first.returncode == 0, first.stderr + first.stdout
     assert db.is_file()
@@ -245,7 +245,7 @@ def test_refresh_skip_reindex_refuse_and_pending(tmp_path):
     try:
         t0 = time.monotonic()
         pending = subprocess.run(
-            [sys.executable, "-m", "codegraph.cli", "refresh", str(repo), "--db", str(fresh)],
+            [sys.executable, "-m", "cg_code_graph.cli", "refresh", str(repo), "--db", str(fresh)],
             capture_output=True, text=True, timeout=20)
         assert time.monotonic() - t0 < 20
         assert pending.returncode == 0
@@ -393,8 +393,67 @@ def test_recorded_interpreter_wins_over_cg_on_path(tmp_path):
               interpreter=str(py), out=lambda *a: None)
     env = os.environ.copy()
     env["PATH"] = str(bindir) + os.pathsep + "/usr/bin:/bin"
-    env.pop("CODEGRAPH_NO_HOOKS", None)
+    env.pop("CG_NO_HOOKS", None)
     subprocess.run(["sh", str(_hooks(repo) / "post-commit")], check=True, env=env, timeout=20)
     text = _wait_for(marker)
-    assert text.startswith("RECORDED -m codegraph.cli refresh ")
+    assert text.startswith("RECORDED -m cg_code_graph.cli refresh ")
     assert "PATH-CG" not in text
+
+
+def test_hook_prefers_cg_beside_python_and_names_both_switches(tmp_path):
+    py = tmp_path / "bin" / "python"
+    py.parent.mkdir()
+    marker = tmp_path / "ran"
+    py.write_text(f"#!/bin/sh\necho PY >> {marker}\n", encoding="utf-8")
+    cg = py.parent / "cg"
+    cg.write_text(f"#!/bin/sh\necho CG \"$@\" >> {marker}\n", encoding="utf-8")
+    os.chmod(py, 0o755)
+    os.chmod(cg, 0o755)
+    text = hooks._block_text("post-commit", str(tmp_path / "root"), str(tmp_path / "g.db"), str(py))
+    assert "${CG_NO_HOOKS:-${CODEGRAPH_NO_HOOKS:-}}" in text
+    assert "cg_code_graph.cli" in text
+    assert hooks._sh_quote(str(cg)) in text
+    repo = tmp_path / "repo"
+    _init(repo)
+    hooks.run("install", root=str(repo), db=str(tmp_path / "g.db"), assume_yes=True,
+              interpreter=str(py), out=lambda *a: None)
+    env = os.environ.copy()
+    env.pop("CG_NO_HOOKS", None)
+    env.pop("CODEGRAPH_NO_HOOKS", None)
+    subprocess.run(["sh", str(_hooks(repo) / "post-commit")], check=True, env=env, timeout=20)
+    assert _wait_for(marker).startswith("CG refresh ")
+
+
+def test_outdated_codegraph_hook_is_reported_and_rewritten(tmp_path, monkeypatch):
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    _init(repo)
+    old = "-m " + "codegraph" + ".cli"
+    block = (
+        f"{hooks.BEGIN}\n"
+        f"# cg-root: {repo}\n"
+        f"# cg-db: {tmp_path / 'g.db'}\n"
+        "# cg-hook: post-commit\n"
+        'if [ "${CG_NO_HOOKS:-}" != 1 ]; then\n'
+        f"  ( '/usr/bin/python3' {old} refresh '{repo}' --db '{tmp_path / 'g.db'}' --quiet "
+        "</dev/null >/dev/null 2>&1 & ) >/dev/null 2>&1\n"
+        "  true\n"
+        "fi\n"
+        f"{hooks.END}\n"
+    )
+    path = _hooks(repo) / "post-commit"
+    path.write_text("#!/bin/sh\n" + block, encoding="utf-8")
+    os.chmod(path, 0o755)
+    lines = []
+    assert hooks.run("status", root=str(repo), out=lines.append) == 0
+    assert "outdated hook post-commit: re-run cg hooks install" in lines
+    assert hooks.outdated_names(repo) == ["post-commit"]
+    from cg_code_graph import doctor
+    text = doctor.render(doctor.report(repo))
+    assert "note: outdated hook post-commit: re-run cg hooks install" in text
+    assert hooks.run("install", root=str(repo), db=str(tmp_path / "g.db"), assume_yes=True,
+                     interpreter=str(tmp_path / "py"), out=lambda *_a: None) == 0
+    rewritten = path.read_text(encoding="utf-8")
+    assert old not in rewritten
+    assert "cg_code_graph.cli" in rewritten
+    assert hooks.outdated_names(repo) == []

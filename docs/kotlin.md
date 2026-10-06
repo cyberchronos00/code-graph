@@ -24,13 +24,13 @@ A scip-java index replaces name-based call edges. Ids stay the syntax layer's, s
 | source | how |
 |---|---|
 | `cg index --scip index.scip` | Kotlin documents go to this plugin, not the generic SCIP importer |
-| `CODEGRAPH_KOTLIN_SCIP_FILE` | a prebuilt index |
-| `CODEGRAPH_KOTLIN_SCIP=1` | cg runs `scip-java index` (cache `~/.cache/codegraph/scip`; `CODEGRAPH_NO_CACHE=1` forces a run; `CODEGRAPH_INDEXER_TIMEOUT` caps it) |
+| `CG_KOTLIN_SCIP_FILE` | a prebuilt index |
+| `CG_KOTLIN_SCIP=1` | cg runs `scip-java index` (cache `~/.cache/cg/scip`; `CG_NO_CACHE=1` forces a run; `CG_INDEXER_TIMEOUT` caps it) |
 
 | scip-java | Kotlin (Gradle builds checked) | install |
 |---|---|---|
 | 0.12.x | up to 2.1 | `cs install scip-java` |
-| 0.13.x | 2.2.0–2.2.10 | launcher; `CODEGRAPH_SCIP_JAVA` is one path or several joined by `:` |
+| 0.13.x | 2.2.0–2.2.10 | launcher; `CG_SCIP_JAVA` is one path or several joined by `:` |
 | none | 2.2.20 and newer | stays heuristic |
 
 cg reads the version the build declares, tries the matching release first, then the next if the compiler plugin does not load. Index stats record `kotlin_version`, `indexer`, and failed `attempts`. `cg doctor <project>` names the release that fits. `install.sh --with kotlin` installs the supported pair (Windows: `cg doctor`).

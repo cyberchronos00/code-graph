@@ -12,9 +12,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FILES = {
  "App/App.swift": "import SwiftUI\n\n@main\nstruct ShopApp: App {\n    var body: some Scene {\n        WindowGroup { Text(\"x\") }\n    }\n    func launch() -> Int { Screen().render() }\n}\n\nstruct Screen {\n    func render() -> Int { Cart().total() }\n}\n\nstruct Cart {\n    func total() -> Int { Pricing.sum([1, 2]) }\n    func checkout() -> Int { Ledger().post(total()) }\n    func checkoutAudited() -> Int { Ledger().postAudited(1) }\n}\n\nstruct Ledger {\n    func post(_ v: Int) -> Int { Audit().record(v) }\n    func postAudited(_ v: Int) -> Int { post(v) }\n}\n\nstruct Audit {\n    func record(_ v: Int) -> Int { Formatter.round(v) }\n}\n\nenum Pricing {\n    static func sum(_ xs: [Int]) -> Int { Formatter.round(xs.reduce(0, +)) }\n}\n\nenum Formatter {\n    static func round(_ v: Int) -> Int { v }\n}\n",
@@ -61,11 +61,11 @@ def test_options(db):
 
 
 def test_cli_and_summary(db):
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "tests", "Formatter.round", "--db", str(db),
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "tests", "Formatter.round", "--db", str(db),
                           "--no-paths", "--unit-only"], capture_output=True, text=True, cwd=ROOT).stdout
     assert out.splitlines()[1].startswith("tests: 1 direct, 3 nearby transitive (app depth <= 3); "
                                           "3 more not listed (1 deeper, 1 through roots, 1 ui)")
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "tests", "Formatter.round", "--db", str(db),
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "tests", "Formatter.round", "--db", str(db),
                           "--no-paths", "--max-depth", "0", "--through-roots"], capture_output=True, text=True,
                          cwd=ROOT).stdout
     assert "5 nearby transitive, 1 UI / snapshot (of" in out and "not listed" not in out
@@ -81,7 +81,7 @@ def test_classification():
 
 
 def test_mcp_options(db, monkeypatch):
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     monkeypatch.setattr(M, "_st", lambda: GraphStore(db))
     out = M.tests_covering("Formatter.round", paths=False)
     assert "1 direct, 3 nearby transitive (app depth <= 3), 1 UI / snapshot; 2 more not listed" in out

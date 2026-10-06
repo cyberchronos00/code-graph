@@ -9,12 +9,12 @@ Prerequisites: Python 3.11+, PHP 8.2+ with Composer 2, Node.js 20+ (see the [REA
 ```bash
 git clone https://github.com/cyberchronos00/code-graph.git && cd code-graph
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"     # cg and cg-mcp from this checkout, plus pytest
-(cd codegraph/plugins/php/extractor && composer install)        # extractor deps in the checkout (the tests use them)
-(cd codegraph/plugins/ts/extractor && npm ci)
+(cd cg_code_graph/plugins/php/extractor && composer install)        # extractor deps in the checkout (the tests use them)
+(cd cg_code_graph/plugins/ts/extractor && npm ci)
 ```
 
 An installed cg (not a checkout) puts the extractor dependencies in the user cache instead
-(`codegraph/core/extractors.py`, `cg setup`); `cg doctor` shows which directory is in use.
+(`cg_code_graph/core/extractors.py`, `cg setup`); `cg doctor` shows which directory is in use.
 
 Generated files (`out/`, `*.db`, plan baselines, `node_modules/`, `vendor/`) are gitignored.
 
@@ -44,23 +44,23 @@ uv run --isolated --python 3.11 --extra dev python -m pytest -q tests/     # a t
 
 Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, plugin interface).
 
-1. **Language plugin:** subclass `LanguagePlugin` (`codegraph/core/plugin.py`) with `detect(project)` and
+1. **Language plugin:** subclass `LanguagePlugin` (`cg_code_graph/core/plugin.py`) with `detect(project)` and
    `index(project, builder, frameworks)`. Emit nodes with `builder.add_node(kind, key, …)` and edges with
    `builder.add_edge(src, dst, kind, file=, line=, confidence=)`. Reuse the existing node and edge kinds in
-   `codegraph/core/model.py` where they fit; add a new kind there (with its `propagates` flag and a description) only
+   `cg_code_graph/core/model.py` where they fit; add a new kind there (with its `propagates` flag and a description) only
    when none does.
 2. **Framework plugin:** subclass `FrameworkPlugin`. Use `register_hooks` for type rules and fact handlers that must
    run during resolution, and `contribute` for framework nodes and edges (routes, entry points, …) afterwards.
 3. **SCIP instead:** if a SCIP indexer exists for the language, a `ScipIndexerPlugin(...)` entry in
-   `codegraph/plugins/stubs/plugins.py` is often enough to start. For a first-class plugin that combines a SCIP
-   indexer with a tree-sitter syntax layer, `codegraph/plugins/rust/` and `codegraph/plugins/cfamily/` (on top of
-   the shared `codegraph/plugins/native/` helpers) are the templates.
+   `cg_code_graph/plugins/stubs/plugins.py` is often enough to start. For a first-class plugin that combines a SCIP
+   indexer with a tree-sitter syntax layer, `cg_code_graph/plugins/rust/` and `cg_code_graph/plugins/cfamily/` (on top of
+   the shared `cg_code_graph/plugins/native/` helpers) are the templates.
 4. **Completeness:** leave a per-file report in `self.file_report` (`seen`, `parse_failed`, `skipped_oversize`,
    `unmapped`, `excluded`) so `cg coverage` can tell discovered from indexed files, and add a detector to
-   `codegraph/blindspots.py` for registration patterns the plugin does not model (with a positive and a negative
+   `cg_code_graph/blindspots.py` for registration patterns the plugin does not model (with a positive and a negative
    fixture), so answers can say where they may be partial ([docs/completeness.md](docs/completeness.md)).
-5. Register the plugin in `LANGUAGE_PLUGINS` / `FRAMEWORK_PLUGINS` in `codegraph/indexer.py` and, if needed, add
-   marker files to `codegraph/core/detect.py`.
+5. Register the plugin in `LANGUAGE_PLUGINS` / `FRAMEWORK_PLUGINS` in `cg_code_graph/indexer.py` and, if needed, add
+   marker files to `cg_code_graph/core/detect.py`.
 6. Add a **small fixture** under `tests/` (a few files, written from scratch) and a test that asserts the exact edges
    you expect, with their `file:line` and confidence.
 
@@ -87,7 +87,7 @@ Every release ships three things together, all with the same version `X.Y.Z`: th
 out. A tag without a GitHub release, or a GitHub release without the PyPI upload, means the release is not finished.
 
 1. Every change adds its line under `## [Unreleased]` in the same commit.
-2. To release `X.Y.Z`: bump `__version__` in `codegraph/__init__.py` (the only place: `pyproject.toml` reads it, and
+2. To release `X.Y.Z`: bump `__version__` in `cg_code_graph/__init__.py` (the only place: `pyproject.toml` reads it, and
    `cg doctor` / `cg --version` report it), rename `## [Unreleased]` to
    `## [X.Y.Z] - YYYY-MM-DD` (UTC date), add a fresh empty `## [Unreleased]` above it, and update the compare links at
    the bottom of the changelog.

@@ -42,7 +42,7 @@ name only, so a generic `Keys` does not meet an unrelated type.
 ## Structure (`--structure`)
 
 Off by default. With it, symbols still missing after the name rules are paired by what they use
-(`codegraph/parity_structure.py`).
+(`cg_code_graph/parity_structure.py`).
 
 | feature | from |
 |---|---|

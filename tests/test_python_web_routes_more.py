@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import routes as R  # noqa: E402
+from cg_code_graph import routes as R  # noqa: E402
 from test_python_tests import build, edges  # noqa: E402
 from test_python_web_routes import handler_of, routes  # noqa: E402
 

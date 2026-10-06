@@ -27,20 +27,20 @@ dev = ["pytest>=8"]
 watch = ["watchfiles>=0.21"]
 
 [project.scripts]
-cg = "codegraph.cli:main"
-cg-mcp = "codegraph.mcp_server:main"
+cg = "cg_code_graph.cli:main"
+cg-mcp = "cg_code_graph.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/cyberchronos00/code-graph"
 Changelog = "https://github.com/cyberchronos00/code-graph/blob/main/CHANGELOG.md"
 
 [tool.setuptools.dynamic]
-version = { attr = "codegraph.__version__" }
+version = { attr = "cg_code_graph.__version__" }
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["codegraph*"]
-# extractor dependencies are installed per user (codegraph/core/extractors.py), never shipped
-exclude = ["*.node_modules*", "codegraph.plugins.php.extractor.vendor*", "*.dart_tool*", "*.screenshots*"]
+include = ["cg_code_graph*"]
+# extractor dependencies are installed per user (cg_code_graph/core/extractors.py), never shipped
+exclude = ["*.node_modules*", "cg_code_graph.plugins.php.extractor.vendor*", "*.dart_tool*", "*.screenshots*"]

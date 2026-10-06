@@ -1,4 +1,4 @@
-"""Platform-specific code (codegraph/platforms.py): platform tags, --platform filtered queries and divergence findings
+"""Platform-specific code (cg_code_graph/platforms.py): platform tags, --platform filtered queries and divergence findings
 on one small fixture per idiom (tests/platform_fixtures): Rust #[cfg] / cfg!, C #ifdef, Dart conditional imports and
 Platform.isX / kIsWeb, React Native .ios.ts / .native.ts files, Platform.OS and Platform.select."""
 import json
@@ -10,11 +10,11 @@ import pytest
 from native_util import ROOT, TS_SKIP, have_tree_sitter, index
 
 sys.path.insert(0, str(ROOT))
-from codegraph import platforms as PF  # noqa: E402
-from codegraph import query as Q  # noqa: E402
-from codegraph.config import ConfigError, parse  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.plugins.dart.plugin import find_dart  # noqa: E402
+from cg_code_graph import platforms as PF  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.config import ConfigError, parse  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.plugins.dart.plugin import find_dart  # noqa: E402
 
 FX = ROOT / "tests" / "platform_fixtures"
 _C = {}
@@ -42,12 +42,12 @@ def callers(st, spec, platform=None):
 
 
 def cli(*args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *args], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *args], cwd=ROOT, capture_output=True, text=True)
 
 
 # ------------------------------------------------------------------ evaluation
 def test_condition_evaluation():
-    from codegraph.plugins.native.gates import parse_cfg
+    from cg_code_graph.plugins.native.gates import parse_cfg
     t = parse_cfg('all(unix, not(target_os = "macos"))')
     assert [p for p in PF.KNOWN if PF.eval_tree(t, p)] == ["linux", "ios", "android", "tvos", "watchos", "visionos"]
     assert PF.eval_tree(parse_cfg('feature = "x"'), "linux") is None                 # not a platform: unknown
@@ -63,7 +63,7 @@ def test_condition_evaluation():
 
 
 def test_scanner_regions():
-    from codegraph.platform_scan import scan
+    from cg_code_graph.platform_scan import scan
     src = ("if (Platform.OS === 'ios') { a() } else if (Platform.OS === 'android') { b() } else { c() }\n"
            "const s = 'Platform.OS === \"web\"' // Platform.OS === 'web'\n")
     regs = scan(src, "ts")
@@ -86,7 +86,7 @@ def test_scanner_regions():
 # ------------------------------------------------------------------ Rust
 @needs_ts
 def test_rust_cfg_tags_variants_and_filtered_impact():
-    st, res = graph("rust_app", CODEGRAPH_RUST_SCIP="0")
+    st, res = graph("rust_app", CG_RUST_SCIP="0")
     s = res["platforms"]
     assert s["targets"] == ["windows", "linux", "macos"]
     assert tags(st, "function:dirs_demo::paths::config_dir") == ["windows"]
@@ -205,7 +205,7 @@ def test_unfiltered_queries_unchanged():
     r = Q.reaches(st, ["function:src/storage/storage.ios.ts#save"])
     assert "platform" not in r and {i["id"] for i in r["items"]} >= {"function:src/sync.ts#syncNotes"}
     # a graph without platform code: the filter is a no-op and says so
-    st2, res2 = graph("rust_app", CODEGRAPH_RUST_SCIP="0")
+    st2, res2 = graph("rust_app", CG_RUST_SCIP="0")
     assert PF.filter_info(st2, "ios")["note"].startswith("ios is not a declared target")
 
 
@@ -219,7 +219,7 @@ def test_filtered_search_routes_path_downstream():
     assert Q.path_between(st, "function:src/sync.ts#syncNotes", "function:src/storage/storage.android.ts#save", platform="android")
     d = Q.downstream(st, "function:src/sync.ts#syncNotes", platform="web")
     assert d["platform"]["platform"] == "web"
-    from codegraph.routes import routes_report
+    from cg_code_graph.routes import routes_report
     assert routes_report(st, platform="web")["platform"]["platform"] == "web"
 
 
@@ -240,7 +240,7 @@ def test_cli_platform_flags():
 
 
 def test_mcp_platform_replies():
-    import codegraph.mcp_server as M
+    import cg_code_graph.mcp_server as M
     graph("rn_app")
     old = M.STATE["db"]
     M.STATE["db"] = str(_C[("rn_app", ())][2])

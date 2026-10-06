@@ -11,11 +11,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.link import match_path  # noqa: E402
-from codegraph.plugins.tsweb.common import express_path, next_segment  # noqa: E402
+from cg_code_graph.link import match_path  # noqa: E402
+from cg_code_graph.plugins.tsweb.common import express_path, next_segment  # noqa: E402
 from sample import EXTRACTOR_DEPS, WEB  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 EX = ROOT / "examples"
 FX = ROOT / "tests" / "ts_fixtures"
@@ -25,8 +25,8 @@ _S: dict = {}
 def build() -> dict:
     if _S:
         return _S
-    from codegraph.indexer import index_project
-    from codegraph.link import link
+    from cg_code_graph.indexer import index_project
+    from cg_code_graph.link import link
     d = Path(tempfile.mkdtemp(prefix="codegraph-tsfw-"))
     for name, root in (("nest", EX / "bookstore-nest"), ("next", EX / "bookstore-next"), ("express", EX / "bookstore-express"),
                        ("web", WEB), ("fastify", FX / "fastify-api"), ("koa", FX / "koa-api"), ("hono", FX / "hono-api"),
@@ -75,7 +75,7 @@ def test_path_helpers():
 
 
 def test_suffix_match_prefers_literal_segments():
-    from codegraph.link import match_endpoint
+    from cg_code_graph.link import match_endpoint
     routes = [{"id": "route:GET /api/articles/feed", "method": "GET", "uri": "/api/articles/feed", "uris": [("uri", "/api/articles/feed")]},
               {"id": "route:GET /api/articles/{slug}", "method": "GET", "uri": "/api/articles/{slug}", "uris": [("uri", "/api/articles/{slug}")]}]
     assert match_endpoint("GET", "/articles/feed", routes, "unknown")["matched"][0]["route"] == "route:GET /api/articles/feed"

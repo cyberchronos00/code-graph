@@ -12,9 +12,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import lint_async as LA  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import lint_async as LA  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "async_fixture"
 _S: dict = {}
@@ -56,7 +56,7 @@ def test_react():
 
 def test_python_and_cli_json():
     assert found("python") == [("app/search.py:16", "async def", "heuristic")]   # not :23 (token), :27 (fixed request)
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "lint", "async-state", "--db", str(db("python")), "--json"],
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "lint", "async-state", "--db", str(db("python")), "--json"],
                          capture_output=True, text=True, check=True, cwd=ROOT).stdout
     j = json.loads(out)
     assert j["confidence"] == "heuristic" and j["findings"][0]["rule"] == "stale-async-result"
@@ -80,7 +80,7 @@ def test_two_writers(lang, state, life, late):
 
 
 def test_mcp_tool(monkeypatch):
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     monkeypatch.setattr(M, "_st", lambda: GraphStore(db("kotlin")))
     out = getattr(M.lint_async_state, "fn", M.lint_async_state)()
     assert "heuristic" in out and "Search.kt:10" in out
@@ -139,6 +139,6 @@ def test_rules_subset():
     assert res["rules"] == ["echo-suppression"] and {f["rule"] for f in res["findings"]} == {"echo-suppression"}
     with pytest.raises(ValueError):
         LA.lint(GraphStore(db("python")), rules=["nope"])
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "lint", "async-state", "--db", str(db("python")),
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "lint", "async-state", "--db", str(db("python")),
                           "--rules", "incomplete-cache-key"], capture_output=True, text=True, check=True, cwd=ROOT).stdout
     assert "[incomplete-cache-key]" in out and "[echo-suppression]" not in out

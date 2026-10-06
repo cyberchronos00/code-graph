@@ -7,12 +7,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm install` in codegraph/plugins/ts/extractor")
+pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm install` in cg_code_graph/plugins/ts/extractor")
 
 FILES = {
     "package.json": '{"name": "orders", "dependencies": {"express": "^4"}}\n',
@@ -70,10 +70,10 @@ def test_repeated_names_in_one_file(db):
 
 
 def test_cli_and_mcp(db):
-    p = subprocess.run([sys.executable, "-m", "codegraph.cli", "impact", "a/app.ts#listOrders", "--db", str(db), "--no-paths"],
+    p = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "impact", "a/app.ts#listOrders", "--db", str(db), "--no-paths"],
                        cwd=ROOT, capture_output=True, text=True)
     assert p.returncode == 0 and f"targets: ['{A}']" in p.stdout and "useA" in p.stdout and "useB" not in p.stdout
-    import codegraph.mcp_server as M
+    import cg_code_graph.mcp_server as M
     old = M.STATE["db"]
     M.STATE["db"] = str(db)
     try:

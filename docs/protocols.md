@@ -30,11 +30,11 @@ process matches either.
 
 ## Registry
 
-`codegraph/protocols/` holds one `Protocol`: `name`, `transport`, `ports`, URL `schemes`, a
+`cg_code_graph/protocols/` holds one `Protocol`: `name`, `transport`, `ports`, URL `schemes`, a
 normaliser, a `matcher`, `fanout` (every match) or most-specific-with-ties, `entry`, `guards`, `source` (`endpoint`, `adapter`, `bridges`). Plugins call `register` and the builders:
 
 ```python
-from codegraph.protocols import protocol_receive, protocol_send
+from cg_code_graph.protocols import protocol_receive, protocol_send
 protocol_send(builder, "mqtt", "devices/42/state", fn_id, file, line, "exact", role="publish", library="paho-mqtt")
 protocol_receive(builder, "mqtt", "devices/+/state", handler_id, file, line, "exact", guards=[])
 ```
@@ -116,7 +116,7 @@ handler → `SENDS_TO` → `RECEIVED_BY` → `WRITES_TABLE`. Corpus numbers:
 
 ## Webhook verification
 
-A receiver is a route a third party calls. `codegraph/webhooks.py` walks the handler, two levels
+A receiver is a route a third party calls. `cg_code_graph/webhooks.py` walks the handler, two levels
 of calls, and its middleware.
 
 | result | when |
@@ -151,7 +151,7 @@ are never `no_sender`. A signed POST from this repo is a sender of
 | isolate | `<file>#<entry>`, `:out` | exact | `Isolate.spawn` / `compute` ↔ `port.listen` | later messages on a returned `SendPort` |
 | xpc | `<service>`, `<Protocol>.<method>` | exact | `NSXPCConnection(machServiceName:)` ↔ `shouldAcceptNewConnection` | `Info.plist` `NSXPCListener.service()`, dependency protocols |
 | darwin-notification | `<name>` | exact, fan-out | `CFNotificationCenterPostNotification` ↔ `AddObserver` | |
-| tcp, udp | `endpoint:tcp:<port>`, `udp:<port>` | same port; `env:KEY` is heuristic | `listen(6379)` ↔ `connect(6379)` across the languages in `codegraph/sockets.py` | proof they speak; QUIC; WebRTC; port only in a config file; `env:` across `cg link` |
+| tcp, udp | `endpoint:tcp:<port>`, `udp:<port>` | same port; `env:KEY` is heuristic | `listen(6379)` ↔ `connect(6379)` across the languages in `cg_code_graph/sockets.py` | proof they speak; QUIC; WebRTC; port only in a config file; `env:` across `cg link` |
 | mdns, osc, coap, ssdp | service type, OSC address, CoAP path, SSDP USN | exact / glob / path | zeroconf `ServiceInfo` ↔ `ServiceBrowser`; `dispatcher.map` ↔ `send_message` | |
 | grpc | `endpoint:grpc:<pkg>.<Service>/<Method>` | contract method, case-insensitive | `.proto` `rpc` ↔ servicer class / stub call | Go; Nest `@GrpcMethod` not merged onto the contract node |
 | thrift | `endpoint:thrift:<stem>.<Service>/<method>` | same, including `extends` | `.thrift` service ↔ `Svc.Client` / `Processor` | Java sources (no plugin) |

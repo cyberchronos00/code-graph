@@ -1,5 +1,5 @@
 """Kotlin exact layer (scip-java): a SCIP index of the Gradle build replaces the heuristic call edges with
-compiler-resolved ones (`--scip`, CODEGRAPH_KOTLIN_SCIP_FILE, or an opted-in scip-java run through the native runner
+compiler-resolved ones (`--scip`, CG_KOTLIN_SCIP_FILE, or an opted-in scip-java run through the native runner
 cache), the heuristic layer stays the fallback without a JDK / scip-java, and `cg coverage` says which mode ran and
 why. tests/kotlin_exact_fixture/index.scip was produced by scip-java 0.12.3 (Kotlin 2.1.20) from that directory."""
 import json
@@ -14,8 +14,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_kotlin")
-from codegraph import coverage  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import coverage  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "kotlin_exact_fixture"
 SCIP = FIX / "index.scip"
@@ -42,12 +42,12 @@ def no_toolchain(tmp_path, monkeypatch):
     empty.mkdir()
     monkeypatch.setenv("PATH", str(empty))
     monkeypatch.delenv("JAVA_HOME", raising=False)
-    monkeypatch.delenv("CODEGRAPH_SCIP_JAVA", raising=False)
-    monkeypatch.delenv("CODEGRAPH_KOTLIN_SCIP", raising=False)
-    monkeypatch.delenv("CODEGRAPH_KOTLIN_SCIP_FILE", raising=False)
+    monkeypatch.delenv("CG_SCIP_JAVA", raising=False)
+    monkeypatch.delenv("CG_KOTLIN_SCIP", raising=False)
+    monkeypatch.delenv("CG_KOTLIN_SCIP_FILE", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
-    monkeypatch.delenv("CODEGRAPH_NO_CACHE", raising=False)    # tests/sample.py sets it for the whole session
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("CG_NO_CACHE", raising=False)    # tests/sample.py sets it for the whole session
     return empty
 
 
@@ -59,13 +59,13 @@ def _exe(path: Path, body: str) -> Path:
 
 @pytest.fixture
 def fake_tools(no_toolchain, monkeypatch):
-    """A `java` on PATH and a scip-java stand-in (CODEGRAPH_SCIP_JAVA) whose behaviour the test picks."""
+    """A `java` on PATH and a scip-java stand-in (CG_SCIP_JAVA) whose behaviour the test picks."""
     _exe(no_toolchain / "java", "exit 0\n")
     monkeypatch.setenv("PATH", f"{no_toolchain}{os.pathsep}/usr/bin{os.pathsep}/bin")
 
     def make(body: str) -> Path:
         tool = _exe(no_toolchain / "scip-java", body)
-        monkeypatch.setenv("CODEGRAPH_SCIP_JAVA", str(tool))
+        monkeypatch.setenv("CG_SCIP_JAVA", str(tool))
         return tool
     return make
 
@@ -106,19 +106,19 @@ def test_exact_mode_with_scip_flag(tmp_path, no_toolchain):
 
 
 def test_exact_mode_from_env_file(tmp_path, no_toolchain, monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_KOTLIN_SCIP_FILE", str(SCIP))
+    monkeypatch.setenv("CG_KOTLIN_SCIP_FILE", str(SCIP))
     st, con = _index(tmp_path)
     assert st["plugins"]["kotlin"]["mode"] == "scip"
-    assert st["plugins"]["kotlin"]["scip"]["source"] == "CODEGRAPH_KOTLIN_SCIP_FILE"
+    assert st["plugins"]["kotlin"]["scip"]["source"] == "CG_KOTLIN_SCIP_FILE"
     assert _edges(con).get(("function:demo.build", "method:demo.Registry.add")) == "exact"
-    monkeypatch.setenv("CODEGRAPH_KOTLIN_SCIP_FILE", str(tmp_path / "missing.scip"))
+    monkeypatch.setenv("CG_KOTLIN_SCIP_FILE", str(tmp_path / "missing.scip"))
     st, _ = _index(tmp_path)
     assert st["plugins"]["kotlin"]["mode"] == "heuristic"
     assert "does not exist" in _kotlin_cov(st)["reason"]
 
 
 def test_heuristic_fallback_without_jdk(tmp_path, no_toolchain, monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_KOTLIN_SCIP", "1")     # opted in, but there is nothing to run
+    monkeypatch.setenv("CG_KOTLIN_SCIP", "1")     # opted in, but there is nothing to run
     st, con = _index(tmp_path)
     k = st["plugins"]["kotlin"]
     assert k["mode"] == "heuristic" and k["scip"]["status"].startswith("no JDK")
@@ -128,24 +128,24 @@ def test_heuristic_fallback_without_jdk(tmp_path, no_toolchain, monkeypatch):
     assert calls and set(calls.values()) == {"heuristic"}
     assert calls.get(("method:demo.Report.render", "method:demo.Store.load")) == "heuristic"
     text = coverage.render({"": st["coverage"]})
-    assert "kotlin: 5 files (.kt 3, .kts 2) heuristic" in text and "CODEGRAPH_KOTLIN_SCIP=1" in text
+    assert "kotlin: 5 files (.kt 3, .kts 2) heuristic" in text and "CG_KOTLIN_SCIP=1" in text
 
 
 def test_heuristic_reasons_scip_java_missing_and_not_opted_in(tmp_path, fake_tools, monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_SCIP_JAVA", str(tmp_path / "no-such-scip-java"))
+    monkeypatch.setenv("CG_SCIP_JAVA", str(tmp_path / "no-such-scip-java"))
     st, _ = _index(tmp_path)
     assert st["plugins"]["kotlin"]["scip"]["status"].startswith("scip-java not installed")
     fake_tools("exit 1\n")
     st, _ = _index(tmp_path)
     # running scip-java executes the project's Gradle build scripts: only on request
     assert st["plugins"]["kotlin"]["mode"] == "heuristic"
-    assert "set CODEGRAPH_KOTLIN_SCIP=1" in _kotlin_cov(st)["reason"]
+    assert "set CG_KOTLIN_SCIP=1" in _kotlin_cov(st)["reason"]
 
 
 def test_scip_java_run_failure_keeps_heuristic(tmp_path, fake_tools, monkeypatch):
     fake_tools('echo "error: Plugin com.sourcegraph.semanticdb_kotlinc.AnalyzerRegistrar is incompatible" >&2\n'
                "exit 1\n")
-    monkeypatch.setenv("CODEGRAPH_KOTLIN_SCIP", "1")
+    monkeypatch.setenv("CG_KOTLIN_SCIP", "1")
     st, con = _index(tmp_path)
     k = st["plugins"]["kotlin"]
     assert k["mode"] == "heuristic" and k["scip"]["error"].startswith("exit 1")
@@ -160,7 +160,7 @@ def test_scip_java_run_through_runner_cache(tmp_path, fake_tools, monkeypatch):
                f'echo run >> "{log}"\n'
                'for a in "$@"; do case "$a" in --output=*) cp "' + str(SCIP) + '" "${a#--output=}";; esac; done\n'
                "exit 0\n")
-    monkeypatch.setenv("CODEGRAPH_KOTLIN_SCIP", "1")
+    monkeypatch.setenv("CG_KOTLIN_SCIP", "1")
     st, con = _index(tmp_path)
     k = st["plugins"]["kotlin"]
     assert k["mode"] == "scip" and k["scip"]["source"] == "scip-java" and k["scip"]["cache"] == "miss"

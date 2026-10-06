@@ -11,9 +11,9 @@ from native_util import ROOT, TS_SKIP, have_tree_sitter, index, rust_analyzer, s
 import sys
 
 sys.path.insert(0, str(ROOT))
-from codegraph import platforms as PF  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.plugins.dart.plugin import find_dart  # noqa: E402
+from cg_code_graph import platforms as PF  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.plugins.dart.plugin import find_dart  # noqa: E402
 
 needs_ts = pytest.mark.skipif(not have_tree_sitter(), reason=TS_SKIP)
 
@@ -77,7 +77,7 @@ RUST_CFG = {
 
 @needs_ts
 def test_rust_path_attr_normalised(tmp_path):
-    db, res = index(write(tmp_path, RUST_CFG), CODEGRAPH_RUST_SCIP="0")
+    db, res = index(write(tmp_path, RUST_CFG), CG_RUST_SCIP="0")
     files = {r[0] for r in rows(db, "select distinct file from nodes where lang='rust'")}
     assert "shared/extra.rs" in files and not any(".." in f for f in files if f)
     assert rows(db, "select 1 from edges where src='function:ra::main' and dst='function:ra::extra::shared'")
@@ -86,7 +86,7 @@ def test_rust_path_attr_normalised(tmp_path):
 
 @pytest.mark.skipif(not have_tree_sitter() or not rust_analyzer(), reason="rust-analyzer / tree-sitter not installed")
 def test_rust_exact_index_per_target(tmp_path):
-    db, res = index(write(tmp_path, RUST_CFG), CODEGRAPH_RUST_SCIP=None, CODEGRAPH_RUST_TARGETS=None)
+    db, res = index(write(tmp_path, RUST_CFG), CG_RUST_SCIP=None, CG_RUST_TARGETS=None)
     st = stats_of(res, "rust")
     assert st["mode"] == "scip"
     tg = st["scip"]["targets"]
@@ -98,7 +98,7 @@ def test_rust_exact_index_per_target(tmp_path):
     e = rows(db, "select confidence, attrs from edges where src='function:ra::main' and dst='function:ra::mac_only'")
     assert e and e[0][0] == "exact" and json.loads(e[0][1])["exact_target"] == "macos"
     # opt out: the syntactic fallback for code under an inactive cfg
-    db2, res2 = index(tmp_path, CODEGRAPH_RUST_SCIP=None, CODEGRAPH_RUST_TARGETS="0")
+    db2, res2 = index(tmp_path, CG_RUST_SCIP=None, CG_RUST_TARGETS="0")
     assert "targets" not in stats_of(res2, "rust")["scip"]
     a = json.loads(rows(db2, "select attrs from edges where src='function:ra::main' and dst='function:ra::win_only'")[0][0])
     assert a["via"] == "cfg-inactive" and "exact_target" not in a
@@ -144,7 +144,7 @@ SWIFT = {
 
 @needs_ts
 def test_swift_availability(tmp_path):
-    db, res = index(write(tmp_path, SWIFT), CODEGRAPH_SWIFT_INDEX="0")
+    db, res = index(write(tmp_path, SWIFT), CG_SWIFT_INDEX="0")
     assert attrs(db, "function:newApi")["available"] == {"iOS": "17", "macOS": "14"}
     leg = attrs(db, "function:legacy")
     # the package deploys iOS 16 / macOS 13 (#100): iOS 15.0 always holds, so only the declared form is kept
@@ -294,7 +294,7 @@ C_SRC = {
 
 @needs_ts
 def test_c_macro_generated_and_recovered_definitions(tmp_path):
-    db, res = index(write(tmp_path, C_SRC), CODEGRAPH_C_SCIP="0")
+    db, res = index(write(tmp_path, C_SRC), CG_C_SCIP="0")
     fns = {r[0]: json.loads(r[1] or "{}") for r in rows(db, "select id, attrs from nodes where kind='function'")}
     assert fns["function:get_width"]["macro_generated"] == "DEFINE_GETTER"
     assert fns["function:get_height"]["macro_generated"] == "DEFINE_GETTER"
@@ -320,7 +320,7 @@ def test_c_platform_directory_pair_is_one_symbol(tmp_path):
         "src/unix/a.c": '#include "a.h"\nvoid f(void) {\n}\n',
         "src/win/a.c": '#include "a.h"\nvoid f(void) {\n}\n',
         "main.c": '#include "a.h"\nint main(void) {\n  f();\n  return 0;\n}\n',
-    }), CODEGRAPH_C_SCIP="0")
+    }), CG_C_SCIP="0")
     calls = {d for s, d in rows(db, "select src, dst from edges where kind='CALLS' and src='function:main'")}
     assert calls == {"function:src/unix/a.c#f", "function:src/win/a.c#f"}
 
@@ -402,7 +402,7 @@ def test_c_separate_programs_and_callees_on_no_target(tmp_path):
         "src/unix/sunos.c": "unsigned long strnlen(const char* s, unsigned long n) {\n  return 0;\n}\n",
         "src/unix/core.c": "unsigned long strnlen(const char* s, unsigned long n);\nvoid use(void) {\n  strnlen(\"a\", 1);\n}\n",
         "src/win/core.c": "void wuse(void) {\n}\n",
-    }), CODEGRAPH_C_SCIP="0")
+    }), CG_C_SCIP="0")
     d = findings(db)
     assert not [v for v in d["variants"] if v["name"] == "alloc_buffer"], d["variants"]
     assert not [m for m in d["missing_callee"] if "strnlen" in m["to"]], d["missing_callee"]

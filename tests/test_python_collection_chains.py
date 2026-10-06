@@ -7,9 +7,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FILES = {
     "plug/__init__.py": "",

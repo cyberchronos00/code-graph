@@ -7,7 +7,7 @@ server's actual reply. Used by scripts/demo/agent.tape (docs/media/cg-agent-demo
   .venv/bin/python scripts/demo/mcp-session.py call impact '{"method": "StockService::reserve"}'
 
 The server is started exactly as an MCP host starts it from the config in docs/mcp.md
-(`python -m codegraph.mcp_server --db out/graph.db --gates ... --plans ...`, cwd = the checkout).
+(`python -m cg_code_graph.mcp_server --db out/graph.db --gates ... --plans ...`, cwd = the checkout).
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SERVER = [sys.executable, "-m", "codegraph.mcp_server", "--db", "out/graph.db",
+SERVER = [sys.executable, "-m", "cg_code_graph.mcp_server", "--db", "out/graph.db",
           "--gates", "examples/bookstore.gates.json", "--plans", "examples/plans"]
 DIM, CYAN, GREEN, RESET = "\033[2m", "\033[36m", "\033[32m", "\033[0m"
 

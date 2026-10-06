@@ -1,6 +1,6 @@
 # CLI reference
 
-`cg <command>` is `python -m codegraph.cli <command>`. Query commands need `--db`. Flags not listed here: `cg <command> -h`.
+`cg <command>` is `python -m cg_code_graph.cli <command>`. Query commands need `--db`. Flags not listed here: `cg <command> -h`.
 
 ## Commands at a glance
 
@@ -268,7 +268,7 @@ Exit 0 on success or when nothing changes. Exit 2 on invalid JSON or TOML (the f
 
 A missing hook becomes `#!/bin/sh` plus the block, mode `0755`. An existing shell hook keeps every other byte; the block is inserted immediately after the shebang, so a later `exit 0` cannot skip it. A second `install` replaces that block in place. A hook with no shebang, or a non-shell shebang, is left unchanged and reported as `skipped (not a shell hook)`. `uninstall` removes only the block and restores the original bytes. A file that then contains only the `#!/bin/sh` cg wrote is deleted.
 
-The block never calls `exit`. It backgrounds the refresh, discards its output, and ends with a succeeding command, so git is not blocked and a hook failure cannot fail the git command. `post-checkout` does nothing when `$1` equals `$2` (HEAD unchanged). `CODEGRAPH_NO_HOOKS=1` skips the block ([Configuration](configuration.md#environment-variables)). The command is `'<python>' -m codegraph.cli refresh '<root>' --db '<db>' --quiet` with the Python that ran `cg hooks install`, when that file still exists; otherwise `cg refresh …` when `cg` is on `PATH`. If neither exists, the block does nothing. Run `install` again after moving or recreating that environment.
+The block never calls `exit`. It backgrounds the refresh, discards its output, and ends with a succeeding command, so git is not blocked and a hook failure cannot fail the git command. `post-checkout` does nothing when `$1` equals `$2` (HEAD unchanged). `CG_NO_HOOKS=1` skips the block (`CODEGRAPH_NO_HOOKS` still works in 0.17.x; [Configuration](configuration.md#environment-variables)). The command is the absolute `cg` next to the Python that ran `cg hooks install`, when that file exists; otherwise `'<python>' -m cg_code_graph.cli refresh '<root>' --db '<db>' --quiet`; otherwise `cg refresh …` when `cg` is on `PATH`. If none of those exists, the block does nothing. A block that still runs `-m codegraph.cli` is outdated: `cg hooks status` and `cg doctor` say so, and `install` rewrites it. Run `install` again after moving or recreating that environment.
 
 `cg refresh ROOT --db DB` re-indexes when the checkout changed. Every run touches `<db>.refresh.pending`, then takes `<db>.refresh.lock` (non-blocking `flock`, or `msvcrt.locking` on Windows; the OS releases either if the process dies). If another refresh holds the lock, it prints `refresh already running; marked pending` and exits 0. The holder clears the flag before each pass and runs another pass while it is set again, at most three passes per run, so a burst of checkouts collapses into a few runs and a request that arrives mid-pass is not lost. When the database exists and ROOT is a git repo, cg hashes the path, mtime and size of every file from `git ls-files -c -o --exclude-standard`; if that matches `<db>.refresh.state` (written by the last successful refresh, together with the database's mtime), it prints `up to date` and exits 0. A rename, an added or deleted file, an edit, or a database rewritten by something else (`cg index`) re-indexes. Not a git repo, or a workspace app root outside ROOT: always re-index. Otherwise it indexes into `<db>.refresh.tmp` (root, name and recorded `--python-root` / `--include-generated` flags from the database, or the CLI arguments when the database is new), refuses a 0-node result without replacing the database, then moves the file into place with an atomic rename. A workspace `apps:` list is indexed on that temporary path as well; per-app databases derived from it are moved next to the real `--db`. A combined graph from `cg link` (no `apps:`) is refused and left unchanged. Git's own `GIT_DIR` / `GIT_INDEX_FILE` and similar variables, which git sets for hooks, are ignored, so ROOT is always the repository indexed. The last run is written to `<db>.refresh.log`. Exit 0 means refreshed, up to date, or another refresh holds the lock; a failure or refusal is nonzero, and the hooks ignore it.
 
@@ -300,14 +300,14 @@ The database file and its sidecars (`<db>`, `<db>.*` and `<db>-*`, including `-w
 
 ## clean
 
-Cache root: `$CODEGRAPH_CACHE`, else `$CODEGRAPH_CACHE_DIR`, else `%LOCALAPPDATA%\codegraph`, else `$XDG_CACHE_HOME/codegraph`, else `~/.cache/codegraph`. [configuration](configuration.md#environment-variables)
+Cache root: `$CG_CACHE`, else `%LOCALAPPDATA%\cg`, else `$XDG_CACHE_HOME/cg`, else `~/.cache/cg`. A directory left at the previous `codegraph` name is moved on first use. [configuration](configuration.md#environment-variables)
 
 `doctor` prints size per kind. Paths under the root: `extractors/<language>-<lock hash>/`, `scip/<name>-v<N>-<project key>-<key>.scip` (and `.lock`), `scip/ra-config-<project key>-<hash>.json`, `scip/swift-v<N>-<build key>.lock`, `swift-build/<build key>/`, `ts/<project key>-v<N>-<fingerprint>.json`, `dart/<project key>-v<N>-<fingerprint>.json`, `projects/<project key>`. `v<N>` is the cache version. The project key is the first 12 hex digits of the SHA-256 of the resolved root.
 
 | Invocation | Removes |
 |---|---|
 | `clean ROOT` | entries of that project and of projects indexed below it, every kind except extractors |
-| `clean --stale` | older cache versions and layouts (names with no cache version or project key), `.tmp` files older than `CODEGRAPH_INDEXER_TIMEOUT` + 10 min, SCIP locks with no cache entry |
+| `clean --stale` | older cache versions and layouts (names with no cache version or project key), `.tmp` files older than `CG_INDEXER_TIMEOUT` + 10 min, SCIP locks with no cache entry |
 | `clean --all` | the cache root, extractors kept |
 | `clean --all --extractors` | the cache root, including extractor installs |
 | `--db DB` | that graph plus `-wal` / `-shm` / `-journal` (alone, the cache is left as-is) |

@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 VALUES = """let maxRetries = 3
 private let ray = 2

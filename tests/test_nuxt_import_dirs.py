@@ -6,12 +6,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.plugins.nuxt.plugin import (  # noqa: E402
+from cg_code_graph.plugins.nuxt.plugin import (  # noqa: E402
     generate_types, nuxt_import_plan, unevaluable_import_dirs)
-from codegraph.blindspots import nuxt_unevaluable_import_dirs  # noqa: E402
+from cg_code_graph.blindspots import nuxt_unevaluable_import_dirs  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 
 def _write(path: Path, text: str) -> None:
@@ -118,7 +118,7 @@ def test_prepared_nuxt_dir_is_not_a_blind_spot(tmp_path):
 @needs_ts
 def test_indexed_edges_for_dirs_glob_file_alias_and_layer(tmp_path):
     _project(tmp_path)
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     db = tmp_path / "g.db"
     index_project(tmp_path, db, "fixture")
     import sqlite3
@@ -131,6 +131,6 @@ def test_indexed_edges_for_dirs_glob_file_alias_and_layer(tmp_path):
     assert any(d.endswith("#useAliased") for d in dsts)
     assert any("useLayer" in d for d in dsts)
     assert not any(d.endswith("#useOther") or d.endswith("#useNotGlob") for d in dsts)
-    from codegraph.core.store import GraphStore
+    from cg_code_graph.core.store import GraphStore
     kinds = [b["kind"] for b in (GraphStore(db).meta().get("stats") or {}).get("coverage", {}).get("blind_spots") or []]
     assert "nuxt_unevaluable_import_dirs" in kinds

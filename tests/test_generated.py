@@ -1,4 +1,4 @@
-"""Generated, copied and vendored files: one classifier (codegraph/core/generated.py) for every walk and the coverage
+"""Generated, copied and vendored files: one classifier (cg_code_graph/core/generated.py) for every walk and the coverage
 scan. One fixture per detection source (.gitattributes, each header banner, each path rule, Capacitor webDir, Cordova,
 .openapi-generator/FILES, .cg.yaml), the default index without them, `--include-generated` with attrs.generated and
 COPY_OF, and the coverage report. Every fixture is written from scratch in a temp dir."""
@@ -13,15 +13,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import config as CFG  # noqa: E402
-from codegraph import coverage as C  # noqa: E402
-from codegraph import query as Q  # noqa: E402
-from codegraph.core import generated as G  # noqa: E402
-from codegraph.core.paths import PathRules  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import config as CFG  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core import generated as G  # noqa: E402
+from cg_code_graph.core.paths import PathRules  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
-HAS_NODE = shutil.which("node") is not None and (ROOT / "codegraph/plugins/ts/extractor/node_modules/typescript").exists()
+HAS_NODE = shutil.which("node") is not None and (ROOT / "cg_code_graph/plugins/ts/extractor/node_modules/typescript").exists()
 
 
 def write(root: Path, files: dict) -> Path:
@@ -45,7 +45,7 @@ def reason(clf: G.Classifier, rel: str):
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
 
 
 # ------------------------------------------------------------------------------------------- header banners

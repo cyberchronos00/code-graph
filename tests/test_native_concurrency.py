@@ -13,11 +13,11 @@ from pathlib import Path
 import pytest
 
 from native_util import ROOT, cmake_compdb, have_tree_sitter, rust_analyzer, scip_clang
-from codegraph import coverage as C  # noqa: E402
-from codegraph.plugins.native import runner  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
+from cg_code_graph.plugins.native import runner  # noqa: E402
 
 WORKERS = 4
-WORKER = ("import sys, json; sys.path.insert(0, sys.argv[1]); from codegraph.indexer import index_project; "
+WORKER = ("import sys, json; sys.path.insert(0, sys.argv[1]); from cg_code_graph.indexer import index_project; "
           "r = index_project(sys.argv[2], sys.argv[3], 'p'); p = r['plugins'].get(sys.argv[4], {}); "
           "print(json.dumps({'mode': p.get('mode'), 'scip': p.get('scip')}, default=str))")
 
@@ -48,8 +48,8 @@ def _parallel(fn, n=WORKERS):
 
 
 def test_runner_runs_the_indexer_once_for_concurrent_callers(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
-    monkeypatch.delenv("CODEGRAPH_NO_CACHE", raising=False)
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("CG_NO_CACHE", raising=False)
     cmd = _fake(tmp_path)
     res = _parallel(lambda: runner.run_cached("fake", "k" * 20, cmd, tmp_path, "--out", 60))
     assert all(p is not None and p.read_bytes() == b"scip-bytes" for p, _ in res), res
@@ -60,8 +60,8 @@ def test_runner_runs_the_indexer_once_for_concurrent_callers(tmp_path, monkeypat
 
 
 def test_runner_without_file_locks_still_gives_every_caller_a_result(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
-    monkeypatch.delenv("CODEGRAPH_NO_CACHE", raising=False)
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("CG_NO_CACHE", raising=False)
     monkeypatch.setattr(runner, "fcntl", None)      # platforms without flock: private temporary files only
     cmd = _fake(tmp_path)
     res = _parallel(lambda: runner.run_cached("fake", "j" * 20, cmd, tmp_path, "--out", 60))
@@ -70,8 +70,8 @@ def test_runner_without_file_locks_still_gives_every_caller_a_result(tmp_path, m
 
 
 def test_single_run_and_cache_hit_unchanged(tmp_path, monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
-    monkeypatch.delenv("CODEGRAPH_NO_CACHE", raising=False)
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("CG_NO_CACHE", raising=False)
     cmd = _fake(tmp_path)
     p1, i1 = runner.run_cached("fake", "m" * 20, cmd, tmp_path, "--out", 60)
     p2, i2 = runner.run_cached("fake", "m" * 20, cmd, tmp_path, "--out", 60)
@@ -80,9 +80,9 @@ def test_single_run_and_cache_hit_unchanged(tmp_path, monkeypatch):
 
 
 def test_no_cache_runs_are_serialised_not_lost(tmp_path, monkeypatch):
-    """CODEGRAPH_NO_CACHE=1: every caller runs the indexer itself (one at a time) and gets its own result."""
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
-    monkeypatch.setenv("CODEGRAPH_NO_CACHE", "1")
+    """CG_NO_CACHE=1: every caller runs the indexer itself (one at a time) and gets its own result."""
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("CG_NO_CACHE", "1")
     cmd = _fake(tmp_path)
     res = _parallel(lambda: runner.run_cached("fake", "n" * 20, cmd, tmp_path, "--out", 60))
     assert all(p is not None and not i.get("error") and i["cache"] == "miss" for p, i in res), res
@@ -106,13 +106,13 @@ def _graph(db: Path):
 def _concurrent(tmp_path, src: Path, plugin: str, env: dict):
     root = tmp_path / src.name
     shutil.copytree(src, root, ignore=shutil.ignore_patterns("target", "build"))
-    base = {k: v for k, v in dict(os.environ, **env).items() if k != "CODEGRAPH_NO_CACHE"}   # (tests/sample.py sets it)
+    base = {k: v for k, v in dict(os.environ, **env).items() if k != "CG_NO_CACHE"}   # (tests/sample.py sets it)
     single = subprocess.run([sys.executable, "-c", WORKER, str(ROOT), str(root), str(tmp_path / "single.db"), plugin],
-                            env=dict(base, CODEGRAPH_CACHE=str(tmp_path / "cache-single")), capture_output=True, text=True)
+                            env=dict(base, CG_CACHE=str(tmp_path / "cache-single")), capture_output=True, text=True)
     assert single.returncode == 0, single.stderr[-2000:]
     one = json.loads(single.stdout.strip().splitlines()[-1])
     assert one["mode"] == "scip", one
-    shared = dict(base, CODEGRAPH_CACHE=str(tmp_path / "cache-shared"))
+    shared = dict(base, CG_CACHE=str(tmp_path / "cache-shared"))
     ps = [subprocess.Popen([sys.executable, "-c", WORKER, str(ROOT), str(root), str(tmp_path / f"w{i}.db"), plugin],
                            env=shared, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for i in range(WORKERS)]
     outs = [p.communicate() for p in ps]
@@ -127,7 +127,7 @@ def _concurrent(tmp_path, src: Path, plugin: str, env: dict):
 
 @pytest.mark.skipif(not have_tree_sitter() or not rust_analyzer(), reason="rust-analyzer / tree-sitter not installed")
 def test_rust_concurrent_runs_are_exact(tmp_path):
-    _concurrent(tmp_path, ROOT / "tests" / "rust_routes_fixture", "rust", {"CODEGRAPH_RUST_SCIP": "1"})
+    _concurrent(tmp_path, ROOT / "tests" / "rust_routes_fixture", "rust", {"CG_RUST_SCIP": "1"})
 
 
 @pytest.mark.skipif(not have_tree_sitter() or not scip_clang() or not shutil.which("cmake"),
@@ -138,4 +138,4 @@ def test_c_concurrent_runs_are_exact(tmp_path):
     cdb = cmake_compdb(src / "c-ringbuf")
     if cdb is None:
         pytest.skip("cmake configure failed (no C compiler?)")
-    _concurrent(tmp_path, src / "c-ringbuf", "c_cpp", {"CODEGRAPH_COMPDB": str(cdb)})
+    _concurrent(tmp_path, src / "c-ringbuf", "c_cpp", {"CG_COMPDB": str(cdb)})

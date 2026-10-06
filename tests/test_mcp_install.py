@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from codegraph.mcp_install import (
+from cg_code_graph.mcp_install import (
     InstallError, _FALLBACK_NOTE, build_entry, config_path, plan_text, remove_cg, remove_member,
     server_command, set_cg, set_member,
 )
@@ -177,7 +177,7 @@ def test_server_command(monkeypatch, tmp_path):
     exe.write_text("")
     monkeypatch.setattr(sys, "executable", str(exe))
     monkeypatch.setattr(os, "name", "posix")
-    fallback = [str(Path(exe).resolve()), "-m", "codegraph.mcp_server"]
+    fallback = [str(Path(exe).resolve()), "-m", "cg_code_graph.mcp_server"]
     assert server_command() == fallback
 
     tool = tmp_path / "bin" / "cg-mcp"
@@ -224,19 +224,19 @@ def test_server_command(monkeypatch, tmp_path):
 
 
 def _main(argv):
-    from codegraph.cli import main
+    from cg_code_graph.cli import main
     return main(argv)
 
 
 def test_module_fallback_prints_a_note(home, tmp_path, monkeypatch, capsys):
     exe = str(Path(sys.executable).resolve())
-    monkeypatch.setattr("codegraph.mcp_install.server_command",
-                        lambda: [exe, "-m", "codegraph.mcp_server"])
+    monkeypatch.setattr("cg_code_graph.mcp_install.server_command",
+                        lambda: [exe, "-m", "cg_code_graph.mcp_server"])
     proj = tmp_path / "proj"
     proj.mkdir()
     rc = _main(["install", "--host", "cursor", "--dry-run", "--dir", str(proj)])
     out = capsys.readouterr().out
-    assert rc == 0 and _FALLBACK_NOTE in out and "codegraph.mcp_server" in out
+    assert rc == 0 and _FALLBACK_NOTE in out and "cg_code_graph.mcp_server" in out
     assert not (proj / ".cursor").exists()
 
 
@@ -346,7 +346,7 @@ def test_claude_global_invokes_cli(home, tmp_path, monkeypatch, capsys):
 
 
 def test_doctor_lists_registrations(home, tmp_path):
-    from codegraph.doctor import render, report
+    from cg_code_graph.doctor import render, report
     proj = tmp_path / "proj"
     db = proj / "out" / "graph.db"
     cursor = proj / ".cursor" / "mcp.json"
@@ -370,7 +370,7 @@ def test_doctor_lists_registrations(home, tmp_path):
 
 def test_tool_allowlist(capsys):
     import fnmatch
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     before = [t.name for t in asyncio.run(M.server.list_tools())]
     assert "explore" in before and "affected" in before
     core = {"explore", "search", "node", "snippet", "impact", "reaches", "callers", "routes",

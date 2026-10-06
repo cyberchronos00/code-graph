@@ -15,12 +15,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
-EXTRACTOR_DEPS = ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules" / "typescript"
-pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+EXTRACTOR_DEPS = ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules" / "typescript"
+pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 FIX = ROOT / "tests" / "ts_fields_fixture"
 F = "src/cart.ts#"
 _S: dict = {}

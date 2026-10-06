@@ -3,9 +3,9 @@
 cg keeps generated files out of the graph by default and lists them in `cg coverage`. A copy
 points back at the file you edit.
 
-One classifier (`codegraph/core/generated.py`) runs at the start of `cg index`. The first
+One classifier (`cg_code_graph/core/generated.py`) runs at the start of `cg index`. The first
 matching rule wins. Built-in directory and file-name lists live in
-`codegraph/presets/common.yaml`.
+`cg_code_graph/presets/common.yaml`.
 
 | rule | result |
 |---|---|

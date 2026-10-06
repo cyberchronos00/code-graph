@@ -17,7 +17,7 @@ also carries a `completeness` object.
 | `discovered` | source files under the root (dependency, build and VCS dirs skipped) | |
 | `indexed` | files in the graph | |
 | `parse_failed` | the parser rejected the file | yes |
-| `skipped_oversize` | over the plugin limit (Python 1.5 MB, C/C++ `CODEGRAPH_MAX_FILE_BYTES`) | yes |
+| `skipped_oversize` | over the plugin limit (Python 1.5 MB, C/C++ `CG_MAX_FILE_BYTES`) | yes |
 | `unmapped` | parsed, not placed in the module table | yes |
 | `excluded` | the plugin's skip list (Python migrations, PHP `storage/`, generated Dart) | no |
 

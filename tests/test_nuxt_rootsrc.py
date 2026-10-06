@@ -13,23 +13,23 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph import query as Q, coverage as C  # noqa: E402
-from codegraph.link import match_endpoint  # noqa: E402
-from codegraph.plugins.nuxt.plugin import find_src_dir, nuxt_route, _component_name  # noqa: E402
-from codegraph.plugins.ts.baseurl import ConfigValues, base_path, parse_env, runtime_config_defaults  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import query as Q, coverage as C  # noqa: E402
+from cg_code_graph.link import match_endpoint  # noqa: E402
+from cg_code_graph.plugins.nuxt.plugin import find_src_dir, nuxt_route, _component_name  # noqa: E402
+from cg_code_graph.plugins.ts.baseurl import ConfigValues, base_path, parse_env, runtime_config_defaults  # noqa: E402
 from sample import EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 FX = ROOT / "tests" / "nuxt_rootsrc_fixture"
 API = ROOT / "tests" / "broadcast_fixture" / "api"
 _S: dict = {}
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 
 def built() -> dict:
     if not _S:
-        from codegraph.indexer import index_project
-        from codegraph.link import link
+        from cg_code_graph.indexer import index_project
+        from cg_code_graph.link import link
         d = Path(tempfile.mkdtemp(prefix="codegraph-rootsrc-"))
         _S["web_stats"] = index_project(FX, d / "web.db", "board-web")
         index_project(API, d / "api.db", "board-api")
@@ -166,7 +166,7 @@ def test_coverage_on_linked_db_after_sources_are_gone():
 
 
 def test_discovery_skips_dangling_symlinks_in_every_language(tmp_path):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "ok.py").write_text("def ok():\n    return 1\n")
     os.symlink("/nonexistent/elsewhere/gone.py", tmp_path / "app" / "gone.py")

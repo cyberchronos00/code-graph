@@ -14,9 +14,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link, match_path  # noqa: E402
-from codegraph.plugins.dart.plugin import find_dart  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.link import link, match_path  # noqa: E402
+from cg_code_graph.plugins.dart.plugin import find_dart  # noqa: E402
 
 DJ = ROOT / "examples" / "bookstore-django"
 FL = ROOT / "examples" / "bookstore-flutter"
@@ -316,8 +316,8 @@ def test_model_view_registry_call_form_and_duplicates(tmp_path):
 
 
 def test_query_targets_python_symbols_and_files():
-    from codegraph.core.store import GraphStore
-    from codegraph.query import resolve_targets
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph.query import resolve_targets
     st = GraphStore.open(str(build()["dj"])) if hasattr(GraphStore, "open") else GraphStore(str(build()["dj"]))
     assert resolve_targets(st, "catalog.api.place_order") == ["function:catalog.api.place_order"]
     assert resolve_targets(st, "line_total") == ["function:catalog.pricing.line_total"]

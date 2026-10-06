@@ -1,10 +1,10 @@
-"""AGENTS.md at the repo root is generated from codegraph.agent_rules; keep them in sync."""
+"""AGENTS.md at the repo root is generated from cg_code_graph.agent_rules; keep them in sync."""
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import agent_rules  # noqa: E402
+from cg_code_graph import agent_rules  # noqa: E402
 
 
 def test_agents_md_matches_package_source():

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 pytest.importorskip("tree_sitter_swift")
 pytest.importorskip("tree_sitter_kotlin")
 from test_parity import ROOT, build  # noqa: E402
-from codegraph import parity as P  # noqa: E402
+from cg_code_graph import parity as P  # noqa: E402
 
 IOS = {
  "App/Auth/PreloginRequest.swift": 'struct PreloginRequest {\n    var path: String { "/accounts/prelogin" }\n'
@@ -71,7 +71,7 @@ def test_structure_endpoint_l10n_learned_and_true_missing(dbs):
 
 def test_cli_structure_and_write_map(dbs, tmp_path):
     out = tmp_path / "map.json"
-    r = subprocess.run([sys.executable, "-m", "codegraph.cli", "parity", "--db", dbs[0], "--against", dbs[1],
+    r = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "parity", "--db", dbs[0], "--against", dbs[1],
                         "--structure", "--write-map", str(out)], capture_output=True, text=True, cwd=ROOT)
     assert r.returncode == 0, r.stderr
     assert "== INFERRED matches (not by name): 3" in r.stdout and "== LEARNED rename rules" in r.stdout

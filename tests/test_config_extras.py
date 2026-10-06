@@ -13,9 +13,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.config import ConfigError, parse, effective  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.dart.plugin import find_dart  # noqa: E402
+from cg_code_graph.config import ConfigError, parse, effective  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.dart.plugin import find_dart  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
 needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="TS extractor deps not installed")
@@ -37,12 +37,12 @@ def files_of(db: Path, lang: str | None = None) -> set:
 
 
 def test_no_skip_directory_names_outside_presets():
-    """Directory skip lists live in codegraph/presets/*.yaml only (the walks and both extractors read them)."""
-    ts = (ROOT / "codegraph/plugins/ts/extractor/extract.mjs").read_text()
-    dart = (ROOT / "codegraph/plugins/dart/extractor/bin/extract.dart").read_text()
+    """Directory skip lists live in cg_code_graph/presets/*.yaml only (the walks and both extractors read them)."""
+    ts = (ROOT / "cg_code_graph/plugins/ts/extractor/extract.mjs").read_text()
+    dart = (ROOT / "cg_code_graph/plugins/dart/extractor/bin/extract.dart").read_text()
     assert "TEST_WALK_SKIP" not in ts and not re.search(r"name === 'node_modules'|includes\('/node_modules/'\)", ts)
     assert not re.search(r"'\.dart_tool'|'Pods'|'node_modules'", dart)
-    py = [p for p in (ROOT / "codegraph").rglob("*.py") if "presets" not in p.parts]
+    py = [p for p in (ROOT / "cg_code_graph").rglob("*.py") if "presets" not in p.parts]
     sets = [p for p in py if re.search(r"\{[^{}\n]*\"node_modules\"[^{}\n]*\}", p.read_text())]
     assert not sets, sets
 
@@ -174,7 +174,7 @@ def graph(db: Path) -> tuple[set, set]:
 def test_monorepo_apps_one_command_matches_one_by_one(tmp_path):
     root = write(tmp_path / "mono", MONO)
     out = tmp_path / "out"
-    r = subprocess.run([sys.executable, "-m", "codegraph.cli", "index", str(root), "--db", str(out / "mono.db")],
+    r = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "index", str(root), "--db", str(out / "mono.db")],
                        cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     summary = json.loads(r.stdout)
@@ -192,7 +192,7 @@ def test_monorepo_apps_one_command_matches_one_by_one(tmp_path):
     assert json.loads(con.execute("SELECT value FROM meta WHERE key='repos'").fetchone()[0]) == ["api", "web", "admin"]
     assert con.execute("SELECT count(*) FROM edges WHERE kind='MATCHES_ROUTE'").fetchone()[0] >= 3
     # --no-apps: the root as one project
-    r = subprocess.run([sys.executable, "-m", "codegraph.cli", "index", str(root), "--db", str(tmp_path / "one.db"), "--no-apps"],
+    r = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "index", str(root), "--db", str(tmp_path / "one.db"), "--no-apps"],
                        cwd=ROOT, capture_output=True, text=True)
     assert r.returncode == 0 and "apps" not in json.loads(r.stdout)
 

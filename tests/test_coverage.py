@@ -13,15 +13,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
 from sample import API, WEB, EXTRACTOR_DEPS, needs_php  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph import coverage as C  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
 
 
 def cg(*args, path=None, cwd=ROOT):
-    env = dict(os.environ, CODEGRAPH_NO_CACHE="1")
+    env = dict(os.environ, CG_NO_CACHE="1")
     if path is not None:
         env["PATH"] = path
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=cwd, env=env,
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=cwd, env=env,
                           capture_output=True, text=True)
 
 
@@ -45,7 +45,7 @@ def test_missing_php_is_skipped_not_fatal(tmp_path):
     assert "php: 22 files (.php 22) skipped: php not installed" in out and "fix: install PHP 8.2+" in out
 
 
-@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 def test_missing_node_skips_typescript(tmp_path):
     empty = tmp_path / "bin"
     empty.mkdir()
@@ -74,7 +74,7 @@ def test_unsupported_languages_are_counted(tmp_path):
     assert (lang(cov, "kotlin")["status"], lang(cov, "kotlin")["files"]) == ("heuristic", 1)   # Kotlin plugin (#9)
     assert (lang(cov, "swift")["status"], lang(cov, "swift")["files"]) == ("heuristic", 1)     # Swift plugin (#10)
     assert "scip-go" in lang(cov, "go")["hint"]
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = str(tmp_path / "m.db")
@@ -92,8 +92,8 @@ def test_unsupported_languages_are_counted(tmp_path):
 
 def test_rust_without_rust_analyzer_is_heuristic(tmp_path):
     env_root = ROOT / "examples" / "rust-kvstore"
-    r = subprocess.run([sys.executable, "-m", "codegraph.cli", "index", str(env_root), "--db", str(tmp_path / "kv.db")],
-                       cwd=ROOT, capture_output=True, text=True, env=dict(os.environ, CODEGRAPH_RUST_SCIP="0"))
+    r = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "index", str(env_root), "--db", str(tmp_path / "kv.db")],
+                       cwd=ROOT, capture_output=True, text=True, env=dict(os.environ, CG_RUST_SCIP="0"))
     assert r.returncode == 0, r.stderr[-800:]
     rs = lang(json.loads(r.stdout)["coverage"], "rust")
     assert rs["status"] == "heuristic" and "rust-analyzer" in rs["hint"]

@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 PORT=${PORT:-8199}
-cg() { .venv/bin/python -m codegraph.cli "$@"; }
+cg() { .venv/bin/python -m cg_code_graph.cli "$@"; }
 mkdir -p out/demo docs/media
 cg index examples/bookstore-api --gates examples/bookstore.gates.json --db out/api.db > /dev/null
 cg index examples/bookstore-web --db out/web.db > /dev/null

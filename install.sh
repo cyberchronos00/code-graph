@@ -80,7 +80,7 @@ installed_with() {
   echo none
 }
 
-cache_dir() { printf '%s' "${CODEGRAPH_CACHE:-${CODEGRAPH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/codegraph}}"; }  # as codegraph/core/cache.py
+cache_dir() { printf '%s' "${CG_CACHE:-${CODEGRAPH_CACHE:-${CODEGRAPH_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cg}}}"; }  # as cg_code_graph/core/cache.py
 
 drop_old_name() {  # an install under the pre-0.9.1 package name owns the `cg` command: remove it first
   if command -v uv >/dev/null 2>&1 && uv tool list 2>/dev/null | grep -q "^$OLD_PKG "; then
@@ -197,7 +197,7 @@ with_kotlin() {
       else rm -f "$sj13.part"; say "kotlin: scip-java $SCIP_JAVA_13 checksum mismatch, not installed"; fi
     fi
   fi
-  say "kotlin: exact mode runs the project's Gradle / Maven build; opt in per run with CODEGRAPH_KOTLIN_SCIP=1"
+  say "kotlin: exact mode runs the project's Gradle / Maven build; opt in per run with CG_KOTLIN_SCIP=1"
 }
 
 with_swift() {
@@ -205,7 +205,7 @@ with_swift() {
   elif [ "$(uname -s)" = Darwin ]; then say "swift: install the Xcode command line tools: xcode-select --install"
   else say "swift: install a Swift toolchain for this user with swiftly (https://www.swift.org/install/linux/, no sudo for the toolchain itself)"
   fi
-  say "swift: exact mode builds the SwiftPM package with an index store; opt in with CODEGRAPH_SWIFT_INDEX=1"
+  say "swift: exact mode builds the SwiftPM package with an index store; opt in with CG_SWIFT_INDEX=1"
 }
 
 # --- main
@@ -225,7 +225,7 @@ for w in $(printf '%s' "$WITH" | tr ',' ' '); do
     "") ;; *) say "--with: unknown '$w' (rust, c, kotlin, swift)" ;;
   esac
 done
-CG_DIR="$(dirname "$CG")"; [ "$CG_DIR" = . ] && CG_DIR="$BIN_DIR"
-case ":$ORIG_PATH:" in *":$CG_DIR:"*) ;; *) say "open a new shell or add $CG_DIR to PATH to use cg (uv tool update-shell / pipx ensurepath)";; esac
+cg_bin_dir="$(dirname "$CG")"; [ "$cg_bin_dir" = . ] && cg_bin_dir="$BIN_DIR"
+case ":$ORIG_PATH:" in *":$cg_bin_dir:"*) ;; *) say "open a new shell or add $cg_bin_dir to PATH to use cg (uv tool update-shell / pipx ensurepath)";; esac
 [ "$DRY" = 1 ] || "$CG" doctor || true
 say "done. Update later with: sh install.sh --update   (or: uv tool upgrade $PKG / pipx upgrade $PKG)"

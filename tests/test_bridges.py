@@ -1,4 +1,4 @@
-"""Web / native bridges (codegraph/bridges.py): Capacitor plugins, React Native / Expo native modules and Flutter
+"""Web / native bridges (cg_code_graph/bridges.py): Capacitor plugins, React Native / Expo native modules and Flutter
 platform channels on both platforms (tests/bridge_fixtures), as SENDS_TO -> endpoint:<protocol>:<module>#<method> ->
 RECEIVED_BY edges with per-platform receivers, the missing-platform / no-receiver / external checks, `impact` /
 `downstream` / `tests` across the bridge, the --platform filter, `cg bridges` and the native source scanner."""
@@ -12,16 +12,16 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import bridges as B  # noqa: E402
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.model import EDGE_KINDS, PROPAGATING  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.dart.plugin import find_dart  # noqa: E402
+from cg_code_graph import bridges as B  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.model import EDGE_KINDS, PROPAGATING  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.dart.plugin import find_dart  # noqa: E402
 
 FX = ROOT / "tests" / "bridge_fixtures"
-TS_DEPS = ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules"
-needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+TS_DEPS = ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules"
+needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 needs_dart = pytest.mark.skipif(find_dart() is None, reason="Dart SDK not found (set $DART or put dart on PATH)")
 pytest.importorskip("tree_sitter_kotlin")
 pytest.importorskip("tree_sitter_swift")
@@ -49,7 +49,7 @@ def senders(e: dict) -> set:
 
 
 def cli(*args) -> subprocess.CompletedProcess:
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *args], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *args], cwd=ROOT, capture_output=True, text=True)
 
 
 def test_edge_kinds_propagate():
@@ -198,7 +198,7 @@ def _scan(rel: str, src: str):
     root = Path(tempfile.mkdtemp(prefix="codegraph-bridge-src-"))
     (root / rel).parent.mkdir(parents=True, exist_ok=True)
     (root / rel).write_text(src)
-    from codegraph.core.plugin import GraphBuilder
+    from cg_code_graph.core.plugin import GraphBuilder
     b = GraphBuilder()
     proj = SimpleNamespace(root=root, options={})
     sc = SimpleNamespace(paths={}, bridge_paths=[rel])
@@ -322,7 +322,7 @@ def test_electron_ipc_and_context_bridge():
 
 @needs_ts
 def test_tauri_commands(monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_RUST_SCIP", "0")
+    monkeypatch.setenv("CG_RUST_SCIP", "0")
     st, res, _ = graph("tauri_app")
     ep = endpoints(st)
     assert set(ep) == {"tauri:greet", "tauri:increment", "tauri:gret", "tauri:secret", "tauri:plugin:fs|read_text_file",
@@ -381,7 +381,7 @@ def test_native_events_cordova_and_dynamic_names():
 
 
 def test_scanner_cordova_and_event_helpers():
-    from codegraph.bridges import NativeFile, scan_cordova
+    from cg_code_graph.bridges import NativeFile, scan_cordova
     nf = NativeFile("src/android/X.java", 'package p;\nclass X extends CordovaPlugin {\n static final String A = "go";\n'
                     ' public boolean execute(String action, JSONArray a, CallbackContext c) {\n'
                     '  switch (action) {\n   case "stop": return true;\n  }\n  if (A.equals(action)) return true;\n'
@@ -399,7 +399,7 @@ def test_scanner_cordova_and_event_helpers():
 def test_event_names_from_string_enums():
     # #95: `sendEvent(name: Event.keyPressed.rawValue)` (Swift String enum) and `Events.SAVED.event` (Kotlin enum class
     # with a String property) evaluate to the case's value
-    from codegraph.bridges import NativeFile, _enum_consts, _str_value
+    from cg_code_graph.bridges import NativeFile, _enum_consts, _str_value
     sw = ('enum Event: String, CaseIterable {\n    case keyPressed, keyReleased = "released"\n'
           '    case other // note\n    var x: Int { 1 }\n}\n')
     kt = 'enum class Events(val event: String) {\n    SAVE_ERROR("SaveError"),\n    SPLIT("SplitViewChanged")\n}\n'
@@ -473,7 +473,7 @@ def test_kotlin_event_helper_forwarding_its_parameter(tmp_path):
 def test_event_names_from_locals_and_computed_properties():
     # #95: `notifyListeners(event.listenerEvent, ..)` with a Swift computed `var listenerEvent: String { switch ... }`
     # (each returned literal), and `let event = self?.visibilityChanged` before `notifyListeners(event, ..)`
-    from codegraph.bridges import NativeFile, _event_values, _str_props
+    from cg_code_graph.bridges import NativeFile, _event_values, _str_props
     sw = ('public class P: CAPPlugin {\n    private let visibilityChanged = "statusBarVisibilityChanged"\n'
           '    @objc func hide(_ call: CAPPluginCall) {\n        guard let event = self?.visibilityChanged else { return }\n'
           '        self?.notifyListeners(event, data: [:])\n    }\n'

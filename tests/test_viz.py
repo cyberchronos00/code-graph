@@ -1,4 +1,4 @@
-"""Visual view (codegraph/viz): subgraph projection + HTTP server smoke test + static export, on the sample apps."""
+"""Visual view (cg_code_graph/viz): subgraph projection + HTTP server smoke test + static export, on the sample apps."""
 import json
 import shutil
 import subprocess
@@ -13,9 +13,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.viz import graph as G  # noqa: E402
-from codegraph.viz.server import App, make_handler, export_html  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.viz import graph as G  # noqa: E402
+from cg_code_graph.viz.server import App, make_handler, export_html  # noqa: E402
 from sample import build, EXTRACTOR_DEPS, PLANS, needs_php  # noqa: E402
 
 
@@ -42,7 +42,7 @@ def test_reaches_view_runtime_operator_gated():
     assert any(e["gated"] for e in g["edges"])
 
 
-@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 @needs_php
 def test_server_and_static_export(tmp_path):
     db = str(build()["combined"])
@@ -91,7 +91,7 @@ def test_stats_and_fuzzy_search():
     assert G.search(st, "ReportController", fuzzy=True)[:len(exact)] == exact  # substring hits stay first
 
 
-LAYERED = ROOT / "codegraph" / "viz" / "static" / "layered.js"
+LAYERED = ROOT / "cg_code_graph" / "viz" / "static" / "layered.js"
 NODE_CHECK = r"""
 const L = require(process.argv[1])
 // impact view: target at depth 0, 40 callers at depth 1 in 25 modules over 6 folders, 8 entry points at depth 2
@@ -134,7 +134,7 @@ def test_layered_clusters_and_lanes():
     assert r["again"], r                                              # deterministic
 
 
-APP_JS = ROOT / "codegraph" / "viz" / "static" / "app.js"
+APP_JS = ROOT / "cg_code_graph" / "viz" / "static" / "app.js"
 
 
 def _lum(h: str) -> float:

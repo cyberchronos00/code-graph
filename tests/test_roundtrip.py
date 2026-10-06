@@ -15,9 +15,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import roundtrip as RT  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import roundtrip as RT  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "roundtrip_fixture"
 _S: dict = {}
@@ -79,19 +79,19 @@ def test_python_round_trip_config_and_tag():
 
 def test_no_edges_added_and_cli_json(tmp_path):
     before = sqlite3.connect(db("python")).execute("select count(*) from edges").fetchone()[0]
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "roundtrip", "LevelStore.level", "--db", str(db("python")),
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "roundtrip", "LevelStore.level", "--db", str(db("python")),
                           "--json"], capture_output=True, text=True, check=True, cwd=ROOT).stdout
     j = json.loads(out)
     assert j["confidence"] == "heuristic" and j["findings"][0]["confidence"] == "heuristic"
     assert sqlite3.connect(db("python")).execute("select count(*) from edges").fetchone()[0] == before
-    txt = subprocess.run([sys.executable, "-m", "codegraph.cli", "roundtrip", "LevelStore.level", "--db", str(db("python"))],
+    txt = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "roundtrip", "LevelStore.level", "--db", str(db("python"))],
                          capture_output=True, text=True, check=True, cwd=ROOT).stdout
     assert "heuristic" in txt and "SEEDS initializer" in txt
     assert "no stored property" in RT.render(RT.roundtrip(GraphStore(db("python")), "Nope.x"))
 
 
 def test_mcp_tool(monkeypatch):
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     monkeypatch.setattr(M, "_st", lambda: GraphStore(db("kotlin")))
     fn = getattr(M.roundtrip, "fn", M.roundtrip)
     out = fn("LevelStore.level")
@@ -100,7 +100,7 @@ def test_mcp_tool(monkeypatch):
 
 def test_read_back_exclusions():
     """Not a read-back: the writer using what it just built, a callback-valued property, an index use."""
-    from codegraph.roundtrip import _read_back
+    from cg_code_graph.roundtrip import _read_back
 
     class Src:
         L = {"a.kt": ["bar = Bar(color.toInt())", "addView(bar)"],
@@ -118,7 +118,7 @@ def test_read_back_exclusions():
 
 def test_call_args_scopes_caller_hop():
     """One hop through a caller only blames the argument passed for the parameter, not a lossy call elsewhere."""
-    from codegraph.roundtrip import _call_args
+    from cg_code_graph.roundtrip import _call_args
 
     class St:
         def node(self, i):

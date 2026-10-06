@@ -1,7 +1,7 @@
-"""Swift exact layer (index store): `swift build --enable-index-store` (opt-in, CODEGRAPH_SWIFT_INDEX=1) or an
-existing store (CODEGRAPH_SWIFT_INDEX_STORE) replaces the heuristic call edges with the compiler's, read through the
+"""Swift exact layer (index store): `swift build --enable-index-store` (opt-in, CG_SWIFT_INDEX=1) or an
+existing store (CG_SWIFT_INDEX_STORE) replaces the heuristic call edges with the compiler's, read through the
 toolchain's libIndexStore; without a toolchain the heuristic layer stays and `cg coverage` says why. The exact-mode
-tests need a Swift toolchain (swift on PATH, CODEGRAPH_SWIFT or ~/tools/swift-*) and are skipped without one."""
+tests need a Swift toolchain (swift on PATH, CG_SWIFT or ~/tools/swift-*) and are skipped without one."""
 import os
 import shutil
 import sqlite3
@@ -14,9 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph import coverage  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.swift import exact, indexstore  # noqa: E402
+from cg_code_graph import coverage  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.swift import exact, indexstore  # noqa: E402
 
 FIX = ROOT / "tests" / "swift_exact_fixture"
 SWIFT = exact.find_swift()
@@ -40,9 +40,9 @@ def _cov(st):
 
 @pytest.fixture
 def clean_env(tmp_path, monkeypatch):
-    for v in ("CODEGRAPH_SWIFT_INDEX", "CODEGRAPH_SWIFT_INDEX_STORE", "CODEGRAPH_NO_CACHE", "CODEGRAPH_LIBINDEXSTORE"):
+    for v in ("CG_SWIFT_INDEX", "CG_SWIFT_INDEX_STORE", "CG_NO_CACHE", "CG_LIBINDEXSTORE"):
         monkeypatch.delenv(v, raising=False)
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
     return monkeypatch
 
 
@@ -52,7 +52,7 @@ def no_toolchain(clean_env, tmp_path):
     empty.mkdir()
     clean_env.setenv("PATH", str(empty))
     clean_env.setenv("HOME", str(tmp_path / "home"))
-    clean_env.delenv("CODEGRAPH_SWIFT", raising=False)
+    clean_env.delenv("CG_SWIFT", raising=False)
     return empty
 
 
@@ -65,14 +65,14 @@ def _fake_toolchain(tmp_path, monkeypatch, body: str) -> Path:
     sw = usr / "bin" / "swift"
     sw.write_text("#!/bin/sh\n" + body)
     sw.chmod(sw.stat().st_mode | stat.S_IEXEC)
-    monkeypatch.setenv("CODEGRAPH_SWIFT", str(sw))
+    monkeypatch.setenv("CG_SWIFT", str(sw))
     return sw
 
 
 @needs_toolchain
 def test_exact_mode_swift_build(tmp_path, clean_env):
-    clean_env.setenv("CODEGRAPH_SWIFT", SWIFT)
-    clean_env.setenv("CODEGRAPH_SWIFT_INDEX", "1")
+    clean_env.setenv("CG_SWIFT", SWIFT)
+    clean_env.setenv("CG_SWIFT_INDEX", "1")
     st, con = _index(tmp_path)
     k = st["plugins"]["swift"]
     assert k["mode"] == "indexstore", k["index"]
@@ -102,18 +102,18 @@ def test_exact_mode_swift_build(tmp_path, clean_env):
 
 @needs_toolchain
 def test_existing_store_from_another_checkout(tmp_path, clean_env):
-    """CODEGRAPH_SWIFT_INDEX_STORE built in a different directory: source paths are matched by project suffix."""
-    clean_env.setenv("CODEGRAPH_SWIFT", SWIFT)
-    clean_env.setenv("CODEGRAPH_SWIFT_INDEX", "1")
+    """CG_SWIFT_INDEX_STORE built in a different directory: source paths are matched by project suffix."""
+    clean_env.setenv("CG_SWIFT", SWIFT)
+    clean_env.setenv("CG_SWIFT_INDEX", "1")
     other = tmp_path / "elsewhere" / "Demo"
     shutil.copytree(FIX, other)
     st, _ = _index(tmp_path, other)
     store = next(Path(st["plugins"]["swift"]["index"]["build_path"]).glob("*/debug/index/store"))
-    clean_env.delenv("CODEGRAPH_SWIFT_INDEX")
-    clean_env.setenv("CODEGRAPH_SWIFT_INDEX_STORE", str(store))
+    clean_env.delenv("CG_SWIFT_INDEX")
+    clean_env.setenv("CG_SWIFT_INDEX_STORE", str(store))
     st, con = _index(tmp_path)
     assert st["plugins"]["swift"]["mode"] == "indexstore"
-    assert st["plugins"]["swift"]["index"]["source"] == "CODEGRAPH_SWIFT_INDEX_STORE"
+    assert st["plugins"]["swift"]["index"]["source"] == "CG_SWIFT_INDEX_STORE"
     assert _edges(con).get(("method:Registry.total", "method:Shape.area")) == "exact"
 
 
@@ -127,19 +127,19 @@ def test_heuristic_without_toolchain(tmp_path, no_toolchain):
     calls = _edges(con)
     assert calls and set(calls.values()) == {"heuristic"}
     assert calls.get(("method:Report.render", "method:Store.load")) == "heuristic"
-    assert "CODEGRAPH_SWIFT_INDEX=1" in coverage.render({"": st["coverage"]})
+    assert "CG_SWIFT_INDEX=1" in coverage.render({"": st["coverage"]})
     assert clean is not None
 
 
 def test_heuristic_reasons(tmp_path, no_toolchain, monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_SWIFT_INDEX_STORE", str(tmp_path / "missing"))
+    monkeypatch.setenv("CG_SWIFT_INDEX_STORE", str(tmp_path / "missing"))
     st, _ = _index(tmp_path)
     assert "is not a directory" in _cov(st)["reason"]
-    monkeypatch.delenv("CODEGRAPH_SWIFT_INDEX_STORE")
+    monkeypatch.delenv("CG_SWIFT_INDEX_STORE")
     _fake_toolchain(tmp_path, monkeypatch, "exit 0\n")
     st, _ = _index(tmp_path)
     # the build runs Package.swift and package plugins: only on request
-    assert st["plugins"]["swift"]["mode"] == "heuristic" and "set CODEGRAPH_SWIFT_INDEX=1" in _cov(st)["reason"]
+    assert st["plugins"]["swift"]["mode"] == "heuristic" and "set CG_SWIFT_INDEX=1" in _cov(st)["reason"]
     # an Xcode project (no Package.swift) needs an existing store
     app = tmp_path / "XcodeApp"
     (app / "App").mkdir(parents=True)
@@ -151,7 +151,7 @@ def test_heuristic_reasons(tmp_path, no_toolchain, monkeypatch):
 def test_swift_build_failure_keeps_heuristic(tmp_path, no_toolchain, monkeypatch):
     _fake_toolchain(tmp_path, monkeypatch, '[ "$1" = --version ] && { echo "Swift version 0.0"; exit 0; }\n'
                     'echo "/src/Sources/Demo/main.swift:1:8: error: no such module \'SwiftUI\'" >&2\nexit 1\n')
-    monkeypatch.setenv("CODEGRAPH_SWIFT_INDEX", "1")
+    monkeypatch.setenv("CG_SWIFT_INDEX", "1")
     st, con = _index(tmp_path)
     k = st["plugins"]["swift"]
     assert k["mode"] == "heuristic" and k["index"]["error"] == "exit 1"
@@ -170,8 +170,8 @@ def test_exact_extension_initializer_of_sdk_type(tmp_path, clean_env):
         "extension String {\n    init(order: Int) {\n        self = \"o\\(order)\"\n    }\n}\n\n"
         "func ext() -> String {\n    let a = String(order: 2)\n    let b = String(repeating: \"x\", count: 2)\n"
         "    return a + b\n}\n")
-    clean_env.setenv("CODEGRAPH_SWIFT", SWIFT)
-    clean_env.setenv("CODEGRAPH_SWIFT_INDEX", "1")
+    clean_env.setenv("CG_SWIFT", SWIFT)
+    clean_env.setenv("CG_SWIFT_INDEX", "1")
     st, con = _index(tmp_path, root)
     assert st["plugins"]["swift"]["mode"] == "indexstore"
     rows = {(s, d, k, ln, c) for s, d, k, ln, c in con.execute(

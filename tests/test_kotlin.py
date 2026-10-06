@@ -12,8 +12,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_kotlin")
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.link import link  # noqa: E402
 
 FIX = ROOT / "tests" / "kotlin_fixture"
 AND = ROOT / "examples" / "bookstore-android"
@@ -122,8 +122,8 @@ def test_android_sample_entries_pages_and_link():
 
 
 def test_android_sample_path_from_compose_screen_to_table():
-    from codegraph.core.store import GraphStore
-    from codegraph import query as Q
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph import query as Q
     db("and")
     st = GraphStore(_S["and"])
     res = Q.path_between(st, "page:kotlin:checkout/{bookId}", "table:catalog_order")
@@ -232,7 +232,7 @@ def test_ktor_type_safe_resources():
 
 def test_suspend_lambda_expression_parses(tmp_path):
     """#81: `val b = suspend { 1 }` / `X to suspend { ... }` no longer swallows the enclosing class."""
-    from codegraph.plugins.kotlin.plugin import _suspend_lambdas
+    from cg_code_graph.plugins.kotlin.plugin import _suspend_lambdas
     d = tmp_path / "src" / "test" / "kotlin"
     d.mkdir(parents=True)
     src = ("package demo\n\nimport kotlin.test.Test\n\nclass SuspendTest {\n    @Test\n    fun usesSuspendLambda() {\n"
@@ -256,7 +256,7 @@ def test_route_call_after_property_and_dynamic_named_call_parse(tmp_path):
     """#104: `get("/x") { }` on the line after a `val` was read as that property's getter, and a call or function
     named `dynamic` hit the Kotlin/JS type keyword; both swallowed the enclosing function. The parsed copy is
     rewritten byte for byte; names, lines and routes come from the original source."""
-    from codegraph.plugins.kotlin.plugin import _keyword_calls, _route_calls
+    from cg_code_graph.plugins.kotlin.plugin import _keyword_calls, _route_calls
     d = tmp_path / "src" / "main" / "kotlin"
     d.mkdir(parents=True)
     src = ("package demo\n\nimport io.ktor.server.application.*\nimport io.ktor.server.response.*\n"
@@ -290,7 +290,7 @@ def test_member_reparse_keeps_the_members_around_a_parse_error(tmp_path):
     """#104: a construct the grammar lacks (here a `$$"..."` multi-dollar string) used to turn the rest of the class
     into an ERROR. Each member is now parsed on its own inside the file's skeleton; the one that still errors is
     blanked and reported as an error span, and the members around it keep their nodes, lines and calls."""
-    from codegraph.plugins.kotlin.reparse import reparse_members
+    from cg_code_graph.plugins.kotlin.reparse import reparse_members
     import tree_sitter_kotlin as tsk
     from tree_sitter import Language, Parser
     d = tmp_path / "src" / "main" / "kotlin"
@@ -327,7 +327,7 @@ def test_member_reparse_keeps_the_members_around_a_parse_error(tmp_path):
 
 def test_statement_suspend_lambda_parses():
     """#104: `suspend { ... }.runCatching(x)` starting a statement; `;` keeps it off the previous line's call."""
-    from codegraph.plugins.kotlin.plugin import _suspend_lambdas
+    from cg_code_graph.plugins.kotlin.plugin import _suspend_lambdas
     src = (b"fun f() {\n    val a = g()\n    suspend {\n        h()\n    }.runCatching(a)\n    val b =\n"
            b"        suspend { 1 }\n    suspend fun k() {}\n}\n")
     out, n = _suspend_lambdas(src)
@@ -338,8 +338,8 @@ def test_statement_suspend_lambda_parses():
 def test_function_locals_and_lazy_properties_type_their_receivers(tmp_path):
     # #96 item 5: `val repo = OrderRepo()` in a function body and `by lazy { UserRepo() }` give the receiver type,
     # so a call on them landing on an inherited method carries attrs.recv; `val same = 1 == UserRepo()...` does not
-    from codegraph.core.store import GraphStore
-    from codegraph.indexer import index_project
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph.indexer import index_project
     src = tmp_path / "k" / "src" / "main" / "kotlin" / "app"
     src.mkdir(parents=True)
     (src / "Repo.kt").write_text(

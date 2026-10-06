@@ -14,13 +14,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import coverage as C  # noqa: E402
-from codegraph.config import ConfigError, load as load_config  # noqa: E402
-from codegraph.core.plugin import Project  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.python.plugin import PythonPlugin  # noqa: E402
-from codegraph.plugins.python.roots import packaging_roots  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
+from cg_code_graph.config import ConfigError, load as load_config  # noqa: E402
+from cg_code_graph.core.plugin import Project  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.python.plugin import PythonPlugin  # noqa: E402
+from cg_code_graph.plugins.python.roots import packaging_roots  # noqa: E402
 
 
 def write(root: Path, files: dict) -> Path:
@@ -39,7 +39,7 @@ def build(tmp: Path, name: str, files: dict, **kw) -> GraphStore:
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
 
 
 def modules(st):
@@ -192,7 +192,7 @@ def test_python_root_flag_beats_config_file_and_is_kept_by_mcp_reindex(tmp_path)
     r = cg("index", tmp_path / "flag", "--db", tmp_path / "cli.db", "--python-root", "lib", "--python-root", "vendored")
     assert r.returncode == 0, r.stderr[-500:]
     assert set(modules(GraphStore(tmp_path / "cli.db"))) == {"tool", "tool.cli", "shared", "shared.text"}
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE.update(db=str(tmp_path / "cli.db"), root=None, gates=None)
@@ -308,7 +308,7 @@ def test_packaging_config_roots(tmp_path, files, expect):
 
 def test_mcp_coverage_lists_roots(tmp_path):
     st = build(tmp_path, "mcp", {**REPRO, "my-tools/x.py": "X = 1\n"})
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = st.path

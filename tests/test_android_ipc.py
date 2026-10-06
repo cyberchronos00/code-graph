@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_kotlin")
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FX = ROOT / "tests" / "android_ipc_fixture"
 APP = "com.example.app"
@@ -82,8 +82,8 @@ def test_exposure(db):
 
 
 def test_exposure_guards(db):
-    from codegraph.core.store import GraphStore
-    from codegraph.protocols.view import collect
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph.protocols.view import collect
     ep = collect(GraphStore(db[0]))
     ext = ep[f"endpoint:intent-action:{APP}.ACTION_EXTERNAL"]       # exported, no permission: any app can send it
     assert ext["guards"] == [] and "unguarded" in ext["checks"]

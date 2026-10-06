@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from codegraph import hooks
-from codegraph.indexer import index_project
+from cg_code_graph import hooks
+from cg_code_graph.indexer import index_project
 
 
 def _git(repo, *args):
@@ -30,7 +30,7 @@ def _init(repo: Path):
 
 
 def _run_watch(repo, db, monkeypatch, **kw):
-    from codegraph import watch as W
+    from cg_code_graph import watch as W
     calls = []
 
     def fake(*a, **k):
@@ -168,7 +168,7 @@ def test_ctrl_c_stops_cleanly(tmp_path):
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     proc = subprocess.Popen(
-        [sys.executable, "-m", "codegraph.cli", "watch", str(repo), "--db", str(db), "--poll", "--interval", "0.2"],
+        [sys.executable, "-m", "cg_code_graph.cli", "watch", str(repo), "--db", str(db), "--poll", "--interval", "0.2"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, start_new_session=True)
     lines = []
 
@@ -195,7 +195,7 @@ def test_ctrl_c_stops_cleanly(tmp_path):
 
 
 def test_poll_non_git_returns_2(tmp_path):
-    from codegraph import watch as W
+    from cg_code_graph import watch as W
     root = tmp_path / "plain"
     root.mkdir()
     (root / "a.py").write_text("x = 1\n", encoding="utf-8")
@@ -209,7 +209,7 @@ def test_mcp_staleness_note_cache_and_index(tmp_path, monkeypatch):
     _init(repo)
     db = tmp_path / "graph.db"
     assert hooks.refresh(str(repo), str(db), quiet=True) == 0
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = str(db)
@@ -256,7 +256,7 @@ def test_staleness_mtime_fallback_without_state_file(tmp_path):
 
 
 def test_edit_during_refresh_gets_one_follow_up(tmp_path, monkeypatch):
-    from codegraph import watch as W
+    from cg_code_graph import watch as W
     repo = tmp_path / "repo"
     _init(repo)
     db = tmp_path / "graph.db"
@@ -288,7 +288,7 @@ def test_stale_note_never_breaks_a_reply(tmp_path, monkeypatch):
     _init(repo)
     db = tmp_path / "graph.db"
     assert hooks.refresh(str(repo), str(db), quiet=True) == 0
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
 
     def boom(*a, **k):
@@ -302,7 +302,7 @@ def test_stale_note_never_breaks_a_reply(tmp_path, monkeypatch):
         txt = M.stats()
         assert "index note:" not in txt and "boom" not in txt
         assert "stale" not in M.stats.structured()
-        monkeypatch.setenv("CODEGRAPH_NO_STALE_CHECK", "1")
+        monkeypatch.setenv("CG_NO_STALE_CHECK", "1")
         monkeypatch.setattr(hooks, "staleness", lambda *a, **k: True)
         M._STALE["key"] = None
         assert "index note:" not in M.stats()

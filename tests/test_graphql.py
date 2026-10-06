@@ -1,4 +1,4 @@
-"""GraphQL root fields as protocol endpoints (#34): codegraph/graphql.py over tests/graphql_fixture (SDL files, an
+"""GraphQL root fields as protocol endpoints (#34): cg_code_graph/graphql.py over tests/graphql_fixture (SDL files, an
 Apollo resolver map, Apollo Client operations and a codegen hook, a Nest resolver, graphene / strawberry / ariadne
 schemas and Python gql clients)."""
 import json
@@ -10,9 +10,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.graphql import Doc, camel, first_level, root_fields  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.graphql import Doc, camel, first_level, root_fields  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
 
 FIX = ROOT / "tests" / "graphql_fixture"
 Q, M, S = "endpoint:graphql:Query.", "endpoint:graphql:Mutation.", "endpoint:graphql:Subscription."
@@ -136,7 +136,7 @@ def test_nest_twin_and_view(graph):
     recv = _edges(con, "RECEIVED_BY", Q + "shelves")
     assert set(recv) == {"method:src/nest/shelf.resolver.ts#ShelfResolver.shelves"}
     assert _node(con, Q + "shelves")[2] is None              # the route stays the entry point
-    from codegraph.protocols.view import collect
+    from cg_code_graph.protocols.view import collect
     ep = collect(GraphStore(db))
     assert Q + "shelves" not in ep                          # shown as the route
     r = ep["route:GRAPHQL Query.shelves"]

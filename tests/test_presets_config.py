@@ -13,17 +13,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import config as CFG  # noqa: E402
-from codegraph import coverage as C  # noqa: E402
-from codegraph import plans as P  # noqa: E402
-from codegraph import presets as PR  # noqa: E402
-from codegraph import query as Q  # noqa: E402
-from codegraph import routes as R  # noqa: E402
-from codegraph import starters as S  # noqa: E402
-from codegraph.core.paths import PathRules, glob_regex  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import FRAMEWORK_PLUGINS, LANGUAGE_PLUGINS, index_project  # noqa: E402
-from codegraph.viz.server import menu  # noqa: E402
+from cg_code_graph import config as CFG  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
+from cg_code_graph import plans as P  # noqa: E402
+from cg_code_graph import presets as PR  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph import routes as R  # noqa: E402
+from cg_code_graph import starters as S  # noqa: E402
+from cg_code_graph.core.paths import PathRules, glob_regex  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import FRAMEWORK_PLUGINS, LANGUAGE_PLUGINS, index_project  # noqa: E402
+from cg_code_graph.viz.server import menu  # noqa: E402
 from sample import needs_php  # noqa: E402
 
 EXAMPLES = ROOT / "examples"
@@ -45,7 +45,7 @@ def build(tmp: Path, name: str, files: dict, **kw) -> GraphStore:
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
 
 
 def guards(st) -> dict:
@@ -144,13 +144,13 @@ def test_preset_files_are_well_formed_and_cite_their_source():
 
 
 def test_skip_lists_come_from_the_shared_presets():
-    from codegraph.plugins.cfamily import plugin as cf
-    from codegraph.plugins.dart import plugin as dart, program as dprog
-    from codegraph.plugins.nuxt import plugin as nuxt
-    from codegraph.plugins.python import plugin as py
-    from codegraph.plugins.rust import cargo
-    from codegraph.plugins.ts import plugin as ts
-    from codegraph.plugins.tsweb import common as tsw
+    from cg_code_graph.plugins.cfamily import plugin as cf
+    from cg_code_graph.plugins.dart import plugin as dart, program as dprog
+    from cg_code_graph.plugins.nuxt import plugin as nuxt
+    from cg_code_graph.plugins.python import plugin as py
+    from cg_code_graph.plugins.rust import cargo
+    from cg_code_graph.plugins.ts import plugin as ts
+    from cg_code_graph.plugins.tsweb import common as tsw
     common = set(PR.load("common")["skip_dirs"])
     assert {".git", "node_modules", "__pycache__"} == common
     for got, preset, keys in ((C.SKIP_DIRS, "common", ("scan_skip_dirs",)), (py.SKIP_DIRS, "python", ()),
@@ -289,7 +289,7 @@ def test_config_show_lists_the_source_of_every_value(tmp_path):
         src.setdefault(row["key"], []).append(row["source"])
         assert row["source"], row
     assert src["frameworks"] == ["detected", ".cg.yaml frameworks.add"]
-    assert src["presets"] == ["built-in (codegraph/presets), picked by detection"]
+    assert src["presets"] == ["built-in (cg_code_graph/presets), picked by detection"]
     assert src["python.source_roots"] == [".cg.yaml python.source_roots"]
     assert src["exclude"] == [".cg.yaml exclude"]
     assert "preset common" in src["skip_dirs"] and "preset python" in src["skip_dirs"] and ".cg.yaml skip_dirs.add" in src["skip_dirs"]
@@ -351,7 +351,7 @@ def test_starters_resolve_on_the_examples(tmp_path, example):
 
 
 def test_mcp_starters_tool(tmp_path):
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     db = tmp_path / "dj.db"
     index_project(write(tmp_path / "dj", DJANGO), db, "dj")
     old = dict(M.STATE)

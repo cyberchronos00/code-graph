@@ -10,15 +10,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import bridges as B  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.dart.plugin import find_dart  # noqa: E402
-from codegraph.plugins.ts import plugin as TS  # noqa: E402
+from cg_code_graph import bridges as B  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.dart.plugin import find_dart  # noqa: E402
+from cg_code_graph.plugins.ts import plugin as TS  # noqa: E402
 
 FX = ROOT / "tests" / "bridge_fixtures" / "flutter_pigeon_app"
-TS_DEPS = ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules"
-needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+TS_DEPS = ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules"
+needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 needs_dart = pytest.mark.skipif(find_dart() is None, reason="Dart SDK not found (set $DART or put dart on PATH)")
 _G: dict = {}
 

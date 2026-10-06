@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
-from codegraph import coverage as C  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 from sample import API, EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 XC = ROOT / "tests" / "platform_fixtures" / "xcode_app"
@@ -24,8 +24,8 @@ _S: dict = {}
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=ROOT, capture_output=True,
-                          text=True, env={**__import__("os").environ, "CODEGRAPH_NO_CACHE": "1"})
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, capture_output=True,
+                          text=True, env={**__import__("os").environ, "CG_NO_CACHE": "1"})
 
 
 def xc_db() -> Path:
@@ -135,7 +135,7 @@ def test_typescript_in_a_subdirectory_of_a_swift_repo(tmp_path):
     langs = {e["language"]: e["status"] for e in st.meta()["stats"]["coverage"]["languages"]}
     assert langs["typescript"] == "exact" and langs["swift"] == "heuristic"
     # a PHP / Python backend root keeps its frontend separate (index it on its own, `cg link`)
-    from codegraph.plugins.ts.plugin import sub_tsconfigs
+    from cg_code_graph.plugins.ts.plugin import sub_tsconfigs
     assert sub_tsconfigs(root) == ["web/tsconfig.json"]
     (root / "requirements.txt").write_text("")
     assert sub_tsconfigs(root) == []

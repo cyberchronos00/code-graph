@@ -13,9 +13,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph import platforms as PF  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.xcode import apple_build, parse_pbxproj  # noqa: E402
+from cg_code_graph import platforms as PF  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.xcode import apple_build, parse_pbxproj  # noqa: E402
 
 XC = ROOT / "tests" / "platform_fixtures" / "xcode_app"
 _S: dict = {}
@@ -180,7 +180,7 @@ def test_test_code_on_project_default_platforms_is_listed_apart(tmp_path):
     assert [(m["at"], m["missing_on"], m["platform_source"]) for m in t] == [
         ("Tests/LibTests/CacheTests.swift:3", ["watchos"], "project default (test target)")]
     assert d["counts"]["missing_callee"] == 1 and d["counts"]["missing_callee_tests"] == 1
-    from codegraph.core.store import GraphStore
+    from cg_code_graph.core.store import GraphStore
     g = GraphStore(db.execute("PRAGMA database_list").fetchone()[2])
     txt = PF.render_divergence(PF.divergence(g))
     assert "FROM TEST CODE WHOSE PLATFORMS ARE THE PROJECT DEFAULT: 1" in txt

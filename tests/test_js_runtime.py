@@ -1,4 +1,4 @@
-"""JavaScript runtime lookup for the TypeScript extractor: node, then bun, or CODEGRAPH_NODE."""
+"""JavaScript runtime lookup for the TypeScript extractor: node, then bun, or CG_NODE."""
 import json
 import os
 import shutil
@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from sample import WEB, EXTRACTOR_DEPS  # noqa: E402
-from codegraph.core import extractors  # noqa: E402
-from codegraph import doctor  # noqa: E402
+from cg_code_graph.core import extractors  # noqa: E402
+from cg_code_graph import doctor  # noqa: E402
 
 
 def _which(found: dict):
@@ -26,7 +26,7 @@ def _which(found: dict):
 
 
 def test_path_precedence(monkeypatch):
-    monkeypatch.delenv("CODEGRAPH_NODE", raising=False)
+    monkeypatch.delenv("CG_NODE", raising=False)
     monkeypatch.setattr(extractors.shutil, "which", _which({"node": "/usr/bin/node", "bun": "/usr/bin/bun"}))
     assert extractors.js_runtime()["kind"] == "node"
     monkeypatch.setattr(extractors.shutil, "which", _which({"bun": "/usr/bin/bun"}))
@@ -35,22 +35,22 @@ def test_path_precedence(monkeypatch):
     monkeypatch.setattr(extractors.shutil, "which", _which({}))
     assert extractors.js_runtime() is None
     problem = extractors.js_runtime_problem()
-    assert "node not installed" in problem and "CODEGRAPH_NODE" in problem
+    assert "node not installed" in problem and "CG_NODE" in problem
 
 
 def test_codegraph_node_override(monkeypatch):
-    monkeypatch.setenv("CODEGRAPH_NODE", "/x/bun")
+    monkeypatch.setenv("CG_NODE", "/x/bun")
     monkeypatch.setattr(extractors.shutil, "which", _which({"/x/bun": "/x/bun", "node": "/usr/bin/node"}))
     rt = extractors.js_runtime()
-    assert rt["kind"] == "bun" and rt["source"] == "CODEGRAPH_NODE" and rt["path"] == "/x/bun"
-    monkeypatch.setenv("CODEGRAPH_NODE", "/nope")
+    assert rt["kind"] == "bun" and rt["source"] == "CG_NODE" and rt["path"] == "/x/bun"
+    monkeypatch.setenv("CG_NODE", "/nope")
     monkeypatch.setattr(extractors.shutil, "which", _which({"node": "/usr/bin/node"}))
     assert extractors.js_runtime() is None
-    assert extractors.js_runtime_problem().startswith("CODEGRAPH_NODE=/nope")
+    assert extractors.js_runtime_problem().startswith("CG_NODE=/nope")
 
 
 def test_install_command_npm_or_bun(monkeypatch):
-    monkeypatch.delenv("CODEGRAPH_NODE", raising=False)
+    monkeypatch.delenv("CG_NODE", raising=False)
     monkeypatch.setattr(extractors.shutil, "which", _which({"npm": "/usr/bin/npm", "bun": "/usr/bin/bun", "node": "/usr/bin/node"}))
     cmd = extractors.install_command("typescript")
     assert cmd[0] == "/usr/bin/npm" and "ci" in cmd
@@ -59,7 +59,7 @@ def test_install_command_npm_or_bun(monkeypatch):
 
 
 def test_doctor_bun_only(monkeypatch):
-    monkeypatch.delenv("CODEGRAPH_NODE", raising=False)
+    monkeypatch.delenv("CG_NODE", raising=False)
 
     def which(name):
         if name == "bun":
@@ -103,11 +103,11 @@ needs_bun = pytest.mark.skipif(
 
 
 def _cg(args, path, extra_env=None, cwd=ROOT):
-    env = dict(os.environ, CODEGRAPH_NO_CACHE="1", PATH=path)
-    env.pop("CODEGRAPH_NODE", None)
+    env = dict(os.environ, CG_NO_CACHE="1", PATH=path)
+    env.pop("CG_NODE", None)
     if extra_env:
         env.update(extra_env)
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=cwd, env=env,
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=cwd, env=env,
                           capture_output=True, text=True)
 
 
@@ -147,16 +147,16 @@ def test_codegraph_node_selects_bun_and_missing_skips(tmp_path):
         pytest.skip("node is not on PATH")
     db = tmp_path / "over.db"
     r = _cg(["index", WEB, "--name", "bookstore-web", "--db", db], os.environ["PATH"],
-            {"CODEGRAPH_NODE": _BUN})
+            {"CG_NODE": _BUN})
     assert r.returncode == 0, r.stderr[-800:]
     assert json.loads(r.stdout)["plugins"]["typescript"]["runtime"]["kind"] == "bun"
     empty = tmp_path / "bin"
     empty.mkdir()
     r2 = _cg(["index", WEB, "--name", "bookstore-web", "--db", tmp_path / "miss.db"], str(empty),
-             {"CODEGRAPH_NODE": "/nonexistent"})
+             {"CG_NODE": "/nonexistent"})
     assert r2.returncode == 0, r2.stderr[-800:]
     ts = next(e for e in json.loads(r2.stdout)["coverage"]["languages"] if e["language"] == "typescript")
-    assert ts["status"] == "skipped" and "CODEGRAPH_NODE" in ts["reason"]
+    assert ts["status"] == "skipped" and "CG_NODE" in ts["reason"]
 
 
 def test_codegraph_node_name_path_and_symlink(tmp_path, monkeypatch):
@@ -166,17 +166,17 @@ def test_codegraph_node_name_path_and_symlink(tmp_path, monkeypatch):
     (tmp_path / "node").symlink_to(real_bun)          # a Bun image's `node` -> bun
     (tmp_path / "bun").symlink_to(real_bun)
     monkeypatch.setenv("PATH", str(tmp_path))
-    monkeypatch.delenv("CODEGRAPH_NODE", raising=False)
+    monkeypatch.delenv("CG_NODE", raising=False)
     rt = extractors.js_runtime()
     assert rt["path"] == str(tmp_path / "node") and rt["kind"] == "bun"   # no --max-old-space-size for it
-    monkeypatch.setenv("CODEGRAPH_NODE", "bun")                           # a name on PATH
+    monkeypatch.setenv("CG_NODE", "bun")                           # a name on PATH
     rt = extractors.js_runtime()
-    assert rt["path"] == str(tmp_path / "bun") and rt["kind"] == "bun" and rt["source"] == "CODEGRAPH_NODE"
+    assert rt["path"] == str(tmp_path / "bun") and rt["kind"] == "bun" and rt["source"] == "CG_NODE"
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CODEGRAPH_NODE", "~/bun-1.4")                     # a path, ~ expanded
+    monkeypatch.setenv("CG_NODE", "~/bun-1.4")                     # a path, ~ expanded
     assert extractors.js_runtime()["path"] == str(real_bun)
-    monkeypatch.setenv("CODEGRAPH_NODE", str(tmp_path / "missing-node"))
+    monkeypatch.setenv("CG_NODE", str(tmp_path / "missing-node"))
     assert extractors.js_runtime() is None
     problem = extractors.js_runtime_problem()
-    assert problem.startswith(f"CODEGRAPH_NODE={tmp_path / 'missing-node'} is not an executable")
+    assert problem.startswith(f"CG_NODE={tmp_path / 'missing-node'} is not an executable")
     assert "node not installed" not in problem

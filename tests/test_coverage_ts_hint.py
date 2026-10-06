@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import coverage as C  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
 
 
 def _ts(root: Path, plugins: dict) -> dict:
@@ -46,7 +46,7 @@ def test_ts_files_outside_the_source_dirs_are_not_indexed(tmp_path):
     """Files the TypeScript program never read (outside the source dirs, bin / script files and test trees) are
     `unmapped`, so coverage is not reported as complete; tool configs and test-named files stay excluded (#106)."""
     import json
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     root = tmp_path / "app"
     files = {
         "package.json": '{"name": "app", "version": "1.0.0", "devDependencies": {"jest": "29"}}',

@@ -12,13 +12,13 @@ pytestmark = pytest.mark.skipif(not have_tree_sitter(), reason=TS_SKIP)
 
 SAMPLE = ROOT / "examples" / "rust-kvstore"
 ROUTES = ROOT / "tests" / "rust_routes_fixture"
-RA_SKIP = "rust-analyzer not installed (rustup component add rust-analyzer, or set CODEGRAPH_RUST_ANALYZER); SCIP-mode Rust tests skipped"
+RA_SKIP = "rust-analyzer not installed (rustup component add rust-analyzer, or set CG_RUST_ANALYZER); SCIP-mode Rust tests skipped"
 _CACHE = {}
 
 
 def heur():
     if "h" not in _CACHE:
-        db, res = index(SAMPLE, CODEGRAPH_RUST_SCIP="0")
+        db, res = index(SAMPLE, CG_RUST_SCIP="0")
         _CACHE["h"] = (DB(db), res)
     return _CACHE["h"]
 
@@ -27,7 +27,7 @@ def scip():
     if not rust_analyzer():
         pytest.skip(RA_SKIP)
     if "s" not in _CACHE:
-        db, res = index(SAMPLE, CODEGRAPH_RUST_SCIP=None)
+        db, res = index(SAMPLE, CG_RUST_SCIP=None)
         _CACHE["s"] = (DB(db), res)
     return _CACHE["s"]
 
@@ -83,8 +83,8 @@ def test_facts_env_unsafe_ffi_gates():
 
 
 def test_reaches_groups_runtime_library_dev():
-    from codegraph import query as Q
-    from codegraph.core.store import GraphStore
+    from cg_code_graph import query as Q
+    from cg_code_graph.core.store import GraphStore
     g, _ = heur()
     res = Q.reaches(GraphStore(str(g.path)), ["unsafe:kv_core"])
     cls = {i["id"]: i["class"] for i in res["items"]}
@@ -95,7 +95,7 @@ def test_reaches_groups_runtime_library_dev():
 
 
 def test_gating_features_off():
-    db, _ = index(SAMPLE, gates=True, CODEGRAPH_RUST_SCIP="0")
+    db, _ = index(SAMPLE, gates=True, CG_RUST_SCIP="0")
     g = DB(db)
     # statement-level #[cfg(feature = "fs")] block inside open_default
     e = g.edges("CALLS", "function:kv_core::open_default", "function:kv_core::store::file::data_dir")
@@ -107,7 +107,7 @@ def test_gating_features_off():
 
 
 def test_routes_fixture():
-    db, res = index(ROUTES, CODEGRAPH_RUST_SCIP="0")
+    db, res = index(ROUTES, CG_RUST_SCIP="0")
     g = DB(db)
     assert g.entry("function:routes_fixture::main") == "main"
     attrs = json.loads(g.node("function:routes_fixture::main")["attrs"])
@@ -145,8 +145,8 @@ def test_scip_and_heuristic_share_node_ids():
 
 
 def test_scip_path_main_to_unsafe():
-    from codegraph import query as Q
-    from codegraph.core.store import GraphStore
+    from cg_code_graph import query as Q
+    from cg_code_graph.core.store import GraphStore
     g, _ = scip()
     p = Q.path_between(GraphStore(str(g.path)), "kv::main", "unsafe:kv_core")
     assert p and p[-1]["to"] == "unsafe:kv_core", p
@@ -163,7 +163,7 @@ IT = "mtest_fixture[test:integration]"
 def test_macro_generated_tests(scip_mode):
     if scip_mode is None and not rust_analyzer():
         pytest.skip(RA_SKIP)
-    db, res = index(MACROS, CODEGRAPH_RUST_SCIP=scip_mode)
+    db, res = index(MACROS, CG_RUST_SCIP=scip_mode)
     g = DB(db)
     st = stats_of(res, "rust")
     assert st["test_macros"] == 2 and st["macro_tests"] == 4, st
@@ -183,7 +183,7 @@ def test_scip_parameter_symbols_are_not_items():
     """rust-analyzer 1.83 gives closure / fn parameters global symbols (`put().(e)`); they are not items, so the
     import must not turn their parent descriptor into a synthetic function node (node ids would then depend on the
     rust-analyzer version)."""
-    from codegraph.plugins.native import scipread
+    from cg_code_graph.plugins.native import scipread
     pkg, d = scipread.descriptors("rust-analyzer cargo kv-core 0.1.0 file/store/put().(e)")
     assert pkg == "kv-core" and d[-1] == ("e", ")") and d[-2] == ("put", "(")
     assert scipread.descriptors("rust-analyzer cargo kv-core 0.1.0 codec/impl#[Plain][Codec]decode().")[1][-1] == ("decode", "(")

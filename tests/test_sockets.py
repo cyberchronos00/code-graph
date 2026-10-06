@@ -1,4 +1,4 @@
-"""Raw TCP / UDP sockets paired by port (#39): codegraph/sockets.py over tests/sockets_fixture (Python, TypeScript,
+"""Raw TCP / UDP sockets paired by port (#39): cg_code_graph/sockets.py over tests/sockets_fixture (Python, TypeScript,
 Rust, Kotlin, Swift) and tests/sockets_c_fixture (BSD sockets, libuv)."""
 import json
 import sqlite3
@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "sockets_fixture"
 CFIX = ROOT / "tests" / "sockets_c_fixture"
@@ -98,8 +98,8 @@ def test_env_port_without_value_matches_the_same_key(graph):
 
 
 def test_protocols_view_lists_sockets(graph):
-    from codegraph.core.store import GraphStore
-    from codegraph.protocols.view import protocols
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph.protocols.view import protocols
     _, con = graph
     db = con.execute("pragma database_list").fetchone()[2]
     res = protocols(GraphStore(db), protocol="tcp")
@@ -119,7 +119,7 @@ def test_c_bsd_sockets_and_libuv(tmp_path):
 
 
 def test_value_parsing():
-    from codegraph.sockets import parse_addr, split_args
+    from cg_code_graph.sockets import parse_addr, split_args
     assert parse_addr("127.0.0.1:6379") == ("127.0.0.1", "6379")
     assert parse_addr("[::]:8080") == ("::", "8080")
     assert parse_addr("tcp://0.0.0.0:9000") == ("0.0.0.0", "9000")

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from codegraph import agents, agent_rules
+from cg_code_graph import agents, agent_rules
 
 
 def _write(p, text):
@@ -155,7 +155,7 @@ def test_all_writes_one_full_block_and_two_pointers(tmp_path):
 
 
 def test_full_block_pins_pypi_not_editable():
-    from codegraph import __version__
+    from cg_code_graph import __version__
 
     major, minor, *_rest = __version__.split(".")
     expected = f"pip install 'cg-code-graph>={major}.{minor}'"
@@ -235,6 +235,6 @@ def test_rerun_is_a_noop(tmp_path):
 @pytest.mark.parametrize("version,expected", [("0.14.0", "cg-code-graph>=0.14"), ("1.2.3rc1", "cg-code-graph>=1.2"),
                                               ("0.15.0.dev2", "cg-code-graph>=0.15"), ("10.20", "cg-code-graph>=10.20")])
 def test_pin_is_major_minor(monkeypatch, version, expected):
-    import codegraph
-    monkeypatch.setattr(codegraph, "__version__", version)
+    import cg_code_graph
+    monkeypatch.setattr(cg_code_graph, "__version__", version)
     assert agent_rules.pin() == expected

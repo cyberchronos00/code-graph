@@ -1,4 +1,4 @@
-"""Socket.IO in JS / TS (#32 part 1): codegraph/realtime_events.py over tests/realtime_fixture (a socket.io server with a
+"""Socket.IO in JS / TS (#32 part 1): cg_code_graph/realtime_events.py over tests/realtime_fixture (a socket.io server with a
 namespace, middleware, rooms, an ack, a template event and an emit wrapper; a socket.io-client web app; a Nest
 gateway with a guard), linked by cg link."""
 import json
@@ -10,10 +10,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link  # noqa: E402
-from codegraph.protocols.view import protocols  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.link import link  # noqa: E402
+from cg_code_graph.protocols.view import protocols  # noqa: E402
 
 FX = ROOT / "tests" / "realtime_fixture"
 E = "endpoint:socketio:"

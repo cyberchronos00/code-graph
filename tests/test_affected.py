@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from codegraph import query as Q
-from codegraph.affected import affected, file_changes, git_changes, render_affected, render_quiet
-from codegraph.core.store import GraphStore
-from codegraph.indexer import index_project
+from cg_code_graph import query as Q
+from cg_code_graph.affected import affected, file_changes, git_changes, render_affected, render_quiet
+from cg_code_graph.core.store import GraphStore
+from cg_code_graph.indexer import index_project
 
 FILES = {
     "pyproject.toml": '[project]\nname = "affx"\nversion = "0"\n\n[project.scripts]\naffx = "app.cli:main"\n',
@@ -52,7 +52,7 @@ def _reset(repo):
 
 
 def _cli(repo, db, *args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *args, "--db", str(db)],
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *args, "--db", str(db)],
                           cwd=repo, capture_output=True, text=True)
 
 
@@ -177,7 +177,7 @@ def test_json_and_cap(affx):
 
 def test_mcp(affx, monkeypatch):
     repo, db = affx
-    import codegraph.mcp_server as M
+    import cg_code_graph.mcp_server as M
     monkeypatch.setitem(M.STATE, "db", str(db))
     monkeypatch.setitem(M.STATE, "root", str(repo))
     out = M.affected(files=["app/util.py"])
@@ -185,7 +185,7 @@ def test_mcp(affx, monkeypatch):
 
 
 def test_hunk_header_paths_and_deletions():
-    from codegraph.affected import _hunks
+    from cg_code_graph.affected import _hunks
     diff = "\n".join([
         "diff --git a/a b.py b/a b.py",
         "--- a/a b.py\t",

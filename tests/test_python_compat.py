@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-PKG = ROOT / "codegraph"
+PKG = ROOT / "cg_code_graph"
 SKIP_PARTS = {"node_modules", "vendor", ".dart_tool", "__pycache__", ".bin"}
 MIN = (3, 11)
 
@@ -124,25 +124,26 @@ def test_package_byte_compiles_under_python_311():
 
 
 def test_doctor_imports_every_module():
-    from codegraph.doctor import module_imports
+    from cg_code_graph.doctor import module_imports
     r = module_imports()
     assert r["modules"] > 100 and r["failed"] == {}
 
 
 def test_doctor_reports_a_module_that_does_not_import(tmp_path, monkeypatch, capsys):
-    from codegraph import cli, doctor
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    from cg_code_graph import cli, doctor
     try:
-        compile("x = (\n", "codegraph/plugins/kotlin/plugin.py", "exec")
+        compile("x = (\n", "cg_code_graph/plugins/kotlin/plugin.py", "exec")
     except SyntaxError as e:
         err = doctor._describe(e)
-    assert err.startswith("SyntaxError: ") and err.endswith("(codegraph/plugins/kotlin/plugin.py:1)")
-    fake = {"modules": 111, "failed": {"codegraph.indexer": err, "codegraph.plugins.kotlin.plugin": err}}
+    assert err.startswith("SyntaxError: ") and err.endswith("(cg_code_graph/plugins/kotlin/plugin.py:1)")
+    fake = {"modules": 111, "failed": {"cg_code_graph.indexer": err, "cg_code_graph.plugins.kotlin.plugin": err}}
     monkeypatch.setattr(doctor, "module_imports", lambda: fake)
     (tmp_path / "a.py").write_text("print(1)\n")
     (tmp_path / "Main.kt").write_text("fun main() {}\n")
     r = doctor.report(tmp_path)
     langs = {x["language"]: x for x in r["languages"]}
-    assert langs["kotlin"]["mode"] == "broken" and "codegraph.plugins.kotlin.plugin does not import" in langs["kotlin"]["why"]
+    assert langs["kotlin"]["mode"] == "broken" and "cg_code_graph.plugins.kotlin.plugin does not import" in langs["kotlin"]["why"]
     assert langs["python"]["mode"] == "broken" and "cg index cannot load" in langs["python"]["why"]
     txt = doctor.render(r)
     assert "cg modules: 2 of 111 do not import" in txt and "plugins/kotlin/plugin.py:1" in txt

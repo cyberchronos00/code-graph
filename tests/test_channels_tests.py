@@ -10,21 +10,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph import query as Q, realtime as RT, routes as R  # noqa: E402
-from codegraph.plugins.php.strings import channel_match, same_shape  # noqa: E402
-from codegraph.tests_index import page_pattern  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import query as Q, realtime as RT, routes as R  # noqa: E402
+from cg_code_graph.plugins.php.strings import channel_match, same_shape  # noqa: E402
+from cg_code_graph.tests_index import page_pattern  # noqa: E402
 from sample import EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 FIX = ROOT / "tests" / "broadcast_fixture"
 _S: dict = {}
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 
 def built() -> dict:
     if not _S:
-        from codegraph.indexer import index_project
-        from codegraph.link import link
+        from cg_code_graph.indexer import index_project
+        from cg_code_graph.link import link
         d = Path(tempfile.mkdtemp(prefix="codegraph-bc-"))
         _S["api_stats"] = index_project(FIX / "api", d / "api.db", "taskboard-api")
         _S["api"] = d / "api.db"
@@ -231,7 +231,7 @@ def test_channels_and_tests_on_combined_graph():
 @needs_ts
 @needs_php
 def test_mcp_tools(monkeypatch):
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     monkeypatch.setattr(M, "_st", lambda: GraphStore(built()["combined"]))
     out = M.channels("board.{board}")
     assert "WHO CAN JOIN" in out and "useBoardRealtime" in out
@@ -258,7 +258,7 @@ def test_listeners_on_an_assigned_channel_property():
 
 
 def test_channel_matcher_flags_visibility_mismatch():
-    from codegraph.link import channel_links
+    from cg_code_graph.link import channel_links
     chans = [("channel:orders.{order}", {"pattern": "orders.{order}", "visibility": "private"}, "routes/channels.php", 3)]
     subs = [("channel_sub:orders.{id}", {"name": "orders.{id}", "visibility": "public", "events": [".shipped"]}),
             ("channel_sub:orders.{orderId}", {"name": "orders.{orderId}", "visibility": "private", "events": ["OrderShipped"]})]

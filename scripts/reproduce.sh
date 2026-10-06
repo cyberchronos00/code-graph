@@ -4,13 +4,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY=.venv/bin/python
-C="$PY -m codegraph.cli"
+C="$PY -m cg_code_graph.cli"
 
 # deps (once): php-cli >= 8.2 + composer, Node >= 20, Python 3.11+
 [ -d .venv ] || python3 -m venv .venv
 $PY -c 'import google.protobuf, pytest, mcp, yaml' 2>/dev/null || .venv/bin/pip install -q protobuf grpcio-tools pytest mcp pyyaml
-[ -d codegraph/plugins/php/extractor/vendor ] || (cd codegraph/plugins/php/extractor && composer install -q)
-[ -d codegraph/plugins/ts/extractor/node_modules/typescript ] || (cd codegraph/plugins/ts/extractor && npm ci --no-audit --no-fund)
+[ -d cg_code_graph/plugins/php/extractor/vendor ] || (cd cg_code_graph/plugins/php/extractor && composer install -q)
+[ -d cg_code_graph/plugins/ts/extractor/node_modules/typescript ] || (cd cg_code_graph/plugins/ts/extractor && npm ci --no-audit --no-fund)
 mkdir -p out/viz
 
 # index both sample apps, link them into one graph
@@ -40,10 +40,10 @@ $C viz-plan preorders --plans-dir examples/plans --db out/graph.db -o out/viz/pl
 
 # optional screenshots (puppeteer-core + a local Chrome; no browser download)
 if command -v google-chrome >/dev/null || [ -n "${CHROME:-}" ]; then
-  [ -d codegraph/viz/tools/node_modules/puppeteer-core ] || (cd codegraph/viz/tools && PUPPETEER_SKIP_DOWNLOAD=1 npm ci --no-audit --no-fund --ignore-scripts)
+  [ -d cg_code_graph/viz/tools/node_modules/puppeteer-core ] || (cd cg_code_graph/viz/tools && PUPPETEER_SKIP_DOWNLOAD=1 npm ci --no-audit --no-fund --ignore-scripts)
   $C serve --db out/graph.db --port 8178 --plans-dir examples/plans > /dev/null 2>&1 & SRV=$!
   sleep 2
-  (cd codegraph/viz/tools && node shoot.mjs http://127.0.0.1:8178/ ../../../out/screenshots) || true
+  (cd cg_code_graph/viz/tools && node shoot.mjs http://127.0.0.1:8178/ ../../../out/screenshots) || true
   kill $SRV
 fi
 

@@ -11,8 +11,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.swift.packages import SwiftPM  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.swift.packages import SwiftPM  # noqa: E402
 
 CORE_PKG = """// swift-tools-version: 5.9
 import PackageDescription

@@ -1,6 +1,6 @@
 # Value facts and `resolutions`
 
-Facts about values, from the PHP and TypeScript ASTs (`codegraph/plugins/laravel/values.py` and
+Facts about values, from the PHP and TypeScript ASTs (`cg_code_graph/plugins/laravel/values.py` and
 the TS extractor).
 
 | node | edges | from |

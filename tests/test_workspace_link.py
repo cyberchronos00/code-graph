@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from codegraph.apps import index_apps
-from codegraph.cli import main
-from codegraph.config import ConfigError, load
-from codegraph.core.model import Edge, Node
-from codegraph.core.store import GraphStore
-from codegraph.link import link, link_many
-from codegraph.query import path_between, resolve_targets
+from cg_code_graph.apps import index_apps
+from cg_code_graph.cli import main
+from cg_code_graph.config import ConfigError, load
+from cg_code_graph.core.model import Edge, Node
+from cg_code_graph.core.store import GraphStore
+from cg_code_graph.link import link, link_many
+from cg_code_graph.query import path_between, resolve_targets
 
 
 def _save(path, nodes, edges):

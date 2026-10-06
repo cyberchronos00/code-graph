@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from codegraph import explore as EX
-from codegraph.core.store import GraphStore
-from codegraph.indexer import index_project
+from cg_code_graph import explore as EX
+from cg_code_graph.core.store import GraphStore
+from cg_code_graph.indexer import index_project
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -75,14 +75,14 @@ def test_nothing_matched(st, db):
     assert "nothing matched 'zzqx frobnicate'" in text
     assert "zzqx" in text and "frobnicate" in text
     proc = subprocess.run(
-        [sys.executable, "-m", "codegraph.cli", "explore", "zzqx frobnicate", "--db", str(db)],
+        [sys.executable, "-m", "cg_code_graph.cli", "explore", "zzqx frobnicate", "--db", str(db)],
         capture_output=True, text=True)
     assert proc.returncode == 1
     assert "nothing matched" in proc.stdout
 
 
 def test_cli_create_book(db):
-    cmd = [sys.executable, "-m", "codegraph.cli", "explore", "how does creating a book work", "--db", str(db)]
+    cmd = [sys.executable, "-m", "cg_code_graph.cli", "explore", "how does creating a book work", "--db", str(db)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     assert "create_book" in proc.stdout
@@ -97,7 +97,7 @@ def test_cli_create_book(db):
 
 
 def test_mcp_explore(db):
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = str(db)
@@ -141,13 +141,13 @@ def test_file_uses_its_symbols(st):
 
 
 def test_mcp_explore_stale_note(db, monkeypatch):
-    from codegraph import hooks
-    from codegraph import mcp_server as M
+    from cg_code_graph import hooks
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = str(db)
         M.STATE["root"] = str(ROOT / "examples" / "bookstore-django")
-        monkeypatch.delenv("CODEGRAPH_NO_STALE_CHECK", raising=False)
+        monkeypatch.delenv("CG_NO_STALE_CHECK", raising=False)
         monkeypatch.setattr(hooks, "staleness", lambda *a, **k: True)
         M._STALE["key"] = None
         assert "files changed since this graph was built" in M.explore("how does placing an order work")

@@ -31,9 +31,9 @@ Type `export HOME=/tmp/demo PS1='$ ' PS2='> ' TZ=UTC LC_ALL=C.UTF-8 HISTFILE=/de
 Enter
 Type "rm -rf /tmp/demo && mkdir -p /tmp/demo && cd /tmp/demo"
 Enter
-# CG_CLONE_FROM (record-setup.sh): record a release before it is pushed; the clone of the public URL is served from
+# DEMO_CLONE_FROM (record-setup.sh): record a release before it is pushed; the clone of the public URL is served from
 # that local repo instead, the commands on screen stay the README's.
-Type `[ -n "$CG_CLONE_FROM" ] && git config --global url."$CG_CLONE_FROM".insteadOf https://github.com/cyberchronos00/code-graph.git; clear`
+Type `[ -n "$DEMO_CLONE_FROM" ] && git config --global url."$DEMO_CLONE_FROM".insteadOf https://github.com/cyberchronos00/code-graph.git; clear`
 Enter
 Sleep 500ms
 Show
@@ -50,15 +50,15 @@ Type `python3 -m venv .venv && .venv/bin/pip install "mcp>=2.2" pyyaml pytest pr
 Enter
 Wait
 Sleep 300ms
-Type "(cd codegraph/plugins/php/extractor && composer install)"
+Type "(cd cg_code_graph/plugins/php/extractor && composer install)"
 Enter
 Wait
 Sleep 300ms
-Type "(cd codegraph/plugins/ts/extractor && npm ci)"
+Type "(cd cg_code_graph/plugins/ts/extractor && npm ci)"
 Enter
 Wait
 Sleep 300ms
-Type `cg() { .venv/bin/python -m codegraph.cli "$@"; }    # shorthand used below`
+Type `cg() { .venv/bin/python -m cg_code_graph.cli "$@"; }    # shorthand used below`
 Enter
 Sleep 1500ms
 
@@ -116,7 +116,7 @@ Type '{"mcpServers": {"code-graph": {'
 Enter
 Type '  "command": "/tmp/demo/code-graph/.venv/bin/python",'
 Enter
-Type '  "args": ["-m", "codegraph.mcp_server", "--db", "out/graph.db",'
+Type '  "args": ["-m", "cg_code_graph.mcp_server", "--db", "out/graph.db",'
 Enter
 Type '           "--gates", "examples/bookstore.gates.json", "--plans", "examples/plans"],'
 Enter
@@ -129,7 +129,7 @@ Sleep 500ms
 Type "# Quick check: the configured server command starts and lists its options"
 Sleep 300ms
 Enter
-Type ".venv/bin/python -m codegraph.mcp_server --help"
+Type ".venv/bin/python -m cg_code_graph.mcp_server --help"
 Enter
 Wait
 Sleep 1500ms

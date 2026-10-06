@@ -13,17 +13,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
 from sample import API, WEB, GATES, EXTRACTOR_DEPS, needs_php  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph import mcp_server as M  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import mcp_server as M  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 DELETE = "route:DELETE /v1/{store}/admin/reports/{report}"
 
 
 @pytest.fixture()
 def copy(monkeypatch):
-    from codegraph.indexer import index_project
-    from codegraph.link import link
+    from cg_code_graph.indexer import index_project
+    from cg_code_graph.link import link
     d = Path(tempfile.mkdtemp(prefix="codegraph-index-"))
     api, web = d / "bookstore-api", d / "bookstore-web"
     shutil.copytree(API, api)
@@ -112,7 +112,7 @@ def test_refusals_leave_the_graph_unchanged(copy):
 
 @needs_php
 def test_single_repo_graph_refuses_empty_root(tmp_path, monkeypatch):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     shutil.copytree(API, tmp_path / "api")
     index_project(tmp_path / "api", tmp_path / "api.db", "bookstore-api")
     monkeypatch.setitem(M.STATE, "db", str(tmp_path / "api.db"))
@@ -136,7 +136,7 @@ def test_impact_lists_snapshot_clients(monkeypatch):
     assert "external clients (snapshot, not indexed): 1" in out
     assert "POST /stock/reserve -> POST /v1/stock/reserve  @example/bookstore-mobile@4f2c9e1:pages/cart.vue:12" in out
     assert "external clients" not in M.impact("SalesReportService::remove")  # its route has no snapshot client
-    from codegraph import cli
+    from cg_code_graph import cli
     import contextlib, io
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

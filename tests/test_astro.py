@@ -9,17 +9,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.plugin import Project  # noqa: E402
-from codegraph.core.detect import detect  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.coverage import SUPPORTED, UNSUPPORTED  # noqa: E402
-from codegraph import query as Q  # noqa: E402
-from codegraph.plugins.astro.plugin import AstroPlugin, astro_route  # noqa: E402
+from cg_code_graph.core.plugin import Project  # noqa: E402
+from cg_code_graph.core.detect import detect  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.coverage import SUPPORTED, UNSUPPORTED  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.plugins.astro.plugin import AstroPlugin, astro_route  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
 FX = ROOT / "tests" / "astro_fixture"
 _S: dict = {}
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 INDEX = "page:src/pages/index.astro"
 SLUG = "page:src/pages/books/[slug].astro"
@@ -44,7 +44,7 @@ ACCENT = "constant:src/pages/shop.astro#accent"
 
 def built() -> dict:
     if not _S:
-        from codegraph.indexer import index_project
+        from cg_code_graph.indexer import index_project
         d = Path(tempfile.mkdtemp(prefix="codegraph-astro-"))
         db = d / "astro.db"
         _S["stats"] = index_project(FX, db, "astro-site")
@@ -181,7 +181,7 @@ def test_coverage_counts():
 
 
 def test_split_frontmatter():
-    from codegraph.plugins.astro.plugin import _split
+    from cg_code_graph.plugins.astro.plugin import _split
     assert _split("---\nconst a = 1\n---\n<p/>\n") == ("const a = 1", "\n<p/>\n")
     assert _split("---\n---\n<pre>\n---\n</pre>\n") == ("", "\n<pre>\n---\n</pre>\n")   # empty frontmatter
     assert _split("---\r\nconst a = 1\r\n---\r\n<p/>") == ("const a = 1\r", "\r\n<p/>")
@@ -224,7 +224,7 @@ ODD = {
 
 @needs_ts
 def test_odd_astro_files(tmp_path):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     root = tmp_path / "odd"
     for rel, text in ODD.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -302,7 +302,7 @@ def test_template_expressions():
 
 @needs_ts
 def test_odd_template_bits(tmp_path):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     root = tmp_path / "bits"
     files = {
         "package.json": '{"name": "bits", "dependencies": {"astro": "^5.0.0"}}',
@@ -371,7 +371,7 @@ TPL = {
 
 @needs_ts
 def test_template_scanner_edge_cases(tmp_path):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     root = tmp_path / "tpl"
     for rel, text in TPL.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,4 @@
-"""gRPC services from `.proto` contracts paired with their servers and clients (#33): codegraph/rpc.py over
+"""gRPC services from `.proto` contracts paired with their servers and clients (#33): cg_code_graph/rpc.py over
 tests/rpc_fixture (Python, Node / TypeScript, Connect, Rust tonic, Kotlin) and tests/rpc_cpp_fixture (grpc++)."""
 import json
 import sqlite3
@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "rpc_fixture"
 CFIX = ROOT / "tests" / "rpc_cpp_fixture"

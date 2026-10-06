@@ -3,7 +3,7 @@
 # Needs: vhs (+ ttyd, Chrome/Chromium; https://github.com/charmbracelet/vhs), ffmpeg, git, python3, composer, npm, jq,
 # and network access to GitHub. The tape clones the public repo into a throwaway HOME (/tmp/demo) and runs the README
 # quickstart there. Package caches point at the recorder's own caches so downloads are quick; the install is real.
-# CG_CLONE_FROM=/path/to/repo.git records a release that is not pushed yet: the on-screen clone of the public URL is
+# DEMO_CLONE_FROM=/path/to/repo.git records a release that is not pushed yet: the on-screen clone of the public URL is
 # served from that repo (git url.insteadOf in the throwaway HOME), so the video matches the code it ships with.
 set -euo pipefail
 cd "$(dirname "$0")/../.."

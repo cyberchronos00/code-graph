@@ -22,10 +22,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.swift import exact, indexstore  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.swift import exact, indexstore  # noqa: E402
 
 FIX = ROOT / "tests" / "swift_fields_fixture"
 SWIFT = exact.find_swift()
@@ -123,7 +123,7 @@ def test_readers_writers_queries():
     assert {x["src"] for x in r if not x["test"]} == {"method:Store.save", "method:Picker.init"}
     assert Q.writers(st, "field:Store.limit") == [] and Q.readers(st, "Store.limit")
     assert "no " in Q.explain_no_writers(st, "Store.limit", "writers")
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "readers", "Store.level", "--db", str(db())],
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "readers", "Store.level", "--db", str(db())],
                          cwd=ROOT, capture_output=True, text=True, check=True).stdout
     assert "(1 from test code)" in out and "receiver=store" in out
 
@@ -136,11 +136,11 @@ def test_call_edges_unchanged():
 
 @needs_toolchain
 def test_exact_mode_keeps_branches_and_fields(tmp_path, monkeypatch):
-    for v in ("CODEGRAPH_SWIFT_INDEX_STORE", "CODEGRAPH_NO_CACHE", "CODEGRAPH_LIBINDEXSTORE"):
+    for v in ("CG_SWIFT_INDEX_STORE", "CG_NO_CACHE", "CG_LIBINDEXSTORE"):
         monkeypatch.delenv(v, raising=False)
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
-    monkeypatch.setenv("CODEGRAPH_SWIFT", SWIFT)
-    monkeypatch.setenv("CODEGRAPH_SWIFT_INDEX", "1")
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("CG_SWIFT", SWIFT)
+    monkeypatch.setenv("CG_SWIFT_INDEX", "1")
     root = tmp_path / "proj"
     shutil.copytree(FIX, root)
     st = index_project(root, tmp_path / "x.db", "swift-fields-exact")

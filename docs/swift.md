@@ -1,6 +1,6 @@
 # Swift
 
-What `.swift` adds beyond [Install](install.md), [CLI specs](cli.md#query-targets-specs), and [Graph schema](schema.md): heuristic vs the Swift index store, the `CODEGRAPH_SWIFT_*` flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
+What `.swift` adds beyond [Install](install.md), [CLI specs](cli.md#query-targets-specs), and [Graph schema](schema.md): heuristic vs the Swift index store, the `CG_SWIFT_*` flags, and the ids those pages do not spell out. Toolchain fit: `cg doctor -h`. Why a file stayed heuristic: `cg coverage`.
 
 ## Modes
 
@@ -27,15 +27,15 @@ tree-sitter-swift 0.7.3 rewrites some sources before parse (same length, so line
 
 | source | how |
 |---|---|
-| `CODEGRAPH_SWIFT_INDEX=1` | root `Package.swift`: `swift build --enable-index-store` into `<cache root>/swift-build/` (default `~/.cache/codegraph`; never the checkout). Reused while sources, manifests, and the toolchain match. `CODEGRAPH_NO_CACHE=1` forces a run; `CODEGRAPH_INDEXER_TIMEOUT` caps it |
-| `CODEGRAPH_SWIFT_INDEX_STORE` | an existing store (Xcode `DerivedData/…/Index.noindex/DataStore`, or `Index/DataStore` before Xcode 14; CI `.build/<triple>/debug/index/store`). Another checkout's paths map by longest common suffix |
-| `CODEGRAPH_SWIFT`, `CODEGRAPH_LIBINDEXSTORE` | `swift` and `libIndexStore` when they are not on `PATH` or next to `swift` |
+| `CG_SWIFT_INDEX=1` | root `Package.swift`: `swift build --enable-index-store` into `<cache root>/swift-build/` (default `~/.cache/cg`; never the checkout). Reused while sources, manifests, and the toolchain match. `CG_NO_CACHE=1` forces a run; `CG_INDEXER_TIMEOUT` caps it |
+| `CG_SWIFT_INDEX_STORE` | an existing store (Xcode `DerivedData/…/Index.noindex/DataStore`, or `Index/DataStore` before Xcode 14; CI `.build/<triple>/debug/index/store`). Another checkout's paths map by longest common suffix |
+| `CG_SWIFT`, `CG_LIBINDEXSTORE` | `swift` and `libIndexStore` when they are not on `PATH` or next to `swift` |
 
 A failed build keeps a `partial` store; the coverage reason includes the first `error:` line. Stats include `exact_vs_heuristic` and `heuristic_kept_not_compiled`.
 
 | still heuristic | why |
 |---|---|
-| no toolchain, not opted in, or no `Package.swift` | coverage says which; set `CODEGRAPH_SWIFT_INDEX_STORE` to an Xcode store |
+| no toolchain, not opted in, or no `Package.swift` | coverage says which; set `CG_SWIFT_INDEX_STORE` to an Xcode store |
 | Apple-only targets on Linux | SwiftUI, UIKit, and tests that need Apple frameworks are not in that store |
 | inactive `#if` | edges stay, `via: "not-compiled"` |
 | files the store omits | those files keep heuristic calls, counted in the reason |

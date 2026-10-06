@@ -1,4 +1,4 @@
-"""Job queues as protocol endpoints (#36): codegraph/jobs.py over tests/jobs_fixture (a Flask shop enqueuing Celery
+"""Job queues as protocol endpoints (#36): cg_code_graph/jobs.py over tests/jobs_fixture (a Flask shop enqueuing Celery
 tasks by name and RQ jobs by import path, a Celery billing worker with task_routes and a Procfile, a mailer with RQ
 and Dramatiq workers in docker-compose, a Django shop whose Celery job nodes get endpoint twins, a Bull / BullMQ
 producer and worker, a Laravel app with Horizon, a Symfony Messenger app), linked by cg link."""
@@ -11,11 +11,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.jobs import Scan, decorated, CELERY_DECO  # noqa: E402
-from codegraph.link import link  # noqa: E402
-from codegraph.protocols.view import protocols  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.jobs import Scan, decorated, CELERY_DECO  # noqa: E402
+from cg_code_graph.link import link  # noqa: E402
+from cg_code_graph.protocols.view import protocols  # noqa: E402
 
 FX = ROOT / "tests" / "jobs_fixture"
 J, Q = "endpoint:job:", "endpoint:queue:"

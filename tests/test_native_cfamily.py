@@ -14,14 +14,14 @@ pytestmark = pytest.mark.skipif(not have_tree_sitter(), reason=TS_SKIP)
 C = ROOT / "examples" / "c-ringbuf"
 CPP = ROOT / "examples" / "cpp-eventbus"
 SKIP = ("scip-clang and/or cmake not installed (see docs/native.md: download scip-clang from "
-        "github.com/sourcegraph/scip-clang/releases, or set CODEGRAPH_SCIP_CLANG); exact-mode C/C++ tests skipped")
+        "github.com/sourcegraph/scip-clang/releases, or set CG_SCIP_CLANG); exact-mode C/C++ tests skipped")
 _CACHE = {}
 
 
 def heur(src):
     k = ("h", src)
     if k not in _CACHE:
-        db, res = index(src, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+        db, res = index(src, CG_C_SCIP="0", CG_COMPDB=None)
         _CACHE[k] = (DB(db), res)
     return _CACHE[k]
 
@@ -34,7 +34,7 @@ def exact(src):
         cdb = cmake_compdb(src)
         if cdb is None:
             pytest.skip("cmake configure failed (no C/C++ compiler?); exact-mode tests skipped")
-        db, res = index(src, CODEGRAPH_C_SCIP=None, CODEGRAPH_COMPDB=str(cdb))
+        db, res = index(src, CG_C_SCIP=None, CG_COMPDB=str(cdb))
         _CACHE[k] = (DB(db), res)
     return _CACHE[k]
 
@@ -66,7 +66,7 @@ def test_c_heuristic_calls_includes_env_gates():
 
 
 def test_c_gating_defines_off():
-    db, _ = index(C, gates=True, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    db, _ = index(C, gates=True, CG_C_SCIP="0", CG_COMPDB=None)
     g = DB(db)
     e = g.edges("CONTAINS", "struct:rb_buffer", "field:rb_buffer::lock")
     assert e and e[0]["gate"] == "minimal_build"
@@ -88,8 +88,8 @@ def test_cpp_heuristic_virtual_dispatch():
 
 
 def test_cpp_reaches_through_virtual_dispatch():
-    from codegraph import query as Q
-    from codegraph.core.store import GraphStore
+    from cg_code_graph import query as Q
+    from cg_code_graph.core.store import GraphStore
     g, _ = heur(CPP)
     res = Q.reaches(GraphStore(str(g.path)), ["bus::LogHandler::handle"])
     cls = {i["id"]: i["class"] for i in res["items"]}
@@ -98,7 +98,7 @@ def test_cpp_reaches_through_virtual_dispatch():
 
 
 def test_cpp_gating_defines_off():
-    db, _ = index(CPP, gates=True, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    db, _ = index(CPP, gates=True, CG_C_SCIP="0", CG_COMPDB=None)
     g = DB(db)
     e = g.edges("CALLS", "function:app/main.cpp#main", "method:bus::Bus::published")
     assert e and e[0]["gate"] == "minimal_build"
@@ -128,7 +128,7 @@ def test_cpp_exact_dispatch_and_ids():
 
 
 def test_mcp_tools_on_native_graph():
-    import codegraph.mcp_server as M
+    import cg_code_graph.mcp_server as M
     g, _ = heur(CPP)
     old = M.STATE["db"]
     M.STATE["db"] = str(g.path)
@@ -154,7 +154,7 @@ def test_c_static_inline_in_header(tmp_path):
     (tmp_path / "other.c").write_text("static void toolbar_show(int *t) { (void)t; }\n"
                                       "void own(void) { int t; toolbar_show(&t); }\n")
     (tmp_path / "lone.c").write_text("void lone(void) { int t; toolbar_show(&t); }\n")
-    db, _ = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    db, _ = index(tmp_path, CG_C_SCIP="0", CG_COMPDB=None)
     g = DB(db)
     tgt = "function:tb.h#toolbar_show"
     assert g.node(tgt)
@@ -185,7 +185,7 @@ def test_cpp_file_level_macro_call_keeps_next_class(tmp_path):
         "  GreeterImpl service;\n"
         "  LOG_EVERY(port);\n"
         "}\n")
-    db, _ = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    db, _ = index(tmp_path, CG_C_SCIP="0", CG_COMPDB=None)
     g = DB(db)
     assert g.node("class:GreeterImpl") and g.node("method:GreeterImpl::SayHello")
     assert g.node("function:RunServer")["line"] == 14
@@ -201,7 +201,7 @@ def test_cpp_member_call_does_not_reach_a_class_of_another_source_file(tmp_path)
     (tmp_path / "shared.h").write_text("class Shared {\n public:\n  void touch() {}\n};\n")
     (tmp_path / "client.cc").write_text('#include "shared.h"\n'
                                         "void run(Client& client, Shared& s) {\n  Reply r;\n  Shared t;\n  client.ping();\n  s.touch();\n}\n")
-    db, res = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    db, res = index(tmp_path, CG_C_SCIP="0", CG_COMPDB=None)
     g = DB(db)
     assert g.node("method:Handler::ping") and not g.edges("CALLS", "function:run", "method:Handler::ping")
     assert g.has("CALLS", "function:run", "method:Shared::touch") and g.has("USES_TYPE", "function:run", "class:Shared")
@@ -231,7 +231,7 @@ def test_cpp_thread_safety_annotations_are_not_declarators(tmp_path):
         " private:\n"
         "  Mutex* const mu_;\n"
         "};\n")
-    db, _ = index(tmp_path, CODEGRAPH_C_SCIP="0", CODEGRAPH_COMPDB=None)
+    db, _ = index(tmp_path, CG_C_SCIP="0", CG_COMPDB=None)
     g = DB(db)
     assert g.has("CALLS", "method:Reactor::Start", "method:Reactor::Write")
     assert g.has("CALLS", "method:Reactor::Write", "method:Reactor::Flush")

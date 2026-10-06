@@ -1,6 +1,7 @@
 """Packaging (#64): pyproject metadata, extractor dependencies in the user cache, `cg doctor` / `cg setup`, and the
 `.cg.yaml` rust.targets setting."""
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -8,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from codegraph import __version__
-from codegraph.config import ConfigError, load
-from codegraph.core import extractors
+from cg_code_graph import __version__
+from cg_code_graph.config import ConfigError, load
+from cg_code_graph.core import extractors
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -18,17 +19,17 @@ ROOT = Path(__file__).resolve().parent.parent
 def test_pyproject_metadata():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert meta["project"]["name"] == "cg-code-graph"          # PyPI name; `codegraph` is taken there
-    assert meta["project"]["scripts"]["cg"] == "codegraph.cli:main"
+    assert meta["project"]["scripts"]["cg"] == "cg_code_graph.cli:main"
     wf = (ROOT / ".github" / "workflows" / "publish.yml").read_text()
     assert "pypa/gh-action-pypi-publish" in wf and "id-token: write" in wf and "workflow_dispatch" in wf
     assert meta["project"]["dynamic"] == ["version"]
-    assert meta["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "codegraph.__version__"}
+    assert meta["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "cg_code_graph.__version__"}
     deps = " ".join(meta["project"]["dependencies"])
     for d in ("mcp", "pyyaml", "protobuf", "tree-sitter-rust", "tree-sitter-swift"):
         assert d in deps
     manifest = (ROOT / "MANIFEST.in").read_text()
     for d in ("ts/extractor/node_modules", "php/extractor/vendor", "dart/extractor/.bin", "dart/extractor/.dart_tool"):
-        assert f"prune codegraph/plugins/{d}" in manifest
+        assert f"prune cg_code_graph/plugins/{d}" in manifest
     # every extractor source listed for the cache copy exists in the package
     for spec in extractors.SPECS.values():
         for rel in spec.sources:
@@ -43,7 +44,7 @@ def _fake_spec(tmp_path, monkeypatch):
     spec = extractors.Spec("typescript", pkg, ("extract.mjs", "fw.mjs", "package-lock.json"), "package-lock.json",
                            ("node_modules/typescript/package.json",), "npm", "TypeScript")
     monkeypatch.setitem(extractors.SPECS, "typescript", spec)
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
     return pkg
 
 
@@ -78,8 +79,8 @@ def test_extractor_install_failure_names_the_tool(tmp_path, monkeypatch):
 
 
 def test_rust_targets_config(tmp_path, monkeypatch):
-    from codegraph.plugins.rust.plugin import rust_targets_setting
-    monkeypatch.delenv("CODEGRAPH_RUST_TARGETS", raising=False)
+    from cg_code_graph.plugins.rust.plugin import rust_targets_setting
+    monkeypatch.delenv("CG_RUST_TARGETS", raising=False)
     for text, want in (("off", "off"), ("false", "off"), ("auto", "auto"), ("[windows, macos]", "windows,macos"),
                        ("x86_64-pc-windows-msvc", "x86_64-pc-windows-msvc")):
         (tmp_path / ".cg.yaml").write_text(f"rust:\n  targets: {text}\n")
@@ -89,9 +90,9 @@ def test_rust_targets_config(tmp_path, monkeypatch):
         class P:
             options = {"config": cfg}
         assert rust_targets_setting(P) == (want, ".cg.yaml rust.targets")
-    monkeypatch.setenv("CODEGRAPH_RUST_TARGETS", "0")
-    assert rust_targets_setting(P) == ("0", "CODEGRAPH_RUST_TARGETS")      # the environment wins
-    monkeypatch.delenv("CODEGRAPH_RUST_TARGETS")
+    monkeypatch.setenv("CG_RUST_TARGETS", "0")
+    assert rust_targets_setting(P) == ("0", "CG_RUST_TARGETS")      # the environment wins
+    monkeypatch.delenv("CG_RUST_TARGETS")
     assert rust_targets_setting(None) == ("auto", "default")
     (tmp_path / ".cg.yaml").write_text("rust:\n  targets: [1]\n")
     with pytest.raises(ConfigError, match="rust.targets"):
@@ -99,8 +100,9 @@ def test_rust_targets_config(tmp_path, monkeypatch):
 
 
 def test_doctor_report_and_cli(tmp_path, monkeypatch):
-    from codegraph.doctor import render, report
-    monkeypatch.delenv("CODEGRAPH_RUST_TARGETS", raising=False)
+    from cg_code_graph.doctor import render, report
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("CG_RUST_TARGETS", raising=False)
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.rs").write_text("fn main() {}\n")
     (tmp_path / "app.py").write_text("print(1)\n")
@@ -118,15 +120,17 @@ def test_doctor_report_and_cli(tmp_path, monkeypatch):
         assert rs.get("fix")
     txt = render(r)
     assert "languages in" in txt and "update:" in txt
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "doctor", str(tmp_path), "--json"], capture_output=True,
-                         text=True, cwd=ROOT, check=True).stdout
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "doctor", str(tmp_path), "--json"], capture_output=True,
+                         text=True, cwd=ROOT, check=True,
+                         env={**os.environ, "CG_CACHE": str(tmp_path / "cache")}).stdout
     assert {x["language"] for x in json.loads(out)["languages"]} == {"python", "rust"}
-    bad = subprocess.run([sys.executable, "-m", "codegraph.cli", "setup", "cobol"], capture_output=True, text=True, cwd=ROOT)
+    bad = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "setup", "cobol"], capture_output=True, text=True, cwd=ROOT)
     assert bad.returncode == 2 and "unknown language" in bad.stderr
 
 
-def test_doctor_mcp_tool(tmp_path):
-    from codegraph import mcp_server
+def test_doctor_mcp_tool(tmp_path, monkeypatch):
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    from cg_code_graph import mcp_server
     (tmp_path / "a.py").write_text("x = 1\n")
     txt = mcp_server.doctor(str(tmp_path))
     assert "python" in txt and "exact" in txt
@@ -172,13 +176,13 @@ def test_setup_prune_and_install_lock(tmp_path, monkeypatch):
                         (d / "node_modules" / "typescript").mkdir(parents=True) or
                         (d / "node_modules" / "typescript" / "package.json").write_text("{}"))
     assert extractors.ensure("typescript") == cur and extractors.ensure("typescript") == cur and calls == [cur]
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "setup", "--prune", "--dry-run"], capture_output=True,
-                         text=True, cwd=ROOT, env={**__import__("os").environ, "CODEGRAPH_CACHE": str(tmp_path / "cache")})
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "setup", "--prune", "--dry-run"], capture_output=True,
+                         text=True, cwd=ROOT, env={**__import__("os").environ, "CG_CACHE": str(tmp_path / "cache")})
     assert out.returncode == 0, out.stderr
 
 
 def test_doctor_project_checks(tmp_path):
-    from codegraph.doctor import render, report
+    from cg_code_graph.doctor import render, report
     (tmp_path / "packages" / "a").mkdir(parents=True)
     (tmp_path / "package.json").write_text('{"workspaces": ["packages/*"]}')
     (tmp_path / "packages" / "a" / "package.json").write_text("{}")
@@ -194,7 +198,7 @@ def test_doctor_project_checks(tmp_path):
     assert pr["kotlin"]["ok"] and "Kotlin 2.1.0" in pr["kotlin"]["what"]
     assert not pr["swift"]["ok"] and "1 Xcode project(s): ios" in pr["swift"]["what"] and "INDEX_STORE" in pr["swift"]["fix"]
     txt = render(report(tmp_path))
-    assert "project:" in txt and "fix: point CODEGRAPH_SWIFT_INDEX_STORE" in txt
+    assert "project:" in txt and "fix: point CG_SWIFT_INDEX_STORE" in txt
     (tmp_path / "build.gradle.kts").unlink()
     (tmp_path / "tsconfig.json").write_text("{}")
     pr = {x["language"]: x for x in report(tmp_path)["project"]}
@@ -203,8 +207,8 @@ def test_doctor_project_checks(tmp_path):
 
 def test_doctor_scip_java_releases_for_the_kotlin_version(tmp_path, monkeypatch):
     """#67: `cg doctor <root>` names the installed scip-java releases with their Kotlin ranges and the one that fits."""
-    from codegraph.doctor import report
-    from codegraph.plugins.kotlin import exact
+    from cg_code_graph.doctor import report
+    from cg_code_graph.plugins.kotlin import exact
     (tmp_path / "M.kt").write_text("fun main() {}\n")
     monkeypatch.setattr(exact, "scip_java_candidates", lambda: ["/t/scip-java", "/t/scip-java-0.13.1/scip-java"])
     monkeypatch.setattr(exact, "_generation", lambda t: 13 if "0.13" in t else 12)

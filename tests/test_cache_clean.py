@@ -13,18 +13,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core import cache, extractors, fsutil  # noqa: E402
-from codegraph.plugins.native import runner  # noqa: E402
+from cg_code_graph.core import cache, extractors, fsutil  # noqa: E402
+from cg_code_graph.plugins.native import runner  # noqa: E402
 
 V = fsutil.CACHE_VERSION
 
 
 @pytest.fixture
 def croot(tmp_path, monkeypatch):
-    for k in ("CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR", "XDG_CACHE_HOME", "LOCALAPPDATA"):
+    for k in ("CG_CACHE", "CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR", "XDG_CACHE_HOME", "LOCALAPPDATA"):
         monkeypatch.delenv(k, raising=False)
     r = tmp_path / "cache"
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(r))
+    monkeypatch.setenv("CG_CACHE", str(r))
     return r
 
 
@@ -46,7 +46,7 @@ def populate(r: Path, proj: Path) -> dict:
         "scip": touch(r / "scip" / f"rust-v{V}-{k}-{'a' * 20}.scip"),
         "lock": touch(r / "scip" / f"rust-v{V}-{k}-{'a' * 20}.lock", b""),
         "ra": touch(r / "scip" / f"ra-config-{k}-{'b' * 12}.json"),
-        "swift": touch(r / "swift-build" / sk / "codegraph-stamp.json",
+        "swift": touch(r / "swift-build" / sk / "cg-stamp.json",
                        json.dumps({"key": "k", "cache_version": V}).encode()).parent,
         "swift_lock": touch(r / "scip" / f"swift-v{V}-{sk}.lock", b""),
         "ts": touch(r / "ts" / f"{k}-v{V}-{'c' * 20}.json"),
@@ -67,7 +67,7 @@ def populate(r: Path, proj: Path) -> dict:
         "old_ts": touch(r / "ts" / f"{other}-{'c' * 20}.json"),
         "old_tmp": touch(r / "scip" / f"rust-v{V}-{other}-x.123.abcd.tmp.scip", age=3 * 86400),
         "orphan_lock": touch(r / "scip" / f"kotlin-v{V}-{other}-{'9' * 20}.lock", b""),
-        "old_swift": touch(r / "swift-build" / ("0" * 16) / "codegraph-stamp.json",
+        "old_swift": touch(r / "swift-build" / ("0" * 16) / "cg-stamp.json",
                            json.dumps({"key": "k", "cache_version": V - 1}).encode()).parent,
     }
     fresh_tmp = touch(r / "scip" / f"rust-v{V}-{other}-y.1.abcd.tmp.scip")
@@ -76,26 +76,27 @@ def populate(r: Path, proj: Path) -> dict:
 
 
 def run(*args, env=None):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", "clean", *map(str, args)], cwd=ROOT, env=env,
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "clean", *map(str, args)], cwd=ROOT, env=env,
                           capture_output=True, text=True)
 
 
 def test_one_cache_root_for_every_user(tmp_path, monkeypatch):
-    for k in ("CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR", "XDG_CACHE_HOME", "LOCALAPPDATA"):
+    for k in ("CG_CACHE", "CODEGRAPH_CACHE", "CODEGRAPH_CACHE_DIR", "XDG_CACHE_HOME", "LOCALAPPDATA"):
         monkeypatch.delenv(k, raising=False)
+    cache._migrated = False
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
-    want = tmp_path / "xdg" / "codegraph"
+    want = tmp_path / "xdg" / "cg"
     assert cache.root() == want
     assert runner.cache_dir() == want / "scip"
     assert extractors.cache_root() == want / "extractors"
     monkeypatch.setenv("CODEGRAPH_CACHE_DIR", str(tmp_path / "old-name"))
     assert cache.root() == tmp_path / "old-name" and runner.cache_dir().parent == tmp_path / "old-name"
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "c"))
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "c"))
     assert cache.root() == tmp_path / "c" == extractors.cache_root().parent
     # the TS / Dart / Swift / rust cache users take their directory from the same helper
     for f in ("plugins/ts/plugin.py", "plugins/dart/plugin.py", "plugins/swift/exact.py", "plugins/rust/plugin.py"):
-        src = (ROOT / "codegraph" / f).read_text()
-        assert 'environ.get("CODEGRAPH_CACHE' not in src and '".cache"' not in src, f
+        src = (ROOT / "cg_code_graph" / f).read_text()
+        assert 'environ.get("CG_CACHE' not in src and '".cache"' not in src, f
 
 
 def test_scip_entries_carry_the_project_key(croot, tmp_path):
@@ -180,7 +181,7 @@ def test_dry_run_deletes_nothing(croot, tmp_path):
     proj.mkdir()
     ent = populate(croot, proj)
     db = touch(tmp_path / "g.db", b"SQLite format 3\0" + b"\0" * 84)
-    env = dict(os.environ, CODEGRAPH_CACHE=str(croot))
+    env = dict(os.environ, CG_CACHE=str(croot))
     r = run("--all", "--extractors", "--stale", proj, "--db", db, "--dry-run", "--json", env=env)
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
@@ -212,11 +213,11 @@ def test_refuses_root_or_home(tmp_path, monkeypatch, where):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     target = {"/": Path("/"), "home": home, "home-parent": home.parent}[where]
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(target))
+    monkeypatch.setenv("CG_CACHE", str(target))
     for kw in ({"all_": True}, {"stale": True}, {"project": tmp_path}):
         with pytest.raises(cache.CacheError, match="refusing to clean"):
             cache.plan(**kw)
-    env = dict(os.environ, CODEGRAPH_CACHE=str(target), HOME=str(home))
+    env = dict(os.environ, CG_CACHE=str(target), HOME=str(home))
     r = run("--all", env=env)
     assert r.returncode == 2 and "refusing to clean" in r.stderr
     assert keep.exists()
@@ -236,7 +237,7 @@ def test_doctor_reports_cache_size_by_kind(croot, tmp_path):
     proj = tmp_path / "p"
     proj.mkdir()
     populate(croot, proj)
-    from codegraph import doctor
+    from cg_code_graph import doctor
     u = cache.usage()
     assert u["root"] == str(croot) and u["bytes"] > 0 and u["stale_bytes"] > 0
     assert {"scip", "rust-analyzer", "swift-build", "ts", "dart", "extractors", "projects"} <= set(u["kinds"])

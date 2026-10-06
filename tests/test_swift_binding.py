@@ -18,7 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "swift_binding_fixture"
 _S: dict = {}
@@ -89,8 +89,8 @@ def test_known_non_app_receivers_do_not_bind_by_name():
 def test_name_only_binding_is_not_a_divergence_finding():
     # HUDController exists only under `#if os(macOS)`; `mystery.toggle()` (untyped) is not reported as a call to
     # code missing on the other targets, and `inside.toggle()` (a Bool) is not bound at all
-    from codegraph.core.store import GraphStore
-    from codegraph import platforms as PF
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph import platforms as PF
     con()
     d = PF.divergence(GraphStore(str(_S["db"])))
     assert set(d["targets"]) - {"macos"}                     # targets the class is missing on
@@ -118,8 +118,8 @@ def test_continuation_line_after_binary_operator():
 def test_unknown_receiver_with_ambiguous_selector_gives_candidates():
     # `let store = registry.store(for: id); store.reload(force: true)`: FeedStore and InboxStore both fit; 0.8.0
     # dropped the call (and the test's), so `cg tests` found no test of either
-    from codegraph import query as Q
-    from codegraph.core.store import GraphStore
+    from cg_code_graph import query as Q
+    from cg_code_graph.core.store import GraphStore
     for dst in ("method:FeedStore.reload", "method:InboxStore.reload"):
         got = sorted((s, ln, a.get("binding"), a.get("candidates")) for s, _d, ln, a in calls(dst))
         assert got == [("function:reloadsStores", 6, "candidate", 2), ("method:Refresher.refreshAll", 17, "candidate", 2)]
@@ -139,8 +139,8 @@ def test_unknown_receiver_with_ambiguous_selector_gives_candidates():
 
 def test_candidate_edges_are_not_divergence_findings():
     # InboxStore exists only under `#if os(iOS)`: the candidate call to it is no `missing_callee` elsewhere
-    from codegraph.core.store import GraphStore
-    from codegraph import platforms as PF
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph import platforms as PF
     con()
     d = PF.divergence(GraphStore(str(_S["db"])))
     assert not [f for f in d["missing_callee"] if f["to"] == "method:InboxStore.reload"]

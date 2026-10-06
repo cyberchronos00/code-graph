@@ -9,15 +9,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.plugin import Project  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph import query as Q  # noqa: E402
-from codegraph.plugins.astro.plugin import astro_route, read_astro_config  # noqa: E402
+from cg_code_graph.core.plugin import Project  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.plugins.astro.plugin import astro_route, read_astro_config  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
 FX = ROOT / "tests" / "astro_server_fixture"
 _S: dict = {}
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 INDEX = "page:app/pages/index.astro"
 LOGIN = "page:app/pages/login.astro"
@@ -44,7 +44,7 @@ ROUTES = (API, ADD, REM, CLEAR)
 
 def built() -> dict:
     if not _S:
-        from codegraph.indexer import index_project
+        from cg_code_graph.indexer import index_project
         d = Path(tempfile.mkdtemp(prefix="codegraph-astro-server-"))
         db = d / "astro.db"
         _S["stats"] = index_project(FX, db, "astro-server")
@@ -304,7 +304,7 @@ def test_config_edge_cases(tmp_path):
 
 @needs_ts
 def test_root_src_dir_project(tmp_path):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     proj = tmp_path / "proj"
     for name, text in ROOT_PROJECT.items():
         (proj / name).parent.mkdir(parents=True, exist_ok=True)

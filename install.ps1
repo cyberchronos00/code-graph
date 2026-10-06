@@ -75,7 +75,7 @@ if ($Uninstall) {
         "pipx" { Run "pipx" @("uninstall", $Pkg) }
         default { Say "cg is not installed with uv or pipx (nothing to uninstall)" }
     }
-    $cache = if ($env:CODEGRAPH_CACHE) { $env:CODEGRAPH_CACHE } elseif ($env:CODEGRAPH_CACHE_DIR) { $env:CODEGRAPH_CACHE_DIR } else { Join-Path $env:LOCALAPPDATA "codegraph" }
+    $cache = if ($env:CG_CACHE) { $env:CG_CACHE } elseif ($env:CODEGRAPH_CACHE) { $env:CODEGRAPH_CACHE } elseif ($env:CODEGRAPH_CACHE_DIR) { $env:CODEGRAPH_CACHE_DIR } else { Join-Path $env:LOCALAPPDATA "cg" }
     $ex = Join-Path $cache "extractors"
     if (Test-Path $ex) { Say "removing the extractor dependencies in $ex"; Remove-Item -Recurse -Force $ex }
     Say "left in place: index caches in $cache, uv / pipx themselves"
@@ -119,11 +119,11 @@ foreach ($w in ($With.Split(",") | Where-Object { $_ })) {
         }
         { $_ -in "c", "cpp" } { Say "c: scip-clang has no Windows release binary; C / C++ stays heuristic (docs/native.md)" }
         "kotlin" {
-            Say "kotlin: install a JDK 17+ (https://adoptium.net) and coursier (https://get-coursier.io), then: cs install scip-java (0.12: Kotlin <= 2.1 builds); opt in with CODEGRAPH_KOTLIN_SCIP=1"
+            Say "kotlin: install a JDK 17+ (https://adoptium.net) and coursier (https://get-coursier.io), then: cs install scip-java (0.12: Kotlin <= 2.1 builds); opt in with CG_KOTLIN_SCIP=1"
             # install.sh also fetches the scip-java 0.13.1 launcher (Kotlin 2.2.0 - 2.2.10); that release ships only a POSIX sh launcher
             Say "kotlin: scip-java 0.13.x (Kotlin 2.2.0 - 2.2.10 builds) has no Windows launcher; under WSL use install.sh --with kotlin, or index with --scip index.scip (docs/kotlin.md#exact-mode)"
         }
-        "swift" { Say "swift: install the Swift toolchain (https://www.swift.org/install/windows/); opt in with CODEGRAPH_SWIFT_INDEX=1" }
+        "swift" { Say "swift: install the Swift toolchain (https://www.swift.org/install/windows/); opt in with CG_SWIFT_INDEX=1" }
         default { Say "-With: unknown '$w' (rust, c, kotlin, swift)" }
     }
 }

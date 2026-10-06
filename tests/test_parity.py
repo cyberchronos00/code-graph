@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
 pytest.importorskip("tree_sitter_kotlin")
-from codegraph import parity as P  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import parity as P  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 IOS = {
  "App/Cart/CartView.swift": "import SwiftUI\n\nstruct CartView: View {\n    var body: some View { Text(\"cart\") }\n}\n",
@@ -75,11 +75,11 @@ def test_android_to_ios_and_cli(dbs, tmp_path):
     assert "com.shop.orders.OrderService.LIMIT" in {r["symbol"] for r in res["missing"]}
     mp = tmp_path / "map.json"
     mp.write_text(json.dumps({"WidgetTimeline": "OrderService"}))
-    out = subprocess.run([sys.executable, "-m", "codegraph.cli", "parity", "--db", dbs[0], "--against", dbs[1],
+    out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "parity", "--db", dbs[0], "--against", dbs[1],
                           "--map", str(mp), "--json"], capture_output=True, text=True, cwd=ROOT).stdout
     r = json.loads(out)
     assert by_symbol(r)["WidgetTimeline"]["confidence"] == "explicit"
-    txt = subprocess.run([sys.executable, "-m", "codegraph.cli", "parity", "--db", dbs[0], "--against", dbs[1]],
+    txt = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "parity", "--db", dbs[0], "--against", dbs[1]],
                          capture_output=True, text=True, cwd=ROOT).stdout
     assert "== MISSING in target" in txt and "unknown (syntax errors)" in txt
 

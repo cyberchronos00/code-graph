@@ -8,8 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.plugins.python.plugin import parse_source  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.plugins.python.plugin import parse_source  # noqa: E402
 from test_python_tests import build, edges, names  # noqa: E402
 
 FASTAPI = {

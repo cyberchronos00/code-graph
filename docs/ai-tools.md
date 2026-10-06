@@ -39,7 +39,7 @@ function. Those facts feed the external nodes in [External systems](external.md)
 `exact` for a literal name, `resolved` through a wrapper or a module constant, `heuristic` when
 a `BaseTool` subclass has no literal `name` (the class name is used).
 
-cg's own server (`codegraph/mcp_server.py`) indexes as `endpoint:mcp_tool:code-graph/<tool>`.
+cg's own server (`cg_code_graph/mcp_server.py`) indexes as `endpoint:mcp_tool:code-graph/<tool>`.
 The decorator's reference edge is replaced by that endpoint.
 
 ```bash

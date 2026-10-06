@@ -12,8 +12,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.link import link  # noqa: E402
 
 FIX = ROOT / "tests" / "swift_fixture"
 IOS = ROOT / "examples" / "bookstore-ios"
@@ -105,8 +105,8 @@ def test_ios_sample_pages_entries_and_link():
 
 
 def test_ios_sample_path_from_swiftui_view_to_table():
-    from codegraph.core.store import GraphStore
-    from codegraph import query as Q
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph import query as Q
     db("ios")
     text = json.dumps(Q.path_between(GraphStore(_S["ios"]), "page:swift:CheckoutView", "table:catalog_order"), default=str)
     assert "method:BookStore.checkout" in text and "http:POST /api/orders/" in text and "function:catalog.api.place_order" in text

@@ -8,10 +8,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 _S: dict = {}
 
@@ -64,8 +64,8 @@ def test_nuxt_literal_and_helper_edges():
 
 
 def test_nuxt_impact_lists_linker():
-    from codegraph.core.store import GraphStore
-    from codegraph import query as Q
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph import query as Q
     c = built("vue_nav_fixture")
     db = Path(c.execute("PRAGMA database_list").fetchone()[2])
     st = GraphStore(db)

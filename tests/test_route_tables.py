@@ -6,9 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.query import downstream, render_downstream  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.query import downstream, render_downstream  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
 from sample import needs_php  # noqa: E402
 
 
@@ -152,7 +152,7 @@ def test_pivot_writes_and_grouped_downstream(tmp_path):
     assert "through events / listeners:" in text
     assert "interactions" not in text
 
-    from codegraph.query import impact
+    from cg_code_graph.query import impact
     callers = {c["id"] if isinstance(c, dict) else c for c in impact(st, "table:playlists").get("callers", [])}
     # column-level impact still sees the service that writes the table
     blob = json.dumps(impact(st, "table:playlists"))
@@ -161,7 +161,7 @@ def test_pivot_writes_and_grouped_downstream(tmp_path):
 
 
 def test_auth_names_are_generic():
-    from codegraph.query import _auth_node
+    from cg_code_graph.query import _auth_node
     auth = [
         "function:src/utils/access.ts#checkAccess",
         "method:src/services/base.service.ts#BaseService.requireAccess",

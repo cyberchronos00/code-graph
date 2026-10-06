@@ -9,12 +9,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.plugin import GraphBuilder, Project  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.python.plugin import PythonPlugin  # noqa: E402
-from codegraph.tests_index import isolate_tests  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.plugin import GraphBuilder, Project  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.python.plugin import PythonPlugin  # noqa: E402
+from cg_code_graph.tests_index import isolate_tests  # noqa: E402
 
 
 def write(root: Path, files: dict) -> Path:
@@ -35,7 +35,7 @@ def build(tmp: Path, name: str, files: dict) -> tuple[GraphStore, Path]:
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True)
 
 
 def edges(st, kind, **attrs):
@@ -313,7 +313,7 @@ def test_callbacks_to_stdlib_and_library_apis(tmp_path):
     out = cg("impact", "svc.work.double", "--db", db, "--no-paths").stdout
     assert "d=1 [svc] svc.work.go  (ref: callback)" in out
     # MCP callers names the reference as such
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = str(db)
@@ -648,7 +648,7 @@ def test_functions_referenced_only_from_tests_stay_uncalled(tmp_path):
     before = {(e.src, e.kind) for e in b.edges.values() if e.dst == "function:app.core.helper"}
     assert ("module:tests.test_core", "REFERENCES_FN") in before and ("function:tests.test_core.test_helper", "CALLS") in before
     isolate_tests(b)
-    from codegraph.core.model import PROPAGATING
+    from cg_code_graph.core.model import PROPAGATING
     into = [e for e in b.edges.values() if e.dst == "function:app.core.helper" and e.kind in PROPAGATING]
     assert into == []
     assert {e.attrs.get("orig") for e in b.edges.values() if e.dst == "function:app.core.helper" and e.kind == "TEST_CALLS"} \

@@ -15,11 +15,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT)); sys.path.insert(0, str(ROOT / "tests"))
 from sample import EXTRACTOR_DEPS  # noqa: E402
-from codegraph import blindspots as B, coverage as C, query as Q, routes as R  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import blindspots as B, coverage as C, query as Q, routes as R  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 
 def write(root: Path, files: dict) -> Path:
@@ -31,8 +31,8 @@ def write(root: Path, files: dict) -> Path:
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True,
-                          env=dict(os.environ, CODEGRAPH_NO_CACHE="1"))
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, capture_output=True, text=True,
+                          env=dict(os.environ, CG_NO_CACHE="1"))
 
 
 def build(tmp: Path, name: str, files: dict) -> Path:
@@ -179,7 +179,7 @@ def test_mcp_replies_carry_completeness(tmp_path):
           - target: shop.views.list_orders
             intent: "add paging"
         '''})
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE.update(db=str(db), plans=str(plans))
@@ -206,7 +206,7 @@ def test_mcp_replies_carry_completeness(tmp_path):
 
 def test_mcp_complete_answer_has_no_note(tmp_path):
     db = build(tmp_path, "clean", {"requirements.txt": "", "pkg/__init__.py": "", "pkg/a.py": "def f():\n    return g()\n\ndef g():\n    return 1\n"})
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = str(db)

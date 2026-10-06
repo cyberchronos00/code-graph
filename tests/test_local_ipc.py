@@ -10,7 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FX = ROOT / "tests" / "local_ipc_fixture"
 
@@ -114,6 +114,6 @@ def test_worker_getter_and_private_fields(dbs):
 
 
 def test_extension_ports_match_only_port_listeners():
-    from codegraph.protocols import matchers as M
+    from cg_code_graph.protocols import matchers as M
     assert M.extension("port:devtools", "port:*") and M.extension("save", "*")
     assert M.extension("port:devtools", "*") is None and M.extension("save", "port:*") is None

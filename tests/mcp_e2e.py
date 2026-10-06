@@ -54,7 +54,7 @@ def text_of(res) -> str:
 
 async def run(db: Path, calls=CALLS) -> dict:
     params = StdioServerParameters(command=sys.executable, cwd=str(ROOT), env={**os.environ, "TZ": "UTC"},
-                                   args=["-m", "codegraph.mcp_server", "--db", str(db), "--plans", str(PLANS)])
+                                   args=["-m", "cg_code_graph.mcp_server", "--db", str(db), "--plans", str(PLANS)])
     outs = {}
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -74,7 +74,7 @@ async def run_index_tool() -> str:
     """Exercise the `index` tool against the gating fixture into a temp DB."""
     tmp = Path(tempfile.mkdtemp()) / "fixture.db"
     params = StdioServerParameters(command=sys.executable, cwd=str(ROOT), env={**os.environ, "TZ": "UTC"},
-                                   args=["-m", "codegraph.mcp_server", "--db", str(tmp)])
+                                   args=["-m", "cg_code_graph.mcp_server", "--db", str(tmp)])
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
@@ -164,7 +164,7 @@ def run_all() -> dict:
 def test_mcp_e2e():
     import pytest
     if not EXTRACTOR_DEPS.exists():
-        pytest.skip("run `npm ci` in codegraph/plugins/ts/extractor")
+        pytest.skip("run `npm ci` in cg_code_graph/plugins/ts/extractor")
     run_all()
 
 

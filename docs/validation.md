@@ -1,7 +1,7 @@
 # How we validate
 
 Public-project checks, not a tutorial. Each area was indexed from a shallow clone (default
-branch, October 2026) with `python -m codegraph.cli index <repo>` on one 8-core Linux box. Wall
+branch, October 2026) with `python -m cg_code_graph.cli index <repo>` on one 8-core Linux box. Wall
 time includes a cold extractor cache, not a one-off `dart compile exe`.
 
 A **spot check** is 20 routes (or every route when there are fewer) sampled from the graph and

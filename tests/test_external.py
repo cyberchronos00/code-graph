@@ -9,16 +9,16 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.external import _split, parse_dsn, read_compose, read_env_example  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.external import _split, parse_dsn, read_compose, read_env_example  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FX = ROOT / "tests" / "external_fixture"
 SECRETS = (b"s3cr3t-fixture-pw", b"r3dis-fixture-pw", b"sm7p-fixture-pw", b"pg-fixture-literal")
 
 
 def cli(*a):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *a], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *a], cwd=ROOT, capture_output=True, text=True)
 
 
 def ext(st):
@@ -145,7 +145,7 @@ def test_link_one_node_per_system_and_reach(dbs):
 
 def test_impact_on_external_and_table(dbs):
     """#77: impact walks CONNECTS_TO / USES_CONNECTION / table edges into the code that uses the system."""
-    from codegraph.query import impact
+    from cg_code_graph.query import impact
     st = GraphStore(dbs["link"])
     res = impact(st, "external:postgres:db:5432")
     callers = {c["name"]: c["depth"] for c in res["callers"]}
@@ -173,7 +173,7 @@ def test_cli_and_mcp(dbs, monkeypatch):
     assert "external:redis:redis:6379" in r.stdout and "mail.example.net" not in r.stdout
     r = cli("external", "--db", str(dbs["shop-api"]), "--protocol", "mysql")
     assert "reports.internal.example" in r.stdout and "postgres" not in r.stdout.split("\n", 1)[1]
-    from codegraph import mcp_server
+    from cg_code_graph import mcp_server
     monkeypatch.setattr(mcp_server, "_st", lambda: GraphStore(dbs["shop-py"]))
     out = str(mcp_server.external_systems(protocol="amqp"))
     assert "queue.internal.example" in out and "smtp.example.org" not in out
@@ -384,8 +384,8 @@ export function setup() { process.env.FEATURE_FLAG = 'on' }
 '''
 
 
-@pytest.mark.skipif(not (ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules").exists(),
-                    reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not (ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules").exists(),
+                    reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 def test_node_client_constructors_and_env_wrappers(tmp_path):
     """#103: Node client constructors (pg, ioredis incl. a subclass, nodemailer, mongoose, knex, ssh2-sftp-client)
     are CONNECTS_TO from the constructing code; `env.X` wrappers and values parsed from process.env read the key;
@@ -421,8 +421,8 @@ def test_node_client_constructors_and_env_wrappers(tmp_path):
 
 def test_impact_on_table_includes_column_users(tmp_path):
     """#103: `impact table:x` also follows READS_COLUMN / WRITES_COLUMN into code that touches only some columns."""
-    from codegraph.core.model import Edge, Node
-    from codegraph.query import impact
+    from cg_code_graph.core.model import Edge, Node
+    from cg_code_graph.query import impact
     st = GraphStore.create(tmp_path / "g.db")
     st.write([Node("table:orders", "table", "orders"), Node("column:orders.total", "column", "total"),
               Node("table:users", "table", "users"), Node("column:users.email", "column", "email"),
@@ -603,8 +603,8 @@ def test_redis_prefixes_ts_worker(dbs):
 
 def test_third_party_https_hosts(tmp_path):
     """#42 part 1: origin_kind other becomes external:http(s):<host>:<port> with CONNECTS_TO."""
-    from codegraph.link import match_endpoint
-    from codegraph.query import impact
+    from cg_code_graph.link import match_endpoint
+    from cg_code_graph.query import impact
 
     db = tmp_path / "https.db"
     index_project(FX / "https-client", db, "https-client")

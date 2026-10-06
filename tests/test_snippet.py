@@ -7,9 +7,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 SRC = {
     "pkg/__init__.py": "",
@@ -44,7 +44,7 @@ def build(tmp):
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", "snippet", *map(str, args)],
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "snippet", *map(str, args)],
                           cwd=ROOT, capture_output=True, text=True)
 
 

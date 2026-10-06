@@ -8,9 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q, routes as R, starters as S  # noqa: E402
-from codegraph.core.model import PROPAGATING, Edge, Node  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import query as Q, routes as R, starters as S  # noqa: E402
+from cg_code_graph.core.model import PROPAGATING, Edge, Node  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
 
 
 def synthetic(tmp_path, n_routes=12, n_fns=60, n_tables=9, seed=7) -> GraphStore:
@@ -101,7 +101,7 @@ def test_starters_over_budget_are_skipped_and_reported(tmp_path, monkeypatch):
 
 
 def test_index_stats_list_skipped_starters(tmp_path, monkeypatch):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     orig = S.generate
     monkeypatch.setattr(S, "generate", lambda st, budget_s=20.0, report=None: orig(st, budget_s=0.0, report=report))
     stats = index_project(ROOT / "tests" / "django_access_fixture", tmp_path / "a.db", "access")

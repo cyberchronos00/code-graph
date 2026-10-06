@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from codegraph import query as Q  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
 from test_python_tests import build, edges  # noqa: E402
 
 PROJECT = {

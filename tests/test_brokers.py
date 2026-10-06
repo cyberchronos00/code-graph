@@ -1,4 +1,4 @@
-"""Message brokers and pub/sub as protocol endpoints (#35): codegraph/brokers.py over tests/brokers_fixture (a TS
+"""Message brokers and pub/sub as protocol endpoints (#35): cg_code_graph/brokers.py over tests/brokers_fixture (a TS
 orders API producing to Kafka, a RabbitMQ topic exchange, Redis, MQTT and NATS; a Python fulfilment worker consuming
 them with confluent-kafka, pika, redis-py, paho-mqtt and nats-py; a Laravel notifier with Redis pub/sub and
 php-amqplib; part 2: a Kotlin / Spring billing service and a Rust ledger with lapin and rdkafka), linked by cg link."""
@@ -11,11 +11,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link  # noqa: E402
-from codegraph.protocols import matchers as M  # noqa: E402
-from codegraph.protocols.view import protocols  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.link import link  # noqa: E402
+from cg_code_graph.protocols import matchers as M  # noqa: E402
+from cg_code_graph.protocols.view import protocols  # noqa: E402
 
 FX = ROOT / "tests" / "brokers_fixture"
 E = "endpoint:"

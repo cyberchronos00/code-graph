@@ -14,12 +14,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
-TS_DEPS = ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules"
-needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+TS_DEPS = ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules"
+needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 TS = {
     "tsconfig.json": '{"compilerOptions": {"strict": true, "target": "es2020"}, "include": ["src"]}',
@@ -190,7 +190,7 @@ def build(tmp: Path, files: dict, name: str):
 
 
 def cli(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *args], cwd=ROOT, capture_output=True, text=True).stdout
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *args], cwd=ROOT, capture_output=True, text=True).stdout
 
 
 def edges(st, kind):
@@ -293,7 +293,7 @@ def test_nest_binding_is_a_dispatch_hop(tmp_path):
 
 def test_override_lines_show_file_when_names_collide():
     """#62 item 6: two interfaces named FeedAPI implemented by one class print as two entries with their files."""
-    from codegraph.query import override_lines
+    from cg_code_graph.query import override_lines
     res = {"overrides": [
         {"id": "method:src/lib/api/feed/types.ts#FeedAPI.peekLatest", "fqn": "FeedAPI.peekLatest", "of": "x", "edge": "IMPLEMENTED_BY"},
         {"id": "method:src/state/feed/types.ts#FeedAPI.peekLatest", "fqn": "FeedAPI.peekLatest", "of": "x", "edge": "IMPLEMENTED_BY"},
@@ -373,7 +373,7 @@ def test_swift_inherited_calls_carry_the_receiver(tmp_path):
 
 def test_dart_inherited_calls_carry_the_receiver(tmp_path):
     """#62 item 1: the same for Dart (typed parameter receivers and implicit `this` in a subclass)."""
-    from codegraph.plugins.dart.plugin import find_dart
+    from cg_code_graph.plugins.dart.plugin import find_dart
     if find_dart() is None:
         pytest.skip("Dart SDK not found")
     (tmp_path / "proj" / "lib").mkdir(parents=True)

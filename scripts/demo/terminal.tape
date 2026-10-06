@@ -21,7 +21,7 @@ Set CursorBlink false
 
 # Neutral setup: a plain '$ ' prompt, UTC, history off and a fresh output dir, so the screen shows only the demo.
 Hide
-Type `export PS1='$ ' PS2='  ' TZ=UTC LC_ALL=C.UTF-8 HISTFILE=/dev/null; cg() { .venv/bin/python -m codegraph.cli "$@"; }`
+Type `export PS1='$ ' PS2='  ' TZ=UTC LC_ALL=C.UTF-8 HISTFILE=/dev/null; cg() { .venv/bin/python -m cg_code_graph.cli "$@"; }`
 Enter
 Type "rm -f out/api.db* out/web.db* out/graph.db* && mkdir -p out && clear"
 Enter

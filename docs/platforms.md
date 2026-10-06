@@ -82,7 +82,7 @@ unknown conditions.
 | `platform_unknown` | targets the condition did not decide |
 | `platform_variant_of` | sibling variants of one call (`storage.ios.ts`, a conditional-import stub, a per-`#if` Swift function) |
 | `variant_platforms` | targets that definition is built for. Divergence counts any variant, so a caller with no condition of its own is not "missing" on a target another variant covers |
-| `exact_target` | rust-analyzer ran for that cfg (`CODEGRAPH_RUST_TARGETS`, up to 3 non-host targets). What none resolves is added from syntax (`via: cfg-inactive`) |
+| `exact_target` | rust-analyzer ran for that cfg (`CG_RUST_TARGETS`, up to 3 non-host targets). What none resolves is added from syntax (`via: cfg-inactive`) |
 
 A Swift member a variant does not define is not missing when the variant conforms to a protocol
 that requires it, or when `init` comes from an SDK superclass (`attrs.external_supers`).
@@ -141,7 +141,7 @@ not built for ios: function:lib/storage/storage_web.dart#save
 ```
 
 Rust exact mode resolves the host configuration, then runs once per other target the `cfg`
-conditions name (up to 3, `CODEGRAPH_RUST_TARGETS`). References under another target's `cfg`
+conditions name (up to 3, `CG_RUST_TARGETS`). References under another target's `cfg`
 are exact (`attrs.exact_target`). What none of those runs resolves is added from the syntax
 layer (`via: cfg-inactive`), so every target's callers are in the graph.
 

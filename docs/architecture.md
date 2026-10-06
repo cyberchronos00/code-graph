@@ -111,11 +111,11 @@ The command adds `MATCHES_ROUTE` from each repo's `http:` endpoints to routes of
 `impact`, `downstream`, and `path` then cross the whole workspace, including a chain of three or more repos.
 A frontend `links:` list limits which servers that repo is matched against ([apps and workspace](configuration.md#apps-and-workspace)).
 
-Matching (`codegraph/link.py`) is deterministic: the method must agree, then each path segment.
+Matching (`cg_code_graph/link.py`) is deterministic: the method must agree, then each path segment.
 A literal fitted into `{param}` is `resolved`. Catch-alls absorb the tail. The best candidate has the fewest heuristic fits, then the most literal agreements; a tie is ambiguous.
 `exact` means the segments agree and the client base was traced. An unknown origin is a suffix match at `heuristic`. The report lists every endpoint with its match and evidence.
 
 ### Payload / field check
 
-For a client endpoint with one route match, `codegraph/payload.py` compares the keys the client sends and parses with the server schema or the returned shape, and writes `payload_checks` (each issue has `file:line` on both sides).
+For a client endpoint with one route match, `cg_code_graph/payload.py` compares the keys the client sends and parses with the server schema or the returned shape, and writes `payload_checks` (each issue has `file:line` on both sides).
 Ambiguous matches are skipped. Kind names: [Graph schema](schema.md).

@@ -8,9 +8,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FILES = {
     "shapes/__init__.py": "",
@@ -98,17 +98,17 @@ def test_abstract_base_lists_the_override_callers(tmp_path):
 
 def test_cli_and_mcp_state_the_relation(tmp_path):
     _, db = build(tmp_path)
-    p = subprocess.run([sys.executable, "-m", "codegraph.cli", "impact", "Square.area", "--db", str(db), "--no-paths"],
+    p = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "impact", "Square.area", "--db", str(db), "--no-paths"],
                        cwd=ROOT, capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     assert "overrides: shapes.base.Shape.area" in p.stdout
     assert "] shapes.base.Shape.area" not in p.stdout              # not in the callers list
-    p = subprocess.run([sys.executable, "-m", "codegraph.cli", "impact", "Shape.area", "--db", str(db), "--no-paths"],
+    p = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "impact", "Shape.area", "--db", str(db), "--no-paths"],
                        cwd=ROOT, capture_output=True, text=True)
     assert "overridden by: shapes.base.Circle.area, shapes.base.Square.area" in p.stdout
     assert "shapes.report.total  (call through a collection)  (via override shapes.base.Circle.area +1)" in p.stdout
 
-    import codegraph.mcp_server as M
+    import cg_code_graph.mcp_server as M
     old = M.STATE["db"]
     M.STATE["db"] = str(db)
     try:

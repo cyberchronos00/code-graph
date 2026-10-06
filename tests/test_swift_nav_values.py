@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("tree_sitter_swift")
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "swift_nav_values"
 
@@ -40,8 +40,8 @@ def test_previews_run_as_tests(tmp_path):
     """#100: snapshot / generated preview tests reach a view through its preview provider: `X_Previews._allPreviews`
     and, in a test file, a string naming the provider (`performAccessibilityAudit(named: "X_Previews")`)."""
     import json
-    from codegraph import query as Q
-    from codegraph.core.store import GraphStore
+    from cg_code_graph import query as Q
+    from cg_code_graph.core.store import GraphStore
     root = tmp_path / "app"
     (root / "App").mkdir(parents=True)
     (root / "PreviewTests").mkdir()
@@ -69,7 +69,7 @@ def test_availability_checks_met_by_the_deployment_target(tmp_path):
     """#100: with `platforms: [.iOS(.v17)]` an `@available(iOS 16, *)` / `if #available(iOS 15, *)` always holds:
     no attrs.available, listed as availability_always_true; a higher requirement keeps its attrs.available."""
     import json
-    from codegraph.plugins.swift.plugin import deployment_targets
+    from cg_code_graph.plugins.swift.plugin import deployment_targets
     root = tmp_path / "pkg"
     (root / "Sources" / "App").mkdir(parents=True)
     (root / "Package.swift").write_text(

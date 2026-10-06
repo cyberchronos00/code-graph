@@ -1,4 +1,4 @@
-"""Planned-change layer (codegraph/plans.py): schema, deterministic checks, verify mode, CLI, MCP tools, overlay view.
+"""Planned-change layer (cg_code_graph/plans.py): schema, deterministic checks, verify mode, CLI, MCP tools, overlay view.
 Sample: examples/bookstore-api + examples/plans/preorders.yaml; the implemented state is the sample API overlaid
 with tests/bookstore_impl."""
 import asyncio
@@ -10,8 +10,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import plans as P  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
+from cg_code_graph import plans as P  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
 from sample import build, PLANS, needs_php  # noqa: E402
 
 BROKEN = ROOT / "tests" / "broken_plans"
@@ -64,7 +64,7 @@ def test_malformed_items_are_errors_not_crashes(dbs, tmp_path):
     with pytest.raises(P.PlanError, match="invalid YAML"):
         P.load_plan("bad", tmp_path)
     assert any(r.get("error", "").startswith("bad.yaml: invalid YAML") for r in P.list_plans(tmp_path))
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE.update(db=dbpath(before), plans=str(tmp_path))
@@ -164,7 +164,7 @@ def test_verify_mode(dbs):
 # ---------------------------------------------------------------- CLI + MCP + view
 @needs_php
 def test_cli(dbs, capsys):
-    from codegraph.cli import main
+    from cg_code_graph.cli import main
     before, _ = dbs
     main(["plan", "list", "--plans-dir", str(PLANS)])
     main(["plan", "check", "preorders", "--plans-dir", str(PLANS), "--db", dbpath(before)])
@@ -182,7 +182,7 @@ def test_mcp_plan_tools(dbs):
 
     async def go():
         params = StdioServerParameters(command=sys.executable, cwd=str(ROOT),
-                                       args=["-m", "codegraph.mcp_server", "--db", dbpath(before), "--plans", str(PLANS)])
+                                       args=["-m", "cg_code_graph.mcp_server", "--db", dbpath(before), "--plans", str(PLANS)])
         async with stdio_client(params) as (r, w):
             async with ClientSession(r, w) as s:
                 await s.initialize()
@@ -208,8 +208,8 @@ def test_mcp_plan_tools(dbs):
 
 @needs_php
 def test_overlay_view(dbs, tmp_path):
-    from codegraph.viz import graph as G
-    from codegraph.viz.server import export_plan_html
+    from cg_code_graph.viz import graph as G
+    from cg_code_graph.viz.server import export_plan_html
     before, _ = dbs
     g = G.build_plan(before, str(PLANS / "preorders.yaml"))
     roles = {n["id"]: n.get("plan_role") for n in g["nodes"]}

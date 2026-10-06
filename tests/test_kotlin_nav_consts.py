@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("tree_sitter_kotlin")
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "kotlin_nav_consts"
 

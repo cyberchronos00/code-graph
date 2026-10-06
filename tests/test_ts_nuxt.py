@@ -1,7 +1,7 @@
 """TypeScript/Vue/Nuxt plugin + cross-repo link on the sample apps (examples/bookstore-web -> examples/bookstore-api).
 
 The web sample ships a hand-written `.nuxt/` (same shape `nuxi prepare` generates) so no network or
-`nuxi` run is needed; the extractor's own TypeScript (codegraph/plugins/ts/extractor/node_modules) is used.
+`nuxi` run is needed; the extractor's own TypeScript (cg_code_graph/plugins/ts/extractor/node_modules) is used.
 """
 import json
 import sqlite3
@@ -12,12 +12,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.link import match_endpoint, match_path  # noqa: E402
-from codegraph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.link import match_endpoint, match_path  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
 from sample import build, EXTRACTOR_DEPS, needs_php  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 
 def fe():
@@ -106,7 +106,7 @@ def test_cross_repo_impact_and_downstream():
 
 @needs_php
 def test_mcp_tools_on_combined_and_reindex_repo():
-    from codegraph import mcp_server as M
+    from cg_code_graph import mcp_server as M
     old = dict(M.STATE)
     try:
         M.STATE["db"] = str(build()["combined"])

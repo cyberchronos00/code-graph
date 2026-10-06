@@ -59,7 +59,7 @@ Comments in the file are the meanings. Flags and env vars that override a key:
 | `plans.dir` | `--plans-dir DIR` / `--plans DIR` |
 | `viz.presets` | `cg serve --presets FILE` |
 | `apps` | `cg index --no-apps` indexes the root as one project |
-| `rust.targets` | `CODEGRAPH_RUST_TARGETS` (takes precedence; [Rust, C and C++](native.md)) |
+| `rust.targets` | `CG_RUST_TARGETS` (takes precedence; [Rust, C and C++](native.md)) |
 
 `include` walks only the path down to those directories; `exclude` still applies inside them. `skip_dirs.keep` also lets a walk into a hidden directory such as `.storybook`. `frameworks` names include `laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `astro`, `express` (aliases such as `nestjs`, `next`, `fastify`, `drf` work). `platforms.targets` accepts `windows`, `linux`, `macos`, `ios`, `android`, `web`; `unix` and `native` work in `platforms.paths`. Details: [Python](python.md), [Generated files](generated.md), [Platforms](platforms.md).
 
@@ -83,7 +83,7 @@ The same merge from graphs you already built is `cg link --repo` ([workspace](cl
 
 ## Framework presets
 
-A detected language or framework brings a preset from `codegraph/presets/*.yaml`:
+A detected language or framework brings a preset from `cg_code_graph/presets/*.yaml`:
 
 | preset | what it adds |
 |---|---|
@@ -140,9 +140,11 @@ Starter cards are built in this order: `serve --presets FILE` or `viz.presets`; 
 | variable | effect |
 |---|---|
 | `CG_MCP_TOOLS=LIST` | tools `cg-mcp` lists: `core`, names, globs, `-name`. Unset or empty means all ([Choosing tools](mcp.md#choosing-tools)) |
-| `CODEGRAPH_NO_CACHE=1` | disable the TS, Dart and native SCIP caches (keyed by file content) |
-| `CODEGRAPH_NO_HOOKS=1` | git hooks installed by `cg hooks` do nothing for that command ([CLI reference](cli.md#hooks)) |
-| `CODEGRAPH_NO_STALE_CHECK=1` | MCP tool replies skip the staleness `index note:` ([MCP server](mcp.md#staleness)) |
-| `CODEGRAPH_CACHE=DIR` | cache root (else `$CODEGRAPH_CACHE_DIR`, `%LOCALAPPDATA%\codegraph` on Windows, `$XDG_CACHE_HOME/codegraph`, `~/.cache/codegraph`). `cg clean` empties it ([clean](cli.md#clean)) |
-| `CODEGRAPH_NODE=PATH` | JavaScript runtime for the TypeScript extractor (Node.js or Bun; a path or a name on PATH); else `node`, then `bun` on PATH ([Installing and updating cg](install.md#javascript-runtime)) |
-| `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0`, `CODEGRAPH_COMPDB`, `CODEGRAPH_CFAMILY`, … | Rust / C / C++ options ([environment variables](native.md#environment-variables)) |
+| `CG_NO_CACHE=1` | disable the TS, Dart and native SCIP caches (keyed by file content) |
+| `CG_NO_HOOKS=1` | git hooks installed by `cg hooks` do nothing for that command ([CLI reference](cli.md#hooks)) |
+| `CG_NO_STALE_CHECK=1` | MCP tool replies skip the staleness `index note:` ([MCP server](mcp.md#staleness)) |
+| `CG_CACHE=DIR` | cache root (else `%LOCALAPPDATA%\cg` on Windows, `$XDG_CACHE_HOME/cg`, `~/.cache/cg`). `cg clean` empties it ([clean](cli.md#clean)) |
+| `CG_NODE=PATH` | JavaScript runtime for the TypeScript extractor (Node.js or Bun; a path or a name on PATH); else `node`, then `bun` on PATH ([Installing and updating cg](install.md#javascript-runtime)) |
+| `CG_RUST_SCIP=0`, `CG_C_SCIP=0`, `CG_COMPDB`, `CG_CFAMILY`, … | Rust / C / C++ options ([environment variables](native.md#environment-variables)) |
+
+`CODEGRAPH_*` names still work in 0.17.x with a deprecation warning; they are removed in 0.18.0. `CODEGRAPH_CACHE` and `CODEGRAPH_CACHE_DIR` are read as `CG_CACHE`.

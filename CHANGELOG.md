@@ -8,6 +8,19 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Changed
+
+- The import package is `cg_code_graph`. `python -m cg_code_graph` and `python -m cg_code_graph.cli` replace `python -m codegraph`. The `cg` and `cg-mcp` commands are unchanged.
+- Environment variables use the `CG_*` prefix (`CG_JOBS`, `CG_CACHE`, and the rest of the former `CODEGRAPH_*` settings).
+- The cache root is `~/.cache/cg` (`%LOCALAPPDATA%\cg` on Windows). An existing `codegraph` cache directory is moved automatically on first use; its `swift-build/` directory is dropped.
+- Git hooks that still run `python -m codegraph.cli` are reported as outdated (`cg hooks status`, `cg doctor`). `cg hooks install` rewrites them.
+- Cache stamps and temporary directories are named `cg-stamp.json` and `cg-nuxt-`.
+- `cg agents --mcp` edits the `cg` entry in place instead of rewriting the file. The MCP server's `--help` says `cg-mcp`.
+
+### Deprecated
+
+- `CODEGRAPH_*` environment variables still work in 0.17.x, with one warning per name. They are removed in 0.18.0. `CODEGRAPH_CACHE_DIR` is read as `CG_CACHE`.
+
 ### Added
 
 - `cg install` / `cg uninstall` register the cg MCP server (key `cg`) in Cursor, Claude Code,
@@ -16,11 +29,6 @@ commands, output and the graph schema; such changes are listed under **Changed**
   the file byte-identical. `--dry-run`, and `cg doctor` lists where cg is registered (#122).
 - `CG_MCP_TOOLS` / `cg-mcp --tools` choose which MCP tools are listed (`core`, names, globs,
   `-name`) (#122).
-
-### Changed
-
-- `cg agents --mcp` edits the `cg` entry in place instead of rewriting the file. The MCP
-  server's `--help` says `cg-mcp`.
 
 ## [0.16.0] - 2026-10-06
 

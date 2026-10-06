@@ -7,12 +7,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.extractors import status as extractor_status  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.ts.plugin import sub_tsconfigs  # noqa: E402
+from cg_code_graph.core.extractors import status as extractor_status  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.ts.plugin import sub_tsconfigs  # noqa: E402
 
-TS_DEPS = ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules"
+TS_DEPS = ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules"
 needs_ts = pytest.mark.skipif(
     shutil.which("node") is None or not (TS_DEPS.exists() or extractor_status("typescript")["installed"]),
     reason="node and the TypeScript extractor are required",

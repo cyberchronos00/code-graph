@@ -14,8 +14,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.concepts import resolutions, render_resolutions  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.concepts import resolutions, render_resolutions  # noqa: E402
 from sample import build, EXTRACTOR_DEPS, needs_php  # noqa: E402
 
 BUILD = "method:App\\Services\\SalesReportService::build"
@@ -72,7 +72,7 @@ def test_concept_query_surfaces_divergence_backend_only():
     assert {div["a_next"], div["b_next"]} == {"setting:reports.timezone", "column:orders.customer_timezone"}
 
 
-@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 @needs_php
 def test_concept_query_client_side_never_sends_and_falls_back():
     r = resolutions(GraphStore(build()["combined"]), "timezone")

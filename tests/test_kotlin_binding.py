@@ -13,7 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_kotlin")
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "kotlin_binding_fixture"
 _S: dict = {}
@@ -46,8 +46,8 @@ def test_library_receiver_does_not_bind_by_name():
 
 
 def test_cg_tests_lists_candidate_tests():
-    from codegraph import query as Q
-    from codegraph.core.store import GraphStore
+    from cg_code_graph import query as Q
+    from cg_code_graph.core.store import GraphStore
     calls("method:app.FeedStore.reload")
     res = Q.tests_covering(GraphStore(str(_S["db"])), "FeedStore.reload")
     assert [(t["name"], t.get("candidate")) for t in res["direct"]] == [("reloadsStores", True)]

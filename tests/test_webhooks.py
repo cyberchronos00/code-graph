@@ -10,10 +10,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link  # noqa: E402
-from codegraph.routes import render_routes, routes_report  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.link import link  # noqa: E402
+from cg_code_graph.routes import render_routes, routes_report  # noqa: E402
 
 FX = ROOT / "tests" / "webhooks_fixture"
 

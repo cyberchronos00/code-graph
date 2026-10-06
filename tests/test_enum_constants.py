@@ -11,7 +11,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
 FIXTURES = {
@@ -70,7 +70,7 @@ def test_kotlin(tmp_path):
     }
 
 
-@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 def test_typescript(tmp_path):
     nodes, uses = build(tmp_path, "ts")
     assert nodes == {"enum_case:src/values.ts#Color.Red", "enum_case:src/values.ts#Color.Green",

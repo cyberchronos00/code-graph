@@ -19,11 +19,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph import coverage as C  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.core.syntax_errors import merge, span_text  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.swift.plugin import _preprocess  # noqa: E402
+from cg_code_graph import coverage as C  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.core.syntax_errors import merge, span_text  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.swift.plugin import _preprocess  # noqa: E402
 
 FIX = ROOT / "tests" / "swift_parse_fixture"
 _S: dict = {}
@@ -51,8 +51,8 @@ def cov_of(db) -> dict:
 
 
 def cg(*args):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *map(str, args)], cwd=ROOT, capture_output=True,
-                          text=True, env=dict(os.environ, CODEGRAPH_NO_CACHE="1"))
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, capture_output=True,
+                          text=True, env=dict(os.environ, CG_NO_CACHE="1"))
 
 
 def test_source_location_default_and_directive_tests_are_indexed():
@@ -194,7 +194,7 @@ def test_typescript_syntax_errors_are_listed(tmp_path):
     sys.path.insert(0, str(ROOT / "tests"))
     from sample import EXTRACTOR_DEPS
     if not EXTRACTOR_DEPS.exists():
-        pytest.skip("run `npm ci` in codegraph/plugins/ts/extractor")
+        pytest.skip("run `npm ci` in cg_code_graph/plugins/ts/extractor")
     cov = _index(tmp_path, {"tsconfig.json": '{"include": ["src"]}', "package.json": '{"name": "x"}',
                             "src/a.ts": "export function ok() { return 1 }\n\nexport function broken(a: number {\n"
                                         "  return a\n}\n\nexport class After {}\n"})

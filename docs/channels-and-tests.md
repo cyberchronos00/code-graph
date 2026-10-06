@@ -124,7 +124,7 @@ name shared by a whole group, matches nothing. Frontend tests match when the fro
 to its backend. HTTP endpoints that only tests call are tagged `test_only` and kept out of the
 frontend → backend match rates.
 
-Programs a test starts (`codegraph/process_runs.py`, Python also `plugins/python/subproc.py`):
+Programs a test starts (`cg_code_graph/process_runs.py`, Python also `plugins/python/subproc.py`):
 
 | runtime | recognised start | links to |
 |---|---|---|

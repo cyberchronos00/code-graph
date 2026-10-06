@@ -87,7 +87,7 @@ It lists the tools it found, whether extractor dependencies are installed, and f
 ### JavaScript runtime
 
 TypeScript / JavaScript indexing needs Node.js 20+ or Bun (tested with Bun 1.4.2).
-Lookup order: `CODEGRAPH_NODE`, then `node`, then `bun` on PATH.
+Lookup order: `CG_NODE`, then `node`, then `bun` on PATH.
 Extractor dependencies install with `npm ci`, or `bun install` when npm is missing.
 A Bun-only container (`oven/bun`) needs nothing else.
 `cg doctor` names the runtime it found.
@@ -155,6 +155,15 @@ install.ps1 -Uninstall
 ::
 
 The old package name `codegraph` (through v0.9.0) is removed by the install scripts. By hand: uninstall `codegraph`, then install `cg-code-graph`.
+
+## Upgrading to 0.17
+
+0.17 renames the import package to `cg_code_graph`. Two other PyPI projects (`codegraph` and `codegraph-py`) already ship a top-level `codegraph` package, and colbymchenry/codegraph uses the `CODEGRAPH_*` environment names, so this project no longer uses either.
+
+- Environment variables are `CG_*` (`CG_JOBS`, `CG_CACHE`, …). `CODEGRAPH_*` still works in 0.17.x and prints one deprecation warning per name. Those names are removed in 0.18.0. `CODEGRAPH_CACHE_DIR` is read as `CG_CACHE`.
+- The cache root is `~/.cache/cg` (`%LOCALAPPDATA%\cg` on Windows, or `$XDG_CACHE_HOME/cg`). The first command that uses the default root moves `~/.cache/codegraph` there and drops `swift-build/` (SwiftPM build directories embed absolute paths, so the next Swift index rebuilds). Extractor installs, SCIP output and fact caches move with it. Set `CG_CACHE` to keep a cache where it is.
+- `python -m cg_code_graph.cli` replaces `python -m codegraph.cli`. `python -m cg_code_graph` works the same way. The `cg` and `cg-mcp` commands are unchanged. MCP entries that `cg install` wrote with an absolute `cg-mcp` keep working. An entry that still runs `python -m codegraph.mcp_server` is reported by `cg doctor`; re-run `cg install`.
+- Git hooks that still run `python -m codegraph.cli` stop refreshing until you re-run `cg hooks install`. `cg hooks status` and `cg doctor` name an outdated hook.
 
 ## Elsewhere
 

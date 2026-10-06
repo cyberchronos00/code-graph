@@ -142,7 +142,7 @@ DEPS = {
 
 
 def test_dependency_helpers_class_instances_and_middleware(tmp_path):
-    from codegraph import routes as R
+    from cg_code_graph import routes as R
     from test_python_web_routes import routes
     st = build(tmp_path, "d", DEPS)
     r = routes(st)

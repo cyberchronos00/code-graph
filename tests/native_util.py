@@ -9,8 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.native import runner  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.native import runner  # noqa: E402
 
 GATES = ROOT / "examples" / "native.gates.json"
 
@@ -30,11 +30,11 @@ TS_SKIP = "tree-sitter grammars not installed: pip install -r requirements.txt (
 
 
 def rust_analyzer():
-    return runner.find_tool("CODEGRAPH_RUST_ANALYZER", ["rust-analyzer"], [Path.home() / ".cargo" / "bin"])
+    return runner.find_tool("CG_RUST_ANALYZER", ["rust-analyzer"], [Path.home() / ".cargo" / "bin"])
 
 
 def scip_clang():
-    return runner.find_tool("CODEGRAPH_SCIP_CLANG", ["scip-clang"], [Path.home() / ".local" / "bin"])
+    return runner.find_tool("CG_SCIP_CLANG", ["scip-clang"], [Path.home() / ".local" / "bin"])
 
 
 @contextlib.contextmanager

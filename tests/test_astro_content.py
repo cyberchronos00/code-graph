@@ -9,18 +9,18 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.plugins.astro.content import frontmatter, read_collections  # noqa: E402
-from codegraph.plugins.astro.plugin import astro_route, read_astro_config  # noqa: E402
+from cg_code_graph.plugins.astro.content import frontmatter, read_collections  # noqa: E402
+from cg_code_graph.plugins.astro.plugin import astro_route, read_astro_config  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
 FX = ROOT / "tests" / "astro_content_fixture"
 _S: dict = {}
-needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 
 def built() -> dict:
     if not _S:
-        from codegraph.indexer import index_project
+        from cg_code_graph.indexer import index_project
         d = Path(tempfile.mkdtemp(prefix="codegraph-astro-content-"))
         db = d / "astro.db"
         _S["stats"] = index_project(FX, db, "astro-content")
@@ -159,7 +159,7 @@ def test_local_content_calls_and_src_dir_root(tmp_path):
         "---\nimport { getCollection, render } from '../lib/local'\n"
         "const posts = await getCollection('blog')\nconst view = await render(posts)\n---\n<p>{view}</p>\n"
     )
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     dbp = local / "g.db"
     index_project(local, dbp, "local")
     con = sqlite3.connect(dbp)
@@ -303,7 +303,7 @@ mk(2)
 
 @needs_ts
 def test_markdown_and_collection_edge_cases(tmp_path):
-    from codegraph.indexer import index_project
+    from cg_code_graph.indexer import index_project
     proj = tmp_path / "proj"
     for name, text in EDGE.items():
         (proj / name).parent.mkdir(parents=True, exist_ok=True)

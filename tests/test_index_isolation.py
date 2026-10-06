@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 from sample import EXTRACTOR_DEPS, PHP_EXTRACTOR_DEPS  # noqa: E402
 
-pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 # (root, gates file); the gated PHP project goes first so its gate predicates would show up in every later graph
 PROJECTS = [("tests/gating_fixture", "examples/bookstore.gates.json"), ("examples/bookstore-express", None),
@@ -26,7 +26,7 @@ if not PHP_EXTRACTOR_DEPS.exists():   # the other languages are still checked wi
     PROJECTS = PROJECTS[1:]
 SCRIPT = """
 import sys
-from codegraph.indexer import index_project
+from cg_code_graph.indexer import index_project
 out, args = sys.argv[1], sys.argv[2:]
 for root, gates in zip(args[::2], args[1::2]):
     index_project(root, f"{out}/{root.replace('/', '_')}.db", root.replace('/', '_'), gates=gates or None)
@@ -35,7 +35,7 @@ for root, gates in zip(args[::2], args[1::2]):
 
 def run(out: Path, projects) -> None:
     args = [x for root, gates in projects for x in (root, gates or "")]   # relative to ROOT (the cwd)
-    env = {**os.environ, "CODEGRAPH_NO_CACHE": "1", "PYTHONPATH": str(ROOT)}
+    env = {**os.environ, "CG_NO_CACHE": "1", "PYTHONPATH": str(ROOT)}
     subprocess.run([sys.executable, "-c", SCRIPT, str(out), *args], check=True, env=env, cwd=ROOT,
                    capture_output=True, timeout=600)
 

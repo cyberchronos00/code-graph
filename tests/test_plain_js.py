@@ -9,10 +9,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.detect import detect  # noqa: E402
-from codegraph.core.plugin import Project  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.ts.plugin import TypeScriptPlugin, plain_js_dirs, plain_js_program  # noqa: E402
+from cg_code_graph.core.detect import detect  # noqa: E402
+from cg_code_graph.core.plugin import Project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.ts.plugin import TypeScriptPlugin, plain_js_dirs, plain_js_program  # noqa: E402
 
 FX = ROOT / "tests" / "plainjs_fixture"
 

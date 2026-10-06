@@ -13,13 +13,13 @@ The syntax layer also records facts the compiler index does not: crates and modu
 
 ## Exact mode
 
-Exact mode runs when the indexer is installed. `CODEGRAPH_RUST_SCIP=0` or `CODEGRAPH_C_SCIP=0` forces the heuristic layer. A failed run is named by `cg coverage` (`exact indexer run failed`) and the index stays on the syntax layer. SCIP output is cached under `~/.cache/codegraph/scip/` ([clean](cli.md#clean)).
+Exact mode runs when the indexer is installed. `CG_RUST_SCIP=0` or `CG_C_SCIP=0` forces the heuristic layer. A failed run is named by `cg coverage` (`exact indexer run failed`) and the index stays on the syntax layer. SCIP output is cached under `~/.cache/cg/scip/` ([clean](cli.md#clean)).
 
 | indexer | how |
 |---|---|
-| `rust-analyzer scip` | a root `Cargo.toml` (`cargo metadata`, or the manifests if cargo is missing). Build scripts and proc-macros stay off unless `CODEGRAPH_RUST_BUILD_SCRIPTS=1`. Cargo features are `all` |
-| `scip-clang` | a `compile_commands.json` at the root, under `build*/`, `out/`, `cmake-build-*/`, or at `CODEGRAPH_COMPDB`. One database is one configuration |
-| prebuilt index | `CODEGRAPH_RUST_SCIP_FILE` or `CODEGRAPH_C_SCIP_FILE` |
+| `rust-analyzer scip` | a root `Cargo.toml` (`cargo metadata`, or the manifests if cargo is missing). Build scripts and proc-macros stay off unless `CG_RUST_BUILD_SCRIPTS=1`. Cargo features are `all` |
+| `scip-clang` | a `compile_commands.json` at the root, under `build*/`, `out/`, `cmake-build-*/`, or at `CG_COMPDB`. One database is one configuration |
+| prebuilt index | `CG_RUST_SCIP_FILE` or `CG_C_SCIP_FILE` |
 
 | still heuristic | why |
 |---|---|
@@ -28,26 +28,26 @@ Exact mode runs when the indexer is installed. `CODEGRAPH_RUST_SCIP=0` or `CODEG
 | inactive `#[cfg]` / `#if` | the syntax node stays. Rust re-runs rust-analyzer for other targets the `cfg`s name (`attrs.exact_target`); the rest is `via: cfg-inactive` |
 | files the index omits | those files keep heuristic edges |
 
-`CODEGRAPH_CFAMILY=1` forces the C/C++ plugin and `=0` turns it off. It steps aside in a Cargo, npm, Composer, Go, Python, or Dart repo unless a compile database exists. Generated headers come from the configure step; unity sources listed but not on disk are skipped.
+`CG_CFAMILY=1` forces the C/C++ plugin and `=0` turns it off. It steps aside in a Cargo, npm, Composer, Go, Python, or Dart repo unless a compile database exists. Generated headers come from the configure step; unity sources listed but not on disk are skipped.
 
 ## Environment variables
 
 | variable | effect |
 |---|---|
-| `CODEGRAPH_RUST_SCIP=0`, `CODEGRAPH_C_SCIP=0` | force heuristic mode |
-| `CODEGRAPH_RUST_ANALYZER`, `CODEGRAPH_SCIP_CLANG` | indexer binary (`PATH`, then `~/.cargo/bin` or `~/.local/bin`) |
-| `CODEGRAPH_RUST_SCIP_FILE`, `CODEGRAPH_C_SCIP_FILE` | an existing `index.scip` |
-| `CODEGRAPH_RUST_BUILD_SCRIPTS=1` | let rust-analyzer run build scripts and proc-macros |
-| `CODEGRAPH_RUST_TARGETS` | extra rust-analyzer runs: `auto` (default, up to 3 targets the `cfg`s name), `0`, or a platform / triple list (`windows,macos`). Overrides `.cg.yaml` `rust.targets` |
-| `CODEGRAPH_COMPDB` | `compile_commands.json` or its directory |
-| `CODEGRAPH_CFAMILY=0` / `1` | disable or force the C/C++ plugin |
-| `CODEGRAPH_JOBS` | scip-clang workers |
-| `CODEGRAPH_NO_CARGO=1`, `CODEGRAPH_CARGO` | skip `cargo metadata`, or point at the cargo binary |
-| `CODEGRAPH_EXCLUDE_DIRS`, `CODEGRAPH_INCLUDE_DIRS` | C/C++ directory filters (comma-separated names) |
-| `CODEGRAPH_C_MASK_ANNOTATIONS=0` | do not blank annotation macros (`FOO_API`) before parsing |
-| `CODEGRAPH_C_MAX_MACRO_REFS` | references kept per macro expansion site (default 8) |
-| `CODEGRAPH_MAX_FILE_BYTES` | skip larger C/C++ files (default 30 MB) |
-| `CODEGRAPH_NO_CACHE=1`, `CODEGRAPH_INDEXER_TIMEOUT` | fresh indexer run; cap in seconds |
+| `CG_RUST_SCIP=0`, `CG_C_SCIP=0` | force heuristic mode |
+| `CG_RUST_ANALYZER`, `CG_SCIP_CLANG` | indexer binary (`PATH`, then `~/.cargo/bin` or `~/.local/bin`) |
+| `CG_RUST_SCIP_FILE`, `CG_C_SCIP_FILE` | an existing `index.scip` |
+| `CG_RUST_BUILD_SCRIPTS=1` | let rust-analyzer run build scripts and proc-macros |
+| `CG_RUST_TARGETS` | extra rust-analyzer runs: `auto` (default, up to 3 targets the `cfg`s name), `0`, or a platform / triple list (`windows,macos`). Overrides `.cg.yaml` `rust.targets` |
+| `CG_COMPDB` | `compile_commands.json` or its directory |
+| `CG_CFAMILY=0` / `1` | disable or force the C/C++ plugin |
+| `CG_JOBS` | scip-clang workers |
+| `CG_NO_CARGO=1`, `CG_CARGO` | skip `cargo metadata`, or point at the cargo binary |
+| `CG_EXCLUDE_DIRS`, `CG_INCLUDE_DIRS` | C/C++ directory filters (comma-separated names) |
+| `CG_C_MASK_ANNOTATIONS=0` | do not blank annotation macros (`FOO_API`) before parsing |
+| `CG_C_MAX_MACRO_REFS` | references kept per macro expansion site (default 8) |
+| `CG_MAX_FILE_BYTES` | skip larger C/C++ files (default 30 MB) |
+| `CG_NO_CACHE=1`, `CG_INDEXER_TIMEOUT` | fresh indexer run; cap in seconds |
 
 ## Query specs
 
@@ -72,4 +72,4 @@ Qualified paths, `mod:`, source files, and `feature:` / `cfg:` / `define:` / `un
 | C / C++ entry | `main` / `wmain` / `WinMain` (a test, example, or bench directory retags it), gtest / Catch2 / doctest / Boost.Test `TEST*` and `test*` in test dirs, `BENCHMARK`, and an export macro or a non-static declaration in `include/` (`public_api`) |
 | Virtuals | exact: scip-clang → `OVERRIDDEN_BY` / `IMPLEMENTED_BY` (`resolved`). Heuristic: same-named methods on derived classes. The call carries `dispatch: "virtual"` and fans out to every override |
 | Gates and env | `#[cfg(feature = "x")]` → `feature:<package>/<feature>`; other cfgs → `cfg:` (`cfg(test)` marks test code). `#if` / `#ifdef` (not an include guard or `__cplusplus`) → `define:`. `env!`, `option_env!`, `std::env::var`, `getenv` → `env:KEY`. `unsafe` blocks and `unsafe fn` / `impl` → `unsafe:<crate>`; `extern "C"` is an `ffi` node |
-| Macro expansions | a function-like macro is a `macro` node and a `CALLS` target. A clang reference at an expansion is `resolved` with `via_macro`; sites with more symbols than `CODEGRAPH_C_MAX_MACRO_REFS` are dropped |
+| Macro expansions | a function-like macro is a `macro` node and a `CALLS` target. A clang reference at an expansion is `resolved` with `via_macro`; sites with more symbols than `CG_C_MAX_MACRO_REFS` are dropped |

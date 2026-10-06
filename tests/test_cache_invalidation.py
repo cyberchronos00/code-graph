@@ -14,9 +14,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core import fsutil  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.native import runner  # noqa: E402
+from cg_code_graph.core import fsutil  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.native import runner  # noqa: E402
 from native_util import env  # noqa: E402
 from sample import EXTRACTOR_DEPS  # noqa: E402
 
@@ -63,10 +63,10 @@ def _ts_project(d: Path) -> Path:
     return d
 
 
-@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 def test_ts_facts_cache_same_size_same_mtime_edit_is_a_miss(tmp_path):
     proj = _ts_project(tmp_path / "proj")
-    with env(CODEGRAPH_NO_CACHE=None, CODEGRAPH_CACHE=tmp_path / "cache"):
+    with env(CG_NO_CACHE=None, CG_CACHE=tmp_path / "cache"):
         st1 = index_project(proj, tmp_path / "1.db", "probe")
         st2 = index_project(proj, tmp_path / "2.db", "probe")
         same_size_edit(proj / "src" / "app.ts", "return foo()", "return bar()")
@@ -80,9 +80,9 @@ def test_ts_facts_cache_same_size_same_mtime_edit_is_a_miss(tmp_path):
     assert not any(dst == "function:src/app.ts#foo" for _, dst, _ in c3)
 
 
-@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 def test_ts_facts_cache_from_an_older_cache_version_is_discarded(tmp_path):
-    from codegraph.plugins.ts.plugin import facts_fingerprint
+    from cg_code_graph.plugins.ts.plugin import facts_fingerprint
     import hashlib
     proj = _ts_project(tmp_path / "proj")
     cdir = tmp_path / "cache" / "ts"
@@ -90,7 +90,7 @@ def test_ts_facts_cache_from_an_older_cache_version_is_discarded(tmp_path):
     rkey = hashlib.sha256(str(proj.resolve()).encode()).hexdigest()[:12]
     stale = cdir / f"{rkey}-0123456789abcdef0123.json"     # an entry written by a previous cache version
     stale.write_text(json.dumps({"nodes": [], "edges": []}))
-    with env(CODEGRAPH_NO_CACHE=None, CODEGRAPH_CACHE=tmp_path / "cache"):
+    with env(CG_NO_CACHE=None, CG_CACHE=tmp_path / "cache"):
         st = index_project(proj, tmp_path / "1.db", "probe")
         fp = facts_fingerprint(proj, {})
     assert st["plugins"]["typescript"]["facts_cache"] == "miss"
@@ -100,7 +100,7 @@ def test_ts_facts_cache_from_an_older_cache_version_is_discarded(tmp_path):
 
 
 def test_ts_fingerprint_includes_the_cache_version(tmp_path, monkeypatch):
-    from codegraph.plugins.ts import plugin as ts
+    from cg_code_graph.plugins.ts import plugin as ts
     proj = _ts_project(tmp_path / "proj")
     a = ts.facts_fingerprint(proj, {})
     monkeypatch.setattr(fsutil, "CACHE_VERSION", fsutil.CACHE_VERSION + 1)
@@ -116,7 +116,7 @@ def _dart_project(d: Path) -> Path:
 
 
 def test_dart_fingerprint_same_size_same_mtime_edit(tmp_path, monkeypatch):
-    from codegraph.plugins.dart import plugin as dart
+    from cg_code_graph.plugins.dart import plugin as dart
     proj = _dart_project(tmp_path / "proj")
     a = dart.facts_fingerprint(proj, {})
     same_size_edit(proj / "lib" / "app.dart", "return foo()", "return bar()")
@@ -127,11 +127,11 @@ def test_dart_fingerprint_same_size_same_mtime_edit(tmp_path, monkeypatch):
 
 
 def test_dart_facts_cache_same_size_same_mtime_edit_is_a_miss(tmp_path):
-    from codegraph.plugins.dart.plugin import find_dart
+    from cg_code_graph.plugins.dart.plugin import find_dart
     if not find_dart():
         pytest.skip("Dart SDK not installed")
     proj = _dart_project(tmp_path / "proj")
-    with env(CODEGRAPH_NO_CACHE=None, CODEGRAPH_CACHE=tmp_path / "cache"):
+    with env(CG_NO_CACHE=None, CG_CACHE=tmp_path / "cache"):
         st1 = index_project(proj, tmp_path / "1.db", "probe")
         st2 = index_project(proj, tmp_path / "2.db", "probe")
         same_size_edit(proj / "lib" / "app.dart", "return foo()", "return bar()")
@@ -143,7 +143,7 @@ def test_dart_facts_cache_same_size_same_mtime_edit_is_a_miss(tmp_path):
 
 
 def test_dart_extractor_binary_is_rebuilt_when_its_source_changes(tmp_path, monkeypatch):
-    from codegraph.plugins.dart import plugin as dart
+    from cg_code_graph.plugins.dart import plugin as dart
     src, lock, bin_ = tmp_path / "extract.dart", tmp_path / "pubspec.lock", tmp_path / ".bin" / "extract"
     src.write_text("void main() { print(1); }\n")
     lock.write_text("packages: {}\n")
@@ -199,7 +199,7 @@ def test_scip_cache_rerun_after_same_size_same_mtime_edit_and_legacy_entries_pru
         key = runner.fingerprint(proj, ["main.c"], "fake 1")
         return runner.run_cached("cfamily", key, [sys.executable, str(tool), str(src)], proj, "--out", 60)
 
-    with env(CODEGRAPH_NO_CACHE=None, CODEGRAPH_CACHE=cache):
+    with env(CG_NO_CACHE=None, CG_CACHE=cache):
         p1, i1 = index()
         p2, i2 = index()
         same_size_edit(src, "foo()", "bar()")
@@ -210,7 +210,7 @@ def test_scip_cache_rerun_after_same_size_same_mtime_edit_and_legacy_entries_pru
 
 
 def test_cfamily_scip_key_follows_compile_commands_content(tmp_path):
-    from codegraph.plugins.cfamily.plugin import scip_cache_key
+    from cg_code_graph.plugins.cfamily.plugin import scip_cache_key
     (tmp_path / "a.c").write_text("int a;\n")
     cdb = tmp_path / "compile_commands.json"
     cdb.write_text(json.dumps([{"directory": ".", "file": "a.c", "command": "cc -DX=1 -c a.c"}]))

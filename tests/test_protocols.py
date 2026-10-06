@@ -11,17 +11,17 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import protocols as P  # noqa: E402
-from codegraph.protocols import matchers as M  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.link import link  # noqa: E402
+from cg_code_graph import protocols as P  # noqa: E402
+from cg_code_graph.protocols import matchers as M  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.link import link  # noqa: E402
 
 FX = ROOT / "tests" / "protocol_fixtures"
 
 
 def cli(*a):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *a], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *a], cwd=ROOT, capture_output=True, text=True)
 
 
 # ------------------------------------------------------------------ matchers
@@ -75,7 +75,7 @@ def test_normalise():
 
 # ------------------------------------------------------------------ registry + builder + index-time matching
 def _builder():
-    from codegraph.core.plugin import GraphBuilder
+    from cg_code_graph.core.plugin import GraphBuilder
     return GraphBuilder()
 
 
@@ -117,7 +117,7 @@ def test_external_match():
 
 
 def test_config_protocols_external(tmp_path):
-    from codegraph.config import ConfigError, load
+    from cg_code_graph.config import ConfigError, load
     (tmp_path / ".cg.yaml").write_text("version: 1\nprotocols:\n  external: [\"kafka:audit.*\"]\n")
     assert load(tmp_path)["protocols"] == {"external": ["kafka:audit.*"]}
     (tmp_path / ".cg.yaml").write_text("version: 1\nprotocols:\n  external: [\"audit\"]\n")
@@ -134,7 +134,7 @@ def nest_db(tmp_path_factory):
 
 
 def test_nest_messages_and_bull_jobs_adapted(nest_db):
-    from codegraph.protocols.view import protocols
+    from cg_code_graph.protocols.view import protocols
     st = GraphStore(nest_db)
     before = {r[0] for r in st.q("SELECT id FROM nodes WHERE kind IN ('message','job')")}
     res = protocols(st)
@@ -160,7 +160,7 @@ def test_nest_messages_and_bull_jobs_adapted(nest_db):
 
 def test_nest_message_guards(nest_db, tmp_path):
     """#69: @UseGuards / APP_GUARD on message handlers are recorded and classified like route guards."""
-    from codegraph.protocols.view import protocols
+    from cg_code_graph.protocols.view import protocols
     msgs = {m["name"]: m for p in ("nest-rpc", "nest-ws") for m in protocols(GraphStore(nest_db), protocol=p)["endpoints"]}
     rpc = msgs['{"cmd":"inventory.check"}']
     assert rpc["guards"] == ["ThrottleGuard"] and "unguarded" in rpc["checks"]        # APP_GUARD, not auth
@@ -221,7 +221,7 @@ def test_link_path_from_producer_route_to_consumer_table(linked):
 
 
 def test_protocols_view_checks(linked):
-    from codegraph.protocols.view import protocols
+    from cg_code_graph.protocols.view import protocols
     st = GraphStore(linked["db"])
     res = protocols(st, protocol="socketio")
     by = {e["name"]: e for e in res["endpoints"]}
@@ -250,7 +250,7 @@ def test_protocols_view_checks(linked):
 
 
 def test_mcp_protocol_links(linked, monkeypatch):
-    from codegraph import mcp_server
+    from cg_code_graph import mcp_server
     monkeypatch.setattr(mcp_server, "_st", lambda: GraphStore(linked["db"]))
     out = mcp_server.protocol_links(protocol="socketio", unmatched=True)
     out = out if isinstance(out, str) else str(out)
@@ -260,7 +260,7 @@ def test_mcp_protocol_links(linked, monkeypatch):
 def test_socketio_direction(tmp_path):
     """#69: a Socket.IO client emit reaches server handlers only; a client's own handler of that name is not its
     receiver (and a server emit reaches client handlers)."""
-    from codegraph.protocols.view import protocols
+    from cg_code_graph.protocols.view import protocols
     (tmp_path / "requirements.txt").write_text("python-socketio\n")
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "__init__.py").write_text("")

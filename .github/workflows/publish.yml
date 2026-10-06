@@ -36,7 +36,7 @@ jobs:
           grep -q '^name = "cg-code-graph"$' pyproject.toml
       - name: The tag matches codegraph.__version__
         run: |
-          v=$(python -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('codegraph/__init__.py').read()).group(1))")
+          v=$(python -c "import re; print(re.search(r'__version__ = \"(.+?)\"', open('cg_code_graph/__init__.py').read()).group(1))")
           [ "v$v" = "$TAG" ] || { echo "tag $TAG != v$v"; exit 1; }
       - name: Build and check
         run: |

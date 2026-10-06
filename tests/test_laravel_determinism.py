@@ -68,7 +68,7 @@ FILES = {
 
 def _index(root: Path, db: Path, seed: str):
     env = {**os.environ, "PYTHONHASHSEED": seed}
-    subprocess.run([sys.executable, "-m", "codegraph.cli", "index", str(root), "--db", str(db), "--name", "r"],
+    subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "index", str(root), "--db", str(db), "--name", "r"],
                    cwd=ROOT, env=env, check=True, capture_output=True)
     c = sqlite3.connect(db)
     nodes = sorted(c.execute("SELECT id, kind, attrs FROM nodes"))

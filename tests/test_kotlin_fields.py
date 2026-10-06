@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "kotlin_fields_fixture"
 _S: dict = {}
@@ -71,8 +71,8 @@ def test_call_edges_never_reach_fields():
 
 
 def test_readers_writers_queries():
-    from codegraph import query as Q
-    from codegraph.core.store import GraphStore
+    from cg_code_graph import query as Q
+    from cg_code_graph.core.store import GraphStore
     st = GraphStore(db())
     assert {(r["src"], r["line"]) for r in Q.writers(st, "Cart.total")} == {
         ("method:app.Cart.add", 13), ("method:app.Cart.add", 14), ("method:app.Shop.reset", 21)}
@@ -93,8 +93,8 @@ def test_compose_construction_branches():
 def test_copy_guesses_are_heuristic_in_db_and_viz():
     """A name-bound `copy()` write is `heuristic` (never exact) in the edge confidence and in the web view's graph
     data, which the legend counts and styles (dotted) by `confidence`; a known receiver is `resolved`."""
-    from codegraph.core.store import GraphStore
-    from codegraph.viz import graph as G
+    from cg_code_graph.core.store import GraphStore
+    from cg_code_graph.viz import graph as G
     rows = sqlite3.connect(db()).execute(
         "select line, confidence, attrs from edges where kind='WRITES_PROP' and attrs like '%\"via\": \"copy\"%'").fetchall()
     conf = {ln: c for ln, c, a in rows}

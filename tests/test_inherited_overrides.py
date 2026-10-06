@@ -12,12 +12,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
-TS_DEPS = ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules"
-needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in codegraph/plugins/ts/extractor")
+TS_DEPS = ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules"
+needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 
 PY = {
     "pkg/__init__.py": "",
@@ -133,7 +133,7 @@ def build(tmp: Path, files: dict, name: str):
 
 
 def cli(*args):
-    p = subprocess.run([sys.executable, "-m", "codegraph.cli", *args], cwd=ROOT, capture_output=True, text=True)
+    p = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *args], cwd=ROOT, capture_output=True, text=True)
     assert p.returncode == 0, p.stderr
     return p.stdout
 
@@ -154,7 +154,7 @@ def test_tests_follow_overrides(tmp_path):
     js = json.loads(cli("tests", "pkg.core.Base.run", "--db", str(db), "--json"))
     assert {t["name"]: t.get("via_override") for t in js["transitive"]}["test_main"] == ["pkg.core.A.run"]
 
-    import codegraph.mcp_server as M
+    import cg_code_graph.mcp_server as M
     old = M.STATE["db"]
     M.STATE["db"] = str(db)
     try:

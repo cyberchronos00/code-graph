@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 
 def build(root: Path, files: dict, name: str):
@@ -128,7 +128,7 @@ def test_c_and_rust_types_per_branch(tmp_path):
     assert st["platforms"]["divergence"]["missing_callee"] == []
     pytest.importorskip("tree_sitter_rust")
     import os
-    os.environ["CODEGRAPH_RUST_SCIP"] = "0"
+    os.environ["CG_RUST_SCIP"] = "0"
     try:
         st, db = build(tmp_path / "rs", {
             "Cargo.toml": '[package]\nname = "tb"\nversion = "0.1.0"\nedition = "2021"\n',
@@ -137,7 +137,7 @@ def test_c_and_rust_types_per_branch(tmp_path):
                           "#[cfg(unix)]\nimpl Toolbar {\n    pub fn new() -> Self { Toolbar { fd: 0 } }\n}\n"
                           "pub fn run() {\n    let _t = Toolbar::new();\n}\n"}, "rs")
     finally:
-        os.environ.pop("CODEGRAPH_RUST_SCIP", None)
+        os.environ.pop("CG_RUST_SCIP", None)
     assert edges(db, "function:tb::run", "CALLS") == {"method:tb::Toolbar::new", "method:tb::Toolbar::new@11"}
     assert st["platforms"]["divergence"]["missing_callee"] == []
 
@@ -177,7 +177,7 @@ def test_swift_variant_members_from_a_protocol_or_the_sdk_superclass(tmp_path):
 
 def test_swift_parenthesised_conditions():
     pytest.importorskip("tree_sitter_swift")
-    from codegraph.plugins.swift.plugin import SwiftPlugin
+    from cg_code_graph.plugins.swift.plugin import SwiftPlugin
     p = object.__new__(SwiftPlugin)
     p.mac = None
     ios, tvos = ("atom", "platform", "ios"), ("atom", "platform", "tvos")

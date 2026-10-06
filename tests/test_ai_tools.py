@@ -9,15 +9,15 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.protocols import matchers as M  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.protocols import matchers as M  # noqa: E402
 
 FX = ROOT / "tests" / "ai_fixture"
 
 
 def cli(*a):
-    return subprocess.run([sys.executable, "-m", "codegraph.cli", *a], cwd=ROOT, capture_output=True, text=True)
+    return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *a], cwd=ROOT, capture_output=True, text=True)
 
 
 def edges(st, kind):
@@ -72,7 +72,7 @@ def test_mcp_server_client_path_and_checks(shop):
     assert "shop.agent.run_agent" in r.stdout and "llm_tool" in r.stdout
     r = cli("tests", "shop.agent.refund_order", "--db", str(shop["db"]))
     assert "test_run_agent_refunds" in r.stdout
-    from codegraph.aitools import tools
+    from cg_code_graph.aitools import tools
     res = tools(st)
     by = {(e["protocol"], e["name"]): e for e in res["tools"]}
     assert by[("llm_tool", "escalate")]["checks"] == ["no_receiver"]
@@ -185,7 +185,7 @@ def test_plain_python_untouched(tmp_path):
 
 def test_own_mcp_server_tools_are_endpoints(tmp_path):
     db = tmp_path / "self.db"
-    index_project(ROOT / "codegraph", db, "codegraph")
+    index_project(ROOT / "cg_code_graph", db, "codegraph")
     st = GraphStore(db)
     eps = {r["id"] for r in st.q("SELECT id FROM nodes WHERE id LIKE 'endpoint:mcp_tool:code-graph/%'")}
     assert {"endpoint:mcp_tool:code-graph/impact", "endpoint:mcp_tool:code-graph/llm_tools",
@@ -195,7 +195,7 @@ def test_own_mcp_server_tools_are_endpoints(tmp_path):
 
 
 def test_mcp_llm_tools(shop, monkeypatch):
-    from codegraph import mcp_server
+    from cg_code_graph import mcp_server
     monkeypatch.setattr(mcp_server, "_st", lambda: GraphStore(shop["db"]))
     out = mcp_server.llm_tools(unmatched=True)
     out = out if isinstance(out, str) else str(out)
@@ -393,8 +393,8 @@ def test_lowlevel_server_enum_value_and_single_tool(tmp_path):
     assert ("endpoint:mcp_tool:mcp-fetch/fetch", "function:fetch_srv.serve") in e
 
 
-@pytest.mark.skipif(not (ROOT / "codegraph" / "plugins" / "ts" / "extractor" / "node_modules").exists(),
-                    reason="run `npm ci` in codegraph/plugins/ts/extractor")
+@pytest.mark.skipif(not (ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules").exists(),
+                    reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
 def test_typescript_mcp_server_registrations(tmp_path):
     # #102: @modelcontextprotocol/sdk McpServer registrations -> endpoint:mcp_<kind>:<server>/<name> RECEIVED_BY the
     # handler (inline arrow = its own node, a function reference); a register helper taking `server: McpServer` uses

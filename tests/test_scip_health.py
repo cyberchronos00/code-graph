@@ -8,11 +8,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "codegraph" / "plugins" / "scip"))
+sys.path.insert(0, str(ROOT / "cg_code_graph" / "plugins" / "scip"))
 import scip_pb2  # noqa: E402
 
-from codegraph import coverage, doctor  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph import coverage, doctor  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "kotlin_mixed_fixture"
 GOOD = FIX / "index.scip"
@@ -40,12 +40,13 @@ def _nodefs(o):
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.delenv("CODEGRAPH_KOTLIN_SCIP", raising=False)
-    monkeypatch.delenv("CODEGRAPH_KOTLIN_SCIP_FILE", raising=False)
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("CG_KOTLIN_SCIP", raising=False)
+    monkeypatch.delenv("CG_KOTLIN_SCIP_FILE", raising=False)
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
 
 
-def test_doctor_scip_health(tmp_path):
+def test_doctor_scip_health(tmp_path, monkeypatch):
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
     ok = doctor.scip_health(GOOD)
     assert ok["occurrences"] == ok["positioned"] > 0 and ok["definitions"] > 0 and "warning" not in ok
     bad = doctor.scip_health(_write(tmp_path, "nopos.scip", _nopos))

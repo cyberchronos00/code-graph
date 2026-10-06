@@ -12,7 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_kotlin")
-from codegraph.indexer import index_project  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
 
 FIX = ROOT / "tests" / "kotlin_mixed_fixture"
 SCIP = FIX / "index.scip"
@@ -20,9 +20,9 @@ SCIP = FIX / "index.scip"
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.delenv("CODEGRAPH_KOTLIN_SCIP", raising=False)
-    monkeypatch.delenv("CODEGRAPH_KOTLIN_SCIP_FILE", raising=False)
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
+    monkeypatch.delenv("CG_KOTLIN_SCIP", raising=False)
+    monkeypatch.delenv("CG_KOTLIN_SCIP_FILE", raising=False)
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
 
 
 def _index(tmp_path, **kw):
@@ -98,7 +98,7 @@ SCIP22 = FIX / "index-kotlin-2.2.scip"   # scip-java 0.13.1 on the same sources 
 
 def test_scip_java_013_index_typed_ranges(tmp_path, isolated):
     """scip-java 0.13 writes `single_line_range` / `*_enclosing_range` instead of the packed ranges: same graph."""
-    from codegraph.plugins.native import scipread
+    from cg_code_graph.plugins.native import scipread
     idx = scipread.load(SCIP22)
     assert idx.docs["src/main/kotlin/demo/Shapes.kt"].occs[1].line == 2      # not all zero
     (tmp_path / "a").mkdir()
@@ -112,8 +112,8 @@ def test_scip_java_013_index_typed_ranges(tmp_path, isolated):
 
 
 def test_generic_importer_typed_ranges(tmp_path):
-    from codegraph.core.plugin import GraphBuilder
-    from codegraph.plugins.scip.importer import import_scip
+    from cg_code_graph.core.plugin import GraphBuilder
+    from cg_code_graph.plugins.scip.importer import import_scip
     b = GraphBuilder()
     st = import_scip(SCIP22, b, lang="java")
     assert st["definitions"] and st["references"]
@@ -124,7 +124,7 @@ def test_generic_importer_typed_ranges(tmp_path):
 
 
 def test_kotlin_version_detection(tmp_path):
-    from codegraph.plugins.kotlin.exact import kotlin_version
+    from cg_code_graph.plugins.kotlin.exact import kotlin_version
     assert kotlin_version(FIX) == (2, 1, 20)
     (tmp_path / "gradle").mkdir()
     (tmp_path / "build.gradle.kts").write_text("plugins { alias(libs.plugins.kotlin.android) apply false }\n")
@@ -172,8 +172,8 @@ def kotlin22(tmp_path, isolated, monkeypatch):
     monkeypatch.setenv("PATH", f"{bin_}{os.pathsep}/usr/bin{os.pathsep}/bin")
     monkeypatch.delenv("JAVA_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("CODEGRAPH_KOTLIN_SCIP", "1")
-    monkeypatch.delenv("CODEGRAPH_NO_CACHE", raising=False)
+    monkeypatch.setenv("CG_KOTLIN_SCIP", "1")
+    monkeypatch.delenv("CG_NO_CACHE", raising=False)
     return proj
 
 
@@ -181,7 +181,7 @@ def test_scip_java_release_chosen_by_kotlin_version(tmp_path, kotlin22, monkeypa
     log = tmp_path / "runs.log"
     old = _fake(tmp_path / "scip-java", False, MISMATCH)
     new = _fake(tmp_path / "scip-java-0.13", True, _emit(SCIP22, log, "new"))
-    monkeypatch.setenv("CODEGRAPH_SCIP_JAVA", f"{old}{os.pathsep}{new}")
+    monkeypatch.setenv("CG_SCIP_JAVA", f"{old}{os.pathsep}{new}")
     st = index_project(kotlin22, tmp_path / "g.db", "k22")
     s = st["plugins"]["kotlin"]["scip"]
     assert st["plugins"]["kotlin"]["mode"] == "scip"
@@ -194,7 +194,7 @@ def test_scip_java_falls_back_on_plugin_mismatch(tmp_path, kotlin22, monkeypatch
     # both claim the 0.13 generation: the first one's compiler plugin does not load, the second one runs
     a = _fake(tmp_path / "scip-java-a", True, MISMATCH)
     b = _fake(tmp_path / "scip-java-b", True, _emit(SCIP22, log, "b"))
-    monkeypatch.setenv("CODEGRAPH_SCIP_JAVA", f"{a}{os.pathsep}{b}")
+    monkeypatch.setenv("CG_SCIP_JAVA", f"{a}{os.pathsep}{b}")
     st = index_project(kotlin22, tmp_path / "g.db", "k22")
     s = st["plugins"]["kotlin"]["scip"]
     assert st["plugins"]["kotlin"]["mode"] == "scip" and s["indexer"] == str(b)
@@ -206,7 +206,7 @@ def test_unsupported_kotlin_version_hint(tmp_path, kotlin22, monkeypatch):
     bf.write_text(bf.read_text().replace("2.2.10", "2.4.20"))
     a = _fake(tmp_path / "scip-java", False, MISMATCH)
     b = _fake(tmp_path / "scip-java-0.13", True, MISMATCH)
-    monkeypatch.setenv("CODEGRAPH_SCIP_JAVA", f"{a}{os.pathsep}{b}")
+    monkeypatch.setenv("CG_SCIP_JAVA", f"{a}{os.pathsep}{b}")
     st = index_project(kotlin22, tmp_path / "g.db", "k24")
     s = st["plugins"]["kotlin"]["scip"]
     assert st["plugins"]["kotlin"]["mode"] == "heuristic" and len(s["attempts"]) == 2
@@ -218,7 +218,7 @@ def test_unsupported_kotlin_version_hint(tmp_path, kotlin22, monkeypatch):
 # --- Android modules: reported as skipped (scip-java's Gradle plugin compiles no Android variant) ---
 
 def test_android_modules_detected(tmp_path):
-    from codegraph.plugins.kotlin.exact import android_modules, skipped_modules
+    from cg_code_graph.plugins.kotlin.exact import android_modules, skipped_modules
     for mod, text in (("app", 'plugins { alias(libs.plugins.android.application) }'),
                       ("core/data", 'plugins { id("com.android.library") }'),
                       ("server", 'plugins { kotlin("jvm") }')):
@@ -233,7 +233,7 @@ def test_android_module_skipped_on_success(tmp_path, kotlin22, monkeypatch):
     (kotlin22 / "app").mkdir()
     (kotlin22 / "app" / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n')
     tool = _fake(tmp_path / "scip-java-0.13", True, _emit(SCIP22, tmp_path / "runs.log", "x"))
-    monkeypatch.setenv("CODEGRAPH_SCIP_JAVA", str(tool))
+    monkeypatch.setenv("CG_SCIP_JAVA", str(tool))
     st = index_project(kotlin22, tmp_path / "g.db", "k22")
     s = st["plugins"]["kotlin"]["scip"]
     assert st["plugins"]["kotlin"]["mode"] == "scip" and s["android_modules"] == ["app"]
@@ -249,7 +249,7 @@ def test_repositories_mode_failure_reason(tmp_path, kotlin22, monkeypatch):
                  "echo \"Build was configured to prefer settings repositories over project repositories but "
                  "repository 'MavenRepo' was added by plugin class 'SemanticdbGradlePlugin'\"\n"
                  "echo 'BUILD FAILED in 3s'\nexit 1\n")
-    monkeypatch.setenv("CODEGRAPH_SCIP_JAVA", str(tool))
+    monkeypatch.setenv("CG_SCIP_JAVA", str(tool))
     st = index_project(kotlin22, tmp_path / "g.db", "k22")
     status = st["plugins"]["kotlin"]["scip"]["status"]
     assert "prefer settings repositories" in status and "FAIL_ON_PROJECT_REPOS" in status
@@ -259,7 +259,7 @@ def test_repositories_mode_failure_reason(tmp_path, kotlin22, monkeypatch):
 def test_scip_java_013_explicit_getter_matches_property(tmp_path, isolated, monkeypatch):
     """scip-java 0.13 defines an explicit `get()` accessor as `C#getX().` at the keyword: it is the property."""
     import shutil
-    from codegraph.plugins.native import scipread
+    from cg_code_graph.plugins.native import scipread
     src = tmp_path / "src"
     shutil.copytree(FIX, src)
     shapes = src / "src/main/kotlin/demo/Shapes.kt"

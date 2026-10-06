@@ -17,10 +17,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 pytest.importorskip("tree_sitter_swift")
-from codegraph import query as Q  # noqa: E402
-from codegraph.core.store import GraphStore  # noqa: E402
-from codegraph.indexer import index_project  # noqa: E402
-from codegraph.plugins.swift import exact, indexstore  # noqa: E402
+from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.store import GraphStore  # noqa: E402
+from cg_code_graph.indexer import index_project  # noqa: E402
+from cg_code_graph.plugins.swift import exact, indexstore  # noqa: E402
 
 FIX = ROOT / "tests" / "swift_props_fixture"
 SWIFT = exact.find_swift()
@@ -120,11 +120,11 @@ def test_kotlin_type_level_calls_count_as_callers(tmp_path):
 
 @needs_toolchain
 def test_exact_mode_same_edges(tmp_path, monkeypatch):
-    for v in ("CODEGRAPH_SWIFT_INDEX_STORE", "CODEGRAPH_NO_CACHE", "CODEGRAPH_LIBINDEXSTORE"):
+    for v in ("CG_SWIFT_INDEX_STORE", "CG_NO_CACHE", "CG_LIBINDEXSTORE"):
         monkeypatch.delenv(v, raising=False)
-    monkeypatch.setenv("CODEGRAPH_CACHE", str(tmp_path / "cache"))
-    monkeypatch.setenv("CODEGRAPH_SWIFT", SWIFT)
-    monkeypatch.setenv("CODEGRAPH_SWIFT_INDEX", "1")
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("CG_SWIFT", SWIFT)
+    monkeypatch.setenv("CG_SWIFT_INDEX", "1")
     root = tmp_path / "proj"
     shutil.copytree(FIX, root)
     st = index_project(root, tmp_path / "x.db", "swift-props-exact")
