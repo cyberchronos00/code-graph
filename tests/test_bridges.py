@@ -67,10 +67,10 @@ def test_capacitor_endpoints_and_receivers():
     assert set(ep) == {"capacitor:Echo#echo", "capacitor:Echo#ping", "capacitor:Echo#vibrate", "capacitor:Echo#nowhere",
                        "capacitor:DeviceInfo#getInfo", "capacitor:Camera#getPhoto"}
     echo = ep["capacitor:Echo#echo"]
-    # registerPlugin<EchoPlugin>('Echo') exported as default and imported: Java @PluginMethod (stub) + Swift CAPPluginMethod
+    # registerPlugin<EchoPlugin>('Echo') exported as default and imported: Java @PluginMethod + Swift CAPPluginMethod
     assert recv(echo) == {"android": "method:com.example.app.EchoPlugin.echo", "ios": "method:EchoPlugin.echo"}
     assert senders(echo) == {"function:src/app.ts#greet"} and echo["senders"][0]["confidence"] == "exact"
-    assert echo["receivers"][0]["stub"] is True and st.node("method:com.example.app.EchoPlugin.echo")["lang"] == "java"
+    assert echo["receivers"][0]["stub"] is False and st.node("method:com.example.app.EchoPlugin.echo")["lang"] == "java"
     # `const { DeviceInfo } = Plugins`: Kotlin @CapacitorPlugin without a name (class name) + ObjC CAP_PLUGIN -> Swift func
     dev = ep["capacitor:DeviceInfo#getInfo"]
     assert recv(dev) == {"android": "method:com.example.app.DeviceInfo.getInfo", "ios": "method:DeviceInfoPlugin.getInfo"}

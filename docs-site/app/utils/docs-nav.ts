@@ -40,6 +40,7 @@ export const docGroups: DocGroup[] = [
       { slug: 'python', title: 'Python' },
       { slug: 'php', title: 'PHP' },
       { slug: 'kotlin', title: 'Kotlin' },
+      { slug: 'java', title: 'Java' },
       { slug: 'swift', title: 'Swift' },
       { slug: 'native', title: 'Rust, C, C++' },
       { slug: 'ts-frameworks', title: 'TS frameworks' }

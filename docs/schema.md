@@ -29,25 +29,26 @@ On a combined DB only, `payload_checks(endpoint, route, kind, severity, message,
 | Protocols | `endpoint` | `endpoint:<protocol>:<name>`. Existing `http`, `route`, `channel`, `message`, `job`, `event` ids stay and are read as endpoints. [Protocol links](protocols.md) |
 | AI | `endpoint`, `agent` | `endpoint:llm_tool:`, `endpoint:mcp_tool:`, `endpoint:mcp_resource:`, `endpoint:mcp_prompt:`; `agent:<name>`. [AI tools](ai-tools.md) |
 | External | `external` | `external:<protocol>:<target>`. Attrs name host, port, TLS and credential source, never the secret. [External systems](external.md) |
-| Bridges | `endpoint` | Capacitor, React Native, Flutter, Electron IPC, Tauri. Java / ObjC / missed Kotlin / Swift receivers are `method` nodes with `attrs.bridge_stub`. [Web / native bridges](bridges.md) |
+| Bridges | `endpoint` | Capacitor, React Native, Flutter, Electron IPC, Tauri. ObjC and missed Java / Kotlin / Swift receivers are `method` nodes with `attrs.bridge_stub`. [Web / native bridges](bridges.md) |
 
 Route paths use `{param}`, `{param?}`, `{rest*}` and `{rest*?}`.
 
 ## Enum cases and constants
 
-Every language indexes them as `CONTAINS` children of the type or module. A reference is an edge only where the binding is certain. Nothing `CALLS` these nodes. Query across languages with `kind IN ('enum_case', 'variant', 'enumerator')`. Java and C# have no plugin. Dart enums stay `class` nodes. `cg coverage --details` adds a `values:` line.
+Every language indexes them as `CONTAINS` children of the type or module. A reference is an edge only where the binding is certain. Nothing `CALLS` these nodes. Query across languages with `kind IN ('enum_case', 'variant', 'enumerator')`. C# has no plugin. Java enum constants are `enum_case` nodes. Dart enums stay `class` nodes. `cg coverage --details` adds a `values:` line.
 
 | language | case | constant | edge |
 |---|---|---|---|
 | Swift | `enum_case` | `constant` | `USES_VALUE` |
 | Kotlin | `enum_case` | `constant` | `USES_VALUE` |
+| Java | `enum_case` | | a constant is a node; `USES_VALUE` is not emitted yet |
 | TypeScript / JavaScript | `enum_case` | `constant` | `USES_VALUE` |
 | Python | `enum_case` | `constant` | `USES_VALUE` |
 | PHP | `enum_case` | `constant` | `USES_VALUE` |
 | Rust | `variant` | `const`, `static` | `ACCESSES_FIELD`, `USES_VALUE` |
 | C / C++ | `enumerator` | `global`, object-like `macro` | `USES_VALUE` |
 
-Ids and which spellings resolve: the language pages ([Swift](swift.md), [Kotlin](kotlin.md), [Rust, C and C++](native.md), [Python](python.md)).
+Ids and which spellings resolve: the language pages ([Swift](swift.md), [Kotlin](kotlin.md), [Java](java.md), [Rust, C and C++](native.md), [Python](python.md)).
 
 ## Edge kinds
 

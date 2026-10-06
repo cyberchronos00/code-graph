@@ -1,0 +1,60 @@
+# Java
+
+What `.java` adds beyond [Install](install.md), [CLI specs](cli.md#query-targets-specs), and [Graph schema](schema.md): the heuristic syntax layer and the ids those pages do not spell out. Toolchain fit: `cg doctor`. Why a file stayed heuristic: `cg coverage`.
+
+## Modes
+
+| mode | calls | needs |
+|---|---|---|
+| heuristic (default) | receiver type, imports, same package, then a unique name. Labelled `heuristic` | tree-sitter (`tree-sitter`, `tree-sitter-java`). No JDK |
+
+`--min-confidence resolved` (or `exact`) hides those call edges. Gradle `build/`, Maven `target/`, and IDE folders are skipped.
+
+A file that is not valid UTF-8 is read as Latin-1 and still indexed. A syntax error is recorded on `cg coverage --details` and does not drop the rest of the project. Declarations inside the error span may be missing; that affects answers whose nodes sit in that file.
+
+## What is extracted
+
+| node | id |
+|---|---|
+| file | `file:java:<path>` |
+| package | `package:com.example` |
+| class, interface, enum, record | `class:com.example.Foo` (`attrs.java_kind`) |
+| nested type | `class:com.example.Foo.Bar` |
+| anonymous class | `class:com.example.Foo.1` (or `Foo.place.1` when the `new` sits in a method) |
+| method | `method:com.example.Foo.bar` |
+| constructor | `constructor:com.example.Foo.<init>` |
+| field | `field:com.example.Foo.name` |
+| enum constant | `enum_case:com.example.Color.RED` |
+
+Overloads share one method id, the same way Kotlin does, so a later exact layer can map a scip-java symbol onto it. Nested types use dots, not `$`.
+
+`CONTAINS` links a package to its types and a type to its members, fields, and enum constants. `EXTENDS` / `IMPLEMENTS` link a type to a project supertype. `IMPLEMENTED_BY` / `OVERRIDDEN_BY` link a method to the method that implements or overrides it. Every one of those edges is `heuristic`.
+
+Calls (`CALLS`) bind in this order:
+
+1. Receiver type: a local, a parameter, a field, `this`, or `super`, including `this.field.method()`.
+2. A chain whose type is known: `a.b().c()`, `p.child().line()`, `new Foo().bar()`. The return type (or the constructed type) has to be one project class, and every overload of `b` / `child` has to agree on it.
+3. A static call `Foo.bar()` when `Foo` is in scope, including a qualified name `com.example.Foo.bar()`.
+4. An explicit import, a wildcard import, or a static import.
+5. The same package.
+6. One project method of that name. Two to five are `candidate` edges. A receiver whose type is known and is not a project class (`java.util.Collections.emptyList()`, a primitive) is not guessed by name. A parameter or chain typed as an interface edges that interface method, not each implementing class.
+
+`new Foo()` is `INSTANTIATES` plus `CALLS` on `constructor:….Foo.<init>`. A method reference `Foo::bar`, `this::bar`, `expr::bar` (from `expr`'s type), or `Foo::new` is `REFERENCES_FN` when the target is in the project. A lambda's calls stay on the enclosing method. An explicitly typed lambda parameter (`(Pricing x) -> x.line()`) is a receiver type; an inferred one is not.
+
+## Exact mode
+
+Coming in #164. It will reuse the Kotlin scip-java runner (one opt-in run for a mixed build, JDK 17+) and map compiler symbols onto the ids above. `cg setup java` and `install.sh --with java` install that toolchain today and print the JDK 17+ hint. A `--scip` file still imports Java documents through the generic importer until then. `CG_KOTLIN_SCIP` is unchanged.
+
+## Spring
+
+Coming in #164. Routes, guards, beans, tables, listeners, and HTTP clients will be extracted by one JVM module shared with Kotlin, from these syntax trees. Annotations are kept on the declaration (`attrs.annotations`) so that module can see them.
+
+## Limits
+
+- Lombok members (`@Getter`, `@RequiredArgsConstructor`) are not invented.
+- Overload arity is not part of the id. A call binds the shared method node. When those overloads return different types, a chain stops: there is no single type for the next call.
+- A receiver whose type is not in the project does not fall back to a name match.
+- An inferred lambda parameter (`xs.forEach(x -> x.line())`) has no type, so that call falls through to a unique-name match and can edge every project method of that name.
+- A field chain `a.b.c()` binds `c` when each field's type is a project class. A call chain does the same from return types.
+- Gradle `build.gradle.kts` and `settings.gradle.kts` are Kotlin sources. The Kotlin plugin already treats `.kts` as Kotlin, so a mixed tree counts those scripts as Kotlin, not Java.
+- No Spring, Android XML, or exact edges in this layer. See [Kotlin](kotlin.md) for the Kotlin side of a mixed repo.

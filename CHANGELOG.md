@@ -8,6 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Java heuristic plugin (`tree-sitter-java`): packages, classes, interfaces, enums, records, methods, constructors, and fields. Calls resolve by receiver type (including `this.field.method()`, call chains with a known return type, and `new Foo().bar()`), imports, the same package, then a unique name. An interface-typed receiver edges the interface method. Method references (`Foo::bar`, `this::bar`, `expr::bar`, `Foo::new`) are `REFERENCES_FN`. `cg coverage` counts `.java` as heuristic. `cg doctor` has a java row. `cg setup java` and `install.sh --with java` install scip-java (the Kotlin path) and print the JDK 17+ hint. Exact mode and Spring facts are coming in #164. See [docs/java.md](docs/java.md).
+
+### Changed
+
+- A Java project no longer runs `scip-java index` just because `scip-java` is on PATH. The old stub did that with no opt-in and wrote `index.scip` into the project. Heuristic indexing is the default; exact mode stays opt-in (coming in #164).
+
 ## [0.17.0] - 2026-10-06
 
 ### Changed

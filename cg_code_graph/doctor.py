@@ -24,13 +24,15 @@ INSTALL_DOC = "docs/install.md"
 REPO = "https://github.com/cyberchronos00/code-graph"
 GRAMMARS = {"rust": "tree_sitter_rust", "c_cpp": "tree_sitter_c", "kotlin": "tree_sitter_kotlin", "swift": "tree_sitter_swift"}
 PIP_NAMES = {"tree_sitter": "tree-sitter", "tree_sitter_rust": "tree-sitter-rust", "tree_sitter_c": "tree-sitter-c",
-             "tree_sitter_cpp": "tree-sitter-cpp", "tree_sitter_kotlin": "tree-sitter-kotlin", "tree_sitter_swift": "tree-sitter-swift"}
+             "tree_sitter_cpp": "tree-sitter-cpp", "tree_sitter_kotlin": "tree-sitter-kotlin",
+             "tree_sitter_java": "tree-sitter-java", "tree_sitter_swift": "tree-sitter-swift"}
 
 
 # language -> the plugin packages its `cg index` run loads (besides the indexer, which loads all of them)
 PLUGIN_PACKAGES = {"python": ("python", "pyweb", "django"), "typescript": ("ts", "tsweb", "nuxt", "nest", "nextjs", "express"),
                    "php": ("php", "laravel"), "dart": ("dart", "flutter"), "rust": ("rust", "native", "scip"),
-                   "c_cpp": ("cfamily", "native", "scip"), "kotlin": ("kotlin", "scip"), "swift": ("swift",)}
+                   "c_cpp": ("cfamily", "native", "scip"), "kotlin": ("kotlin", "scip"), "java": ("java",),
+                   "swift": ("swift",)}
 
 
 def _run(tool: str | None, args=("--version",)) -> tuple[str | None, bool]:
@@ -222,6 +224,16 @@ def _languages(tools: dict, root: Path | None, cfg: dict) -> list[dict]:
             "set CG_KOTLIN_SCIP=1 (or pass --scip index.scip)")
     else:
         add("kotlin", "exact", "scip-java on the Gradle / Maven build")
+    # Java (heuristic now; exact mode reuses the Kotlin scip-java install later)
+    if not ts_ok or not _module("tree_sitter_java"):
+        add("java", "unavailable", "tree-sitter grammar missing", _pip("tree_sitter", "tree_sitter_java"))
+    elif not has("scip-java") or not has("java"):
+        miss = " and ".join(t for t in ("scip-java", "java") if not has(t))
+        add("java", "heuristic", f"tree-sitter-java; {miss} not found (exact mode comes later, #164)",
+            "install.sh --with java  (JDK 17+ and scip-java, same install as --with kotlin)")
+    else:
+        add("java", "heuristic", "tree-sitter-java; JDK and scip-java found (exact mode comes later, #164)",
+            "heuristic indexing does not run the build; exact mode will be opt-in, like Kotlin")
     # Swift
     if not ts_ok or not _module("tree_sitter_swift"):
         add("swift", "unavailable", "tree-sitter grammar missing", _pip("tree_sitter", "tree_sitter_swift"))
@@ -469,12 +481,16 @@ def _mcp(rootp: Path | None) -> list:
 
 
 def setup(langs: list[str] | None = None, quiet: bool = False) -> int:
-    """`cg setup [typescript php dart]`: install the extractor dependencies for the languages whose toolchain is
-    present (all three by default); returns 1 if an explicitly named one failed."""
+    """`cg setup [typescript php dart java]`: install the extractor dependencies for the languages whose toolchain is
+    present (typescript, php, dart by default). `java` prints the JDK 17+ hint and reuses the Kotlin scip-java
+    install path; it does not run a build. Returns 1 if an explicitly named one failed."""
     from .plugins.dart.plugin import DartPlugin, find_dart
     want = langs or list(extractors.SPECS)
     rc = 0
     for lang in want:
+        if lang == "java":
+            rc = rc or _setup_java(quiet)
+            continue
         tool = {"typescript": "npm", "php": "composer", "dart": None}[lang]
         need = {"typescript": "node", "php": "php", "dart": None}[lang]
         dart = find_dart() if lang == "dart" else None
@@ -503,3 +519,22 @@ def setup(langs: list[str] | None = None, quiet: bool = False) -> int:
             print(f"{lang}: failed: {e}", file=sys.stderr)
             rc = 1
     return rc
+
+
+def _setup_java(quiet: bool) -> int:
+    """`cg setup java`: the same scip-java / JDK hint as `install.sh --with java`. Heuristic mode needs neither."""
+    from .plugins.kotlin.exact import find_java, scip_java_candidates
+    jdk = find_java()
+    tools = scip_java_candidates()
+    if jdk:
+        print(f"java: JDK found ({jdk}). scip-java needs JDK 17+ (17, 21 or 25).")
+    else:
+        print("java: no JDK found. Install JDK 17+ (17, 21 or 25; https://adoptium.net).", file=sys.stderr)
+    if tools:
+        print(f"java: scip-java found ({tools[0]}). Exact mode is coming in #164 and stays opt-in, because it runs the build.")
+    else:
+        print("java: scip-java not found. install.sh --with java installs it (the same path as --with kotlin).",
+              file=sys.stderr)
+    if not quiet:
+        print("java: heuristic indexing uses tree-sitter-java and does not need a JDK.")
+    return 0

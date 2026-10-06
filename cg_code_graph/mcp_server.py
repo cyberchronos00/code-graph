@@ -946,7 +946,7 @@ def coverage(path: str | None = None, all_files: bool = False, json_output: bool
     exact-mode indexer such as rust-analyzer or scip-clang is missing, skipped when the toolchain is missing, with the
     install hint) and file completeness (discovered vs indexed, with parse failures, files over the size limit,
     unmapped files outside the source roots, excluded files); unsupported source types by extension or shebang
-    (.go .java .kt .swift .qml .sh ...); blind spots: route / handler registrations cg does not model, with file:line.
+    (.go .qml .sh ...); blind spots: route / handler registrations cg does not model, with file:line.
     path (optional): a file or directory; says whether cg has it in the graph. all_files: list every file per bucket
     (default: the first 5). json_output: the completeness object as JSON. Not covered, heuristic or a blind spot
     means: use your normal search and file reading for that part."""

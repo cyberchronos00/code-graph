@@ -35,7 +35,7 @@ A scip-java index replaces name-based call edges. Ids stay the syntax layer's, s
 
 cg reads the version the build declares, tries the matching release first, then the next if the compiler plugin does not load. Index stats record `kotlin_version`, `indexer`, and failed `attempts`. `cg doctor <project>` names the release that fits. `install.sh --with kotlin` installs the supported pair (Windows: `cg doctor`).
 
-Java in that index becomes `java` nodes with exact Kotlin ↔ Java and Java → Java calls, including `AppKt.build()`. Without the index, Java stays unsupported. A Java-only build uses `--scip` and the generic importer. Stats `exact_vs_heuristic` is precision (heuristic call edges the compiler confirms) and recall (compiler edges the heuristic layer had found). Property read / write edges stay and are left out of that pair; a property read is not a call in the SCIP index.
+Java in that index becomes `java` nodes with exact Kotlin ↔ Java and Java → Java calls, including `AppKt.build()`. Without the index, `.java` files are indexed by the [Java](java.md) plugin (heuristic). A `--scip` file that this layer does not consume still imports Java documents through the generic importer. Java exact mode, and Spring facts shared with Java, are coming in #164. Stats `exact_vs_heuristic` is precision (heuristic call edges the compiler confirms) and recall (compiler edges the heuristic layer had found). Property read / write edges stay and are left out of that pair; a property read is not a call in the SCIP index.
 
 | still heuristic | why |
 |---|---|

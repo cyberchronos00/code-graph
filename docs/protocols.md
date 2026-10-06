@@ -154,7 +154,7 @@ are never `no_sender`. A signed POST from this repo is a sender of
 | tcp, udp | `endpoint:tcp:<port>`, `udp:<port>` | same port; `env:KEY` is heuristic | `listen(6379)` ↔ `connect(6379)` across the languages in `cg_code_graph/sockets.py` | proof they speak; QUIC; WebRTC; port only in a config file; `env:` across `cg link` |
 | mdns, osc, coap, ssdp | service type, OSC address, CoAP path, SSDP USN | exact / glob / path | zeroconf `ServiceInfo` ↔ `ServiceBrowser`; `dispatcher.map` ↔ `send_message` | |
 | grpc | `endpoint:grpc:<pkg>.<Service>/<Method>` | contract method, case-insensitive | `.proto` `rpc` ↔ servicer class / stub call | Go; Nest `@GrpcMethod` not merged onto the contract node |
-| thrift | `endpoint:thrift:<stem>.<Service>/<method>` | same, including `extends` | `.thrift` service ↔ `Svc.Client` / `Processor` | Java sources (no plugin) |
+| thrift | `endpoint:thrift:<stem>.<Service>/<method>` | same, including `extends` | `.thrift` service ↔ `Svc.Client` / `Processor` | Java sources (heuristic plugin; Thrift receivers are not linked yet) |
 | trpc | `endpoint:trpc:<dotted.path>` | exact path | `createTRPCRouter` procedure ↔ `x.post.create.useQuery` | `lazy()` routers |
 | jsonrpc | `endpoint:jsonrpc:<method>` | exact | `addMethod("x")` / `@method` ↔ `.request("x")` | MCP (its own endpoints); LSP methods |
 | graphql | `endpoint:graphql:<Root>.<field>` | exact | SDL or graphene / strawberry / ariadne / Nest ↔ Apollo `useQuery` | object-type fields; `.graphql` ops with no hook; Lighthouse, Rust, Spring, Apollo mobile |
@@ -178,6 +178,6 @@ them across repos.
   checked there.
 - `schema_mismatch` needs `schema` on both sides.
 - Broker and host nodes are not attached to endpoints yet.
-- Go has no plugin (gRPC, sockets, brokers). Java is scanned for some RPC shapes and adds no
+- Go has no plugin (gRPC, sockets, brokers). Java has a heuristic plugin; RPC shapes still add no
   edges.
 - GraphQL: code-first schemas (TypeGraphQL, Pothos), `@deprecated` and field guards.

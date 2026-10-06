@@ -20,6 +20,8 @@ _SWIFT_MODS = (r"(?:(?:public|private|fileprivate|internal|open|package|static|f
 DECL = {
     "swift": re.compile(r"^[ \t]*(?:@[\w.]+(?:\([^)\n]*\))?\s+)*" + _SWIFT_MODS +
                         r"(func|init|class|struct|enum|protocol|extension|actor)\b[ \t]*([A-Za-z_]\w*)?", re.M),
+    "java": re.compile(r"^[ \t]*(?:(?:public|private|protected|static|final|abstract|sealed|native|synchronized|"
+                       r"default|strictfp)\s+)*(class|interface|enum|record)\s+([A-Za-z_]\w*)", re.M),
     "kotlin": re.compile(r"^[ \t]*(?:@[\w.]+(?:\([^)\n]*\))?\s+)*(?:(?:public|private|internal|protected|open|abstract|"
                          r"override|suspend|inline|data|sealed|enum|annotation|inner|value|companion|actual|expect|"
                          r"operator|infix|tailrec|external)\s+)*(fun|class|interface|object)\b[ \t]*"

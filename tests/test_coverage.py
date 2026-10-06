@@ -70,7 +70,8 @@ def test_unsupported_languages_are_counted(tmp_path):
     assert lang(cov, "php")["status"] == "exact"
     got = {e["language"]: (e["status"], e["files"]) for e in cov["languages"] if e["status"] == "unsupported"}
     assert got == {"go": ("unsupported", 2),
-                   "ruby": ("unsupported", 1), "csharp": ("unsupported", 1), "java": ("unsupported", 1)}
+                   "ruby": ("unsupported", 1), "csharp": ("unsupported", 1)}
+    assert (lang(cov, "java")["status"], lang(cov, "java")["files"]) == ("heuristic", 1)       # Java plugin (#164)
     assert (lang(cov, "kotlin")["status"], lang(cov, "kotlin")["files"]) == ("heuristic", 1)   # Kotlin plugin (#9)
     assert (lang(cov, "swift")["status"], lang(cov, "swift")["files"]) == ("heuristic", 1)     # Swift plugin (#10)
     assert "scip-go" in lang(cov, "go")["hint"]

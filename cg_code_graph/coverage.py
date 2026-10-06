@@ -22,13 +22,14 @@ SUPPORTED = {
     "rust": (".rs",),
     "c_cpp": (".c", ".h", ".cc", ".cpp", ".cxx", ".c++", ".hpp", ".hh", ".hxx", ".h++", ".ipp", ".inl"),
     "kotlin": (".kt", ".kts"),
+    "java": (".java",),
     "swift": (".swift",),
 }
-# source types without a native plugin (go / java can be imported from a SCIP index). A generic "looks like source" rule:
+# source types without a native plugin (go can be imported from a SCIP index). A generic "looks like source" rule:
 # text source extensions of programming / scripting languages, plus a shebang for extensionless scripts (SHEBANGS).
 # Data, markup, config and asset extensions are not listed, so they never count as unsupported source.
 UNSUPPORTED = {
-    ".go": "go", ".java": "java", ".rb": "ruby", ".cs": "csharp",
+    ".go": "go", ".rb": "ruby", ".cs": "csharp",
     ".scala": "scala", ".ex": "elixir", ".exs": "elixir", ".m": "objective-c", ".mm": "objective-c", ".lua": "lua",
     ".pl": "perl", ".pm": "perl", ".clj": "clojure", ".erl": "erlang", ".hrl": "erlang", ".hs": "haskell", ".fs": "fsharp",
     ".fsx": "fsharp", ".groovy": "groovy", ".r": "r", ".jl": "julia", ".zig": "zig", ".sol": "solidity",
@@ -53,7 +54,7 @@ BUCKET_TEXT = {"parse_failed": "parse failed", "skipped_oversize": "over size li
 BUCKET_SHORT = {"parse_failed": "parse failed", "skipped_oversize": "over size limit", "unmapped": "unmapped",
                 "excluded": "excluded"}
 LANG_LABEL = {"php": "PHP", "typescript": "TypeScript / JavaScript", "python": "Python", "dart": "Dart", "rust": "Rust",
-              "c_cpp": "C / C++", "kotlin": "Kotlin", "swift": "Swift"}
+              "c_cpp": "C / C++", "kotlin": "Kotlin", "java": "Java", "swift": "Swift"}
 MAX_PATHS = 500      # file paths stored per bucket in the index (counts are always exact)
 SHOW_PATHS = 5       # shown per bucket by default (`cg coverage --all-files` / coverage(all_files=true) for all)
 HINTS = {
@@ -73,11 +74,13 @@ HINTS = {
              "CG_SWIFT_INDEX=1 (SwiftPM: runs `swift build --enable-index-store`; needs a Swift toolchain) or "
              "CG_SWIFT_INDEX_STORE to an existing index store (docs/swift.md#exact-mode)",
     "go": "no native plugin: index with scip-go and pass `--scip index.scip`",
-    "java": "no native plugin: index with scip-java and pass `--scip index.scip`",
+    "java": "heuristic mode (tree-sitter syntax layer, receiver-type call resolution){layer}. "
+            "scip-java exact mode is coming in #164 (JDK 17+; `cg setup java` or `install.sh --with java`)",
 }
 # tree-sitter modules of the syntax layer per language: the hint names the ones missing (none: no install hint, #75)
 LAYER_MODULES = {"rust": ("tree_sitter", "tree_sitter_rust"), "c_cpp": ("tree_sitter", "tree_sitter_c", "tree_sitter_cpp"),
-                 "kotlin": ("tree_sitter", "tree_sitter_kotlin"), "swift": ("tree_sitter", "tree_sitter_swift")}
+                 "kotlin": ("tree_sitter", "tree_sitter_kotlin"), "java": ("tree_sitter", "tree_sitter_java"),
+                 "swift": ("tree_sitter", "tree_sitter_swift")}
 
 
 def hint(lang: str) -> str | None:
@@ -111,7 +114,7 @@ class Scan:
         self.counts: Counter = Counter()
         self.paths: dict[str, list[str]] = {}
         self.scripts: Counter = Counter()
-        self.bridge_paths: list[str] = []      # Java / ObjC files: no language plugin, scanned for bridge receivers
+        self.bridge_paths: list[str] = []      # Java / ObjC files scanned for bridge receivers (Java is also a language plugin)
 
     def files(self, exts) -> list[str]:
         return [f for e in exts for f in self.paths.get(e, [])]
@@ -271,6 +274,9 @@ def _status(lang: str, st: dict | None) -> tuple[str, str | None]:
             part += ("; skipped modules: " + ", ".join(m["module"] for m in sc["skipped_modules"][:5])
                      + f" ({sc['skipped_modules'][0]['reason']})")
         return "exact", f"scip-java index ({sc.get('source', 'scip')}){part}"
+    if lang == "java" and mode == "heuristic":
+        return "heuristic", ("tree-sitter syntax layer with receiver-type call resolution; "
+                             "scip-java exact mode is coming in #164")
     if lang == "typescript" and st.get("program_files") == 0 and not st.get("nodes"):
         return "not_indexed", "the TypeScript plugin ran but found no source files (tsconfig include / source dirs)"
     return "exact", None
@@ -350,9 +356,16 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             elif "status" not in st:
                 other[lang]["status"] = "exact"  # a SCIP indexer ran
     kj = ((plugins.get("kotlin") or {}).get("java") or {})
-    if kj.get("documents") and "java" in other and other["java"]["status"] == "unsupported":
-        other["java"].update(status="scip", reason=f"{kj['documents']} Java file(s) imported from the Kotlin build's "
-                                                   "scip-java index (Kotlin exact mode)")
+    if kj.get("documents"):
+        # Kotlin exact mode already imported these documents. Keep that status when the Java
+        # heuristic plugin also indexed the same files.
+        for e in langs:
+            if e["language"] == "java":
+                e["status"] = "scip"
+                e["reason"] = (f"{kj['documents']} Java file(s) imported from the Kotlin build's "
+                               "scip-java index (Kotlin exact mode)")
+                e.pop("hint", None)
+                break
     for o in other.values():
         if o["status"] == "unsupported":
             if scip_imported and o["language"] in ("go", "java"):
@@ -632,7 +645,7 @@ def render_summary(covs: dict[str, dict | None], db: str | None = None) -> str:
                 line += f"; fix: {e['hint']}"
             out.append(line)
         for e in (cov or {}).get("languages", []):        # the mode an exact-capable language ran in, and why
-            if e["language"] in ("kotlin", "swift") and not _is_gap(e) and e.get("reason"):
+            if e["language"] in ("kotlin", "swift", "java") and not _is_gap(e) and e.get("reason"):
                 out.append(f"  {e['language']} {e['files']} {e['status']}: {e['reason']}")
         se = [e for e in (cov or {}).get("languages", []) if e.get("syntax_errors")]
         if se:
@@ -691,7 +704,7 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
         for e in (cov or {}).get("languages", []):
             out += syntax_error_lines(e, all_files)
         for e in (cov or {}).get("languages", []):     # which mode an exact-capable language ran in, and why
-            if e["language"] in ("kotlin", "swift") and not _is_gap(e) and e.get("reason"):
+            if e["language"] in ("kotlin", "swift", "java") and not _is_gap(e) and e.get("reason"):
                 out.append(f"  {e['language']}: {e['files']} files {e['status']}: {e['reason']}")
         if all_files:
             for e in (cov or {}).get("languages", []):

@@ -1,0 +1,5 @@
+name: java
+kind: language
+docs: docs/java.md
+# Gradle / Maven build output, IDE state. Same idea as kotlin.yaml; Spring facts are not in this preset yet.
+skip_dirs: [build, target, .gradle, .idea, .kotlin, out, bin]

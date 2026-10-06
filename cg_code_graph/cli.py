@@ -118,9 +118,9 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true", help="list what would be removed, delete nothing")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("setup", help="install the Node / PHP / Dart extractor dependencies (into the user cache; "
-                                     "otherwise done on the first index)")
+                                     "otherwise done on the first index). `java` prints the JDK 17+ / scip-java hint")
     p.add_argument("languages", nargs="*", metavar="LANG",
-                   help="typescript, php, dart (default: every one whose toolchain is installed)")
+                   help="typescript, php, dart, java (default: typescript, php, dart whose toolchain is installed)")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--prune", action="store_true",
                    help="remove extractor installs this version does not use (left by updates that changed a lock "
@@ -408,9 +408,9 @@ def main(argv=None):
         return 0
     if a.cmd == "setup":
         from .doctor import setup
-        bad = [x for x in a.languages if x not in ("typescript", "php", "dart")]
+        bad = [x for x in a.languages if x not in ("typescript", "php", "dart", "java")]
         if bad:
-            print(f"cg setup: unknown language {bad[0]!r} (typescript, php, dart)", file=sys.stderr)
+            print(f"cg setup: unknown language {bad[0]!r} (typescript, php, dart, java)", file=sys.stderr)
             return 2
         return setup(a.languages or None, quiet=a.quiet)
     if a.cmd == "coverage":

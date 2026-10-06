@@ -46,10 +46,11 @@ Endpoint attrs: `protocol`, `transport = local`, `namespace` (module / plugin / 
 `base_method`, `sender_platforms`, `direction` (`to_native` or `to_app`),
 `platforms_sending`.
 
-Java and Objective-C have no language plugin. Their methods are stub nodes (
-`method:<package>.<Class>.<method>`, `method:objc:<Class>.<method>`, `attrs.bridge_stub`).
-The same stub is used when a Kotlin or Swift method was not indexed. Receiver files are
-platform-specific, so `cg platforms` sees them.
+Objective-C has no language plugin. Java methods are indexed by the [Java](java.md) plugin when
+the file is in the graph. A method that plugin did not index is still a stub
+(`method:<package>.<Class>.<method>`, `attrs.bridge_stub`), as are Objective-C methods
+(`method:objc:<Class>.<method>`). The same stub is used when a Kotlin or Swift method was not
+indexed. Receiver files are platform-specific, so `cg platforms` sees them.
 
 ## Electron and Tauri
 
@@ -155,7 +156,7 @@ listed at the end as `unresolved` (`stats.bridges.dynamic`: a count and up to 20
   `emitOnX`.
 - A Java callback that forwards an event name, and a native `invokeMethod` on a channel created
   in another file (unless this file creates exactly one).
-- Java and Objective-C are scanned for registrations only.
+- Java is indexed by the language plugin; bridge registration is still a separate scan. Objective-C is scanned for registrations only.
 - Electron `MessagePort`, `utilityProcess`, preload listeners mapped through a renderer lookup
   table. Tauri `emit` / `listen`, and commands invoked from `.svelte` / `.vue` outside
   `<script>`.

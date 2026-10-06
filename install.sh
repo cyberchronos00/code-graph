@@ -4,7 +4,7 @@
 # Never uses sudo; every step that installs something prints what it does first. Safe to run again.
 #
 #   curl -fsSL https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.sh | sh
-#   sh install.sh [--update] [--version vX.Y.Z] [--source PATH|URL] [--with rust,c,kotlin,swift]
+#   sh install.sh [--update] [--version vX.Y.Z] [--source PATH|URL] [--with rust,c,kotlin,java,swift]
 #                 [--no-extractors] [--uninstall] [--dry-run]
 set -eu
 
@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
     --version=*) VERSION="${1#*=}" ;;
     --source) [ $# -ge 2 ] || die "--source needs a path or URL"; SOURCE="$2"; shift ;;
     --source=*) SOURCE="${1#*=}" ;;
-    --with) [ $# -ge 2 ] || die "--with needs a list (rust,c,kotlin,swift)"; WITH="$2"; shift ;;
+    --with) [ $# -ge 2 ] || die "--with needs a list (rust,c,kotlin,java,swift)"; WITH="$2"; shift ;;
     --with=*) WITH="${1#*=}" ;;
     --no-extractors) EXTRACTORS=0 ;;
     --dry-run) DRY=1 ;;
@@ -171,21 +171,24 @@ with_c() {
 }
 
 with_kotlin() {
+  # `java` and `kotlin` share this install: scip-java plus a JDK 17+ hint. Heuristic Java does not need either.
+  label="${1:-kotlin}"
+  say "$label: scip-java needs JDK 17+ (17, 21 or 25). Heuristic Java indexing does not run the build."
   if ! command -v java >/dev/null 2>&1 && [ -z "${JAVA_HOME:-}" ]; then
-    say "kotlin: no JDK found. Install JDK 17+ (no sudo: https://adoptium.net archive into ~/tools, or sdk install java 17-tem;"
+    say "$label: no JDK found. Install JDK 17+ (no sudo: https://adoptium.net archive into ~/tools, or sdk install java 17-tem;"
     say "        with your package manager this needs sudo, e.g. sudo apt install openjdk-17-jdk-headless)"
   fi
-  if command -v scip-java >/dev/null 2>&1 || [ -x "$HOME/.local/bin/scip-java" ]; then say "kotlin: scip-java already installed"
-  elif command -v cs >/dev/null 2>&1; then say "kotlin: installing scip-java with coursier"; run cs install scip-java
+  if command -v scip-java >/dev/null 2>&1 || [ -x "$HOME/.local/bin/scip-java" ]; then say "$label: scip-java already installed"
+  elif command -v cs >/dev/null 2>&1; then say "$label: installing scip-java with coursier"; run cs install scip-java
   else
-    say "kotlin: scip-java not found. Install coursier (https://get-coursier.io, no sudo), then: cs install scip-java"
+    say "$label: scip-java not found. Install coursier (https://get-coursier.io, no sudo), then: cs install scip-java"
   fi
   # scip-java 0.13 (Kotlin 2.2.0 - 2.2.10) next to the coursier one (0.12, Kotlin <= 2.1): cg picks the release that
   # fits the build's Kotlin version (docs/kotlin.md#exact-mode)
   sj13="$HOME/.local/bin/scip-java-$SCIP_JAVA_13"
-  if [ -x "$sj13" ] || [ -x "$HOME/tools/scip-java-$SCIP_JAVA_13/scip-java" ]; then say "kotlin: scip-java $SCIP_JAVA_13 already installed"
+  if [ -x "$sj13" ] || [ -x "$HOME/tools/scip-java-$SCIP_JAVA_13/scip-java" ]; then say "$label: scip-java $SCIP_JAVA_13 already installed"
   elif command -v curl >/dev/null 2>&1; then
-    say "kotlin: installing the scip-java $SCIP_JAVA_13 launcher (Kotlin 2.2.0 - 2.2.10) as $sj13"
+    say "$label: installing the scip-java $SCIP_JAVA_13 launcher (Kotlin 2.2.0 - 2.2.10) as $sj13"
     base="https://github.com/scip-code/scip-java/releases/download/v$SCIP_JAVA_13/scip-java-v$SCIP_JAVA_13"
     run mkdir -p "$HOME/.local/bin"
     run curl -fsSL -o "$sj13.part" "$base"
@@ -194,10 +197,10 @@ with_kotlin() {
       want=$(cut -d' ' -f1 < "$sj13.sha256"); got=$( (sha256sum "$sj13.part" 2>/dev/null || shasum -a 256 "$sj13.part") | cut -d' ' -f1)
       rm -f "$sj13.sha256"
       if [ -n "$want" ] && [ "$want" = "$got" ]; then chmod +x "$sj13.part" && mv "$sj13.part" "$sj13"
-      else rm -f "$sj13.part"; say "kotlin: scip-java $SCIP_JAVA_13 checksum mismatch, not installed"; fi
+      else rm -f "$sj13.part"; say "$label: scip-java $SCIP_JAVA_13 checksum mismatch, not installed"; fi
     fi
   fi
-  say "kotlin: exact mode runs the project's Gradle / Maven build; opt in per run with CG_KOTLIN_SCIP=1"
+  say "$label: exact mode runs the project's Gradle / Maven build; opt in per run with CG_KOTLIN_SCIP=1 (Java exact mode is coming in #164)"
 }
 
 with_swift() {
@@ -221,8 +224,8 @@ if [ "$EXTRACTORS" = 1 ]; then
 fi
 for w in $(printf '%s' "$WITH" | tr ',' ' '); do
   case "$w" in
-    rust) with_rust ;; c|cpp|c_cpp) with_c ;; kotlin|java) with_kotlin ;; swift) with_swift ;;
-    "") ;; *) say "--with: unknown '$w' (rust, c, kotlin, swift)" ;;
+    rust) with_rust ;; c|cpp|c_cpp) with_c ;; kotlin) with_kotlin kotlin ;; java) with_kotlin java ;; swift) with_swift ;;
+    "") ;; *) say "--with: unknown '$w' (rust, c, kotlin, java, swift)" ;;
   esac
 done
 cg_bin_dir="$(dirname "$CG")"; [ "$cg_bin_dir" = . ] && cg_bin_dir="$BIN_DIR"

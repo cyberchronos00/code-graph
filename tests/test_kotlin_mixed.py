@@ -81,14 +81,14 @@ def test_coverage_reports_java_imported(tmp_path, isolated):
     assert st["plugins"]["kotlin"]["scip"]["source"] == "--scip"
 
 
-def test_without_index_java_stays_unsupported(tmp_path, isolated, monkeypatch):
+def test_without_index_java_is_heuristic(tmp_path, isolated, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.delenv("JAVA_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     st, con = _index(tmp_path)
     assert st["plugins"]["kotlin"]["mode"] == "heuristic"
-    assert _cov(st, "java")["status"] == "unsupported"
-    assert not con.execute("select count(*) from nodes where lang='java'").fetchone()[0]
+    assert _cov(st, "java")["status"] == "heuristic"
+    assert con.execute("select count(*) from nodes where lang='java'").fetchone()[0] > 0
 
 
 # --- Kotlin 2.2+: scip-java 0.13 (SCIP 0.9 typed ranges) and the choice between installed scip-java releases ---
@@ -212,7 +212,7 @@ def test_unsupported_kotlin_version_hint(tmp_path, kotlin22, monkeypatch):
     assert st["plugins"]["kotlin"]["mode"] == "heuristic" and len(s["attempts"]) == 2
     assert "AnalyzerRegistrar is incompatible" in s["status"]
     assert "2.4.20: no released scip-java supports it yet" in s["status"]
-    assert _cov(st, "java")["status"] == "unsupported"
+    assert _cov(st, "java")["status"] == "heuristic"
 
 
 # --- Android modules: reported as skipped (scip-java's Gradle plugin compiles no Android variant) ---

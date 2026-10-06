@@ -28,9 +28,11 @@ from .plugins.nextjs.plugin import NextPlugin
 from .plugins.express.plugin import ExpressPlugin
 from .plugins.astro.plugin import AstroPlugin
 from .plugins.kotlin.plugin import KotlinPlugin
+from .plugins.java.plugin import JavaPlugin
 from .plugins.swift.plugin import SwiftPlugin
 
-LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(), KotlinPlugin(), SwiftPlugin(),
+LANGUAGE_PLUGINS = [PhpPlugin(), TypeScriptPlugin(), PythonPlugin(), DartPlugin(), RustPlugin(), CFamilyPlugin(),
+                    KotlinPlugin(), JavaPlugin(), SwiftPlugin(),
                     *SCIP_PLUGINS]
 FRAMEWORK_PLUGINS = [LaravelPlugin(), NuxtPlugin(), DjangoPlugin(), FastAPIPlugin(), FlaskPlugin(), FlutterPlugin(), NestPlugin(), NextPlugin(), ExpressPlugin(), AstroPlugin()]
 

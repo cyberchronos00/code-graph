@@ -35,7 +35,7 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 - Generated or copied files need a marker from [Generated files](generated.md): gitattributes, a banner, or a known build path. A generator with none of those is source until `generated.paths` names it.
 - Dangling symlinks are skipped with a per-file warning. The TypeScript walker does not follow symlinked directories.
 - References taken from a SCIP index are attributed to the nearest enclosing definition by source range.
-- Go and Java are SCIP recipes (`plugins/stubs`), not language plugins. Without a SCIP index their files are `unsupported`.
+- Go is a SCIP recipe (`plugins/stubs`), not a language plugin. Without a SCIP index its files are `unsupported`. Java is a heuristic language plugin ([Java](java.md)); scip-java exact mode is coming in #164.
 
 ## Link, payload, and guards
 
@@ -73,6 +73,7 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 | TypeScript servers | [TypeScript / JavaScript frameworks](ts-frameworks.md) |
 | Rust, C, C++ | [Rust, C and C++](native.md) |
 | Kotlin | [Kotlin](kotlin.md) |
+| Java | [Java](java.md) |
 | Swift | [Swift](swift.md) |
 | Platforms and variants | [Platforms](platforms.md) |
 | Channels and tests | [Channels and tests](channels-and-tests.md) |

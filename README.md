@@ -51,10 +51,11 @@ dependents: 18 nodes  (code: 6, entry points: 9, other: 3)
 | ![PHP](https://img.shields.io/badge/PHP-777BB4?logo=php&logoColor=white) | Laravel (routes and middleware, queues, broadcasting) | exact (nikic/php-parser; needs PHP 8.2+) | [PHP](https://code-graph.cyberchronos00.workers.dev/docs/php) |
 | ![Dart](https://img.shields.io/badge/Dart-0175C2?logo=dart&logoColor=white) | Flutter | exact (Dart analyzer; needs the Dart SDK) | [Platforms](https://code-graph.cyberchronos00.workers.dev/docs/platforms) |
 | ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white) | Android, Kotlin Multiplatform | heuristic; exact with scip-java (opt-in) | [Kotlin](https://code-graph.cyberchronos00.workers.dev/docs/kotlin) |
+| ![Java](https://img.shields.io/badge/Java-ED8B00?logo=openjdk&logoColor=white) | Spring (coming in #164) | heuristic (tree-sitter-java); exact with scip-java coming in #164 | [Java](https://code-graph.cyberchronos00.workers.dev/docs/java) |
 | ![Swift](https://img.shields.io/badge/Swift-F05138?logo=swift&logoColor=white) | iOS / SwiftPM | heuristic; exact with the Swift index store (opt-in) | [Swift](https://code-graph.cyberchronos00.workers.dev/docs/swift) |
 | ![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white) ![C](https://img.shields.io/badge/C-A8B9CC?logo=c&logoColor=black) ![C++](https://img.shields.io/badge/C++-00599C?logo=cplusplus&logoColor=white) | crates / modules, entry points, FFI, `#[cfg]` / `#if` gates | heuristic; exact with rust-analyzer / scip-clang | [Rust, C and C++](https://code-graph.cyberchronos00.workers.dev/docs/native) |
 
-Go, Java and others: import a SCIP index with `cg index --scip FILE`. Run `cg doctor` to see exact / heuristic per language on your machine.
+Go and others: import a SCIP index with `cg index --scip FILE`. Run `cg doctor` to see exact / heuristic per language on your machine.
 
 ## What you get
 

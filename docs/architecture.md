@@ -85,9 +85,9 @@ A framework teaches the host resolver, then adds its own nodes.
 
 Compiler indexes (rust-analyzer, scip-clang, scip-java, the Swift index) match SCIP occurrences onto the syntax-layer nodes by file, line, and name.
 Ids stay the same in heuristic and exact mode. `cg index --scip FILE` merges an existing index.
-Go and Java have indexer recipes only (`plugins/stubs`).
+Go has an indexer recipe only (`plugins/stubs`). Java is a heuristic plugin ([Java](java.md)).
 
-Per-language facts: [Python](python.md), [PHP](php.md), [TypeScript / JavaScript frameworks](ts-frameworks.md), [Kotlin](kotlin.md), [Swift](swift.md), [Rust, C and C++](native.md).
+Per-language facts: [Python](python.md), [PHP](php.md), [TypeScript / JavaScript frameworks](ts-frameworks.md), [Kotlin](kotlin.md), [Java](java.md), [Swift](swift.md), [Rust, C and C++](native.md).
 
 ## Queries
 

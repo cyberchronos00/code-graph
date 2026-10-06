@@ -30,8 +30,9 @@ class ScipIndexerPlugin(LanguagePlugin):
 
 SCIP_PLUGINS = [
     ScipIndexerPlugin("go", ["go.mod"], ["scip-go"], "go"),
-    ScipIndexerPlugin("java", ["pom.xml", "build.gradle"], ["scip-java", "index"], "java"),
 ]
+# Java is plugins/java (tree-sitter heuristic). A `--scip` file still imports Java documents
+# through plugins/scip/importer.py until exact mode maps them onto the Java plugin's node ids.
 
 # TypeScript/Vue/Nuxt moved to plugins/ts (language) and plugins/nuxt (framework); Python to plugins/python
 # (+ plugins/django); Dart to plugins/dart (+ plugins/flutter). `index --scip` still imports a scip-python index.

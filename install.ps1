@@ -2,7 +2,7 @@
 # sets up the Node / PHP / Dart extractor dependencies in the user cache. Never elevates; prints each step.
 #
 #   irm https://raw.githubusercontent.com/cyberchronos00/code-graph/main/install.ps1 | iex
-#   .\install.ps1 [-Update] [-Version vX.Y.Z] [-Source PATH|URL] [-With rust,c,kotlin,swift] [-NoExtractors] [-Uninstall]
+#   .\install.ps1 [-Update] [-Version vX.Y.Z] [-Source PATH|URL] [-With rust,c,kotlin,java,swift] [-NoExtractors] [-Uninstall]
 #
 # Untested on Windows so far (written alongside install.sh, which is tested); report problems as issues.
 [CmdletBinding()]
@@ -123,8 +123,12 @@ foreach ($w in ($With.Split(",") | Where-Object { $_ })) {
             # install.sh also fetches the scip-java 0.13.1 launcher (Kotlin 2.2.0 - 2.2.10); that release ships only a POSIX sh launcher
             Say "kotlin: scip-java 0.13.x (Kotlin 2.2.0 - 2.2.10 builds) has no Windows launcher; under WSL use install.sh --with kotlin, or index with --scip index.scip (docs/kotlin.md#exact-mode)"
         }
+        "java" {
+            Say "java: install a JDK 17+ (17, 21 or 25; https://adoptium.net) and coursier (https://get-coursier.io), then: cs install scip-java. Same install as -With kotlin. Heuristic Java indexing does not need a JDK."
+            Say "java: scip-java 0.13.x has no Windows launcher; under WSL use install.sh --with java. Exact mode is coming in #164 and stays opt-in because it runs the build."
+        }
         "swift" { Say "swift: install the Swift toolchain (https://www.swift.org/install/windows/); opt in with CG_SWIFT_INDEX=1" }
-        default { Say "-With: unknown '$w' (rust, c, kotlin, swift)" }
+        default { Say "-With: unknown '$w' (rust, c, kotlin, java, swift)" }
     }
 }
 & $cg doctor
