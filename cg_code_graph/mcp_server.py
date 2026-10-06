@@ -911,7 +911,7 @@ def routes(writes: str | None = None, reaches: list[str] | None = None, missing:
     method, env key...). Optional filters: missing="<name>" keeps routes with no guard whose name contains it (e.g.
     "auth:api", "ApiKeyGuard"), unguarded=true keeps routes with no auth guard (the framework presets' auth guards and
     the auth name pattern; extend with auth_pattern, a regex, or .cg.yaml auth.extra_patterns). Each route: guards, what it reaches with one evidence chain, and the frontend callers on a
-    combined graph. Guards come from Laravel middleware, Nest guards/interceptors, Express/Koa/Fastify/Hono
+    combined graph. Guards come from Laravel middleware, Nest guards/interceptors, Express/Koa/Fastify/Hono/Elysia
     middleware, Next.js middleware.ts / handler wrappers, django-ninja auth= and Django/DRF view access checks.
     min_confidence: keep the default (heuristic) for reviews: every edge still shows its own label, and a stricter
     level names the routes it hides.

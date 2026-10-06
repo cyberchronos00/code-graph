@@ -18,7 +18,8 @@ PRESET_DIR = Path(__file__).parent
 LANGUAGE_ORDER = ("php", "typescript", "python", "dart", "rust", "c_cpp", "kotlin", "java", "swift")
 # framework spellings accepted in .cg.yaml `frameworks.add/remove` -> framework plugin / preset name
 FRAMEWORK_ALIASES = {"nestjs": "nest", "next": "nextjs", "next.js": "nextjs", "koa": "express", "fastify": "express",
-                     "hono": "express", "starlette": "fastapi", "drf": "djangorestframework", "ninja": "django-ninja"}
+                     "hono": "express", "elysia": "express", "starlette": "fastapi", "drf": "djangorestframework",
+                     "ninja": "django-ninja"}
 
 
 class PresetError(ValueError):

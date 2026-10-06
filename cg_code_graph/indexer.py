@@ -102,6 +102,12 @@ def setup(project: Project) -> dict:
     names = {k: v for k, v in found.items() if k not in remove}
     for k in sorted(add):
         names.setdefault(k, ".cg.yaml")
+    # Elysia shares the Express plugin and preset. The coverage label is elysia, not express (via elysia).
+    det_fw = project.detected.get("frameworks") or {}
+    if "elysia" in det_fw and "elysia" not in remove:
+        if "express" in names and "express" not in det_fw:
+            names.pop("express")
+        names.setdefault("elysia", "detected")
     applied = presets.select([lp.name for lp in langs], list(names))
     project.options["presets"] = applied
     return {"language_plugins": langs, "framework_plugins": fws, "languages": [lp.name for lp in langs],

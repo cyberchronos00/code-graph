@@ -20,7 +20,7 @@ const stacks = [
   },
   {
     title: 'TypeScript and JavaScript',
-    detail: 'Nuxt, Vue, NestJS, Next.js, Astro, Express, Fastify, Koa, Hono. The extractor runs on Node or Bun.',
+    detail: 'Nuxt, Vue, NestJS, Next.js, Astro, Express, Fastify, Koa, Hono, Elysia. The extractor runs on Node or Bun.',
     icons: [
       { name: 'i-simple-icons-typescript', label: 'TypeScript' },
       { name: 'i-simple-icons-javascript', label: 'JavaScript' },

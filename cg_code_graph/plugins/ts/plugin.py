@@ -655,7 +655,7 @@ def facts_fingerprint(root, cfg: dict) -> str:
     of every project file outside node_modules (.nuxt and the project lockfile included, so `nuxi prepare` or a
     dependency bump invalidates it). Content, not mtime: a same-size edit with a restored mtime is a miss."""
     h = hashlib.sha256(f"cg-cache-v{fsutil.CACHE_VERSION}\n".encode())
-    for f in (EXTRACTOR, EXTRACTOR_DIR / "package-lock.json"):
+    for f in (EXTRACTOR, EXTRACTOR_DIR / "fw.mjs", EXTRACTOR_DIR / "package-lock.json"):
         h.update(f.read_bytes() if f.exists() else b"")
     # generated stand-in types live in a fresh temp dir per run; their content follows from the project files
     c = {k: v for k, v in cfg.items() if not (cfg.get("generated_types") and k in ("tsconfig", "components_dts"))}

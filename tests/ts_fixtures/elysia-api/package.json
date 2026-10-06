@@ -1,0 +1,7 @@
+{
+  "name": "bookstore-elysia-fixtures",
+  "private": true,
+  "description": "Elysia route shapes for code-graph tests. Not meant to run.",
+  "type": "module",
+  "dependencies": { "elysia": "^1.2.0" }
+}

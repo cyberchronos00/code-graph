@@ -1,7 +1,7 @@
 name: express
 kind: framework
 docs: https://expressjs.com/en/guide/using-middleware.html
-# Express, Koa, Fastify, Hono and the other servers of the express plugin (SERVER_DEPS in cg_code_graph/plugins/tsweb/common.py)
+# Express, Koa, Fastify, Hono, Elysia and the other servers of the express plugin (SERVER_DEPS in cg_code_graph/plugins/tsweb/common.py)
 auth:
   guards:
     - {name: passport.authenticate, source: "passport, https://www.passportjs.org/concepts/authentication/middleware/"}

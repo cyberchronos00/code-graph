@@ -144,7 +144,7 @@ coverage note: 1 route registration cg does not model (Django urlpatterns built 
 
 `routes` joins guards, what the route reaches, and who calls it. One evidence chain per route. On a combined graph, frontend callers are included.
 
-- **Guards** come from Laravel route and group middleware, Nest `@UseGuards` / `@UseInterceptors` / `@UsePipes` (plus `APP_GUARD` and global guards / interceptors), Express / Fastify / Koa / Hono, Next.js `middleware.ts`, django-ninja `auth=`, Django view decorators and access mixins, and DRF `permission_classes` / `authentication_classes`.
+- **Guards** come from Laravel route and group middleware, Nest `@UseGuards` / `@UseInterceptors` / `@UsePipes` (plus `APP_GUARD` and global guards / interceptors), Express / Fastify / Koa / Hono / Elysia, Next.js `middleware.ts`, django-ninja `auth=`, Django view decorators and access mixins, and DRF `permission_classes` / `authentication_classes`.
 - **Scope.** `--writes` or `--writes TABLE`, and/or `--reaches SPEC...`. No scope lists every route.
 - **Auth,** in order: `--auth-pattern` / `.cg.yaml` `auth.extra_patterns`, the preset's auth guards (not `csrf_protect`, `ThrottlerGuard`, `AllowAny`, …), then the auth name pattern. Each guard records `auth_by`. Presets: [configuration](configuration.md#framework-presets).
 - Laravel kernel middleware and Django `MIDDLEWARE` apply to every route and are not repeated.

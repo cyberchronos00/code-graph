@@ -5,7 +5,7 @@ Guards are read from what the framework plugins record on route nodes, so the sa
 
   Laravel                       attrs.middleware (route and group middleware, e.g. `auth:api`)
   NestJS                        attrs.guards / interceptors / pipes (+ USES_MIDDLEWARE to canActivate/intercept)
-  Express / Koa / Fastify / Hono attrs.middleware (route and router-level, in mount order) + USES_MIDDLEWARE
+  Express / Koa / Fastify / Hono / Elysia attrs.middleware (route and router-level, in mount order) + USES_MIDDLEWARE
   Next.js                       USES_MIDDLEWARE from `middleware.ts` matchers, attrs.wrapped_by (`withSession(handler)`)
   django-ninja                  attrs.auth (operation, router or API level `auth=`)
   Django / DRF                  attrs.access (view decorators, access mixins, permission_classes / authentication_classes)
@@ -43,7 +43,7 @@ SECRET_RE = re.compile(SECRET_PATTERN)
 WRITE_KINDS = ("WRITES_TABLE", "WRITES_COLUMN")
 GUARD_ATTRS = (("guards", "guard"), ("interceptors", "interceptor"), ("pipes", "pipe"), ("auth", "auth"),
                ("access", "access"), ("wrapped_by", "wrapper"), ("middleware", "middleware"))
-GUARD_SOURCES = ("Laravel route/group middleware, Nest guards/interceptors/pipes, Express/Koa/Fastify/Hono route and router "
+GUARD_SOURCES = ("Laravel route/group middleware, Nest guards/interceptors/pipes, Express/Koa/Fastify/Hono/Elysia route and router "
                  "middleware, Next.js middleware.ts matchers and handler wrappers, django-ninja auth=, Django view decorators / "
                  "access mixins and DRF permission_classes, FastAPI Depends()/Security() dependencies and Flask view decorators")
 

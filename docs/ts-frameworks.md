@@ -48,12 +48,12 @@ Detect: `next` or `next.config.*`.
 | clients | `fetch`, axios, `ky` (+ `ky.create({prefixUrl})`), `ofetch` / `$fetch` (+ `.create`), `useSWR(key)`, OpenAPI `this.request({path, method})` and `__request(OpenAPI, {method, url})`. Same-repo calls are MATCHES_ROUTE (`attrs.in_repo`) |
 | config | static `basePath`; literal `rewrites` as `uri_variants`. `NEXT_PUBLIC_*` (and `VITE_`, `NUXT_PUBLIC_`, `REACT_APP_`, `EXPO_PUBLIC_`, `PUBLIC_`) is `attrs.public` |
 
-## Express, Koa, Fastify, Hono
+## Express, Koa, Fastify, Hono, Elysia
 
-Detect: `express`, `koa`, `@koa/router`, `fastify`, `hono`. Router values are followed
+Detect: `express`, `koa`, `@koa/router`, `fastify`, `hono`, `elysia`. Router values are followed
 across `import` / `require`, `module.exports` and factories. A parameter typed
 `FastifyInstance` / `Router` / `Hono`, or an untyped parameter that receives a literal path,
-counts.
+counts. `elysia` is its own framework label and uses this router layer.
 
 | feature | graph |
 |---|---|
@@ -68,6 +68,28 @@ counts.
 backend. A traced `baseURL` is exact. `process.env` and generated clients align to the end of
 the route (`heuristic`); the most specific alignment wins. Method and path only: routes carry
 `body_fields`, calls carry `body_keys`, and nothing compares them yet.
+
+### Elysia
+
+Detect: an `elysia` dependency. `cg coverage` reports `frameworks: elysia` (preset `express`).
+Sample: `examples/bookstore-payments`.
+
+| feature | graph |
+|---|---|
+| instances | `new Elysia({ prefix, name })`, an exported const, or a function that returns an instance |
+| chains | `.model`, `.decorate`, `.state`, `.derive`, `.resolve`, `.macro`, `.onError`, `.listen`, `.use(openapi())` stay on the same instance |
+| mounting | `.use(sub)` across files, including nested `new Elysia({ prefix }).use(new Elysia({ prefix }))`, a factory `function f(prefix) { return new Elysia({ prefix }) }`, the same sub-app mounted twice, and `.group('/x', app => app.get(...))`. A circular `.use()` stops. `.use(import('./x'))` is `heuristic`. A plugin with no routes is not a router |
+| hooks | `.onRequest`, `.onBeforeHandle`, `.guard({ beforeHandle })`, route `{ beforeHandle }` → `attrs.middleware`. `local` affects the instance and descendants mounted after the hook. `scoped` also affects the direct parent. `global` affects ancestors and plugins mounted on them afterwards. `onRequest` is copied onto every ancestor, so it affects every route in that app, including routes registered earlier. Other hooks affect routes registered after them. A hook that sets status 401 or 403, returns `error(401)` / `status(401)`, or throws an auth error is `[auth]` with those status codes, whatever its name. A hook that only sets headers is not auth. The label is the hook function, or the plugin `name` |
+| schemas | `body` / `query` / `params: t.Object({...})` → `attrs.request.keys`, `body_fields`, `query_fields` |
+| paths | `:id` → `{id}`, `:id?` → `{id?}`, `*` → `{wildcard*?}`. Extra slashes in a prefix or a path are collapsed |
+
+```ts
+export const payments = new Elysia({ prefix: '/payments' })
+  .use(signedRequests)
+  .post('/', ({ body }) => createPayment(body), { body: t.Object({ order_id: t.Number(), amount: t.Number() }) })
+```
+
+Eden Treaty clients and `.ws()` message names are not read. Hook order across files is not known, so a hook and a route in different files both count. A hook that skips some paths itself (an early return on `request.url`) is still listed on every route it affects.
 
 ## Astro
 

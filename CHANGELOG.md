@@ -15,6 +15,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
 ### Added
 
 - PHP outbound HTTP: Laravel `Http` / `Factory` / `PendingRequest` and Guzzle `Client` calls are `http:` client endpoints (`HTTP_CALLS`). A base URL from a container binding is followed through `config()` to `env()` and `.env.example` (`origin_kind` `env`, `attrs.base`; `.env` is not read), and `cg link` matches those calls to another backend. `Http::fake()` links a test to the client method and is not an application call. See [docs/php.md](docs/php.md#outbound-http).
+- Elysia (Bun) routes on the Express layer: `new Elysia({ prefix, name })`, nested prefixes, `.use()` of a prefixed sub-app (including across files, a factory prefix argument, and the same sub-app mounted twice), chain methods (`.model`, `.decorate`, `.state`, `.derive`, and the rest), `.group()`, and `onRequest` / `onBeforeHandle` / `guard` / route `beforeHandle` as guards. Scope follows Elysia (`local`, `scoped`, `global`); `onRequest` guards every route in the mounted app. A hook that rejects with 401 or 403 counts as auth with that status, whatever its name. `t.Object` body, query and params keys are request keys. `cg coverage` reports `frameworks: elysia`. See [docs/ts-frameworks.md](docs/ts-frameworks.md#elysia).
 
 ## [0.18.0] - 2026-10-07
 

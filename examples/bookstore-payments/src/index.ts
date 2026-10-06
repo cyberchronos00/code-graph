@@ -1,9 +1,7 @@
 import { Elysia } from 'elysia'
+import { openapi } from '@elysiajs/openapi'
+import { payments } from './routes/payments'
 
-// Root routes only. Prefixed Elysia sub-apps (`.use()`, hooks as guards) are a separate change;
-// these paths are indexed with the Elysia support that exists today.
-const app = new Elysia()
-app.post('/payments', () => ({ id: 'pay_1' }))
-app.post('/payments/:id/cancel', () => ({ ok: true }))
+const app = new Elysia().use(openapi()).get('/', () => 'ok').use(payments).listen(3000)
 
 export { app }

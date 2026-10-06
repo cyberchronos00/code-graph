@@ -19,7 +19,13 @@ const ROUTE_VERBS = new Set(['get', 'post', 'put', 'patch', 'delete', 'del', 'he
 const ROUTER_METHODS = new Set([...ROUTE_VERBS, 'use', 'lazyUse', 'route', 'register', 'mount', 'basePath', 'prefix',
   'setGlobalPrefix', 'enableVersioning', 'useGlobalGuards', 'useGlobalInterceptors', 'useGlobalPipes', 'useGlobalFilters',
   'useWebSocketAdapter',
-  'on', 'method', 'addHook', 'group', 'routes', 'connectMicroservice'])
+  'on', 'method', 'addHook', 'group', 'routes', 'connectMicroservice',
+  'onRequest', 'onBeforeHandle', 'guard', 'as'])
+// Elysia chains these between the instance and the route. They are not routes; walking through them keeps
+// `.model().post()` on the same Elysia instance. `group` / hooks are recorded on their own and skipped here.
+const CHAIN_SKIP = new Set(['model', 'decorate', 'state', 'derive', 'resolve', 'macro', 'onError', 'listen',
+  'onRequest', 'onBeforeHandle', 'onAfterHandle', 'onParse', 'onTransform', 'onAfterResponse', 'mapResponse',
+  'guard', 'as', 'group', 'trace', 'error', 'headers', 'onStart', 'onStop'])
 const HTTP_UPPER = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])
 const DATA_METHODS = new Set([
   // Prisma
@@ -331,6 +337,7 @@ export function collectFrameworkFacts(X) {
     }
     if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) {
       const out = { fn: declToNode(e) || null, line: lineOf(e) }
+      if (e.name) out.ref = e.name.text
       if (ts.isArrowFunction(e) && !ts.isBlock(e.body) && depth < 4) out.body = describe(e.body, depth + 1)
       else if (depth < 3) { const rs = returnsOf(e); if (rs.length) out.ret = rs.map(r => describe(r, depth + 2)) }
       return out
@@ -366,6 +373,13 @@ export function collectFrameworkFacts(X) {
       return out
     }
     if (ts.isCallExpression(e)) {
+      if (e.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const spec = e.arguments[0]
+        const lit = spec && ts.isStringLiteralLike(spec) ? spec.text : null
+        const out = { dyn_import: lit, expr: text(e, 80) }
+        if (spec && lit) { const sf = sfOfSpec(spec); if (sf) out.file = rel(realFile(sf)) }
+        return out
+      }
       const c = unwrap(e.expression)
       if (ts.isIdentifier(c) && c.text === 'require' && e.arguments[0] && ts.isStringLiteralLike(e.arguments[0])) {
         return { require: e.arguments[0].text, ...(moduleExport(e.arguments[0], e) || {}) }
@@ -393,7 +407,7 @@ export function collectFrameworkFacts(X) {
       return out
     }
     if (ts.isNewExpression(e)) {
-      const out = { new: text(e.expression, 80) }
+      const out = { new: text(e.expression, 80), line: lineOf(e) }
       const mod = importSource(e.expression); if (mod) out.mod = mod
       const sym = symOf(e.expression); if (sym) { const t = resolveSymbol(sym); if (t) out.node = t.id }
       out.args = (e.arguments || []).slice(0, 8).map(a => describe(a, depth + 1))
@@ -585,22 +599,25 @@ export function collectFrameworkFacts(X) {
           if (take && budget > 0) {
             const chain = []
             let base = unwrap(c.expression)
-            while (ts.isCallExpression(base) && ts.isPropertyAccessExpression(unwrap(base.expression)) && chain.length < 12) {
+            while (ts.isCallExpression(base) && ts.isPropertyAccessExpression(unwrap(base.expression)) && chain.length < 24) {
               const bc = unwrap(base.expression)
-              if (!(ROUTE_VERBS.has(bc.name.text) || ['route', 'use', 'basePath', 'prefix', 'on'].includes(bc.name.text))) break
-              chain.unshift({ method: bc.name.text, args: base.arguments.slice(0, 1).map(a => describe(a, 2)), line: lineOf(base, sf) })
-              base = unwrap(bc.expression)
+              const bn = bc.name.text
+              if (ROUTE_VERBS.has(bn) || ['route', 'use', 'basePath', 'prefix', 'on'].includes(bn)) {
+                chain.unshift({ method: bn, args: base.arguments.slice(0, 1).map(a => describe(a, 2)), line: lineOf(bc.name, sf) })
+                base = unwrap(bc.expression)
+              } else if (CHAIN_SKIP.has(bn)) base = unwrap(bc.expression)
+              else break
             }
-            // `const api = Router().use(a).use(b)` / `export default new Hono().route(..)`: the declaration owning the chain
+            // `const api = Router().use(a).use(b)` / `export const payments = new Elysia().post(..)`: the declaration owning the chain
             let owner
-            if (ts.isCallExpression(base)) {
+            if (ts.isCallExpression(base) || ts.isNewExpression(base)) {
               let top = node
               while (top.parent && ts.isPropertyAccessExpression(top.parent) && top.parent.expression === top && top.parent.parent && ts.isCallExpression(top.parent.parent)) top = top.parent.parent
-              const od = top.parent && (ts.isVariableDeclaration(top.parent) || ts.isExportAssignment(top.parent)) ? top.parent : null
+              const od = top.parent && (ts.isVariableDeclaration(top.parent) || ts.isExportAssignment(top.parent) || ts.isPropertyDeclaration(top.parent)) ? top.parent : null
               const ok = od && keyOfDecl(od)
               if (ok) { owner = ok; addInstance(ok, od) }
             }
-            calls.push({ src: cur, file: r, line: lineOf(node, sf), method: m, recv: describe(base, 0), chain: chain.length ? chain : undefined,
+            calls.push({ src: cur, file: r, line: lineOf(ts.isPropertyAccessExpression(c) ? c.name : node, sf), method: m, recv: describe(base, 0), chain: chain.length ? chain : undefined,
               recv_text: text(base, 60), args: node.arguments.slice(0, 16).map(a => describe(a, 0)), owner })
           }
           // this.<prop>.<method>(...) and data/event calls

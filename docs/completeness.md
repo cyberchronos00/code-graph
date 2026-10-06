@@ -85,7 +85,7 @@ plugin already made an entry point is not reported.
 | `nest_wrapped_route_decorator` | route | `applyDecorators(Get(...))` or a factory that returns `Get(...)` |
 | `django_dynamic_urlpatterns` | route | `urlpatterns` from a call, a comprehension or a loop |
 | `django_unresolved_include` | route | `include(<expression>)` cg could not follow (a third-party package is not reported) |
-| `express_loop_routes` | route | Express / Fastify / Koa / Hono routes in a loop, or `router[m.method](...)` |
+| `express_loop_routes` | route | Express / Fastify / Koa / Hono / Elysia routes in a loop, or `router[m.method](...)` |
 | `laravel_loop_routes` | route | `Route::` inside `foreach` / `->each` / `array_map` |
 | `python_decorator_routes` | route | `@app.route` / `@router.get` that no plugin turned into a route |
 | `python_decorator_registration` | handler | `@registry.register` with no entry point and no caller (click, typer and MCP are entry points) |

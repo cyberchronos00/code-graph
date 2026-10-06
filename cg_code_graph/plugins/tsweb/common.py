@@ -23,7 +23,8 @@ from ...core.plugin import GraphBuilder, Project
 SERVER_DEPS = {
     "nest": ("@nestjs/core", "@nestjs/common"),
     "next": ("next",),
-    "express": ("express", "koa", "@koa/router", "koa-router", "fastify", "hono", "@hono/node-server", "restify", "polka", "h3", "elysia"),
+    "express": ("express", "koa", "@koa/router", "koa-router", "fastify", "hono", "@hono/node-server", "restify", "polka", "h3"),
+    "elysia": ("elysia",),
 }
 # test trees: anywhere for the unambiguous names; `test/`, `tests/`, `e2e/` only at the top (or under src/), since
 # deeper directories with those names are often real route segments (app/api/test/route.ts)
@@ -206,7 +207,15 @@ def add_route(b: GraphBuilder, method: str, uri: str, handlers: list[str], file:
     key = f"{method} {uri}"
     a = {"uri": uri, "method": method, "framework": framework, **(attrs or {})}
     if middleware:
-        a["middleware"] = list(dict.fromkeys([m[1] for m in middleware if m[1]]))
+        names, seen = [], set()
+        for m in middleware:
+            label = m[1]
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            checks = m[3] if len(m) > 3 else None
+            names.append({"name": label, "checks": checks} if checks else label)
+        a["middleware"] = names
     ek = "websocket" if method == "WS" else "http_route"
     rid = b.add_node("route", key, name=key, file=file, line=line, module=module_of(file), lang="ts", entry_kind=ek, attrs=a)
     n = b.nodes[rid]
@@ -219,7 +228,8 @@ def add_route(b: GraphBuilder, method: str, uri: str, handlers: list[str], file:
             if hn.file and not n.attrs.get("handler"):
                 n.attrs["handler"] = hn.name
                 n.module = module_of(hn.file)
-    for node, name, conf in middleware or []:
+    for m in middleware or []:
+        node, name, conf = m[0], m[1], m[2]
         if node and b.has(node):
             b.add_edge(rid, node, "USES_MIDDLEWARE", file=file, line=line, confidence=conf, name=name)
     return rid
