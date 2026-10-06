@@ -35,9 +35,15 @@ not resolve is `ANY` at `heuristic`. `baseUrl()`, `withHeaders`, `withToken`, `w
 call sites (`via`).
 
 A constructor-promoted or assigned `$this->baseUrl` is followed from the container (`singleton` / `bind`,
-`new` inside the provider, `when()->needs()->give()`) through `config()` to `env()`. The endpoint gets
-`origin_kind` `env` and `attrs.base`, so `cg link` strips the base path. The sample value comes from
-`.env.example` or an `env()` default. `.env` is not read, and a value that is not a URL is not stored.
+`new` inside the provider, `when()->needs()->give()`) through `config()`, `config()->get()`,
+`Config::get()`, `$app['config']->get()` and `$app->make('config')->get()` to `env()`. A config array
+(`$cfg = config('services.payments')` or `->get('services.payments', [])`, then `$cfg['base_url']`) resolves
+the same way; a sibling key such as `secret` is not read. The endpoint gets `origin_kind` `env` and
+`attrs.base`, so `cg link` strips the base path. The sample value comes from `.env.example` or an `env()`
+default. `.env` is not read, an empty example value is shown as the env name only, and a value that is not
+a URL is not stored. A relative `Http::get('/path')` stays relative unless `baseUrl()` was set.
+`rawurlencode`, `urlencode`, `trim`, `strval`, a `(string)` cast and `Str::of(...)->toString()` are
+transparent, so a path segment keeps the variable's last name (`{paymentId}`, `$order->id` -> `{id}`).
 Literal array bodies (`post($url, ['order_id' => ...])`, `withBody(json_encode([...]))`) are `body_keys`
 in the same shape the TypeScript extractor writes.
 

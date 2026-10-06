@@ -1868,7 +1868,11 @@ def render_api_calls(rows: list[dict], max_calls=4) -> str:
         a = r.get("attrs") or {}
         tag = "  (called from tests only)" if a.get("test_only") else ""
         if a.get("base"):
-            tag += f"  (base {a['base']['placeholder']} = {a['base']['value']}, {a['base']['from']})"
+            b = a["base"]
+            if b.get("value"):
+                tag += f"  (base {b['placeholder']} = {b['value']}, {b['from']})"
+            elif b.get("placeholder"):
+                tag += f"  (base {b['placeholder']})"
         out.append(f"{r['endpoint']}{tag}")
         for m in r["routes"]:
             out.append(f"   => {m['route']} [{m['confidence']}] -> {', '.join(m['controller']) or '?'}")

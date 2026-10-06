@@ -79,6 +79,85 @@ def _is_facade(cls: str | None) -> bool:
     return bool(cls) and (cls == HTTP_FACADE or cls.endswith("\\Facades\\Http"))
 
 
+def _base_leaf(key: str) -> bool:
+    """True when the last segment of a config key is a base URL, so sibling keys (a secret) are not read."""
+    leaf = (key or "").split(".")[-1].replace("-", "_").replace("_", "").lower()
+    return leaf in {"baseurl", "baseuri", "url"}
+
+
+def _is_config_class(cls: str | None) -> bool:
+    return bool(cls) and (cls == "Config" or cls.endswith("\\Config") or cls.endswith("\\Facades\\Config"))
+
+
+def _is_str_class(cls: str | None) -> bool:
+    return bool(cls) and (cls == "Str" or cls.endswith("\\Support\\Str") or cls.endswith("\\Facades\\Str"))
+
+
+def _is_app(d: dict | None) -> bool:
+    if not d:
+        return False
+    if d.get("k") == "var" and d.get("n") == "app":
+        return True
+    return d.get("k") == "prop" and d.get("n") == "app" and (d.get("of") or {}).get("k") == "this"
+
+
+def _is_config_repo(d: dict | None) -> bool:
+    """`config()`, `$app['config']`, or `$app->make('config')`."""
+    if not d:
+        return False
+    if d.get("k") == "func" and _fn_name(d) == "config" and not (d.get("args") or []):
+        return True
+    if d.get("k") == "dim" and _key_name(d.get("key")) == "config" and _is_app(d.get("of")):
+        return True
+    if d.get("k") == "mcall" and (d.get("m") or "").lower() in ("make", "offsetget") and _is_app(d.get("of")):
+        args = d.get("args") or []
+        return bool(args and args[0].get("k") == "str" and args[0].get("v") == "config")
+    return False
+
+
+def _key_name(key: dict | None) -> str | None:
+    if not key:
+        return None
+    if key.get("k") == "str" and key.get("v"):
+        return key["v"]
+    if key.get("k") in ("var", "prop") and key.get("n"):
+        return key["n"]
+    if key.get("k") == "dim":
+        return _key_name(key.get("key"))
+    return None
+
+
+def _seg_placeholder(d: dict) -> str:
+    """Last name of a property or index, so rawurlencode($order->id) is `{id}`."""
+    if d.get("k") in ("var", "prop") and d.get("n"):
+        return "{%s}" % d["n"]
+    leaf = _key_name(d.get("key")) if d.get("k") == "dim" else None
+    return "{%s}" % leaf if leaf else "{?}"
+
+
+def _bound(item) -> tuple:
+    if isinstance(item, tuple) and len(item) >= 3:
+        return item[0], item[1], item[2]
+    return item[0], item[1], None
+
+
+def _assigns(fn, name: str, ctx) -> list:
+    """Assignments of `name` in this function. A closure only sees assignments in that same closure."""
+    if not fn or not name:
+        return []
+    out = []
+    for f in fn.facts:
+        if f.get("t") != "assign" or f.get("var") != name:
+            continue
+        if ctx is None:
+            if f.get("ctx"):
+                continue
+        elif f.get("ctx") != ctx:
+            continue
+        out.append(f)
+    return out
+
+
 def _fn_name(d: dict | None) -> str:
     if not d:
         return ""
@@ -99,7 +178,7 @@ class ClientEval:
         self._prop_cache: dict[tuple, list[str] | None] = {}
 
     # ---------------------------------------------------------------- expressions
-    def strings(self, d, fn, bind=None, depth=0, seen=None) -> list[str]:
+    def strings(self, d, fn, bind=None, depth=0, seen=None, ctx=None) -> list[str]:
         if not d or depth > 8:
             return ["{?}"]
         seen = seen or set()
@@ -109,57 +188,74 @@ class ClientEval:
         if k == "int":
             return [str(d.get("v"))]
         if k == "interp":
-            return self._prod([self.strings(p, fn, bind, depth + 1, seen) for p in d.get("parts") or []], depth)
+            return self._prod([self.strings(p, fn, bind, depth + 1, seen, ctx) for p in d.get("parts") or []], depth)
         if k == "concat":
-            return self._prod([self.strings(d.get("l"), fn, bind, depth + 1, seen),
-                               self.strings(d.get("r"), fn, bind, depth + 1, seen)], depth)
+            return self._prod([self.strings(d.get("l"), fn, bind, depth + 1, seen, ctx),
+                               self.strings(d.get("r"), fn, bind, depth + 1, seen, ctx)], depth)
+        if k == "alt" and d.get("op") == "coalesce":
+            opts = d.get("opts") or []
+            left = self.strings(opts[0], fn, bind, depth + 1, seen, ctx) if opts else []
+            strong = [v for v in left if not _weak_url(v)]
+            if strong:
+                return strong[:8]
         if k == "alt":
             out = []
             for o in d.get("opts") or []:
-                out += self.strings(o, fn, bind, depth + 1, seen)
+                out += self.strings(o, fn, bind, depth + 1, seen, ctx)
             strong = [v for v in out if not _weak_url(v)]
             return (strong or out)[:8]
         if k == "var":
-            return self._var(d.get("n"), fn, bind, depth, seen)
+            return self._var(d.get("n"), fn, bind, depth, seen, ctx)
         if k == "prop" and (d.get("of") or {}).get("k") == "this" and fn and fn.cls:
             got = self.resolve_prop(fn.cls, d.get("n") or "")
             return got if got else ["{this.%s}" % (d.get("n") or "?")]
+        if k == "prop":
+            return [_seg_placeholder(d)]
+        if k == "dim":
+            ck = self._read_config_key(d, fn, bind, depth, seen, ctx)
+            if ck and _base_leaf(ck):
+                return [self.config_placeholder(ck)]
+            return [_seg_placeholder(d)]
         if k in ("func", "mcall", "scall"):
-            hit = self._call_strings(d, fn, bind, depth, seen)
+            hit = self._call_strings(d, fn, bind, depth, seen, ctx)
             if hit is not None:
                 return hit
         return ["{?}"]
 
-    def _var(self, name, fn, bind, depth, seen):
+    def _var(self, name, fn, bind, depth, seen, ctx=None):
         if not name:
             return ["{?}"]
         if bind and name in bind:
-            arg, owner = bind[name]
-            return self.strings(arg, owner, None, depth + 1, seen)
+            arg, owner, bctx = _bound(bind[name])
+            return self.strings(arg, owner, None, depth + 1, seen, bctx)
         key = (fn.id if fn else "", name)
         if key in seen:
             return ["{%s}" % name]
-        assigns = [f for f in (fn.facts if fn else []) if f.get("t") == "assign" and f.get("var") == name and not f.get("ctx")]
+        assigns = _assigns(fn, name, ctx)
         if assigns:
             out = []
             for a in assigns[:3]:
-                out += self.strings(a.get("expr"), fn, bind, depth + 1, seen | {key})
+                out += self.strings(a.get("expr"), fn, bind, depth + 1, seen | {key}, a.get("ctx") or ctx)
             return out[:8] or ["{%s}" % name]
         return ["{%s}" % name]
 
-    def _call_strings(self, d, fn, bind, depth, seen):
+    def _call_strings(self, d, fn, bind, depth, seen, ctx=None):
         name = _fn_name(d)
         args = d.get("args") or []
-        if name in ("rtrim", "ltrim", "trim") and args:
-            return self.strings(args[0], fn, bind, depth + 1, seen)
+        if name in ("rtrim", "ltrim", "trim", "rawurlencode", "urlencode", "strval") and args:
+            return self.strings(args[0], fn, bind, depth + 1, seen, ctx)
+        if name in ("tostring", "__tostring") and d.get("k") == "mcall":
+            return self.strings(d.get("of"), fn, bind, depth + 1, seen, ctx)
+        if name == "of" and d.get("k") == "scall" and _is_str_class(d.get("class")) and args:
+            return self.strings(args[0], fn, bind, depth + 1, seen, ctx)
         if name == "json_encode" and args:
             return None
-        if name in ("config",) or (d.get("k") == "scall" and (d.get("class") or "").endswith("\\Facades\\Config") and name in ("get", "string")):
-            if args and args[0].get("k") == "str":
-                ph = self.config_placeholder(args[0]["v"])
-                if _weak_url(ph) and len(args) > 1:
-                    return self.strings(args[1], fn, bind, depth + 1, seen)
-                return [ph]
+        ck = self._config_call_key(d)
+        if ck is not None and (name == "config" or (name in ("get", "string") and _base_leaf(ck))):
+            ph = self.config_placeholder(ck)
+            if _weak_url(ph) and len(args) > 1:
+                return self.strings(args[1], fn, bind, depth + 1, seen, ctx)
+            return [ph]
         if name == "env" and args and args[0].get("k") == "str":
             key = args[0]["v"]
             self.env_from.setdefault(key, "env()")
@@ -167,10 +263,10 @@ class ClientEval:
                 self.env_defaults.setdefault(key, (args[1]["v"], "env() default"))
             return ["{env.%s}" % key]
         if name in ("sprintf", "vsprintf") and args and args[0].get("k") == "str":
-            return self._sprintf(args[0]["v"], args[1:], fn, bind, depth, seen)
+            return self._sprintf(args[0]["v"], args[1:], fn, bind, depth, seen, ctx)
         return None
 
-    def _sprintf(self, fmt, args, fn, bind, depth, seen):
+    def _sprintf(self, fmt, args, fn, bind, depth, seen, ctx=None):
         pieces = re.split(r"(%(?:\d+\$)?[-+ 0']*\d*(?:\.\d+)?[sdfuxX])", fmt)
         lists, i = [], 0
         for p in pieces:
@@ -178,7 +274,7 @@ class ClientEval:
             if m:
                 idx = int(m.group(1)) - 1 if m.group(1) else i
                 i += 1
-                lists.append(self.strings(args[idx], fn, bind, depth + 1, seen) if idx < len(args) else ["{?}"])
+                lists.append(self.strings(args[idx], fn, bind, depth + 1, seen, ctx) if idx < len(args) else ["{?}"])
             else:
                 lists.append([p.replace("%%", "%")])
         return self._prod(lists, depth)
@@ -213,6 +309,58 @@ class ClientEval:
                 return lit
         return "{config.%s}" % key
 
+    def _read_config_key(self, d, fn, bind, depth, seen, ctx=None) -> str | None:
+        """Dotted config key a config() / Config::get / $app['config']->get expression reads, including a later index."""
+        if not isinstance(d, dict) or depth > 8:
+            return None
+        k = d.get("k")
+        if k == "var":
+            name = d.get("n")
+            if bind and name in bind:
+                arg, owner, bctx = _bound(bind[name])
+                return self._read_config_key(arg, owner, None, depth + 1, seen, bctx)
+            token = (fn.id if fn else "", "cfg", name)
+            if token in seen:
+                return None
+            assigns = _assigns(fn, name, ctx)
+            if len(assigns) == 1:
+                a = assigns[0]
+                return self._read_config_key(a.get("expr"), fn, bind, depth + 1, seen | {token}, a.get("ctx") or ctx)
+            return None
+        if k == "dim":
+            leaf = _key_name(d.get("key"))
+            if not leaf:
+                return None
+            prefix = self._read_config_key(d.get("of"), fn, bind, depth + 1, seen, ctx)
+            if prefix is None:
+                return None
+            return f"{prefix}.{leaf}"
+        if k == "alt":
+            opts = d.get("opts") or []
+            return self._read_config_key(opts[0], fn, bind, depth + 1, seen, ctx) if opts else None
+        if k in ("func", "mcall", "scall"):
+            return self._config_call_key(d)
+        return None
+
+    def _config_call_key(self, d) -> str | None:
+        """Key argument of config()/Config::get()/$app['config']->get(), or None when this call is not a config read."""
+        if not d:
+            return None
+        name = _fn_name(d)
+        args = d.get("args") or []
+        if not args or args[0].get("k") != "str" or not args[0].get("v"):
+            return None
+        key = args[0]["v"]
+        if d.get("k") == "func" and name == "config":
+            return key
+        if name not in ("get", "string"):
+            return None
+        if d.get("k") == "scall" and _is_config_class(d.get("class")):
+            return key
+        if d.get("k") == "mcall" and _is_config_repo(d.get("of")):
+            return key
+        return None
+
     # ---------------------------------------------------------------- base URL through the container
     def resolve_prop(self, cls: str, name: str) -> list[str] | None:
         key = (cls, name)
@@ -231,8 +379,9 @@ class ClientEval:
             for f in ctor.facts:
                 if f.get("t") == "fetch" and f.get("write") and f.get("prop") == name and (f.get("recv") or {}).get("k") == "this":
                     vals += self._with_params(f.get("expr"), ctor, sources)
-        for expr, owner in sources.get(name, []):
-            vals += [v for v in self.strings(expr, owner) if v and v != "{?}"]
+        for item in sources.get(name, []):
+            expr, owner, ctx = _bound(item)
+            vals += [v for v in self.strings(expr, owner, ctx=ctx) if v and v != "{?}" ]
         strong = [v for v in vals if not _weak_url(v)]
         out, seen = [], set()
         for v in (strong or vals):
@@ -254,7 +403,7 @@ class ClientEval:
                     for i, p in enumerate(ctor.params):
                         arg = self._arg_at(f.get("args") or [], p["name"], i)
                         if arg is not None:
-                            out[p["name"]].append((arg, fn))
+                            out[p["name"]].append((arg, fn, f.get("ctx")))
                 if f.get("t") != "call" or (f.get("m") or "").lower() != "give":
                     continue
                 bound, needs = self._when_needs(f.get("recv"))
@@ -263,7 +412,7 @@ class ClientEval:
                 expr = self._give_expr(fn, f)
                 target = self._needs_param(ctor, needs)
                 if expr is not None and target:
-                    out.setdefault(target, []).append((expr, fn))
+                    out.setdefault(target, []).append((expr, fn, f.get("ctx")))
         return out
 
     @staticmethod
@@ -505,7 +654,7 @@ class ClientEval:
         if expr is None:
             return None
         if bind and expr.get("k") == "var" and expr.get("n") in bind:
-            arg, owner = bind[expr["n"]]
+            arg, owner, _bctx = _bound(bind[expr["n"]])
             return self.body_keys(arg, owner, None)
         expr = self._follow_var(expr, fn, bind)
         if expr and expr.get("k") == "var" and fn:
@@ -541,7 +690,7 @@ class ClientEval:
             return expr
         name = expr.get("n")
         if bind and name in bind:
-            arg, owner = bind[name]
+            arg, owner, _bctx = _bound(bind[name])
             return self._follow_var(arg, owner, None, seen)
         if (fn.id, name) in seen:
             return expr

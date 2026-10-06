@@ -8,6 +8,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- PHP outbound HTTP also follows a base URL stored in a config array (`$cfg['base_url']`, `config('services.payments')['base_url']`, `config()->get`, `$app->make('config')->get`, `Config::get`). `rawurlencode` / `urlencode` / `trim` / `strval` / `(string)` / `Str::of` path segments keep their variable name so `cg link` matches them. An empty `.env.example` value shows the env name only, and a relative `Http::get` path does not pick up the app URL unless `baseUrl()` was set.
+
 ### Added
 
 - PHP outbound HTTP: Laravel `Http` / `Factory` / `PendingRequest` and Guzzle `Client` calls are `http:` client endpoints (`HTTP_CALLS`). A base URL from a container binding is followed through `config()` to `env()` and `.env.example` (`origin_kind` `env`, `attrs.base`; `.env` is not read), and `cg link` matches those calls to another backend. `Http::fake()` links a test to the client method and is not an application call. See [docs/php.md](docs/php.md#outbound-http).

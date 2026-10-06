@@ -116,6 +116,37 @@ def test_base_resolution_and_path_building():
     assert php_stats["http_fake_links"] >= 1
 
 
+def test_config_array_binding_encoded_segments_and_empty_env():
+    nodes = http_nodes()
+    blob = json.dumps(nodes)
+    assert "supersecretvalue" not in blob
+    assert "should-not-win.example" not in blob
+    assert "app.bookstore.test" not in blob
+    for path in ("/array-bind", "/array-index", "/config-get", "/make-config", "/facade-config", "/local-cfg"):
+        node = nodes[f"http:POST {path}"]
+        assert node["origin"] == "{env.PAYMENTS_BASE_URL}"
+        assert node["origin_kind"] == "env"
+        assert node["base"]["value"] == "https://payments.bookstore.test"
+        assert node["base"]["from"] == "config/services.php"
+    assert nodes["http:GET /payments/{paymentId}/status"]["path"] == "/payments/{paymentId}/status"
+    assert nodes["http:GET /orders/{id}/view"]["path"] == "/orders/{id}/view"
+    assert nodes["http:GET /refunds/{paymentId}/start"]["path"] == "/refunds/{paymentId}/start"
+    assert nodes["http:GET /trim/{paymentId}/end"]["path"] == "/trim/{paymentId}/end"
+    assert nodes["http:GET /cast/{paymentId}/end"]["path"] == "/cast/{paymentId}/end"
+    assert nodes["http:GET /str/{paymentId}/end"]["path"] == "/str/{paymentId}/end"
+    assert nodes["http:GET /pay/{id}/x"]["path"] == "/pay/{id}/x"
+    blank = nodes["http:GET /blank"]
+    assert blank["origin"] == "{env.BLANK_BASE_URL}"
+    assert blank["base"]["value"] == ""
+    text = Q.render_api_calls(Q.api_calls(st(), "GET /blank"))
+    assert "{env.BLANK_BASE_URL}" in text
+    assert "= ," not in text
+    rel = nodes["http:GET /relative-only"]
+    assert rel["path"] == "/relative-only"
+    assert rel["origin_kind"] == "unknown"
+    assert not (rel.get("base") or {}).get("value")
+
+
 def test_http_fake_links_the_test_and_is_not_an_app_call():
     rows = st().q("SELECT src, dst, confidence, attrs FROM edges WHERE kind='TEST_HTTP'")
     assert rows
@@ -171,7 +202,8 @@ def _write_express(root: Path):
         "app.get('/forward', (_req, res) => { res.end('ok') })\n"
         "app.get('/shared', (_req, res) => { res.end('ok') })\n"
         "app.post('/shared', (_req, res) => { res.end('ok') })\n"
-        "app.post('/orders/:id', (_req, res) => { res.end('ok') })\n")
+        "app.post('/orders/:id', (_req, res) => { res.end('ok') })\n"
+        "app.get('/payments/:paymentId/status', (_req, res) => { res.end('ok') })\n")
 
 
 def _write_laravel(root: Path):
@@ -229,6 +261,9 @@ def test_php_clients_link_express_and_laravel(tmp_path):
     assert any(m["route"].endswith("route:POST /payments") for m in payments["matched"])
     health = one("http:GET /health")
     assert any(m["route"].endswith("route:GET /health") for m in health["matched"])
+    status = one("http:GET /payments/{paymentId}/status")
+    assert len(status["matched"]) == 1
+    assert status["matched"][0]["route"].endswith("route:GET /payments/{paymentId}/status")
     for row in res["results"]:
         for call in row["calls"]:
             assert "PaymentsFakeTest" not in call["at"]
