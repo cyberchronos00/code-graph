@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Order;
+use App\Services\PaymentsClient;
 use App\Services\StockService;
 use Illuminate\Http\Request;
 
@@ -24,5 +25,10 @@ class OrderController extends Controller
         $this->stock->recordSale((int) ($result['book_id'] ?? 0));
 
         return response()->json($order);
+    }
+
+    public function checkout(Order $order, PaymentsClient $payments)
+    {
+        return $payments->createPayment($order);
     }
 }

@@ -41,6 +41,7 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 
 - `cg link` matches method and path ([cross-repo link](architecture.md#cross-repo-link)). Nest DTO fields, Fastify schema fields, and client body or query keys are stored and are not compared.
 - An endpoint whose origin was not traced matches by suffix at `heuristic`.
+- PHP outbound HTTP covers Laravel `Http` / `Factory` / `PendingRequest` and Guzzle. Symfony HttpClient, `curl_*` and `file_get_contents` are not client endpoints. A base URL that does not resolve is kept (`origin_kind` `unknown`, `heuristic`) and is not matched by host. The sample base comes from `.env.example` or an `env()` default; `.env` is not read. A client verb `ANY` matches only when one route fits the path (`heuristic`).
 - Payload checks run for a single route match ([payload / field check](architecture.md#payload--field-check)). Ambiguous matches are skipped.
 - Server shapes are the declared schema or a returned literal. Framework error bodies (validation 422, auth 401, 500 pages) are absent.
 - Enum checks need `choices=` or a `Literal` / `Enum` annotation.

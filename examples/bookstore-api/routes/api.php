@@ -23,3 +23,5 @@ Route::prefix('v1')->group(function () {
     Route::post('admin/books', [AdminBookController::class, 'store']);
     Route::put('admin/books/{id}', [AdminBookController::class, 'update']);
 });
+
+Route::post('orders/{order}/checkout', [OrderController::class, 'checkout']);

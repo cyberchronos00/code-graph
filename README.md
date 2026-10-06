@@ -48,7 +48,7 @@ dependents: 18 nodes  (code: 6, entry points: 9, other: 3)
 |---|---|---|---|
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | Django (+ DRF, django-ninja), FastAPI / Starlette, Flask, Celery | exact (stdlib `ast`) | [Python](https://code-graph.cyberchronos00.workers.dev/docs/python) |
 | ![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white) ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black) | Nuxt / Vue, NestJS, Next.js, Astro, Express, Fastify, Koa, Hono | exact (TypeScript compiler API) | [TS frameworks](https://code-graph.cyberchronos00.workers.dev/docs/ts-frameworks) |
-| ![PHP](https://img.shields.io/badge/PHP-777BB4?logo=php&logoColor=white) | Laravel (routes and middleware, queues, broadcasting) | exact (nikic/php-parser; needs PHP 8.2+) | [PHP](https://code-graph.cyberchronos00.workers.dev/docs/php) |
+| ![PHP](https://img.shields.io/badge/PHP-777BB4?logo=php&logoColor=white) | Laravel (routes, middleware, queues, broadcasting, outbound HTTP) | exact (nikic/php-parser; needs PHP 8.2+) | [PHP](https://code-graph.cyberchronos00.workers.dev/docs/php) |
 | ![Dart](https://img.shields.io/badge/Dart-0175C2?logo=dart&logoColor=white) | Flutter | exact (Dart analyzer; needs the Dart SDK) | [Platforms](https://code-graph.cyberchronos00.workers.dev/docs/platforms) |
 | ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white) | Android, Kotlin Multiplatform, Spring | heuristic; exact with scip-java (opt-in) | [Kotlin](https://code-graph.cyberchronos00.workers.dev/docs/kotlin) |
 | ![Java](https://img.shields.io/badge/Java-ED8B00?logo=openjdk&logoColor=white) | Spring (routes, guards, beans, tables, clients) | heuristic; exact with scip-java (opt-in) | [Java](https://code-graph.cyberchronos00.workers.dev/docs/java) |
@@ -61,7 +61,7 @@ Go and others: import a SCIP index with `cg index --scip FILE`. Run `cg doctor` 
 
 - `reaches`, `impact`, `path`: every caller, route, job and page that reaches a table, config key or method.
 - `cg affected --base main`: the tests and entry points a change reaches (`--quiet` feeds your test runner).
-- Frontend ↔ backend: `cg link` matches client HTTP calls to server routes across repos.
+- Across repos: `cg link` matches client HTTP calls (frontends and Laravel / Guzzle backends) to server routes.
 - Route guards: `cg routes --writes --unguarded` lists routes that write with no auth guard.
 - MCP server (`cg-mcp`) so agents query the graph instead of grepping.
 - Visual view (`cg serve`) and plan checks (`cg plan check`) for planned changes.

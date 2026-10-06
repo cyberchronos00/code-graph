@@ -49,12 +49,12 @@ def test_routes_reaching_writes_bookstore():
     st = db("combined")
     res = R.routes_report(st, writes="*")
     r = by_route(res)
-    assert res["total_routes"] == 9 and set(r) == {"DELETE /v1/{store}/admin/reports/{report}", "POST /v1/admin/books",
-                                                   "PUT /v1/admin/books/{id}", "POST /v1/orders"}
+    assert res["total_routes"] == 10 and set(r) == {"DELETE /v1/{store}/admin/reports/{report}", "POST /v1/admin/books",
+                                                    "PUT /v1/admin/books/{id}", "POST /v1/orders"}
     assert r["POST /v1/orders"]["has_auth"] and guards(r["POST /v1/orders"]) == {"auth:api": True}
     assert not r["DELETE /v1/{store}/admin/reports/{report}"]["has_auth"]
     txt = R.render_routes(res, st)
-    assert "4 of 9 routes" in txt and "NO AUTH" in txt and "WRITES_TABLE@SalesReportService.php:24" in txt
+    assert "4 of 10 routes" in txt and "NO AUTH" in txt and "WRITES_TABLE@SalesReportService.php:24" in txt
     assert "called from: page:app/pages/index.vue" in txt  # frontend caller on the combined graph
     unguarded = R.routes_report(st, writes="*", unguarded=True)
     assert set(by_route(unguarded)) == set(r) - {"POST /v1/orders"}

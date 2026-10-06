@@ -3,6 +3,7 @@ lands in another repo's slot; unknown roots, mismatched repo/root pairs and 0-no
 graph unchanged. Runs on a throwaway copy of the bookstore samples (the planted bugs in examples/ are not touched)."""
 import hashlib
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -86,7 +87,7 @@ def test_path_inside_a_repo_picks_that_repo(copy):
 def test_parent_root_and_no_args_reindex_every_repo(copy):
     for out in (M.index(root=str(copy)), M.index()):
         assert "re-indexed bookstore-api" in out and "re-indexed bookstore-web" in out, out
-        assert "0 nodes" not in out
+        assert re.search(r"(?<!\d)0 nodes", out) is None, out
     assert web_nodes(copy) > 0
 
 

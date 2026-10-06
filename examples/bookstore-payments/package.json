@@ -1,0 +1,6 @@
+{
+  "name": "bookstore-payments",
+  "private": true,
+  "description": "Fictional payments API (Elysia) called by the Laravel bookstore sample.",
+  "dependencies": { "elysia": "^1.1.0" }
+}

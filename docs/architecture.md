@@ -108,6 +108,7 @@ Specs: [query targets](cli.md#query-targets-specs).
 `cg link` copies every repo graph into one SQLite DB ([workspace](cli.md#workspace)).
 `file` gains a repo prefix and `attrs.repo` is set. An id that occurs in more than one repo is stored as `<repo>:<id>` and its edges are rewritten, except `external:` and `endpoint:` ids, which stay one node (one system, one protocol name). Other ids are unchanged, so two repos with no shared ids keep the same ids.
 The command adds `MATCHES_ROUTE` from each repo's `http:` endpoints to routes of every other server (a backend may be the client), then runs channels, protocols, payload checks and entry tagging once over the union.
+A Laravel app is a client when it calls `Http`, an injected `Factory` / `PendingRequest`, or Guzzle. The PHP plugin writes the same `http:` endpoints as the TypeScript and Kotlin clients, including a base URL read from a container binding through `config()` and `env()`, so `cg link --repo api=…:both --repo payments=…:both` matches those calls to the other backend. See [PHP](php.md#outbound-http).
 `impact`, `downstream`, and `path` then cross the whole workspace, including a chain of three or more repos.
 A frontend `links:` list limits which servers that repo is matched against ([apps and workspace](configuration.md#apps-and-workspace)).
 

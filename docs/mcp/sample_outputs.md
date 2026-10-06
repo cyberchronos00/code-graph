@@ -41,17 +41,17 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `plan_baseline`: Fingerprint (sha1 of source lines) every modified target of a plan before implementing it, so
 - `index`: Re-index after editing (static analysis only: never boots the app or touches a database).
 
-## `stats {}`  (1129 chars)
+## `stats {}`  (1140 chars)
 
 ```
 project=bookstore-api+bookstore-web root=None indexed_at=<indexed_at> index_seconds=None
-nodes: method×32, column×29, class×19, config×13, property×10, route×9, request_key×7, env×6, external_class×6, function×6, http×6, module×5, table×5, composable×4, resolution×4, script×4, setting×3, connection×2, external×2, i18n×2, page×2, admin×1, command×1, component×1, field×1, layout×1, store×1, type×1
-edges: CONTAINS×84, READS_COLUMN×20(gated 1), CALLS×20, WRITES_COLUMN×16, EXTENDS×16, READS_INPUT×13, VALIDATES×12, READS_ENV×12, CONFIG_CONTAINS×11, REFERENCES×10, ROUTES_TO×9, READS_PROP×7, CONNECTS_TO×7, WRITES_TABLE×6, HTTP_CALLS×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, INSTANTIATES×2, IMPORTS×2, HANDLED_BY×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, READS_CONFIG×1, MENTIONS_COLUMN×1, HAS_RELATION×1
-coverage bookstore-api: php 22 exact
+nodes: method×38, column×29, class×21, config×16, property×12, route×10, http×8, env×7, external_class×7, request_key×7, function×6, module×5, script×5, table×5, composable×4, resolution×4, setting×3, connection×2, external×2, i18n×2, page×2, admin×1, command×1, component×1, field×1, layout×1, store×1, type×1
+edges: CONTAINS×92, CALLS×24, READS_COLUMN×22(gated 1), EXTENDS×17, WRITES_COLUMN×16, READS_ENV×14, READS_INPUT×13, CONFIG_CONTAINS×13, VALIDATES×12, REFERENCES×12, ROUTES_TO×10, READS_PROP×9, HTTP_CALLS×8, CONNECTS_TO×7, WRITES_TABLE×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INSTANTIATES×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, READS_CONFIG×2, IMPORTS×2, HANDLED_BY×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, MENTIONS_COLUMN×1, HAS_RELATION×1, BINDS×1
+coverage bookstore-api: php 25 exact
 coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `search {'name': 'reserve'}`  (516 chars)
 
@@ -63,7 +63,7 @@ method     method:App\Http\Controllers\StockController::reserve  bookstore-api/a
 method     method:App\Services\StockService::reserveFromWarehouse  bookstore-api/app/Services/StockService.php:30
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `search {'name': 'auth'}`  (142 chars)
 
@@ -72,12 +72,12 @@ middleware / guards / auth matching 'auth' (route attributes): 1 name(s) on 1 ro
   auth:api  (middleware) on 1 route(s): POST /v1/orders
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
-## `routes {'writes': '*'}`  (1641 chars)
+## `routes {'writes': '*'}`  (1642 chars)
 
 ```
-routes reaching a write (any table): 4 of 9 routes
+routes reaching a write (any table): 4 of 10 routes
 auth guard: 1 with, 3 without (auth = a framework preset auth guard or a name matching the auth pattern)
 auth guards by source: preset laravel 1
 
@@ -96,18 +96,18 @@ PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
 
 POST /v1/orders  @bookstore-api/routes/api.php:21
     guards: auth:api [auth]
-    writes books via Services\StockService::recordSale conf=resolved  ROUTES_TO@api.php:21 → CALLS@OrderController.php:24~r → WRITES_COLUMN@StockService.php:42~r → column:books.sold_count
-    writes orders via Http\Controllers\OrderController::store conf=resolved  ROUTES_TO@api.php:21 → WRITES_COLUMN@OrderController.php:18~r → column:orders.user_id
+    writes books via Services\StockService::recordSale conf=resolved  ROUTES_TO@api.php:21 → CALLS@OrderController.php:25~r → WRITES_COLUMN@StockService.php:42~r → column:books.sold_count
+    writes orders via Http\Controllers\OrderController::store conf=resolved  ROUTES_TO@api.php:21 → WRITES_COLUMN@OrderController.php:19~r → column:orders.user_id
 
 guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
-## `routes {'reaches': ['connection:warehouse'], 'unguarded': True}`  (879 chars)
+## `routes {'reaches': ['connection:warehouse'], 'unguarded': True}`  (880 chars)
 
 ```
-routes reaching connection:warehouse: 3 of 9 routes | filter: no auth guard -> 2
+routes reaching connection:warehouse: 3 of 10 routes | filter: no auth guard -> 2
 auth guard: 0 with, 2 without (auth = a framework preset auth guard or a name matching the auth pattern)
 
 GET /v1/{store}/admin/inventory  @bookstore-api/routes/api.php:15  NO AUTH
@@ -121,12 +121,12 @@ POST /v1/stock/reserve  @bookstore-api/routes/api.php:19  NO AUTH
 guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
-## `routes {'writes': 'books', 'missing': 'auth:api'}`  (873 chars)
+## `routes {'writes': 'books', 'missing': 'auth:api'}`  (874 chars)
 
 ```
-routes reaching a write to books: 3 of 9 routes | filter: missing a guard matching 'auth:api' -> 2
+routes reaching a write to books: 3 of 10 routes | filter: missing a guard matching 'auth:api' -> 2
 auth guard: 0 with, 2 without (auth = a framework preset auth guard or a name matching the auth pattern)
 
 POST /v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
@@ -140,7 +140,7 @@ PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
 guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `reaches {'targets': ['connection:warehouse', 'table:warehouse_stock'], 'max_per_group': 12}`  (1358 chars)
 
@@ -150,7 +150,7 @@ dependents: 6 code (operator 1, runtime 4, gated 1); entry points 4 (3 live): co
 
 ## RUNTIME (4)
 [Http/Controllers]
-  Http\Controllers\OrderController::store  route×1 d3  CALLS@OrderController.php:17~r → CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → connection:warehouse
+  Http\Controllers\OrderController::store  route×1 d3  CALLS@OrderController.php:18~r → CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → connection:warehouse
   Http\Controllers\StockController::reserve  route×1 d3  CALLS@StockController.php:16~r → CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → connection:warehouse
 [Services]
   Services\StockService::reserveFromWarehouse  route×2 d1  USES_CONNECTION@StockService.php:32~r → connection:warehouse
@@ -169,7 +169,7 @@ command (1): bookstore:sync-warehouse
 route (3): GET /v1/{store}/admin/inventory [gated]; POST /v1/orders; POST /v1/stock/reserve
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
 
 ## `reaches {'targets': ['env:WAREHOUSE_DB_*'], 'group_by': 'entry_kind'}`  (1696 chars)
 
@@ -181,7 +181,7 @@ dependents: 7 code (no-entry 1, operator 1, runtime 4, gated 1); entry points 4 
 [route]
   Services\StockService::reserveFromWarehouse  route×2 d3  USES_CONNECTION@StockService.php:32~r → CONNECTS_TO@database.php:11~h → CONFIGURED_BY@None:None~h → env:WAREHOUSE_DB_HOST
   Services\StockService::reserve  route×2 d4  CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → CONNECTS_TO@database.php:11~h → CONFIGURED_BY@None:None~h → env:WAREHOUSE_DB_HOST
-  Http\Controllers\OrderController::store  route×1 d5  CALLS@OrderController.php:17~r → CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → CONNECTS_TO@database.php:11~h → CONFIGURED_BY@None:None~h → env:WAREHOUSE_DB_HOST
+  Http\Controllers\OrderController::store  route×1 d5  CALLS@OrderController.php:18~r → CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → CONNECTS_TO@database.php:11~h → CONFIGURED_BY@None:None~h → env:WAREHOUSE_DB_HOST
   Http\Controllers\StockController::reserve  route×1 d5  CALLS@StockController.php:16~r → CALLS@StockService.php:17 → USES_CONNECTION@StockService.php:32~r → CONNECTS_TO@database.php:11~h → CONFIGURED_BY@None:None~h → env:WAREHOUSE_DB_HOST
 
 ## OPERATOR (1)
@@ -201,7 +201,7 @@ command (1): bookstore:sync-warehouse
 route (3): GET /v1/{store}/admin/inventory [gated]; POST /v1/orders; POST /v1/stock/reserve
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
 
 ## `impact {'method': 'StockService::recordSale'}`  (248 chars)
 
@@ -210,23 +210,23 @@ targets: Services\StockService::recordSale
 transitive callers: 1; entry points: 1
 
 ## http_route (1)
-  POST /v1/orders  ROUTES_TO@api.php:21 → CALLS@OrderController.php:24~r → Services\StockService::recordSale
+  POST /v1/orders  ROUTES_TO@api.php:21 → CALLS@OrderController.php:25~r → Services\StockService::recordSale
 
 callers by module: Http/Controllers×1
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
 
 ## `callers {'symbol': 'StockService::reserve'}`  (219 chars)
 
 ```
 targets: Services\StockService::reserve
 direct callers: 2 (2 sites)
-  Http\Controllers\OrderController::store  CALLS@OrderController.php:17 ~r
+  Http\Controllers\OrderController::store  CALLS@OrderController.php:18 ~r
   Http\Controllers\StockController::reserve  CALLS@StockController.php:16 ~r
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
 
 ## `tests_covering {'target': 'StockService::reserve'}`  (382 chars)
 
@@ -237,12 +237,12 @@ no indexed test reaches the target (the graph has no test code: no test files or
 coverage: every source file cg found is indexed (php, typescript); code outside these languages or generated at runtime is not in the graph.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
 
 ## `coverage {}`  (553 chars)
 
 ```
-coverage bookstore-api: php 22 exact
+coverage bookstore-api: php 25 exact
   frameworks: laravel | presets: common, php, laravel | config: no .cg.yaml
 coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
   frameworks: nuxt | presets: common, typescript, nuxt | config: no .cg.yaml
@@ -251,7 +251,7 @@ coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
 every source file cg found is indexed; edges still carry their own exact / resolved / heuristic label.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `siblings {'symbol': 'StockService::reserveLocal', 'limit': 6}`  (435 chars)
 
@@ -265,7 +265,7 @@ shared resources:
   Http\Controllers\Admin\BookController::update: column:books.price
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `siblings {'symbol': 'StockService::reserve'}`  (793 chars)
 
@@ -276,7 +276,7 @@ try: siblings('Services\StockService::reserveLocal') (a callee that touches data
 coverage: every source file cg found is indexed (php, typescript); code outside these languages or generated at runtime is not in the graph.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `writers {'table': 'books'}`  (579 chars)
 
@@ -291,7 +291,7 @@ table books: 15 write edges from 4 writers
   Services\StockService::recordSale  route×1  cols: sold_count  @ StockService.php:42  conf=resolved
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `node {'id_or_symbol': 'App\\Http\\Controllers\\Admin\\InventoryController::index'}`  (675 chars)
 
@@ -311,7 +311,7 @@ in: CONTAINS×1, ROUTES_TO×1
   ROUTES_TO: route:GET /v1/{store}/admin/inventory@15
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `path {'source': 'page:/', 'target': 'SalesReportService::remove'}`  (460 chars)
 
@@ -323,7 +323,7 @@ page:app/pages/index.vue
   -CALLS[resolved @ bookstore-api/app/Http/Controllers/ReportController.php:40]-> Services\SalesReportService::remove
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `downstream {'target': 'page:/reports/:id', 'max_per_kind': 10}`  (570 chars)
 
@@ -340,19 +340,23 @@ tables touched (2): orders, stores
   column:stores.settings d8
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
-## `api_calls {'filter': 'unmatched'}`  (229 chars)
+## `api_calls {'filter': 'unmatched'}`  (489 chars)
 
 ```
-2 client endpoints (0 matched)
+4 client endpoints (0 matched)
 GET /api/v1/main/admin/session  ⇒ UNMATCHED
    ← useSessionStore.load (useSessionStore.ts) @ useSessionStore.ts:7
 GET /version.json  ⇒ UNMATCHED
    ← useAppVersion (useReports.ts) @ useReports.ts:19
+POST /payments  ⇒ UNMATCHED
+   ← Services\PaymentsClient::createPayment @ PaymentsClient.php:14 via PaymentsClient::request
+POST /payments/{id}/cancel  ⇒ UNMATCHED
+   ← Services\PaymentsClient::cancelPayment @ PaymentsClient.php:19 via PaymentsClient::request
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `resolutions {'concept': 'timezone'}`  (2934 chars)
 
@@ -387,7 +391,7 @@ backend resolution sites: 2 in 2 distinct fallback chains; request keys of the c
   app/pages/reports/[id].vue @bookstore-web/app/pages/reports/[id].vue:10 passes date_from to app/composables/useReports.ts#useReports.fetchTop; the request @bookstore-web/app/composables/useReports.ts:9 (GET /api/v1/main/admin/reports/top) sends only category_id, mode, timezone
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `plan_list {}`  (180 chars)
 
@@ -395,7 +399,7 @@ structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php"
 preorders [agreed] Pre-order books: signed-in customers only, never filled from warehouse stock | +1 nodes ~3 modified +3 edges 1 forbidden 1 required | issues #7 | schema errors 0
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
 
 ## `plan_check {'name': 'preorders'}`  (2175 chars)
 
@@ -409,7 +413,7 @@ middleware: POST /v1/stock/reserve lacks auth:api which peer route(s) POST /v1/o
 2 MISSING FROM PLAN (10) by check: caller 2, entry_point 2, admin_surface 1, api_resource 1, external_client 1, model_fillable 1, table_writer 1, validation 1
   - [admin_surface] Filament\Resources\BookResource::form: Filament form for Book ($model @BookResource.php:11); saves bypass the graph's WRITES edges — must expose preorder_until @ bookstore-api/app/Filament/Resources/BookResource.php:13
   - [api_resource] Http\Resources\BookResource::toArray: serializes Book in API responses (built at BookController.php:24, BookController.php:36); decide whether to expose preorder_until @ bookstore-api/app/Http/Resources/BookResource.php:9
-  - [caller] OrderController::store: calls modified StockService::reserve @ bookstore-api/app/Http/Controllers/OrderController.php:17
+  - [caller] OrderController::store: calls modified StockService::reserve @ bookstore-api/app/Http/Controllers/OrderController.php:18
   - [caller] StockController::reserve: calls modified StockService::reserve @ bookstore-api/app/Http/Controllers/StockController.php:16
   - [entry_point] route:POST /v1/admin/books: http_route reaching modified Admin\BookController::store @ bookstore-api/routes/api.php:23
   … +5 more
@@ -424,7 +428,7 @@ middleware: POST /v1/stock/reserve lacks auth:api which peer route(s) POST /v1/o
 details=true for every item with file:line evidence and call chains (CLI: plan check without --summary); max_items=N shows more top items.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
 
 ## `plan_check {'name': 'preorders', 'details': True, 'max_items': 30}`  (5493 chars)
 
@@ -446,7 +450,7 @@ summary: refs 15/15 resolve | MISSING FROM PLAN 10 | review 7 | covered 7 | forb
   - [api_resource] Http\Resources\BookResource::toArray: serializes Book in API responses (built at BookController.php:24, BookController.php:36); decide whether to expose preorder_until
       @ bookstore-api/app/Http/Resources/BookResource.php:9, bookstore-api/app/Http/Controllers/Admin/BookController.php:24, bookstore-api/app/Http/Controllers/Admin/BookController.php:36
   - [caller] OrderController::store: calls modified StockService::reserve
-      @ bookstore-api/app/Http/Controllers/OrderController.php:17
+      @ bookstore-api/app/Http/Controllers/OrderController.php:18
   - [caller] StockController::reserve: calls modified StockService::reserve
       @ bookstore-api/app/Http/Controllers/StockController.php:16
   - [entry_point] route:POST /v1/admin/books: http_route reaching modified Admin\BookController::store
@@ -467,7 +471,7 @@ summary: refs 15/15 resolve | MISSING FROM PLAN 10 | review 7 | covered 7 | forb
   - [parallel_method] StockService::reserveFromWarehouse: same-class sibling of modified StockService::reserve (reserve*)
       @ bookstore-api/app/Services/StockService.php:30
   - [referencing_column] OrderController::store: writes column orders.book_id (refers to books)
-      @ bookstore-api/app/Http/Controllers/OrderController.php:18
+      @ bookstore-api/app/Http/Controllers/OrderController.php:19
   - [relation] Order::book: Eloquent relation to Book
       @ bookstore-api/app/Models/Order.php:15
   - [table_reader] Admin\InventoryController::index: reads books (is_active) [bypasses StockService::reserve]
@@ -493,11 +497,11 @@ summary: refs 15/15 resolve | MISSING FROM PLAN 10 | review 7 | covered 7 | forb
 
 ENTRY CHAINS (entry point -> modified code)
   route:POST /v1/admin/books -ROUTES_TO@api.php:23-> Admin\BookController::store
-  route:POST /v1/orders -ROUTES_TO@api.php:21-> OrderController::store -CALLS@OrderController.php:17-> StockService::reserve
+  route:POST /v1/orders -ROUTES_TO@api.php:21-> OrderController::store -CALLS@OrderController.php:18-> StockService::reserve
   route:POST /v1/stock/reserve -ROUTES_TO@api.php:19-> StockController::reserve -CALLS@StockController.php:16-> StockService::reserve
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 22, "indexed": 22, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
 
 ## `index (gating fixture, temp db)`  (554 chars)
 

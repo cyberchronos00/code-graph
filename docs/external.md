@@ -22,7 +22,7 @@ external -CREDENTIAL_FROM-> env:<KEY>          # where the secret is, never its 
 | client constructors | Python (`psycopg`, `redis`, `pymongo`, `pika`, `boto3`, …) and Node (`pg`, `ioredis`, `mongoose`, `amqplib`, `knex`, …). A localhost default is not a system |
 | ORM datasources | Prisma `datasource`, TypeORM `DataSource`, Drizzle `dbCredentials`, Laravel tables on `$connection`, PHP `new PDO`, Spring `spring.datasource.url`. sqlite / H2 / HSQLDB / Derby are skipped. The one SQL system in a repo is attached to ORM tables that name none (`via: sole <protocol> system`) |
 | Redis / Elasticsearch | literal key prefixes and `KEY_PREFIX` / `ELASTICSEARCH_INDEX_PREFIX` on `attrs.key_prefixes` / `attrs.indices` |
-| HTTP and SDKs | `external:http(s):<host>:<port>` for a real other-origin host; `external:s3:<bucket>`, `gcs`, `azure-blob`, `aws:<service>`, `saas:stripe`, `llm:<provider>`. Loopback and `${host}` stay unattached. Test-only callers are left out |
+| HTTP and SDKs | `external:http(s):<host>:<port>` for a real other-origin host; `external:s3:<bucket>`, `gcs`, `azure-blob`, `aws:<service>`, `saas:stripe`, `llm:<provider>`. Loopback and `${host}` stay unattached. Test-only callers are left out. A PHP `Http` / Guzzle call whose host is a literal is one of these nodes; a base read from `config()` / `env()` stays a client endpoint (sample value from `.env.example` only, never `.env`) and is matched by `cg link` |
 | Laravel disks / django-storages | `s3` / `gcs` / `azure` disks. `Storage::disk` and `default_storage.save` connect to that disk |
 
 Confidence is `exact` for a literal host, `resolved` through `.env.example` or compose,

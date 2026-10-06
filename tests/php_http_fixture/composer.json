@@ -1,0 +1,1 @@
+{ "name": "fixture/php-http", "require": { "laravel/framework": "^11.0", "guzzlehttp/guzzle": "^7.0" } }

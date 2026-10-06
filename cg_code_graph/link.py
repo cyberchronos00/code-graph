@@ -16,7 +16,8 @@ Matching is deterministic (no guessing):
   - segments match when literal == literal, client placeholder <-> route {param},
     client literal -> route {param} (resolved), or a client segment with an embedded
     placeholder fully matches a route literal (heuristic, e.g. export.{format} ~ export.csv);
-  - method must match (HEAD ~ GET); the most specific route (most literal==literal segments)
+  - method must match (HEAD ~ GET); a client verb `ANY` matches only when one route fits the
+    path, and that match is `heuristic`. The most specific route (most literal==literal segments)
     wins; ties are kept and marked heuristic (ambiguous).
 
 Realtime: client channel subscriptions (channel_sub:<name>, from Echo / pusher-js / useEcho) get MATCHES_CHANNEL ->
@@ -94,6 +95,8 @@ def match_path(client: str, route: str) -> tuple[bool, dict]:
 
 
 def _method_ok(cm: str, rm: str) -> bool:
+    if (cm or "").upper() == "ANY":
+        return True
     rms = set(rm.upper().replace("|", ",").split(","))
     return cm in rms or "ANY" in rms or (cm == "HEAD" and "GET" in rms)
 
@@ -180,6 +183,13 @@ def match_endpoint(method: str, path: str, routes: list[dict], origin_kind: str 
     key = lambda h: (-h[2]["ph_into_lit"], h[2]["lit"])
     top = max(key(h) for h in hits)
     best = [h for h in hits if key(h) == top]
+    if method.upper() == "ANY":
+        if len(best) != 1:
+            return {"matched": [], "path": path, "reason": "ANY verb matches only a unique path",
+                    "near": [h[0]["id"] for h in best][:3]}
+        r, variant, info = best[0]
+        return {"matched": [{"route": r["id"], "uri_variant": variant, "confidence": "heuristic", "segments": info}],
+                "path": path}
     out = []
     for r, variant, info in best:
         conf = "exact"

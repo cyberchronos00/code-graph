@@ -668,4 +668,6 @@ class PhpPlugin(LanguagePlugin):
         from .external import contribute as php_ext
         if (pe := php_ext(project, builder)):
             stats["php_external"] = pe
+        from .http_client import emit_http_clients
+        stats.update(emit_http_clients(prog, builder, project))
         return stats

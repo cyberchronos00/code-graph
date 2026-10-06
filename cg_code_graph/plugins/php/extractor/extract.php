@@ -116,8 +116,9 @@ function desc($e, Ctx $c, int $depth = 0) {
         return ['k' => 'scall', 'class' => resolveSpecial(nameStr($e->class), $c), 'm' => nameStr($e->name), 'args' => argsDesc($e->args, $c, $depth + 1)];
     }
     if ($e instanceof Expr\New_) {
-        if ($e->class instanceof Stmt\Class_) return ['k' => 'new', 'class' => null];
-        return ['k' => 'new', 'class' => resolveSpecial(nameStr($e->class), $c)];
+        $args = argsDesc($e->args, $c, $depth + 1);
+        if ($e->class instanceof Stmt\Class_) return ['k' => 'new', 'class' => null, 'args' => $args];
+        return ['k' => 'new', 'class' => resolveSpecial(nameStr($e->class), $c), 'args' => $args];
     }
     if ($e instanceof Expr\FuncCall) {
         return ['k' => 'func', 'n' => nameStr($e->name), 'args' => argsDesc($e->args, $c, $depth + 1)];
@@ -224,7 +225,7 @@ function walkNode(Node $node, Ctx $c, \PhpParser\NameContext $nc): void {
         if ($target instanceof Expr\Variable && is_string($target->name)) {
             addFact($c, ['t' => 'assign', 'var' => $target->name, 'expr' => desc($node->expr, $c)], $node);
         } elseif ($target instanceof Expr\PropertyFetch || $target instanceof Expr\NullsafePropertyFetch) {
-            addFact($c, ['t' => 'fetch', 'recv' => desc($target->var, $c), 'prop' => nameStr($target->name), 'write' => true], $node);
+            addFact($c, ['t' => 'fetch', 'recv' => desc($target->var, $c), 'prop' => nameStr($target->name), 'write' => true, 'expr' => desc($node->expr, $c)], $node);
             walk($target->var, $c, $nc);
             walk($node->expr, $c, $nc);
             return;
