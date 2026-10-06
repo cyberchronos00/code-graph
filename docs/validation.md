@@ -25,6 +25,7 @@ Full scoreboards, timings and the "other corpora unchanged" notes are in
 | Generated files | Capacitor copies and OpenAPI / protoc output excluded; `cg coverage` lists them | [Generated](validation-log.md#generated-and-copied-files) |
 | Platforms | ripgrep, alacritty, libuv, curl, dart-lang/http, localsend, social-app | [Platforms](validation-log.md#platform-specific-code) |
 | Kotlin / Swift | heuristic calls, then scip-java and the Swift index store | [Kotlin](validation-log.md#kotlin), [Swift](validation-log.md#swift) |
+| Spring | spring-petclinic: 17/17 heuristic routes (PetController class prefix included); exact mode is still coming in #164 | [Java](java.md#spring) |
 | Bridges | Capacitor, React Native, Flutter, Cordova, Pigeon, Electron, Tauri | [Bridges](validation-log.md#web--native-bridges) |
 | Protocols | Socket.IO, WS/SSE, webhooks, IPC, sockets, gRPC, GraphQL, jobs, brokers | [Protocols](validation-log.md#protocol-links-shared-endpoint-model-31) |
 | TS frameworks | immich, Nest samples, Ghost, dub, Next examples, realworld `cg link` | [TS frameworks](validation-log.md#typescript--javascript-frameworks) |

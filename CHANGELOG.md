@@ -8,9 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- Android bridge receivers in `.java` files are scanned again after the Java plugin indexes those files. Capacitor `@CapacitorPlugin` and React Native `@ReactMethod` handlers link to the Java method node.
+
 ### Added
 
-- Java heuristic plugin (`tree-sitter-java`): packages, classes, interfaces, enums, records, methods, constructors, and fields. Calls resolve by receiver type (including `this.field.method()`, call chains with a known return type, and `new Foo().bar()`), imports, the same package, then a unique name. An interface-typed receiver edges the interface method. Method references (`Foo::bar`, `this::bar`, `expr::bar`, `Foo::new`) are `REFERENCES_FN`. `cg coverage` counts `.java` as heuristic. `cg doctor` has a java row. `cg setup java` and `install.sh --with java` install scip-java (the Kotlin path) and print the JDK 17+ hint. Exact mode and Spring facts are coming in #164. See [docs/java.md](docs/java.md).
+- Spring facts for Java and Kotlin from one JVM module (`cg_code_graph/plugins/jvm/spring.py`): routes (including `{id:\d+}` and `server.servlet.context-path`), method-security and `SecurityFilterChain` guards (a Java `@Bean` returning `SecurityFilterChain` guards Kotlin controllers and the other way round), `@Service` / `@Component` / `@Repository` / `@Bean` injection (`BOUND_TO` the single implementing bean, or `@Primary` / `@Qualifier`), JPA tables, Spring Data calls, and `@Query`, entry points (`@Scheduled`, listeners, `CommandLineRunner`), HTTP clients (`RestTemplate`, `RestClient`, `WebClient`, `@FeignClient`, `@HttpExchange`), and JUnit 4 / 5 / TestNG plus `MockMvc` / `WebTestClient` / `TestRestTemplate` `TEST_HTTP` edges. `spring` is detected from the Spring Boot plugin or `spring-boot-starter-*` and applies `presets/spring.yaml`. See [docs/java.md](docs/java.md#spring).
+- Java heuristic plugin (`tree-sitter-java`): packages, classes, interfaces, enums, records, methods, constructors, and fields. Calls resolve by receiver type (including `this.field.method()`, call chains with a known return type, and `new Foo().bar()`), imports, the same package, then a unique name. An interface-typed receiver edges the interface method. Method references (`Foo::bar`, `this::bar`, `expr::bar`, `Foo::new`) are `REFERENCES_FN`. `cg coverage` counts `.java` as heuristic. `cg doctor` has a java row. `cg setup java` and `install.sh --with java` install scip-java (the Kotlin path) and print the JDK 17+ hint. Exact mode is coming in #164. See [docs/java.md](docs/java.md).
 
 ### Changed
 

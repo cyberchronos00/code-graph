@@ -44,6 +44,8 @@ Pipe long output through `head` or `tail`:
     cg impact <symbol> --db out/graph.db | head -n 40
 While iterating, run one file: `pytest -q -x tests/test_x.py`.
 Run the full suite once at the end: `pytest -q 2>&1 | tail -n 30`.
+
+A new language or framework updates README's Supported languages table, its docs page, `docs-site/app/utils/docs-nav.ts`, and `docs-site/app/components/HomeStacks.vue` in the same change.
 """
 
 

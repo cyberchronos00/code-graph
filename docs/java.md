@@ -47,7 +47,19 @@ Coming in #164. It will reuse the Kotlin scip-java runner (one opt-in run for a 
 
 ## Spring
 
-Coming in #164. Routes, guards, beans, tables, listeners, and HTTP clients will be extracted by one JVM module shared with Kotlin, from these syntax trees. Annotations are kept on the declaration (`attrs.annotations`) so that module can see them.
+`cg_code_graph/plugins/jvm/spring.py` reads Java and Kotlin declarations (annotations with arguments, parameter types, supertypes, string-literal call arguments) and emits one set of Spring facts. A Java `SecurityFilterChain` bean guards Kotlin controllers, and a Kotlin `SecurityFilterChain` guards Java controllers. Detection (`org.springframework.boot` or `spring-boot-starter-*` in `build.gradle`, `build.gradle.kts`, or `pom.xml` at the project root or one module down) applies `presets/spring.yaml`. `cg coverage` then reports `frameworks: spring`.
+
+| fact | what is recorded |
+|---|---|
+| Routes | Class and method `@RequestMapping` / `@GetMapping` / `@PostMapping` / `@PutMapping` / `@DeleteMapping` / `@PatchMapping`. A bare `@GetMapping` keeps the class prefix (`GET /api/books`); `@GetMapping("/")` keeps the trailing slash. `{id:\d+}` becomes `{id}`. `server.servlet.context-path` in profile-less `application.properties` or `application.yml` (not a test resource, not `application-*.properties` / `application-*.yml`) prefixes every route |
+| Guards | `@PreAuthorize`, `@PostAuthorize`, `@Secured`, `@RolesAllowed`. `SecurityFilterChain` rules (`requestMatchers` / `antMatchers` / `mvcMatchers` / `pathMatchers`, Kotlin `authorize`) — first chain by `@Order` then source order whose `securityMatcher` matches; a chain with none matches every route; a `RequestMatcher` bean matches none. Java finds the chain on a `@Bean` method whose return type is `SecurityFilterChain` |
+| Beans | `@Service`, `@Component`, `@Repository`, `@Controller`, `@RestController`, `@Bean`. An injected interface is `BOUND_TO` the single implementing bean, or the `@Primary` / `@Qualifier` one (constructor parameter or `@Autowired` / `@Inject` / `@Resource` field) |
+| Tables | JPA `@Entity`: `@Table(name)` or Spring Boot snake_case. Spring Data repository calls (`find*` / `save*` / …) and `@Query` table names are `READS_TABLE` / `WRITES_TABLE` |
+| Entry points | `@Scheduled` (`scheduled`), `@KafkaListener` / `@RabbitListener` / `@JmsListener` / `@SqsListener` / `@EventListener` (`listener`), `CommandLineRunner` / `ApplicationRunner.run` (`main`) |
+| HTTP clients | `RestTemplate`, `RestClient`, `WebClient`, `@FeignClient`, `@HttpExchange` → `http:` nodes and `HTTP_CALLS`, the same shape other plugins emit, so `cg link` can match them. URI templates keep `{id}`. One `baseUrl("https://host")` or `create("https://host")` on the same call is prefixed onto a relative template |
+| Tests | JUnit 4, JUnit 5, TestNG (`entry_kind: test`). `MockMvc.perform(get("/api/books/{id}", 1))`, `WebTestClient`, and `TestRestTemplate` become `TEST_HTTP` edges to the route |
+
+Kotlin projects keep the same routes, guards, and tables as before. Exposed tables stay in the Kotlin plugin. A Kotlin Spring repo gets this preset because detection sees the Gradle or Maven file.
 
 ## Limits
 
@@ -57,4 +69,5 @@ Coming in #164. Routes, guards, beans, tables, listeners, and HTTP clients will 
 - An inferred lambda parameter (`xs.forEach(x -> x.line())`) has no type, so that call falls through to a unique-name match and can edge every project method of that name.
 - A field chain `a.b.c()` binds `c` when each field's type is a project class. A call chain does the same from return types.
 - Gradle `build.gradle.kts` and `settings.gradle.kts` are Kotlin sources. The Kotlin plugin already treats `.kts` as Kotlin, so a mixed tree counts those scripts as Kotlin, not Java.
-- No Spring, Android XML, or exact edges in this layer. See [Kotlin](kotlin.md) for the Kotlin side of a mixed repo.
+- Android XML layouts are not read. Exact call edges are coming in #164. See [Kotlin](kotlin.md) for the Kotlin side of a mixed repo.
+- Spring WebFlux functional routes (`RouterFunctions.route()`), reactive repositories beyond the forms above, Micronaut, Quarkus, Jakarta servlets, and JDBC / `JdbcTemplate` raw SQL are not extracted.

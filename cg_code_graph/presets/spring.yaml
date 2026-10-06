@@ -1,0 +1,22 @@
+name: spring
+kind: framework
+docs: docs/java.md#spring
+# Guard names shared by the Java and Kotlin Spring extractors (cg_code_graph/plugins/jvm/spring.py).
+# A Kotlin or Java repo is detected as Spring when the build uses the Spring Boot plugin or a
+# spring-boot-starter-* dependency, and this preset is applied with the language presets.
+auth:
+  guards:
+    - {name: PreAuthorize, source: "Spring Security method security, https://docs.spring.io/spring-security/reference/servlet/authorization/method-security.html"}
+    - {name: Secured, source: "Spring Security @Secured"}
+    - {name: RolesAllowed, source: "Jakarta @RolesAllowed (Spring Security jsr250)"}
+    - {name: PostAuthorize, source: "Spring Security @PostAuthorize"}
+    - {name: authenticated, source: "SecurityFilterChain requestMatchers(...).authenticated()"}
+    - {name: fullyAuthenticated, source: "SecurityFilterChain fullyAuthenticated()"}
+    - {name: hasRole, source: "SecurityFilterChain hasRole(...)"}
+    - {name: hasAnyRole, source: "SecurityFilterChain hasAnyRole(...)"}
+    - {name: hasAuthority, source: "SecurityFilterChain hasAuthority(...)"}
+    - {name: hasAnyAuthority, source: "SecurityFilterChain hasAnyAuthority(...)"}
+    - {name: access, source: "SecurityFilterChain access(...)"}
+  not_auth:
+    - {name: permitAll, source: "SecurityFilterChain permitAll(): the matcher is public"}
+    - {name: denyAll, source: "SecurityFilterChain denyAll(): the matcher is closed, not an auth check the caller passes"}

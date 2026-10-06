@@ -61,7 +61,7 @@ Comments in the file are the meanings. Flags and env vars that override a key:
 | `apps` | `cg index --no-apps` indexes the root as one project |
 | `rust.targets` | `CG_RUST_TARGETS` (takes precedence; [Rust, C and C++](native.md)) |
 
-`include` walks only the path down to those directories; `exclude` still applies inside them. `skip_dirs.keep` also lets a walk into a hidden directory such as `.storybook`. `frameworks` names include `laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `astro`, `express` (aliases such as `nestjs`, `next`, `fastify`, `drf` work). `platforms.targets` accepts `windows`, `linux`, `macos`, `ios`, `android`, `web`; `unix` and `native` work in `platforms.paths`. Details: [Python](python.md), [Generated files](generated.md), [Platforms](platforms.md).
+`include` walks only the path down to those directories; `exclude` still applies inside them. `skip_dirs.keep` also lets a walk into a hidden directory such as `.storybook`. `frameworks` names include `laravel`, `nuxt`, `django`, `djangorestframework`, `django-ninja`, `flutter`, `nest`, `nextjs`, `astro`, `express`, `spring` (aliases such as `nestjs`, `next`, `fastify`, `drf` work). `platforms.targets` accepts `windows`, `linux`, `macos`, `ios`, `android`, `web`; `unix` and `native` work in `platforms.paths`. Details: [Python](python.md), [Generated files](generated.md), [Platforms](platforms.md).
 
 The settings are stored with the graph, so `cg serve`, `cg routes`, `cg plan` and the MCP server read plans, auth patterns and presets from the DB without repeating the flags.
 
@@ -88,10 +88,11 @@ A detected language or framework brings a preset from `cg_code_graph/presets/*.y
 | preset | what it adds |
 |---|---|
 | `common` | auth and secret name patterns, shared skip directories |
-| `php`, `python`, `typescript`, `dart`, `rust`, `c_cpp` | per-language skip lists |
+| `php`, `python`, `typescript`, `dart`, `rust`, `c_cpp`, `kotlin`, `java`, `swift` | per-language skip lists |
 | `laravel` | auth and signature middleware, plan prefixes, text-mention dirs |
 | `django`, `djangorestframework`, `django-ninja` | view access decorators, DRF permissions, ninja auth |
 | `nest`, `nextjs`, `express`, `nuxt` | Nest guards, Next.js auth helpers, Express-family middleware, Nuxt session helpers |
+| `spring` | Spring Security method annotations and `SecurityFilterChain` guard names (`presets/spring.yaml`) |
 
 A guard matches on its name, ignoring namespace and arguments (`auth:sanctum`, `AuthGuard('jwt')`). Project guards match the shared name pattern or `auth.extra_patterns`. Merge order: `common`, languages, frameworks, `.cg.yaml`, then flags. `cg coverage` and `cg routes` name which presets and patterns matched. `cg config show` lists every preset value with its source.
 

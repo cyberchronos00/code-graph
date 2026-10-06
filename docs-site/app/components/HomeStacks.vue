@@ -54,7 +54,7 @@ const stacks = [
   },
   {
     title: 'Java',
-    detail: 'Plain Java. Spring support in progress.',
+    detail: 'Spring Boot',
     icons: [
       { name: 'i-simple-icons-openjdk', label: 'Java' }
     ]

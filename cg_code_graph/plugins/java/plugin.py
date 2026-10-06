@@ -18,7 +18,7 @@ wildcard import, the same package, then a method name that is unique in the proj
 five names: a candidate edge each). A known type that is not in the project is not name-matched.
 EXTENDS / IMPLEMENTS and IMPLEMENTED_BY / OVERRIDDEN_BY are heuristic too.
 
-Part B (Spring, shared with Kotlin) should read `Decl.annotations` and the same trees.
+Spring facts are extracted by ``cg_code_graph/plugins/jvm/spring.py`` from ``Decl.annotations`` and these trees.
 Part C should replace `_exact` and keep these ids. This part does not run scip-java.
 """
 from __future__ import annotations
@@ -82,12 +82,14 @@ class Decl:
     end: int
     cls: str | None = None    # enclosing type fqn
     supers: list = field(default_factory=list)
-    annotations: list = field(default_factory=list)   # (simple name, first string arg or None)
+    annotations: list = field(default_factory=list)   # (simple name, first string arg or None, raw text)
     modifiers: set = field(default_factory=set)
     types: dict = field(default_factory=dict)         # param / local / field name -> type text
     java_kind: str | None = None
     ret: str | None = None        # method return type text; None when overloads disagree
     test: bool = False
+    field_anns: dict = field(default_factory=dict)    # field name -> annotations (constructor injection uses param_anns)
+    param_anns: dict = field(default_factory=dict)    # parameter name -> annotations
 
 
 class JFile:
@@ -130,6 +132,8 @@ class JavaPlugin(LanguagePlugin):
         self.bodies: list[Decl] = []          # every method / constructor, including overloads that share an id
         self._anon_n: dict[str, int] = defaultdict(int)
         self.st: dict = defaultdict(int)
+        from ..jvm import spring as spring_mod
+        spring_mod.prepare(self, project.root)
         jfiles, failed = [], []
         errs: dict[str, list] = {}
         for rel in files:
@@ -156,6 +160,8 @@ class JavaPlugin(LanguagePlugin):
             self.cur = jf
             self._header(jf)
             self._decls(jf.tree.root_node, jf, None)
+        from ..jvm import spring as spring_mod
+        spring_mod.index_java_repos(self, jfiles)
         for jf in jfiles:
             self.cur = jf
             fid = self._file_node(jf)
@@ -175,6 +181,8 @@ class JavaPlugin(LanguagePlugin):
         self._agree_returns()
         self._resolve_calls()
         self._hierarchy()
+        from ..jvm import spring as spring_mod
+        spring_mod.finish(self, jfiles, "java")
         mode = self._exact(project, files)
         self.file_report = {"seen": [jf.rel for jf in jfiles] + failed, "parse_failed": failed, "syntax_errors": errs}
         st = dict(self.st)
@@ -258,12 +266,12 @@ class JavaPlugin(LanguagePlugin):
                   cls.fqn if cls else None, supers, anns, mods, java_kind=jk, test=jf.test)
         if c.type == "record_declaration":
             params = next((x for x in c.children if x.type == "formal_parameters"), None)
-            dc.types.update(self._params(params))
+            dc.types.update(self._params(params)[0])
         self._add_decl(dc)
         body = next((x for x in c.children if x.type in ("class_body", "interface_body", "enum_body")), None)
         if c.type == "record_declaration":
             params = next((x for x in c.children if x.type == "formal_parameters"), None)
-            for name, ty in self._params(params).items():
+            for name, ty in self._params(params)[0].items():
                 self._field_node(dc, name, ty, jf, params or c)
         if body is not None:
             self._decls(body, jf, dc, None)
@@ -315,10 +323,10 @@ class JavaPlugin(LanguagePlugin):
             return
         anns, mods = self._annotations(c)
         params = next((x for x in c.children if x.type == "formal_parameters"), None)
-        types = self._params(params)
+        types, panns = self._params(params)
         ret = self._decl_type(c) if kind == "method" else None
         dc = self._callable_decl(cls, nm, kind, c.start_point[0] + 1, c.end_point[0] + 1, jf, types, mods, anns,
-                                 ret=ret)
+                                 ret=ret, param_anns=panns)
         self._locals_into(c, dc.types)
         # local and anonymous types inside the body (`Foo.place.Local`, `Foo.place.1`)
         host = f"{cls.fqn}.{nm}" if kind == "method" else f"{cls.fqn}.init"
@@ -330,10 +338,12 @@ class JavaPlugin(LanguagePlugin):
         return f"method:{cls.fqn}.{name}"
 
     def _callable_decl(self, cls: Decl, name: str, kind: str, line: int, end: int, jf: JFile, types: dict,
-                       mods: set, anns: list, source: bool = True, ret: str | None = None) -> Decl:
+                       mods: set, anns: list, source: bool = True, ret: str | None = None,
+                       param_anns: dict | None = None) -> Decl:
         fq = f"{cls.fqn}.{name}" if kind == "method" else f"{cls.fqn}.<init>"
         dc = Decl(self._callable_id(cls, name, kind), kind, name if kind == "method" else "<init>", fq, jf.rel,
-                  line, end, cls.fqn, [], anns, mods, types=dict(types), ret=ret, test=jf.test)
+                  line, end, cls.fqn, [], anns, mods, types=dict(types), ret=ret, test=jf.test,
+                  param_anns=dict(param_anns or {}))
         self._add_decl(dc)
         if source:
             self.bodies.append(dc)
@@ -341,12 +351,15 @@ class JavaPlugin(LanguagePlugin):
 
     def _fields(self, c, jf: JFile, cls: Decl):
         ty = self._decl_type(c)
+        anns, _ = self._annotations(c)
         for d in c.children:
             if d.type != "variable_declarator":
                 continue
             nm = self._name(d)
             if nm and ty:
                 self._field_node(cls, nm, ty, jf, d)
+                if anns:
+                    cls.field_anns[nm] = anns
 
     def _field_node(self, cls: Decl, name: str, ty: str, jf: JFile, n):
         if name in self.fields[cls.fqn]:
@@ -448,6 +461,10 @@ class JavaPlugin(LanguagePlugin):
         name, recv = self._call_parts(n)
         if name:
             self.calls.append((owner, name, recv, n.start_point[0] + 1, jf, decl))
+            from ..jvm import spring as spring_mod
+            rtext = self.t(recv) if recv is not None else None
+            spring_mod.observe_call(self, owner, name, rtext, self._call_strings(n), self.t(n),
+                                    n.start_point[0] + 1, jf.rel, decl, bool(decl.test) if decl is not None else jf.test)
         for c in n.children:
             if c.type == "argument_list" or (recv is not None and c == recv):
                 self._refs(c, owner, decl, jf)
@@ -492,8 +509,11 @@ class JavaPlugin(LanguagePlugin):
         return None, None
 
     def _resolve_calls(self):
+        from ..jvm import spring as spring_mod
         for owner, name, recv, line, jf, decl in self.calls:
             self.cur = jf
+            rtext = self.t(recv) if recv is not None else None
+            spring_mod.repository_access(self, owner, name, rtext, line, jf.rel, decl)
             self._how = None
             targets = self._targets(name, recv, jf, decl)
             if not targets:
@@ -813,13 +833,13 @@ class JavaPlugin(LanguagePlugin):
                     arg = None
                     stack = list(m.children)
                     while stack:
-                        x = stack.pop()
+                        x = stack.pop(0)
                         if x.type == "string_literal":
                             raw = self.t(x)
                             arg = raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'" else raw
                             break
-                        stack.extend(x.children)
-                    anns.append((nm.split(".")[-1], arg))
+                        stack[0:0] = list(x.children)
+                    anns.append((nm.split(".")[-1], arg, self.t(m)))
         return anns, mods
 
     def _supers(self, n) -> list[str]:
@@ -875,14 +895,36 @@ class JavaPlugin(LanguagePlugin):
                 return self.t(c)
         return None
 
-    def _params(self, n) -> dict:
-        out = {}
+    def _params(self, n) -> tuple[dict, dict]:
+        out, anns = {}, {}
         for p in (n.children if n is not None else []):
             if p.type in ("formal_parameter", "spread_parameter"):
                 nm = self._name(p)
                 ty = self._decl_type(p)
                 if nm and ty:
                     out[nm] = ty
+                    pa, _ = self._annotations(p)
+                    if pa:
+                        anns[nm] = pa
+        return out, anns
+
+    def _call_strings(self, n) -> list[str]:
+        """String literals that are direct arguments of this call (a nested call keeps its own)."""
+        out = []
+        for c in n.children:
+            if c.type != "argument_list":
+                continue
+            stack = list(c.children)
+            while stack:
+                x = stack.pop(0)
+                if x.type == "string_literal":
+                    raw = self.t(x)
+                    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+                        out.append(raw[1:-1])
+                elif x.type == "method_invocation":
+                    continue
+                else:
+                    stack[0:0] = list(x.children)
         return out
 
     def _locals_into(self, fn, types: dict):
@@ -908,7 +950,7 @@ class JavaPlugin(LanguagePlugin):
             elif n.type == "lambda_expression":
                 params = next((c for c in n.children if c.type == "formal_parameters"), None)
                 if params is not None:
-                    for k, v in self._params(params).items():
+                    for k, v in self._params(params)[0].items():
                         types.setdefault(k, v)
             stack.extend(n.children)
 

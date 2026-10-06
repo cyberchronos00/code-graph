@@ -178,7 +178,9 @@ def scan_tree(root: str | Path, rules=None, classifier=None) -> Scan:
                 sc.counts[ext] += 1
                 if ext in _SUPPORTED_EXTS:
                     sc.paths.setdefault(ext, []).append(rel_dir + fn)
-                elif ext in (".java", ".m", ".mm"):
+                # .java is a language plugin and still a bridge receiver source (Android
+                # @CapacitorPlugin / @ReactMethod). .m / .mm stay bridge-only until they have one.
+                if ext == ".java" or (ext in (".m", ".mm") and ext not in _SUPPORTED_EXTS):
                     sc.bridge_paths.append(rel_dir + fn)
             elif not fn.startswith(".") and is_real_file(p):
                 lang = _shebang(p)

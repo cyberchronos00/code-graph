@@ -17,7 +17,7 @@ public class BookController {
         this.books = books;
     }
 
-    @GetMapping("/")
+    @GetMapping
     public Iterable<Book> list() {
         return books.findAll();
     }
@@ -32,7 +32,7 @@ public class BookController {
         return books.isAvailable(id);
     }
 
-    @PostMapping("/")
+    @PostMapping
     @PreAuthorize("hasRole('ADMIN')")
     public Book create(Book book) {
         return books.save(book);

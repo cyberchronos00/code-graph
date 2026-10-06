@@ -55,20 +55,12 @@ VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
 KTOR_WS = {"webSocket", "webSocketRaw"}                       # Ktor server `webSocket("/chat") { }` -> route:WS (#32)
 KTOR_WS_CLIENT = {"webSocket", "ws", "wss", "webSocketSession", "webSocketRaw", "wsRaw", "wssRaw"}
 RETROFIT = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
-SPRING_MAP = {"GetMapping": "GET", "PostMapping": "POST", "PutMapping": "PUT", "DeleteMapping": "DELETE",
-              "PatchMapping": "PATCH", "RequestMapping": None}
-# Spring Data repository interfaces (`interface OwnerRepository : JpaRepository<Owner, Int>`) and Exposed tables
-# (`object Users : IntIdTable("users")`): calls on them read / write the table
-REPO_SUPERS = r"(?:Jpa|Crud|ListCrud|PagingAndSorting|ListPagingAndSorting|CoroutineCrud|CoroutineSorting|ReactiveCrud|" \
-              r"ReactiveSorting|R2dbc|Mongo|ReactiveMongo|Kotlin)?Repository"
+# Exposed tables (`object Users : IntIdTable("users")`): calls on them read / write the table.
+# Spring Data repositories and filter chains live in plugins/jvm/spring.py, shared with Java.
 EXPOSED_TABLES = r"(?:Table|IdTable|IntIdTable|LongIdTable|UUIDTable|UIntIdTable|ULongIdTable|CompositeIdTable)"
 DATA_WRITE = re.compile(r"^(save|delete|remove|insert|update|upsert|batchInsert|batchUpsert|replace|persist|merge|"
                         r"flush|truncate)")
 DATA_READ = re.compile(r"^(find|get|read|query|search|stream|count|exists|select|selectAll|all|slice|fetch|load)")
-# Spring Security SecurityFilterChain rules: requestMatchers("/admin/**").hasRole("ADMIN") / Kotlin DSL authorize(...)
-SEC_AUTH = r"(hasRole|hasAnyRole|hasAuthority|hasAnyAuthority|authenticated|fullyAuthenticated|permitAll|denyAll|access)"
-SPRING_GUARDS = {"PreAuthorize", "Secured", "RolesAllowed", "PostAuthorize"}
-LISTENERS = {"KafkaListener", "RabbitListener", "JmsListener", "SqsListener", "EventListener", "StreamListener"}
 WORKER_BASES = {"Worker", "CoroutineWorker", "ListenableWorker", "RxWorker", "JobService", "JobIntentService"}
 LIFECYCLE = re.compile(r"^(on[A-Z]\w*|doWork|startWork|createWork|query|insert|update|delete|getType)$")
 TEST_ANNOTATIONS = {"Test", "ParameterizedTest", "RepeatedTest", "TestFactory", "TestTemplate"}
@@ -333,6 +325,8 @@ class KotlinPlugin(LanguagePlugin):
         self.api_base: dict[str, set] = defaultdict(set)    # Retrofit interface short name -> base URLs it is built with
         self.build_config = self._build_config(project.root, files)
         self.st = defaultdict(int)
+        from ..jvm import spring as spring_mod
+        spring_mod.prepare(self, project.root)
         self.values: dict[str, dict[str, str]] = defaultdict(dict)   # owner fqn / pkg:<package> -> name -> id
         self.value_fq: dict[str, str] = {}                           # fqn -> id (imports name them)
         self.const_str: dict[str, tuple] = {}     # constant id -> (string literal source, KFile, owner Decl) (#67)
@@ -385,7 +379,8 @@ class KotlinPlugin(LanguagePlugin):
                 self._mark_platform(kf)
         self._resolve_calls()
         self._hierarchy()
-        self._security_rules(kfiles)
+        from ..jvm import spring as spring_mod
+        spring_mod.finish(self, kfiles, "kotlin")
         self._emit_http()
         self._link_navs()
         self._manifests(project)
@@ -919,14 +914,8 @@ class KotlinPlugin(LanguagePlugin):
         self._decl_facts(d)
 
     def _decl_facts(self, d: Decl):
-        names = {a[0] for a in d.annotations}
-        if d.kind != "class":
-            if "Scheduled" in names:
-                self.b.nodes[d.id].entry_kind = "scheduled"
-                self.st["scheduled"] += 1
-            elif names & LISTENERS:
-                self.b.nodes[d.id].entry_kind = "listener"
-                self.st["listeners"] += 1
+        from ..jvm import spring as spring_mod
+        spring_mod.mark_entry(self, d)
 
     # ------------------------------------------------------------------ pass 2
     def _owner_at(self, kf: KFile, line: int) -> Decl | None:
@@ -1015,6 +1004,9 @@ class KotlinPlugin(LanguagePlugin):
             return False
         sarg = self._first_string(args)
         rtext = self.t(recv) if recv is not None else None
+        from ..jvm import spring as spring_mod
+        spring_mod.observe_call(self, owner, name, rtext, [sarg] if sarg else [], self.t(c), line, kf.rel, decl,
+                                bool(decl.test) if decl is not None else kf.test)
         # ---- Ktor server routing
         if lam is not None and recv is None:
             if name == "routing":
@@ -1331,38 +1323,8 @@ class KotlinPlugin(LanguagePlugin):
                     self.http.append({"src": d.id, "method": m.group(1).upper(), "url": template('"' + pm.group(1) + '"'),
                                       "client": "retrofit", "file": d.file, "line": d.line, "relative": True,
                                       "iface": (d.cls or "").split(".")[-1]})
-        # Spring MVC / WebFlux annotations
-        if cls is not None and any(nm in SPRING_MAP for nm in anns):
-            canns = {a[0]: a for a in cls.annotations}
-            if not ({"RestController", "Controller"} & set(canns)) and "RequestMapping" not in canns:
-                return
-            prefix = self._mapping_path(canns.get("RequestMapping"))
-            guards = [self._guard(a) for nm2, a in canns.items() if nm2 in SPRING_GUARDS]
-            guards += [self._guard(a) for nm2, a in anns.items() if nm2 in SPRING_GUARDS]
-            for nm, a in anns.items():
-                if nm not in SPRING_MAP:
-                    continue
-                verbs = [SPRING_MAP[nm]] if SPRING_MAP[nm] else (re.findall(r"RequestMethod\.(\w+)", a[2]) or ["ANY"])
-                paths = self._mapping_paths(a)
-                for v in verbs:
-                    for p in paths:
-                        uri = join_path(prefix or "", p) if (prefix or p) else "/"
-                        self._route(v, uri, d.id, d.file, d.line, "spring", guards, EXACT)
-
-    def _mapping_paths(self, a) -> list[str]:
-        if a is None:
-            return [""]
-        inner = a[2][a[2].find("(") + 1:a[2].rfind(")")] if "(" in a[2] else ""
-        m = re.search(r"(?:value|path)\s*=\s*(\[[^\]]*\]|arrayOf\([^)]*\)|\"[^\"]*\")", inner)
-        part = m.group(1) if m else (inner if inner and not re.match(r"\s*\w+\s*=", inner) else "")
-        ps = re.findall(r'"((?:[^"\\]|\\.)*)"', part)
-        return ps or [""]
-
-    def _mapping_path(self, a) -> str:
-        return self._mapping_paths(a)[0] if a is not None else ""
-
-    def _guard(self, a) -> str:
-        return f"{a[0]}({a[1]})" if a[1] is not None else a[0]
+        from ..jvm import spring as spring_mod
+        spring_mod.method_route(self, d, "kotlin")
 
     def _route(self, method: str, uri: str, handler: str | None, file: str, line: int, fw: str, guards: list,
                conf: str) -> str:
@@ -2219,29 +2181,17 @@ class KotlinPlugin(LanguagePlugin):
 
     # ------------------------------------------------------------------ Spring Data / Exposed tables
     def _data_models(self, kfiles: list[KFile]):
-        self.repos: dict[str, str] = {}       # repository interface short name -> table
         self.exposed: dict[str, str] = {}     # Exposed table object short name -> table
-        rx_repo = re.compile(r"\binterface\s+(\w+)\s*(?:<[^>{]*>)?\s*:[^{]*?\b" + REPO_SUPERS + r"\s*<\s*([\w.]+)")
         rx_tab = re.compile(r"\bobject\s+(\w+)\s*:\s*(?:[\w.]+\.)?" + EXPOSED_TABLES + r"(?:<[^>]*>)?\s*\(\s*(?:name\s*=\s*)?"
                             r"(\"[^\"]*\")?")
         for kf in kfiles:
             txt = kf.src.decode("utf-8", "replace")
-            if "Repository" in txt:
-                for m in rx_repo.finditer(txt):
-                    self.repos[m.group(1)] = self._entity_table(m.group(2).split(".")[-1], kf)
             if "Table" in txt and "exposed" in txt:
                 for m in rx_tab.finditer(txt):
                     name = m.group(2).strip('"') if m.group(2) else re.sub(r"Table$", "", m.group(1))
                     self.exposed[m.group(1)] = name or m.group(1)
-
-    def _entity_table(self, entity: str, kf: KFile) -> str:
-        """@Table(name = "owners") on the entity, else Spring Boot's default naming (CamelCase -> snake_case)."""
-        cls = self._class_of(entity, kf)
-        if cls is not None:
-            ann = next((a for a in cls.annotations if a[0] in ("Table", "Document")), None)
-            if ann is not None and ann[1]:
-                return ann[1]
-        return re.sub(r"(?<!^)(?=[A-Z])", "_", entity).lower()
+        from ..jvm import spring as spring_mod
+        spring_mod.index_kotlin_repos(self, kfiles)
 
     def _table(self, name: str, via: str) -> str:
         tid = self.b.add_node("table", name, lang="sql", attrs={"inferred": True, "via": via})
@@ -2259,148 +2209,8 @@ class KotlinPlugin(LanguagePlugin):
                             via=f"exposed {name}")
             self.st["table_access_exposed"] += 1
             return
-        repo = None
-        if recv is None or recv == "this":
-            if decl is not None and decl.cls and decl.cls.split(".")[-1] in self.repos:   # default method of the repo
-                repo = decl.cls.split(".")[-1]
-        else:
-            cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
-            ty = decl.types.get(rname) if decl is not None else None
-            if ty is None and cls is not None:
-                ty = self._field_type(cls, rname)
-            ty = (ty or "").split(".")[-1].split("<")[0].rstrip("?")
-            if ty in self.repos:
-                repo = ty
-        if repo is not None:                                            # owners.findById(id) on an OwnerRepository
-            self.b.add_edge(owner, self._table(self.repos[repo], "spring-data"), kind, kf.rel, line, RESOLVED,
-                            via=f"{repo}.{name}")
-            self.st["table_access_spring_data"] += 1
-
-    # ------------------------------------------------------------------ Spring Security
-    def _security_rules(self, kfiles: list[KFile]):
-        """URL rules of SecurityFilterChain beans (`requestMatchers("/admin/**").hasRole("ADMIN")`, Kotlin DSL
-        `authorize("/admin/**", hasRole("ADMIN"))`), first match wins, as guards on the Spring routes they cover.
-        With several chains (#99), a request goes to the first chain, by `@Order` then declaration order, whose
-        `securityMatcher(...)` matches it (a chain without one matches every request); only that chain's rules apply.
-        A chain whose matcher is not a literal pattern (a `RequestMatcher` bean) is not applied to any route."""
-        rx_chain = re.compile(r"\b(?:requestMatchers|antMatchers|mvcMatchers|pathMatchers)\s*\(([^()]*)\)\s*\.\s*"
-                              + SEC_AUTH + r"\s*\(([^()]*)\)")
-        rx_dsl = re.compile(r"\bauthorize\s*\(\s*(?:HttpMethod\.(\w+)\s*,\s*)?(\"[^\"]*\"|anyRequest)\s*,\s*"
-                            + SEC_AUTH + r"\b(?:\s*\(([^()]*)\))?")
-        rx_any = re.compile(r"\banyRequest\s*\(\s*\)\s*\.\s*" + SEC_AUTH + r"\s*\(([^()]*)\)")
-        rx_fun = re.compile(r"\bfun\s+(\w+)\s*\([^()]*\)\s*:\s*Security(?:Web)?FilterChain\b\s*([{=])")
-        rx_matcher = re.compile(r"\bsecurityMatchers?\s*(?:\(([^()]*(?:\([^()]*\)[^()]*)*)\)|\{([^{}]*)\})")
-        rx_order = re.compile(r"@Order\s*\(\s*(?:value\s*=\s*)?(-?\d+|Ordered\.(HIGHEST|LOWEST)_PRECEDENCE)(?:\s*([+-])\s*(\d+))?\s*\)")
-        lowest = 2 ** 31 - 1
-        chains = []
-        for kf in kfiles:
-            txt = kf.src.decode("utf-8", "replace")
-            if "SecurityFilterChain" not in txt and "SecurityWebFilterChain" not in txt:
-                continue
-            spans = []
-            for m in rx_fun.finditer(txt):
-                if m.group(2) == "{":
-                    depth, i = 0, m.end() - 1
-                    while i < len(txt):
-                        if txt[i] == "{":
-                            depth += 1
-                        elif txt[i] == "}":
-                            depth -= 1
-                            if depth == 0:
-                                break
-                        i += 1
-                    end = i
-                else:
-                    nxt = re.compile(r"\n\s*(?:@\w+[^\n]*\n\s*)*(?:(?:private|public|internal|open|override)\s+)*fun\b").search(txt, m.end())
-                    end = nxt.start() if nxt else len(txt)
-                head = txt[max(0, m.start() - 300):m.start()]
-                head = head[head.rfind("}") + 1:]                  # annotations of this function only
-                om = None
-                for om in rx_order.finditer(head):
-                    pass
-                order = lowest
-                if om:
-                    base = (-2 ** 31 if om.group(2) == "HIGHEST" else lowest) if om.group(2) else int(om.group(1))
-                    if om.group(3):
-                        base = base + int(om.group(4)) if om.group(3) == "+" else base - int(om.group(4))
-                    order = base
-                spans.append((m.start(), end, order))
-            if not spans:
-                spans = [(0, len(txt), lowest)]                   # rules outside a recognisable bean function
-            for start, end, order in spans:
-                body = txt[start:end]
-                matchers = None
-                mm = rx_matcher.search(body)
-                if mm:
-                    lits = re.findall(r'"([^"]*)"', mm.group(1) or mm.group(2) or "")
-                    matchers = [self._ant(x) for x in lits] if lits else []
-                found = []
-                for m in rx_chain.finditer(body):
-                    meth = re.search(r"HttpMethod\.(\w+)", m.group(1))
-                    pats = re.findall(r'"([^"]*)"', m.group(1))
-                    found.append((m.start(), meth.group(1).upper() if meth else None, pats, m.group(2), m.group(3)))
-                for m in rx_dsl.finditer(body):
-                    pats = ["/**"] if m.group(2) == "anyRequest" else [m.group(2).strip('"')]
-                    found.append((m.start(), (m.group(1) or "").upper() or None, pats, m.group(3), m.group(4) or ""))
-                for m in rx_any.finditer(body):
-                    found.append((m.start(), None, ["/**"], m.group(1), m.group(2)))
-                rules = []
-                for _, meth, pats, auth, arg in sorted(found, key=lambda x: x[0]):
-                    roles = ",".join(re.findall(r'"([^"]*)"', arg))
-                    g = None if auth == "permitAll" else (f"{auth}({roles})" if roles else auth)
-                    rules.append((meth, [self._ant(p) for p in pats if p], g))
-                if rules or matchers is not None:
-                    chains.append((order, kf.rel, start, matchers, rules))
-        if not chains:
-            return
-        chains.sort(key=lambda c: (c[0], c[1], c[2]))
-        self.st["security_rules"] = sum(len(c[4]) for c in chains)
-        if len(chains) > 1:
-            self.st["security_chains"] = len(chains)
-        if any(c[3] == [] for c in chains):
-            self.st["security_chains_unknown_matcher"] = sum(1 for c in chains if c[3] == [])
-        for nid, n in self.b.nodes.items():
-            if n.kind != "route" or n.lang != "kotlin" or n.attrs.get("framework") != "spring":
-                continue
-            uri, meth = n.attrs.get("uri", ""), n.attrs.get("method")
-            probe = re.sub(r"\{\w+\}", "x", uri)
-            chain = next((c for c in chains if c[3] is None or any(r.fullmatch(probe) for r in c[3])), None)
-            if chain is None:
-                continue
-            for rm, rxs, g in chain[4]:
-                if rm and rm != meth:
-                    continue
-                if any(r.fullmatch(probe) for r in rxs):
-                    if g:
-                        mw = n.attrs.setdefault("middleware", [])
-                        if g not in mw:
-                            mw.append(g)
-                        n.attrs.setdefault("security", f"SecurityFilterChain ({chain[1]})")
-                        self.st["routes_guarded_by_security_chain"] += 1
-                    break
-
-    @staticmethod
-    def _ant(p: str):
-        """Spring path pattern -> regex: `**` any depth, `*` one segment part, `{x}` one segment."""
-        out, i = "", 0
-        while i < len(p):
-            if p.startswith("/**", i):
-                out += r"(?:/.*)?"
-                i += 3
-            elif p.startswith("**", i):
-                out += r".*"
-                i += 2
-            elif p[i] == "*":
-                out += r"[^/]*"
-                i += 1
-            elif p[i] == "{":
-                j = p.find("}", i)
-                out += r"[^/]+"
-                i = j + 1 if j > 0 else len(p)
-            else:
-                out += re.escape(p[i])
-                i += 1
-        return re.compile(out)
+        from ..jvm import spring as spring_mod
+        spring_mod.repository_access(self, owner, name, recv, line, kf.rel, decl)
 
     def _emit_http(self):
         bases = sorted(self.base_urls)

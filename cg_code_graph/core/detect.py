@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
+
+from ..presets import skip_dirs
 
 MARKERS = {
     # language: files/globs that indicate it
@@ -80,4 +83,34 @@ def detect(root: Path) -> dict:
                 fw[extra] = {}
     if "typescript" in deps:
         langs.setdefault("typescript", ["package.json:typescript"])
+    if _spring_build(root):
+        fw["spring"] = {}
     return {"languages": langs, "frameworks": fw}
+
+
+def _spring_build(root: Path) -> bool:
+    """Spring Boot Gradle plugin or a ``spring-boot-starter-*`` dependency in Gradle / Maven files.
+
+    The root build file and one module level (``app/build.gradle.kts``). Deeper trees stay out so a
+    monorepo's example apps do not mark the repository root.
+    """
+    names = {"build.gradle", "build.gradle.kts", "pom.xml"}
+    rx = re.compile(r"org\.springframework\.boot|spring-boot-starter(?:-[\w.-]+)?")
+    skip = skip_dirs("common") | skip_dirs("common", "scan_skip_dirs")
+    for dp, dn, fn in os.walk(root):
+        rel = os.path.relpath(dp, root)
+        depth = 0 if rel == "." else len(Path(rel).parts)
+        if depth > 1:
+            dn[:] = []
+            continue
+        dn[:] = [d for d in dn if d not in skip and not d.startswith(".")]
+        for name in fn:
+            if name not in names:
+                continue
+            try:
+                text = (Path(dp) / name).read_text(errors="replace")[:200_000]
+            except OSError:
+                continue
+            if rx.search(text):
+                return True
+    return False
