@@ -19,6 +19,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
   line and `stale: true` when the tree changed since the graph was built (cached for 5s).
   A database that lives inside the checkout, and its refresh sidecars, no longer keep
   `cg refresh` from reporting `up to date`.
+- `cg affected` (#121, part 1): changed files, or only the touched lines (`--base`), map to the
+  innermost symbol and then to the tests and entry points that reach it. `--quiet` prints test
+  files for a runner. MCP tool `affected`. A file or module spec in `cg tests` covers every
+  symbol defined in that file.
 
 ## [0.13.0] - 2026-10-05
 

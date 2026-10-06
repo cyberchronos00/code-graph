@@ -201,6 +201,18 @@ def main(argv=None):
     p.add_argument("--unit-only", action="store_true", help="leave out UI / snapshot / screenshot tests")
     p.add_argument("--exclude-root", action="append", default=[], help="a symbol transitive paths must not run through (repeatable)")
     p.add_argument("--through-roots", action="store_true", help="keep paths through app entry points (@main, App.body, MainActivity)")
+    p = sub.add_parser("affected", help="tests and entry points a change reaches (whole files, or the touched lines with --base)")
+    p.add_argument("files", nargs="*", help="changed files (whole file). With --base, only these paths are read from the diff")
+    p.add_argument("--db", required=True)
+    p.add_argument("--base", "--git-diff", dest="base", help="git revision; only the touched lines (alias --git-diff)")
+    p.add_argument("--stdin", action="store_true", help="read one changed path per line from stdin")
+    p.add_argument("--root", help="project root for git and relative paths (default: the indexed root, else cwd)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--quiet", action="store_true", help="print test file paths only, one per line")
+    p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
+    p.add_argument("--max-depth", type=int, default=3, help="transitive tests at most N hops from the target (0: any depth)")
+    p.add_argument("--unit-only", action="store_true", help="leave out UI / snapshot / screenshot tests")
+    p.add_argument("--max-targets", type=int, default=200, help="walk at most N changed symbols (0: no cap)")
     p = sub.add_parser("parity", help="port gap report: types, functions, enum cases and constants of --db with no "
                                        "counterpart in --against (e.g. an iOS app and its Android port)")
     p.add_argument("--db", required=True, help="source graph"); p.add_argument("--against", required=True, help="target graph")
@@ -532,6 +544,33 @@ def main(argv=None):
         res["completeness"] = _completeness(st, res.get("targets"))
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_tests_covering(res, show_paths=not a.no_paths))
         _note(res["completeness"], a.json)
+        return
+    if a.cmd == "affected":
+        from .affected import affected, file_changes, git_changes, render_affected, render_quiet
+        paths = list(a.files or [])
+        if a.stdin:
+            paths += [ln.strip() for ln in sys.stdin.read().splitlines() if ln.strip()]
+        if not paths and not a.base:
+            print("cg affected: pass FILES, --base, or --stdin", file=sys.stderr)
+            return 2
+        root = a.root or (st.meta() or {}).get("root") or os.getcwd()
+        try:
+            changes = git_changes(root, a.base, paths or None) if a.base else file_changes(paths, root)
+        except ValueError as ex:
+            print(f"cg affected: {ex}", file=sys.stderr)
+            return 2
+        res = affected(st, changes, min_conf=a.min_confidence, near_depth=a.max_depth or None,
+                       unit_only=a.unit_only, max_targets=a.max_targets, base=a.base)
+        if a.json:
+            res["completeness"] = _completeness(st, res.get("targets"))
+            print(json.dumps(res, indent=1, default=str))
+        elif a.quiet:
+            quiet_out = render_quiet(res)
+            if quiet_out:           # no tests: print nothing, not a blank line
+                print(quiet_out)
+        else:
+            print(render_affected(res))
+            _note(_completeness(st, res.get("targets")), False)
         return
     if a.cmd == "search":
         res = Q.search(st, a.name, kind=a.kind, limit=a.limit, platform=a.platform)

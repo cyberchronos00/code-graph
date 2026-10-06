@@ -2210,14 +2210,92 @@ def app_roots(st: GraphStore, extra: list[str] | None = None, defaults: bool = T
     return ids
 
 
+def file_symbols(st: GraphStore, path: str, ranges: list[tuple[int, int]] | None = None) -> list[str]:
+    """Symbol nodes defined in `path` (exact `file`, or a `repo/`-prefixed path in a combined graph).
+    `module` and `file` nodes are left out. `ranges` is 1-based inclusive `(start, end)` pairs: only nodes
+    overlapping a range stay, and a node whose span strictly contains another kept node is dropped (the
+    innermost symbol, not the class around it). A node without `end_line` overlaps only its own line."""
+    rows = st.q("SELECT id, line, end_line FROM nodes WHERE file=? AND kind NOT IN ('module', 'file') "
+                "AND line IS NOT NULL ORDER BY line, id", (path,))
+    if not rows and "/" in path:
+        rows = st.q("SELECT id, line, end_line FROM nodes WHERE file LIKE ? ESCAPE '\\' "
+                    "AND kind NOT IN ('module', 'file') AND line IS NOT NULL ORDER BY line, id",
+                    ("%/" + _like(path),))
+    if ranges is not None:
+        def span(r):
+            line = r["line"]
+            return line, (r["end_line"] if r["end_line"] is not None else line)
+
+        kept = []
+        for r in rows:
+            a, b = span(r)
+            if any(a <= rb and b >= ra for ra, rb in ranges):
+                kept.append(r)
+        spans = [span(r) for r in kept]
+        rows = []
+        for i, r in enumerate(kept):
+            a, b = spans[i]
+            inner = sorted(spans[j] for j in range(len(kept))
+                           if i != j and a <= spans[j][0] and b >= spans[j][1] and (a, b) != spans[j])
+            # each touched line belongs to the innermost symbol around it: keep this node when one of its
+            # touched lines lies outside every narrower kept node (a class-level line, not only its methods)
+            if not inner or any(_uncovered(max(a, ra), min(b, rb), inner) for ra, rb in ranges if ra <= b and rb >= a):
+                rows.append(r)
+    return [r["id"] for r in rows]
+
+
+def _uncovered(lo: int, hi: int, spans: list[tuple[int, int]]) -> bool:
+    """True when some line in lo..hi is in none of the sorted inclusive `spans`."""
+    pos = lo
+    for c, d in spans:
+        if c > pos:
+            break
+        pos = max(pos, d + 1)
+        if pos > hi:
+            return False
+    return pos <= hi
+
+
+def _expand_file_targets(st: GraphStore, targets: list[str]) -> tuple[list[str], dict | None]:
+    """A spec that resolved only to module / file nodes covers every symbol in those files."""
+    if not targets:
+        return targets, None
+    info = {}
+    for i in range(0, len(targets), 500):
+        chunk = targets[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for r in st.q(f"SELECT id, kind, file FROM nodes WHERE id IN ({q})", chunk):
+            info[r["id"]] = (r["kind"], r["file"])
+    if any(info.get(t, (None, None))[0] not in ("module", "file") for t in targets):
+        return targets, None
+    files, extra, seen = [], [], set(targets)
+    for t in targets:
+        f = info.get(t, (None, None))[1]
+        if not f:
+            continue
+        if f not in files:
+            files.append(f)
+        for sid in file_symbols(st, f):
+            if sid not in seen:
+                seen.add(sid)
+                extra.append(sid)
+    return targets + extra, {"files": files, "symbols": len(extra)}
+
+
 def tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, near_depth: int | None = 3,
-                   unit_only=False, exclude_roots: list[str] | None = None, through_roots=False) -> dict:
+                   unit_only=False, exclude_roots: list[str] | None = None, through_roots=False,
+                   targets: list[str] | None = None) -> dict:
     """Tests that exercise a symbol / route / table...: direct (the test code itself calls / requests it) and
     transitive (through application code: test -> route -> controller -> service -> target). An inherited
     `Sub.method` spec leaves out the calls whose receiver cannot be a Sub (narrow_inherited).
     Transitive results are kept near the target (#87): at most `near_depth` hops (None: any), not through an app
     root (`@main`, `App.body`, `MainActivity`, `exclude_roots`; `through_roots` keeps those), and UI / snapshot tests
-    in their own `ui` list (`unit_only` drops it). What is left out is counted in `omitted`."""
+    in their own `ui` list (`unit_only` drops it). What is left out is counted in `omitted`.
+    `targets`: already-resolved node ids. Spec resolution, override narrowing and inherited specs are skipped;
+    the ids are still passed to override_seeds."""
+    if targets is not None:
+        res = _tests_covering(st, spec, min_conf, max_depth, targets=targets)
+        return _split_tests(st, res, near_depth, unit_only, exclude_roots, through_roots)
     ob = override_bases(st, spec)
     with narrowed(st, inherited_targets(st, spec) + ob):
         res = _tests_covering(st, spec, min_conf, max_depth)
@@ -2274,15 +2352,20 @@ def _split_tests(st, res, near_depth, unit_only, exclude_roots, through_roots) -
     return res
 
 
-def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30) -> dict:
+def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30,
+                    targets: list[str] | None = None) -> dict:
     from .core.model import TEST_EDGE_KINDS
-    targets = route_targets(st, spec) or resolve_targets(st, spec)
+    given = targets is not None
+    expanded = None
+    if not given:
+        targets = route_targets(st, spec) or resolve_targets(st, spec)
+        targets, expanded = _expand_file_targets(st, targets)
     # a cross-repo hop (frontend http call -> backend route) is still the test's own request
     tk = list(TEST_EDGE_KINDS) + ["MATCHES_ROUTE"]
     si = _has_class_target(targets)
     # a base / interface method: the tests of its overrides exercise it too (calls through a collection or a
     # base-typed value land on the overrides), as in impact; they are marked via_override
-    below = override_seeds(st, spec, targets, min_conf)
+    below = override_seeds(st, targets if given else spec, targets, min_conf)
     seeds = targets + below
     direct = reverse_closure(st, seeds, kinds=tk, min_conf=min_conf, max_depth=max_depth, seed_inst=si)
     allk = CALL_LIKE + tk
@@ -2304,9 +2387,12 @@ def _tests_covering(st: GraphStore, spec: str, min_conf="heuristic", max_depth=3
     dpaths = shortest_paths(st, {k: v for k, v in direct.items()}, kinds=tk, min_conf=min_conf, seed_inst=si)
     tpaths = shortest_paths(st, trans, kinds=allk, min_conf=min_conf, seed_inst=si)
     out = {"targets": targets, "direct": [], "transitive": []}
-    inh = inherited_targets(st, spec)
-    if inh:
-        out["inherited"] = inh
+    if expanded:
+        out["expanded"] = expanded
+    if not given:
+        inh = inherited_targets(st, spec)
+        if inh:
+            out["inherited"] = inh
     for tid, t in sorted(tests.items(), key=lambda x: (x[1]["file"] or "", x[1]["line"] or 0)):
         a = json.loads(t["attrs"] or "{}")
         it = {"test": tid, "name": t["name"], "framework": a.get("framework"), "file": t["file"], "line": t["line"]}
@@ -2355,6 +2441,9 @@ def render_tests_covering(res: dict, show_paths=True, limit=60) -> str:
          + (" ..." if len(res["targets"]) > 6 else "")]
     if not res["targets"]:
         return L[0] + "\n(nothing matched the spec)"
+    exp = res.get("expanded")
+    if exp:
+        L.append(f"file spec: {exp.get('symbols', 0)} symbols in {', '.join(exp.get('files') or [])}")
     st = res["stats"]
     fws = st.get("tests_by_framework") or {}
     per = (": " + ", ".join(f"{k} {v}" for k, v in fws.items())) if fws else ""

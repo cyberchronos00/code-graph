@@ -19,6 +19,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `external_systems`: External systems the code connects to (#40): databases, caches, brokers, mail relays, directories, file-transfer
 - `llm_tools`: LLM tools and MCP primitives (#66): tools offered to a model (OpenAI / Anthropic schema literals, LangChain @tool /
 - `tests_covering`: Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
+- `affected`: Tests and entry points a change reaches. files are whole repo-relative paths; base is a git
 - `node`: Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
 - `snippet`: Source of one symbol: a `path:start-end` header then the body with line numbers. Resolves a
 - `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind

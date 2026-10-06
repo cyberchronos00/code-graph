@@ -72,7 +72,7 @@ Without `--no-source` the auth callback source is printed under WHO CAN JOIN. MC
 Each test case is a `test:` node (`entry_kind` `test`). Edges from test code are rewritten so
 tests never count as callers and never widen `reaches`, `impact`, `writers`, `routes` or
 entry tagging. An app a TypeScript test builds for itself (`express()` inside `*.spec.ts`,
-`test/` or `__tests__/`) never becomes a `route:`.
+`test/` or `__tests__/`) never becomes a `route:`. A file or module spec covers every symbol defined in that file; [CLI reference](cli.md#affected) maps a changed file, or only its touched lines, to the tests and entry points that reach them.
 
 | language | what counts |
 |---|---|

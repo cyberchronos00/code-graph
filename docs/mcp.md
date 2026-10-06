@@ -34,6 +34,7 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 | `llm_tools` | LLM and MCP tools, resources and prompts ([AI tools](ai-tools.md)) |
 | `external_systems` | databases, caches, brokers and other hosts ([External systems](external.md)) |
 | `tests_covering` | tests that reach a symbol, route or table |
+| `affected` | tests and entry points reached by changed files or a git diff ([CLI reference](cli.md#affected)) |
 | `resolutions` | where a concept's value is decided ([Value facts](value-facts.md)) |
 | `plan_list` `plan_load` `plan_validate` `plan_baseline` | plan files under the plans directory |
 | `plan_check` | compact plan report; `details=true` adds file:line and chains |

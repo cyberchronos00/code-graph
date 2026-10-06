@@ -84,6 +84,31 @@ catalog/api.py:26-28
 
 Every edge carries `exact`, `resolved` or `heuristic`. `--min-confidence resolved` hides guesses. See [CLI reference](cli.md) and [Query targets (specs)](cli.md#query-targets-specs).
 
+### Tests a change affects
+
+`cg affected catalog/api.py --db out/api.db` on that index (`cg index examples/bookstore-django --name bookstore-django --db out/api.db`):
+
+```text
+changed: 1 file, 12 symbols
+M catalog/api.py  12 symbols
+
+tests: 3 (3 direct, 0 transitive, 0 UI, 0 changed) in 1 file
+catalog/tests/test_api.py
+  test_list_books [pytest] :7  direct  via route:GET /api/books/
+  test_book_endpoints [pytest] :13  direct  via route:GET /api/books/{book_id}/
+  test_order_needs_token [pytest] :18  direct  via route:POST /api/orders/
+
+entry points: 6
+  http_route  GET /api/books/  (catalog/api.py:15)  via route:GET /api/books/
+  http_route  GET /api/books/{book_id}/  (catalog/api.py:20)  via route:GET /api/books/{book_id}/
+  http_route  GET /api/books/{book_id}/availability/  (catalog/api.py:31)  via route:GET /api/books/{book_id}/availability/
+  http_route  GET /api/orders/{order_id}/  (catalog/api.py:49)  via route:GET /api/orders/{order_id}/
+  http_route  POST /api/books/  (catalog/api.py:25)  via route:POST /api/books/
+  http_route  POST /api/orders/  (catalog/api.py:37)  via route:POST /api/orders/
+```
+
+`--base main` keeps only the touched lines. `--quiet` prints the test files. See [CLI reference](cli.md#affected).
+
 ## Link a frontend and a backend
 Flutter app plus Django API. Needs the Dart SDK; `cg doctor` shows `dart exact`.
 

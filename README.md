@@ -58,6 +58,7 @@ Go, Java and others: import a SCIP index with `cg index --scip FILE`. Run `cg do
 ## What you get
 
 - `reaches`, `impact`, `path`: every caller, route, job and page that reaches a table, config key or method.
+- `cg affected --base main`: the tests and entry points a change reaches (`--quiet` feeds your test runner).
 - Frontend ↔ backend: `cg link` matches client HTTP calls to server routes across repos.
 - Route guards: `cg routes --writes --unguarded` lists routes that write with no auth guard.
 - MCP server (`cg-mcp`) so agents query the graph instead of grepping.

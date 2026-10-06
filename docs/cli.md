@@ -35,7 +35,8 @@
 | `protocols [PATTERN]` | Summary per protocol, or one endpoint's senders, receivers, guards, and checks (`no_receiver`, `no_sender`, `ambiguous`, `schema_mismatch`, `unguarded`). `--side send\|receive`, `--listeners` (TCP / UDP binds). | [protocols](protocols.md) |
 | `tools [PATTERN]` | LLM and MCP tools. `--framework` (`mcp`, `openai`, `anthropic`, `langchain`, `openai-agents`, `llamaindex`, `custom`), `--agent`, `--unmatched` (`no_receiver`, `no_sender`, `name_collision`). | [ai-tools](ai-tools.md) |
 | `external [PATTERN]` | External systems, who uses them, address and credential source, TLS. `--protocol` (`postgres`, `mysql`, `redis`, `smtp`, `amqp`, `mongodb`, `ldap`, `ssh`, `ftp`, `s3`, `https`, …). `--source` is `literal`, `env`, `env-example`, `compose`, or `config`. `--tls-off`. | [external](external.md) |
-| `tests SPEC` | Direct and transitive tests. `--unit-only`, `--exclude-root` (repeatable), `--through-roots`. | [channels](channels-and-tests.md#tests) |
+| `tests SPEC` | Direct and transitive tests. `--unit-only`, `--exclude-root` (repeatable), `--through-roots`. A file or module spec covers every symbol in it. | [channels](channels-and-tests.md#tests) |
+| `affected [FILES...]` | Tests and entry points a change reaches. `--base REF` uses only the touched lines; `--quiet` prints test files. | [affected](#affected) |
 | `parity --db SRC --against TGT` | Symbols in SRC with no counterpart in TGT. `--map`, `--strip-prefix` (repeatable), `--no-fuzzy`. `--structure` also pairs by use; `--no-learn` and `--write-map` apply only with it. | [parity](parity.md) |
 | `platforms [summary\|divergence]` | Targets and tagged symbols, or divergence findings. `--target`. `--kind` is `variants`, `api_surface`, `missing_callee`, or `missing_callee_tests`. | [platforms](platforms.md) |
 | `resolutions CONCEPT` | Where a value is resolved, its fallbacks, and whether the client sends it. `--within`, `--no-client`. | [value facts](value-facts.md) |
@@ -168,6 +169,32 @@ Both are labelled `heuristic` in text and in JSON (`confidence`). Neither adds e
 
 - `roundtrip` pairs a write of a stored property through a lossy transform with a read that seeds UI state (path: write, lossy call, property, read, seed, each with `file:line`). MCP tool: `roundtrip(prop)`.
 - `lint async-state` runs all four rules unless `--rules` lists a subset. MCP tool: `lint_async_state`.
+
+## affected
+
+`cg affected` maps a change to the symbols it touches, then to the tests and entry points that reach those symbols. A path argument is the whole file. `--base REF` (alias `--git-diff`) reads `git diff` against that revision and keeps only the touched lines. The innermost symbol wins: a changed method, not the class that contains it. A pure rename uses both the new path and the old one; a rename the index has not caught up with falls back to the old path. A deletion is resolved from the index. A changed test is listed itself (`changed`). A file with no symbols is reported as not in the index.
+
+The same expansion is what a file or module spec does in `cg tests` (`app/util.py`, `app.util`): every symbol defined in that file. See [Broadcast channels and tests](channels-and-tests.md#tests).
+
+`--quiet` prints the test files, one per line, so a runner can take them:
+
+```bash
+pytest $(cg affected --base main --db out/graph.db --quiet)
+```
+
+At most `--max-targets` symbols are walked (default 200, `0` for no cap). The text report says when it stopped early and JSON reports it under `truncated`. With no test found, `--quiet` prints nothing, and a bare `pytest` would then run the whole suite. No files, no `--base` and no `--stdin` exits 2. A bad revision, or `--base` outside a git checkout, exits 2. Finding no tests is still exit 0.
+
+| flag | |
+|---|---|
+| `--base REF`, `--git-diff REF` | only the lines the diff touches |
+| `--stdin` | one path per line on stdin |
+| `--root DIR` | git root (default: the indexed root) |
+| `--quiet` | test file paths only |
+| `--max-depth N` | transitive tests within N application hops (`0`: any) |
+| `--unit-only` | leave out UI / snapshot tests |
+| `--max-targets N` | cap on symbols walked (`0`: none) |
+| `--json` | the result object, plus `completeness` |
+| `--min-confidence` | `heuristic` (default), `resolved`, `exact` |
 
 ## agents
 

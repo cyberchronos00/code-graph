@@ -3,7 +3,7 @@
 Run:  .venv/bin/python -m codegraph.mcp_server --db out/graph.db [--root path/to/project --gates path/to/gates.json] [--plans plans/]
 
 Tools: reaches, impact, callers, siblings, writers, readers, roundtrip, lint_async_state, routes, node, search, stats, starters, index, downstream, path,
-api_calls, resolutions, channels, bridges, protocol_links, llm_tools, external_systems, tests_covering, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
+api_calls, resolutions, channels, bridges, protocol_links, llm_tools, external_systems, tests_covering, affected, coverage, platforms, platform_divergence, plan_list, plan_load, plan_validate, plan_check, plan_baseline (planned-change layer,
 plans/<name>.yaml).
 Point --db at a combined graph (`cg link`, any number of repos) to query across repos (pages -> routes -> tables).
 All results are plain text: grouped by module / entry-point kind, one line per item, each with the
@@ -802,6 +802,29 @@ def tests_covering(target: str, min_confidence: str = "heuristic", paths: bool =
                            exclude_roots=exclude_roots, through_roots=through_roots)
     _scope(res.get("targets") or [])
     return Q.render_tests_covering(res, show_paths=paths)
+
+
+@tool
+def affected(files: list[str] | None = None, base: str | None = None, max_depth: int = 3,
+             unit_only: bool = False, quiet: bool = False) -> str:
+    """Tests and entry points a change reaches. files are whole repo-relative paths; base is a git
+    revision and only the touched lines count (innermost symbol). A rename or deletion still resolves
+    from the index, and a changed test is listed itself. quiet prints one test file path per line.
+    max_depth keeps transitive tests near the target (0: any); unit_only leaves out UI / snapshot tests."""
+    from .affected import affected as _affected, file_changes, git_changes, render_affected, render_quiet
+    root = STATE["root"] or _st().meta().get("root") or os.getcwd()
+    try:
+        if base:
+            changes = git_changes(root, base, files or None)
+        elif files:
+            changes = file_changes(files, root)
+        else:
+            return "affected: pass files or base"
+        res = _affected(_st(), changes, near_depth=max_depth or None, unit_only=unit_only, base=base)
+    except ValueError as ex:
+        return f"affected: {ex}"
+    _scope(res.get("targets") or [])
+    return render_quiet(res) if quiet else render_affected(res)
 
 
 @tool
