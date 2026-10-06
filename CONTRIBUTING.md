@@ -75,7 +75,8 @@ Read [docs/architecture.md](docs/architecture.md) first (invariants, codemap, pl
 - **Changelog entry.** Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) (Added / Changed /
   Fixed / Removed), linking the issue if there is one.
 - **Docs follow the code.** Update the README or the relevant file in `docs/` when you change behaviour, a command or
-  output.
+  output. A new language or framework updates README's Supported languages table, its docs page,
+  `docs-site/app/utils/docs-nav.ts`, and `docs-site/app/components/HomeStacks.vue` in the same change.
 - Keep PRs focused. For a larger change, open an issue first to agree on the approach.
 
 ## Releasing

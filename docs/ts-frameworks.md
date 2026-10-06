@@ -1,6 +1,6 @@
 # TypeScript / JavaScript frameworks
 
-What NestJS, Next.js and Express-style routers add on top of the TypeScript plugin. They share
+What NestJS, Next.js, Astro and Express-style routers add on top of the TypeScript plugin. They share
 one program with the Nuxt layer, so aliases and types go through the checker. Plain JavaScript
 (CommonJS or ESM, with or without `jsconfig.json`) is indexed with `allowJs`. Samples:
 `examples/bookstore-nest`, `bookstore-next`, `bookstore-express`. Without a root tsconfig, the

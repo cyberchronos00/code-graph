@@ -107,7 +107,7 @@ entry points: 6
   http_route  POST /api/orders/  (catalog/api.py:37)  via route:POST /api/orders/
 ```
 
-`--base main` keeps only the touched lines. `--quiet` prints the test files. See [CLI reference](cli.md#affected).
+`--base main` keeps only the affected lines. `--quiet` prints the test files. See [CLI reference](cli.md#affected).
 
 ## Link a frontend and a backend
 Flutter app plus Django API. Needs the Dart SDK; `cg doctor` shows `dart exact`.
@@ -151,5 +151,9 @@ GET /api/books/  @bookstore-django/catalog/api.py:15  NO AUTH
 - [Configuration](configuration.md)
 - [Python](python.md)
 - [TypeScript / JavaScript frameworks](ts-frameworks.md)
+- [Kotlin](kotlin.md)
+- [Java](java.md)
+- [Swift](swift.md)
+- [Platform-specific code](platforms.md)
 - [Planned changes](plans.md)
 - [Known limitations](limitations.md)

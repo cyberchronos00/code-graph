@@ -20,7 +20,7 @@ const stacks = [
   },
   {
     title: 'TypeScript and JavaScript',
-    detail: 'Nuxt, Vue, NestJS, Next.js, Express, Fastify, Koa, Hono',
+    detail: 'Nuxt, Vue, NestJS, Next.js, Astro, Express, Fastify, Koa, Hono. The extractor runs on Node or Bun.',
     icons: [
       { name: 'i-simple-icons-typescript', label: 'TypeScript' },
       { name: 'i-simple-icons-javascript', label: 'JavaScript' },
@@ -28,18 +28,42 @@ const stacks = [
       { name: 'i-simple-icons-vuedotjs', label: 'Vue' },
       { name: 'i-simple-icons-nestjs', label: 'NestJS' },
       { name: 'i-simple-icons-nextdotjs', label: 'Next.js' },
+      { name: 'i-simple-icons-astro', label: 'Astro' },
       { name: 'i-simple-icons-express', label: 'Express' },
       { name: 'i-simple-icons-fastify', label: 'Fastify' },
       { name: 'i-simple-icons-koa', label: 'Koa' },
-      { name: 'i-simple-icons-hono', label: 'Hono' }
+      { name: 'i-simple-icons-hono', label: 'Hono' },
+      { name: 'i-simple-icons-bun', label: 'Bun' }
     ]
   },
   {
-    title: 'Flutter',
-    detail: 'Dart',
+    title: 'Dart',
+    detail: 'Flutter',
     icons: [
       { name: 'i-simple-icons-flutter', label: 'Flutter' },
       { name: 'i-simple-icons-dart', label: 'Dart' }
+    ]
+  },
+  {
+    title: 'Kotlin',
+    detail: 'Android, Kotlin Multiplatform',
+    icons: [
+      { name: 'i-simple-icons-kotlin', label: 'Kotlin' },
+      { name: 'i-simple-icons-android', label: 'Android' }
+    ]
+  },
+  {
+    title: 'Java',
+    detail: 'Plain Java. Spring support in progress.',
+    icons: [
+      { name: 'i-simple-icons-openjdk', label: 'Java' }
+    ]
+  },
+  {
+    title: 'Swift',
+    detail: 'iOS / SwiftPM',
+    icons: [
+      { name: 'i-simple-icons-swift', label: 'Swift' }
     ]
   },
   {
@@ -69,7 +93,7 @@ const stacks = [
       Languages the index reads
     </h2>
     <p class="mt-2 max-w-2xl text-sm text-zinc-600 dark:text-zinc-300">
-      Other languages can be imported through SCIP.
+      Go and other languages can be imported through SCIP.
     </p>
     <ul class="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <li
