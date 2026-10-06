@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-06
+
 ### Changed
 
 - The import package is `cg_code_graph`. `python -m cg_code_graph` and `python -m cg_code_graph.cli` replace `python -m codegraph`. The `cg` and `cg-mcp` commands are unchanged.
@@ -1495,7 +1497,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/cyberchronos00/code-graph/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/cyberchronos00/code-graph/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/cyberchronos00/code-graph/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/cyberchronos00/code-graph/compare/v0.13.0...v0.14.0
