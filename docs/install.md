@@ -2,6 +2,8 @@
 
 cg is a Python package (Python 3.11+). The PyPI name is `cg-code-graph`; the commands are `cg` and `cg-mcp`. It installs as a user-level tool. No checkout and no sudo.
 
+New here? [Quick start](quickstart.md) indexes a sample app and runs the first queries in a few minutes.
+
 ## Install
 
 ::tabs{default-value="0"}

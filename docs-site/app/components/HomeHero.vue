@@ -41,13 +41,13 @@
         </p>
         <div class="mt-10 flex flex-wrap items-center gap-3">
           <UButton
-            to="/docs/install"
+            to="/docs/quickstart"
             color="primary"
             size="xl"
             icon="i-lucide-book-open"
             class="shadow-[0_12px_40px_-14px_rgba(147,182,0,0.85)]"
           >
-            Read the docs
+            Quick start
           </UButton>
           <UButton
             to="/docs/cli"

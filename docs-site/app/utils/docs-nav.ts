@@ -13,6 +13,7 @@ export const docGroups: DocGroup[] = [
   {
     title: 'Start',
     items: [
+      { slug: 'quickstart', title: 'Quick start' },
       { slug: 'install', title: 'Install' },
       { slug: 'cli', title: 'CLI' },
       { slug: 'configuration', title: 'Configuration' },
