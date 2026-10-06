@@ -8,6 +8,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- TypeScript and JavaScript indexing failed on pip installs in 0.19.0 because the extractor cache missed a module; a broken cache is rebuilt.
+
 ## [0.19.0] - 2026-10-07
 
 ### Removed

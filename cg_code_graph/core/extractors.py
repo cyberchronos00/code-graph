@@ -5,8 +5,9 @@ The extractor sources ship inside the package (cg_code_graph/plugins/{ts,php,dar
 
 - a checkout whose extractor directory already has them (`npm ci` run there) keeps using that directory;
 - otherwise the sources are copied into a per-user cache directory and the dependencies installed there, on first
-  use or by `cg setup`. The directory is keyed by the lock file, so an update that only changes the extractor source
-  reuses the installed dependencies, and one that changes the lock file installs into a fresh directory.
+  use or by `cg setup`. The directory is keyed by the lock file and the extractor sources (names and contents), so a
+  release that adds or edits a module installs into a fresh directory. A cache directory that is missing a listed
+  source is incomplete and is rebuilt.
 
 Cache root (core/cache.py): $CG_CACHE, else %LOCALAPPDATA%\\cg on Windows,
 else $XDG_CACHE_HOME/cg or ~/.cache/cg; the extractors live in <root>/extractors.
@@ -46,7 +47,8 @@ class Spec:
 
 
 SPECS = {
-    "typescript": Spec("typescript", PLUGINS / "ts" / "extractor", ("extract.mjs", "fw.mjs", "package.json", "package-lock.json"),
+    "typescript": Spec("typescript", PLUGINS / "ts" / "extractor", ("extract.mjs", "fw.mjs", "rr.mjs", "package.json",
+                                                                  "package-lock.json"),
                        "package-lock.json", ("node_modules/typescript/package.json",), "npm", "TypeScript / JavaScript"),
     "php": Spec("php", PLUGINS / "php" / "extractor", ("extract.php", "composer.json", "composer.lock"), "composer.lock",
                 ("vendor/autoload.php",), "composer", "PHP"),
@@ -63,20 +65,42 @@ def _installed(d: Path, spec: Spec) -> bool:
     return any((d / m).exists() for m in spec.markers)
 
 
+def _missing_sources(spec: Spec, d: Path) -> list[str]:
+    """Listed sources that exist in the package but not in the cache directory."""
+    return [rel for rel in spec.sources if (spec.pkg / rel).exists() and not (d / rel).exists()]
+
+
+def _cache_key(spec: Spec) -> str:
+    """Lock file plus every source path and its bytes, so a new or edited module does not reuse an old install."""
+    h = hashlib.sha256()
+    lock = spec.pkg / spec.lock
+    h.update(lock.read_bytes() if lock.exists() else b"")
+    for rel in spec.sources:
+        h.update(b"\0")
+        h.update(rel.encode())
+        src = spec.pkg / rel
+        h.update(b"\0")
+        h.update(src.read_bytes() if src.exists() else b"")
+    return h.hexdigest()[:12]
+
+
 def cache_dir(lang: str) -> Path:
     spec = SPECS[lang]
-    lock = spec.pkg / spec.lock
-    key = hashlib.sha256(lock.read_bytes() if lock.exists() else b"").hexdigest()[:12]
-    return cache_root() / f"{lang}-{key}"
+    return cache_root() / f"{lang}-{_cache_key(spec)}"
 
 
 def workdir(lang: str) -> Path:
     """The directory the extractor runs from: the package's own one when its dependencies are installed there (a
-    development checkout), else the cache directory (sources synced into it; dependencies maybe not yet installed)."""
+    development checkout), else the cache directory (sources synced into it; dependencies maybe not yet installed).
+    A cache directory missing a listed source is rebuilt from the package sources."""
     spec = SPECS[lang]
     if _installed(spec.pkg, spec):
         return spec.pkg
     d = cache_dir(lang)
+    if d.exists() and _missing_sources(spec, d):
+        # Incomplete copy (for example a 0.19.0 typescript cache that predates a module): drop it and start over
+        # when the key still matches, otherwise cache_dir already points at a fresh directory.
+        shutil.rmtree(d, ignore_errors=True)
     _sync(spec, d)
     return d
 
@@ -101,7 +125,8 @@ def status(lang: str) -> dict:
     if _installed(spec.pkg, spec):
         return {"installed": True, "dir": str(spec.pkg), "where": "package"}
     d = cache_dir(lang)
-    return {"installed": _installed(d, spec), "dir": str(d), "where": "cache"}
+    ready = _installed(d, spec) and not _missing_sources(spec, d)
+    return {"installed": ready, "dir": str(d), "where": "cache"}
 
 
 JS_RUNTIME_MISSING = (

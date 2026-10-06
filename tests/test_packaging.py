@@ -15,6 +15,21 @@ from cg_code_graph.core import extractors
 
 ROOT = Path(__file__).resolve().parent.parent
 
+_RUNTIME_SUFFIXES = {".mjs", ".js", ".php", ".dart"}
+_SKIP_DIRS = {"node_modules", "vendor", ".dart_tool", ".bin"}
+
+
+def _runtime_sources(pkg: Path) -> list[str]:
+    """Extractor modules that must be listed on Spec.sources (lockfiles and dependency trees are not runtime modules)."""
+    found = []
+    for p in pkg.rglob("*"):
+        if not p.is_file() or p.suffix not in _RUNTIME_SUFFIXES:
+            continue
+        if any(part in _SKIP_DIRS for part in p.relative_to(pkg).parts):
+            continue
+        found.append(p.relative_to(pkg).as_posix())
+    return found
+
 
 def test_pyproject_metadata():
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
@@ -34,6 +49,10 @@ def test_pyproject_metadata():
     for spec in extractors.SPECS.values():
         for rel in spec.sources:
             assert (spec.pkg / rel).exists(), rel
+    # every runtime module in the plugin folder is copied into the cache, or a pip install fails with ERR_MODULE_NOT_FOUND
+    for spec in extractors.SPECS.values():
+        for rel in _runtime_sources(spec.pkg):
+            assert rel in spec.sources, (spec.lang, rel)
 
 
 def _fake_spec(tmp_path, monkeypatch):
@@ -55,20 +74,73 @@ def test_extractor_runs_from_user_cache_without_deps_in_package(tmp_path, monkey
     assert (d / "extract.mjs").read_text() == "// v1\n" and not (d / "fw.mjs").exists()
     st = extractors.status("typescript")
     assert st == {"installed": False, "dir": str(d), "where": "cache"}
-    # dependencies installed there: reused; a newer extractor source with the same lock file is synced into it
+    # dependencies installed there: reused while the sources are unchanged
     (d / "node_modules" / "typescript").mkdir(parents=True)
     (d / "node_modules" / "typescript" / "package.json").write_text("{}")
-    (pkg / "extract.mjs").write_text("// v2\n")
     assert extractors.ensure("typescript") == d          # no install command run: the marker is there
-    assert (d / "extract.mjs").read_text() == "// v2\n"
     assert extractors.status("typescript")["installed"]
+    # edited extractor source: a new cache key, so the broken or stale directory is not reused
+    (pkg / "extract.mjs").write_text("// v2\n")
+    d_src = extractors.workdir("typescript")
+    assert d_src != d and (d_src / "extract.mjs").read_text() == "// v2\n"
     # a new lock file: a fresh directory
     (pkg / "package-lock.json").write_text('{"lockfileVersion": 3, "x": 1}\n')
-    assert extractors.workdir("typescript") != d
+    assert extractors.workdir("typescript") != d_src
     # a checkout with the dependencies in the package directory keeps using it
     (pkg / "node_modules" / "typescript").mkdir(parents=True)
     (pkg / "node_modules" / "typescript" / "package.json").write_text("{}")
     assert extractors.workdir("typescript") == pkg and extractors.status("typescript")["where"] == "package"
+
+
+def test_cache_missing_listed_source_is_rebuilt(tmp_path, monkeypatch):
+    """A cache directory that lost a listed source is not treated as installed and is rebuilt with that file."""
+    pkg = _fake_spec(tmp_path, monkeypatch)
+    (pkg / "rr.mjs").write_text("export const rr = 1\n")
+    spec = extractors.SPECS["typescript"]
+    spec = extractors.Spec(spec.lang, pkg, spec.sources + ("rr.mjs",), spec.lock, spec.markers, spec.tool, spec.label)
+    monkeypatch.setitem(extractors.SPECS, "typescript", spec)
+    d = extractors.workdir("typescript")
+    (d / "node_modules" / "typescript").mkdir(parents=True)
+    (d / "node_modules" / "typescript" / "package.json").write_text("{}")
+    assert extractors.status("typescript")["installed"]
+    (d / "rr.mjs").unlink()
+    assert not extractors.status("typescript")["installed"]
+    rebuilt = extractors.workdir("typescript")
+    assert rebuilt == d
+    assert (rebuilt / "rr.mjs").read_text() == "export const rr = 1\n"
+    assert (rebuilt / "extract.mjs").read_text() == "// v1\n"
+    assert not (rebuilt / "node_modules").exists()          # the incomplete install was removed, not patched in place
+
+
+def test_typescript_cache_index_without_network(tmp_path, monkeypatch):
+    """Pip-style install: package dir has no node_modules, so indexing uses the cache and a local node_modules link."""
+    nm = extractors.SPECS["typescript"].pkg / "node_modules"
+    if not (nm / "typescript" / "package.json").exists():
+        pytest.skip("typescript extractor node_modules is not installed")
+    from cg_code_graph.indexer import index_project
+    monkeypatch.setenv("CG_CACHE", str(tmp_path / "cgcache"))
+    real = extractors._installed
+
+    def installed(d, spec):
+        if spec.lang == "typescript" and d == spec.pkg:
+            return False
+        return real(d, spec)
+
+    def run(cmd, d, spec):
+        assert spec.lang == "typescript", cmd
+        link = d / "node_modules"
+        if not link.exists():
+            link.symlink_to(nm, target_is_directory=True)
+
+    monkeypatch.setattr(extractors, "_installed", installed)
+    monkeypatch.setattr(extractors, "_run", run)
+    root = ROOT / "examples" / "bookstore-react-router"
+    stats = index_project(root, tmp_path / "rr.db", root.name)
+    assert stats["nodes"] > 0
+    import sqlite3
+    routes = sqlite3.connect(tmp_path / "rr.db").execute(
+        "SELECT id FROM nodes WHERE kind IN ('route', 'page')").fetchall()
+    assert routes
 
 
 def test_extractor_install_failure_names_the_tool(tmp_path, monkeypatch):
