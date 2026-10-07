@@ -301,8 +301,10 @@ def _narrowed_bases(ob: list[dict]) -> list[dict]:
 class narrowed:
     """`with narrowed(st, inh):` the traversals of one query leave out the calls `narrow_inherited` drops."""
 
-    def __init__(self, st: GraphStore, inh: list[dict]):
+    def __init__(self, st: GraphStore, inh: list[dict], connection: str | None = None):
         self.skip = narrow_inherited(st, inh) if inh else set()
+        if connection:
+            self.skip = set(self.skip) | other_connection_edges(st, connection)
 
     def __enter__(self):
         self.tok = _SKIP_EDGES.set(self.skip or None)
@@ -310,6 +312,33 @@ class narrowed:
 
     def __exit__(self, *a):
         _SKIP_EDGES.reset(self.tok)
+
+
+def other_connection_edges(st: GraphStore, connection: str) -> set[int]:
+    """Ids of the table / column edges that go to another connection than `connection` (`--connection`, matched by name; a
+    dynamic pattern by its literal name). Edges that record no connection do not match either."""
+    kq = ",".join("?" * len(DATA_EDGE_KINDS))
+    return {r["id"] for r in st.q(f"SELECT id FROM edges WHERE kind IN ({kq}) AND "
+                                  "COALESCE(json_extract(attrs, '$.connection'), '') != ?", (*DATA_EDGE_KINDS, connection))}
+
+
+def connections_seen(st: GraphStore, target_ids: list[str]) -> list[tuple[str, int]]:
+    """`[(connection, edge count)]`, most used first, over the table / column edges into `target_ids`."""
+    if not target_ids:
+        return []
+    counts: dict[str, int] = {}
+    kq = ",".join("?" * len(DATA_EDGE_KINDS))
+    for i in range(0, len(target_ids), 500):
+        chunk = target_ids[i:i + 500]
+        for r in st.q(f"SELECT json_extract(attrs, '$.connection') c, count(*) n FROM edges WHERE kind IN ({kq}) "
+                      f"AND dst IN ({','.join('?' * len(chunk))}) AND json_extract(attrs, '$.connection') IS NOT NULL GROUP BY c",
+                      (*DATA_EDGE_KINDS, *chunk)):
+            counts[r["c"]] = counts.get(r["c"], 0) + r["n"]
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+def seen_text(seen: list[tuple[str, int]]) -> str:
+    return ", ".join(f"{c} {n} edge{'s' if n != 1 else ''}" for c, n in seen) or "none recorded on its edges"
 
 
 def _short(fqn: str) -> str:
@@ -747,8 +776,34 @@ class GroupClosures:
         return out
 
 
+DATA_EDGE_KINDS = ("READS_TABLE", "WRITES_TABLE", "READS_COLUMN", "WRITES_COLUMN", "MENTIONS_COLUMN")
+
+
+def conn_of(attrs) -> dict:
+    """`{connection, default}` from an edge's attrs (a dict or its JSON): the database connection a table / column edge goes to
+    (`attrs.connection`) and the project default (`attrs.connection_default`). `{}` when the edge records none."""
+    if isinstance(attrs, str):
+        attrs = json.loads(attrs) if '"connection"' in attrs else {}
+    c = (attrs or {}).get("connection")
+    return {"connection": c, "default": attrs.get("connection_default")} if c else {}
+
+
+def conn_shown(hop_or_row: dict) -> str | None:
+    """The connection to print for an edge: its name when it is not the default connection (unknown default: always)."""
+    c = hop_or_row.get("connection")
+    return c if c and c != hop_or_row.get("connection_default") else None
+
+
+def conn_label(hop_or_row: dict) -> str:
+    c = conn_shown(hop_or_row)
+    return f" conn={c}" if c else ""
+
+
 def _hop_of(e) -> dict:
     hop = {"from": e["src"], "kind": e["kind"], "to": e["dst"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"]}
+    if e["kind"] in DATA_EDGE_KINDS and e["attrs"] and '"connection"' in e["attrs"]:
+        ci = conn_of(e["attrs"])
+        hop["connection"], hop["connection_default"] = ci["connection"], ci["default"]
     if e["kind"] == "REFERENCES_FN" and e["attrs"]:
         hop["how"] = json.loads(e["attrs"]).get("how")
     elif e["kind"] == "CALLS" and e["attrs"] and '"collection"' in e["attrs"]:
@@ -868,15 +923,24 @@ def _platform_entries(st: GraphStore, depth: dict[str, int], platform: str, min_
 
 
 def reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30, gate: str | None = "auto",
-            platform: str | None = None) -> dict:
+            platform: str | None = None, connection: str | None = None) -> dict:
     """Reverse transitive dependents of the targets (see _reaches). An inherited `Sub.method` spec leaves out the
     calls into the inherited definition whose receiver cannot be a Sub (narrow_inherited)."""
     ob = override_bases(st, specs)
-    with narrowed(st, [i for s in specs for i in inherited_targets(st, s)] + ob):
+    with narrowed(st, [i for s in specs for i in inherited_targets(st, s)] + ob, connection):
         res = _reaches(st, specs, min_conf, max_depth, gate, platform)
+    if connection:
+        tids = [t for ts in res["targets"].values() for t in ts]
+        res["connection"] = connection
+        res["connections_seen"] = _seen_of_targets(st, tids)
     if _narrowed_bases(ob):
         res["override_narrowed"] = _narrowed_bases(ob)
     return res
+
+
+def _seen_of_targets(st: GraphStore, tids: list[str]) -> list[tuple[str, int]]:
+    cols = _table_columns(st, tids)
+    return connections_seen(st, [t for t in tids if t.startswith(("table:", "column:"))] + cols)
 
 
 def _reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=30, gate: str | None = "auto",
@@ -900,7 +964,8 @@ def _reaches(st: GraphStore, specs: list[str], min_conf="heuristic", max_depth=3
     pf = platform
     # the dependents of a base / interface method include those of its overrides (as in impact), marked via_override
     below = override_seeds(st, specs, targets, min_conf)
-    seeds = targets + [b for b in below if b not in targets]
+    cols = _table_columns(st, targets)      # code reading / writing only some columns of a table uses the table too (#103)
+    seeds = targets + [c for c in cols if c not in targets] + [b for b in below if b not in targets]
     depth = reverse_closure(st, seeds, min_conf=min_conf, max_depth=max_depth, seed_inst=si, platform=pf)
     own = set(reverse_closure(st, targets, min_conf=min_conf, max_depth=max_depth, seed_inst=si, platform=pf)) if below else None
     paths = shortest_paths(st, depth, min_conf=min_conf, seed_inst=si, platform=pf)
@@ -976,7 +1041,7 @@ def fmt_path(path: list[dict]) -> str:
     for p in path:
         g = f" GATED:{p['gated']} guard {p.get('guard')}" if p.get("gated") else ""
         pl = f" only on {', '.join(p['platforms']) or 'no known target'}" if p.get("platforms") is not None else ""
-        s += f"\n          -{p['kind']}[{p['confidence']} @ {p['at']}{g}{pl}]-> {p['to']}"
+        s += f"\n          -{p['kind']}[{p['confidence']} @ {p['at']}{conn_label(p)}{g}{pl}]-> {p['to']}"
     return s
 
 
@@ -999,6 +1064,9 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
     code = [i for i in items if i["kind"] in CODE_KINDS]
     entries = [i for i in items if i["kind"] in ENTRY_NODE_KINDS or (i.get("entry_kind") and i["kind"] in CODE_KINDS)]
     other = [i for i in items if i["kind"] not in CODE_KINDS + ENTRY_NODE_KINDS]
+    if res.get("connection") and not items:
+        out.append(f"no dependents recorded for {', '.join(res['targets'])} on connection {res['connection']!r} "
+                   f"(connections seen: {seen_text(res.get('connections_seen') or [])}).")
     out.append(f"dependents: {len(items)} nodes  (code: {len(code)}, entry points: {len(entries)}, other: {len(other)}) min_confidence={res['min_confidence']}")
     labels = {"runtime": f"RUNTIME (reached from {' / '.join(RUNTIME_ENTRY_KINDS)})",
               "library": "LIBRARY API (reached only through the public API of a library: pub items / exported symbols)",
@@ -1243,6 +1311,41 @@ DATA_USE = ["CONNECTS_TO", "USES_CONNECTION", "READS_TABLE", "WRITES_TABLE", "MA
 DATA_TARGET = ("external:", "connection:", "table:", "column:")
 
 
+def impact_connections(st: GraphStore, targets: list[str]) -> list[dict]:
+    """The non-default database connections the targets' own table / column edges go to, each with its evidence
+    (`[{connection, via, from, at, model, default}]`): what a change to the function also affects on those databases."""
+    code = [t for t in targets if not t.startswith(DATA_TARGET)]
+    kq = ",".join("?" * len(DATA_EDGE_KINDS))
+    out, seen = [], set()
+    for i in range(0, len(code), 500):
+        chunk = code[i:i + 500]
+        for r in st.q(f"SELECT file, line, attrs FROM edges WHERE kind IN ({kq}) AND src IN ({','.join('?' * len(chunk))}) "
+                      "AND attrs LIKE '%\"connection\"%' ORDER BY file, line", (*DATA_EDGE_KINDS, *chunk)):
+            a = json.loads(r["attrs"])
+            ci = conn_of(a)
+            if not conn_shown({"connection": ci.get("connection"), "connection_default": ci.get("default")}):
+                continue
+            row = {"connection": ci["connection"], "via": a.get("connection_via"), "from": a.get("connection_from"),
+                   "at": f"{r['file']}:{r['line']}", "model": a.get("connection_model"),
+                   "default": a.get("connection_fallback") if a.get("connection_fallback") else None}
+            key = tuple(row.values())
+            if key not in seen:
+                seen.add(key)
+                out.append(row)
+    return sorted(out, key=lambda x: (x["connection"], x["at"]))
+
+
+def connections_line(conns: list[dict], limit: int = 6) -> str:
+    """`connections: legacy_{store.id} (Book::on via ArchiveService::legacyConnection, app/Services/ArchiveService.php:7; Book default: mysql)`"""
+    def one(c):
+        ev = (c["via"] + (f" via {c['from']}" if c.get("from") else "") + ", " if c.get("via") else "") + c["at"]
+        if c.get("default"):
+            ev += f"; {c['model'] + ' ' if c.get('model') else ''}default: {c['default']}"
+        return f"{c['connection']} ({ev})"
+    more = f"; …+{len(conns) - limit}" if len(conns) > limit else ""
+    return "connections: " + "; ".join(one(c) for c in conns[:limit]) + more
+
+
 def _table_columns(st: GraphStore, targets: list) -> list:
     """The column nodes of table targets (table -CONTAINS-> column): code reading / writing only some columns
     (READS_COLUMN / WRITES_COLUMN, #103) uses the table too."""
@@ -1309,6 +1412,9 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
         callers.append(c)
     out = {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
            "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or "")), **rel}
+    conns = impact_connections(st, targets)
+    if conns:
+        out["connections"] = conns
     if platform:
         from .platforms import filter_info
         out["platform"] = filter_info(st, platform)
@@ -1422,24 +1528,27 @@ def access_targets(st: GraphStore, spec: str) -> list[dict]:
 
 
 def _site_rows(st: GraphStore, where: str, params: tuple, target_kind: str, group: str, label: str | None = None) -> dict:
-    rows = st.q(f"""SELECT e.src, e.kind, e.dst, e.file, e.line, e.confidence, n.module, n.fqn
+    rows = st.q(f"""SELECT e.src, e.kind, e.dst, e.file, e.line, e.confidence, n.module, n.fqn, e.attrs AS eattrs
                     FROM edges e JOIN nodes n ON n.id = e.src
                     WHERE {where} ORDER BY n.module, n.fqn, e.line""", params)
     ents = entry_info(st, list({r["src"] for r in rows}))
     out = []
     for r in rows:
         d = dict(r)
+        ci = conn_of(d.pop("eattrs"))
+        if ci:
+            d["connection"], d["connection_default"] = ci["connection"], ci["default"]
         d["entry_kinds"] = {k: v[0] for k, v in ents.get(r["src"], {}).items()}
         d["target_kind"], d["group"] = target_kind, group
         out.append(d)
     return {"target_kind": target_kind, "group": group, "label": label, "rows": out}
 
 
-def access(st: GraphStore, spec: str, what: str) -> list[dict]:
+def access(st: GraphStore, spec: str, what: str, connection: str | None = None) -> list[dict]:
     """Groups of access sites for `spec` (what = 'readers' | 'writers'): `[{target_kind, group, label, rows}]`, in print order.
     Stored property: READS_PROP / WRITES_PROP. Column: READS_COLUMN (then MENTIONS_COLUMN, heuristic) or WRITES_COLUMN (then the
     table-level writes of functions that record no column of that table). Table: READS_TABLE + READS_COLUMN per column (then
-    mentions) or WRITES_TABLE + WRITES_COLUMN."""
+    mentions) or WRITES_TABLE + WRITES_COLUMN. `connection`: only the edges that go to that database connection (`attrs.connection`)."""
     groups: list[dict] = []
     targets = access_targets(st, spec)
     multi = len(targets) > 1
@@ -1475,18 +1584,21 @@ def access(st: GraphStore, spec: str, what: str) -> list[dict]:
         else:
             groups.append(_site_rows(st, "(e.kind='WRITES_TABLE' AND e.dst=?) OR (e.kind='WRITES_COLUMN' AND e.dst LIKE ?)",
                                      (t["id"], f"column:{name}.%"), tk, "table", f"table {name}" if multi else None))
+    if connection:
+        for g in groups:
+            g["rows"] = [r for r in g["rows"] if r.get("connection") == connection]
     return [g for g in groups if g["rows"]]
 
 
-def readers(st: GraphStore, spec: str) -> list[dict]:
+def readers(st: GraphStore, spec: str, connection: str | None = None) -> list[dict]:
     """Code that reads a stored property `Type.prop` (READS_PROP), a table (READS_TABLE / READS_COLUMN) or a column
     (READS_COLUMN, then heuristic MENTIONS_COLUMN). Rows carry `target_kind` and `group` (#178)."""
-    return [r for g in access(st, spec, "readers") for r in g["rows"]]
+    return [r for g in access(st, spec, "readers", connection) for r in g["rows"]]
 
 
-def writers(st: GraphStore, table: str) -> list[dict]:
+def writers(st: GraphStore, table: str, connection: str | None = None) -> list[dict]:
     """Code that writes a stored property, a table or a column; table-level writes of a column's table come last (#178)."""
-    return [r for g in access(st, table, "writers") for r in g["rows"]]
+    return [r for g in access(st, table, "writers", connection) for r in g["rows"]]
 
 
 def render_access(groups: list[dict], limit: int | None = None) -> list[str]:
@@ -1504,6 +1616,7 @@ def render_access(groups: list[dict], limit: int | None = None) -> list[str]:
             ek = ",".join(sorted(r["entry_kinds"]))
             ex = {k: v for k, v in (r.get("attrs") or {}).items() if k in ("receiver", "accessor", "storage")}
             extra = ("  " + " ".join(f"{k}={v}" for k, v in ex.items())) if ex else ""
+            extra += f"  conn={conn_shown(r)}" if conn_shown(r) else ""
             kind = f"{r['kind']}({r['attrs']['orig']})" if r.get("test") else r["kind"]
             out.append(f"{ind}[{r['module']}] {r['fqn']}  {kind} {r['dst']}  @{r['file']}:{r['line']} ({r['confidence']}){extra}  entries: {ek}")
     return out
@@ -2243,6 +2356,21 @@ def explain_no_writers(st: GraphStore, table: str, what: str = "writers") -> str
     if _has_field_langs(st):
         msg += f" (Swift / Kotlin stored properties are `field:` nodes; try `cg search {name}`.)"
     return msg
+
+
+def explain_no_connection(st: GraphStore, spec: str, connection: str, what: str = "writers") -> str:
+    """Why `readers` / `writers SPEC --connection X` printed nothing although SPEC has access sites on other connections."""
+    ts = access_targets(st, spec)
+    if not ts or not any(t["target_kind"] in ("table", "column") for t in ts) or not access(st, spec, what):
+        return explain_no_writers(st, spec, what)
+    parts = []
+    for t in ts:
+        if t["target_kind"] == "property":
+            continue
+        ids = [t["id"]] + (_table_columns(st, [t["id"]]) if t["target_kind"] == "table" else [])
+        parts.append(f"no {what} recorded for {t['target_kind']} {t['name']!r} on connection {connection!r} "
+                     f"(connections seen: {seen_text(connections_seen(st, ids))}).")
+    return " ".join(parts)
 
 
 def explain_no_path(st: GraphStore, src: str, dst: str, min_conf: str = "heuristic") -> str:

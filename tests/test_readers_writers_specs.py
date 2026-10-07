@@ -89,7 +89,7 @@ def test_readers_of_a_table_group_by_column(api):
     assert labels == sorted(labels, key=lambda x: (not x.startswith("reads of table"), x.startswith("string"), x))
     assert {r["kind"] for g in groups for r in g["rows"]} <= {"READS_TABLE", "READS_COLUMN", "MENTIONS_COLUMN"}
     out = cg("readers", "table:books", db=api).stdout
-    assert "reads of column books.is_active:" in out and out.strip().endswith("read edges, 5 readers")
+    assert "reads of column books.is_active:" in out and out.strip().endswith("read edges, 6 readers")
 
 
 @needs_php

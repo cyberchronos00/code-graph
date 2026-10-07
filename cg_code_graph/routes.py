@@ -197,7 +197,7 @@ def route_guards(attrs: dict, mw_edges: list[dict], is_auth) -> list[dict]:
 def _hop(p: dict) -> str:
     f, _, ln = (p.get("at") or "?").rpartition(":")
     c = "" if p["confidence"] == "exact" else f"~{p['confidence'][0]}"
-    return f"{p['kind']}@{os.path.basename(f)}:{ln}{c}"
+    return f"{p['kind']}@{os.path.basename(f)}:{ln}{c}{Q.conn_label(p)}"
 
 
 def fmt_chain(path: list[dict], limit=8) -> str:
@@ -237,11 +237,11 @@ def _groups_for_writes(st: GraphStore, table: str | None) -> dict[str, dict]:
     """table -> {writer node -> first write edge}."""
     if table and table not in ("*", "any", "all"):
         t = table.split(":", 1)[1] if table.startswith("table:") else table
-        rows = st.q("""SELECT src, kind, dst, file, line, confidence FROM edges
+        rows = st.q("""SELECT src, kind, dst, file, line, confidence, attrs FROM edges
                        WHERE (kind='WRITES_TABLE' AND dst=?) OR (kind='WRITES_COLUMN' AND dst LIKE ?) ORDER BY file, line""",
                     (f"table:{t}", f"column:{t}.%"))
     else:
-        rows = st.q("SELECT src, kind, dst, file, line, confidence FROM edges WHERE kind IN ('WRITES_TABLE','WRITES_COLUMN') ORDER BY file, line")
+        rows = st.q("SELECT src, kind, dst, file, line, confidence, attrs FROM edges WHERE kind IN ('WRITES_TABLE','WRITES_COLUMN') ORDER BY file, line")
     groups: dict[str, dict] = defaultdict(dict)
     for r in rows:
         t = r["dst"].split(":", 1)[1].split(".")[0]
@@ -367,7 +367,8 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
             end = p[-1]["to"] if p else rid
             w = final.get(end)
             if w:
-                p.append({"from": w["src"], "kind": w["kind"], "to": w["dst"], "at": f"{w['file']}:{w['line']}", "confidence": w["confidence"]})
+                p.append({"from": w["src"], "kind": w["kind"], "to": w["dst"], "at": f"{w['file']}:{w['line']}", "confidence": w["confidence"],
+                          **({"connection": ci["connection"], "connection_default": ci["default"]} if (ci := Q.conn_of(w.get("attrs"))) else {})})
             reached[rid].append({"what": label, "via": Q.short_id(w["src"]) if w else None, "depth": gc.depth(rid, i), "path": p, "path_confidence": Q.path_confidence(p),
                                  "gated_only": bool(gate) and not gc.reached(rid, i, live=True)})
     items = []

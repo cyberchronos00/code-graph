@@ -269,7 +269,7 @@ class MassAssign:
             if info["param"]:
                 attrs["param"] = info["param"]
             before = len(self.lv.b.edges)
-            self.lv._col_edge(fn, w["table"], c, "WRITES_COLUMN", line, info["conf"], **attrs)
+            self.lv._col_edge(fn, w["table"], c, "WRITES_COLUMN", line, info["conf"], conn=w.get("conn"), **attrs)
             n += len(self.lv.b.edges) - before
         return n
 

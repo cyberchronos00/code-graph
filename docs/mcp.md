@@ -15,8 +15,8 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 | tool | what it returns |
 |---|---|
 | `explore` | start here for a broad question: matching symbols' source, entry points, call paths and blast radius, within a token budget |
-| `reaches` | what depends on the targets, grouped by entry classification |
-| `impact` | callers of a method up to entry points; overrides listed apart from callers |
+| `reaches` | what depends on the targets, grouped by entry classification; `connection` keeps one database connection and an edge on another one shows `conn=<name>` ([connections](cli.md#database-connections)) |
+| `impact` | callers of a method up to entry points; overrides listed apart from callers; a `connections:` line when the method uses a non-default database connection |
 | `callers` | direct callers; `ref@file:line` when code takes the function as a value |
 | `siblings` | hierarchy, the same method on sibling classes, shared resources |
 | `downstream` | forward dependencies (calls, HTTP, routes, tables) |
@@ -25,7 +25,7 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 | `snippet` | that symbol's source: `path:start-end`, then numbered lines |
 | `search` | name / FQN substring, plus route guard and auth names |
 | `routes` | routes with guards; filter by writes, reaches, missing or unguarded ([routes and guards](cli.md#routes-and-guards)) |
-| `writers` / `readers` | writers or readers of a table, a column (`table.column`, `column:table.column`) or a stored property (`Type.prop`, `Class::$prop`); the same specs, groups and errors as `cg writers` / `cg readers` ([spec forms](cli.md#readers-and-writers-specs)) |
+| `writers` / `readers` | writers or readers of a table, a column (`table.column`, `column:table.column`) or a stored property (`Type.prop`, `Class::$prop`); the same specs, groups and errors as `cg writers` / `cg readers` ([spec forms](cli.md#readers-and-writers-specs)); `connection` keeps one database connection |
 | `roundtrip` | heuristic: a lossy write of `Type.prop` read back into UI state |
 | `lint_async_state` | heuristic async-state lints |
 | `api_calls` | client HTTP calls, request keys and the matched route |

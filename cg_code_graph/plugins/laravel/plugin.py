@@ -237,6 +237,9 @@ class LaravelPlugin(FrameworkPlugin):
                                       lang="php", attrs={"defined_in": "config/database.php"})
                 self.connections[name] = cid
                 self.b.add_edge(cid, f"config:{key}", "CONFIGURED_BY", "config/database.php", n["line"], EXACT)
+        self.default_conn = self._default_connection()
+        if self.default_conn in self.connections:
+            b.add_node("connection", self.default_conn, attrs={"default": True})
         # config values that name a connection (literal value or env() default)
         for key, n in self.config_keys.items():
             vals = []
@@ -249,6 +252,13 @@ class LaravelPlugin(FrameworkPlugin):
                     via = "literal" if v == n.get("literal") else "env-default"
                     self.b.add_edge(f"config:{key}", self.connections[v], "REFERS_TO", f"config/{key.split('.')[0]}.php",
                                     n["line"], RESOLVED, via=via)
+
+    def _default_connection(self) -> str:
+        n = self.config_keys.get("database.default") or {}
+        vals = [e["default"] for e in n.get("envs", []) if isinstance(e.get("default"), str)]
+        if isinstance(n.get("literal"), str):
+            vals.insert(0, n["literal"])
+        return vals[0] if vals else "default"
 
     # ---- database/migrations
     def _parse_migrations(self):
@@ -534,7 +544,7 @@ class LaravelPlugin(FrameworkPlugin):
         return None
 
     # ------------------------------------------------------------------ fact handlers
-    def _col_edge(self, fn, table, col, kind, line, conf, **attrs):
+    def _col_edge(self, fn, table, col, kind, line, conf, conn=None, **attrs):
         if not table or not col or col == "*" or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", col):
             return
         known = table in self.tables and col in self.tables[table]["columns"]
@@ -546,7 +556,7 @@ class LaravelPlugin(FrameworkPlugin):
             cid = self.b.add_node("column", f"{table}.{col}", name=col, fqn=f"{table}.{col}", lang="sql", attrs={"inferred": True})
             self.b.add_edge(f"table:{table}", cid, "CONTAINS", None, None, HEURISTIC)
             conf = HEURISTIC
-        self.b.add_edge(fn.id, f"column:{table}.{col}", kind, fn.file, line, conf, **attrs)
+        self.b.add_edge(fn.id, f"column:{table}.{col}", kind, fn.file, line, conf, **(conn or self._default_conn_attrs()), **attrs)
         self.seen_cols.add((fn.id, line, table, col))
 
     def _split_col(self, s: str, default_table: str | None):
@@ -557,7 +567,7 @@ class LaravelPlugin(FrameworkPlugin):
             return (t.split(" ")[0], c)
         return (default_table, s)
 
-    def _col_args(self, fn, table, f, conf, write_methods=True, recv=None):
+    def _col_args(self, fn, table, f, conf, write_methods=True, recv=None, conn=None):
         ml = (f.get("m") or "").lower()
         args = f.get("args") or []
         line = f.get("line")
@@ -566,19 +576,19 @@ class LaravelPlugin(FrameworkPlugin):
             if a0.get("k") == "str":
                 t, c = self._split_col(a0["v"], table)
                 kind = "WRITES_COLUMN" if ml in ("increment", "decrement") else "READS_COLUMN"
-                self._col_edge(fn, t, c, kind, line, conf, via=f.get("m"))
+                self._col_edge(fn, t, c, kind, line, conf, conn=conn, via=f.get("m"))
             elif a0.get("k") == "arr" and ml in ("where", "orwhere"):
                 for it in a0["items"]:
                     k = it.get("key")
                     if k and k.get("k") == "str":
                         t, c = self._split_col(k["v"], table)
-                        self._col_edge(fn, t, c, "READS_COLUMN", line, conf, via=f.get("m"))
+                        self._col_edge(fn, t, c, "READS_COLUMN", line, conf, conn=conn, via=f.get("m"))
         if ml in COL_ALL_ARGS:
             for a in args:
                 vals = [a["v"]] if a.get("k") == "str" else [i["v"]["v"] for i in a.get("items", []) if (i.get("v") or {}).get("k") == "str"]
                 for v in vals:
                     t, c = self._split_col(v, table)
-                    self._col_edge(fn, t, c, "READS_COLUMN", line, conf, via=f.get("m"))
+                    self._col_edge(fn, t, c, "READS_COLUMN", line, conf, conn=conn, via=f.get("m"))
         if write_methods:
             for idx, names in ((0, WRITE_ARRAY0), (1, WRITE_ARRAY1)):
                 if ml in names and len(args) > idx and args[idx].get("k") == "arr":
@@ -586,19 +596,20 @@ class LaravelPlugin(FrameworkPlugin):
                         k = it.get("key")
                         if k and k.get("k") == "str":
                             t, c = self._split_col(k["v"], table)
-                            self._col_edge(fn, t, c, "WRITES_COLUMN", line, conf, via=f.get("m"))
+                            self._col_edge(fn, t, c, "WRITES_COLUMN", line, conf, conn=conn, via=f.get("m"))
             if recv and table and (ml in WRITE_ARRAY0 or ml in WRITE_ARRAY1):
                 idx = 1 if ml in WRITE_ARRAY1 and len(args) > 1 else 0
                 if len(args) > idx and (args[idx].get("k") != "arr" or any(it.get("key") is None for it in args[idx]["items"])):
-                    self.pending_mass.append({"fn": fn, "f": f, "table": table, "recv": recv})
+                    self.pending_mass.append({"fn": fn, "f": f, "table": table, "recv": recv, "conn": conn})
             if ml in WRITE_ARRAY1 and args and args[0].get("k") == "arr":
                 for it in args[0]["items"]:
                     k = it.get("key")
                     if k and k.get("k") == "str":
                         t, c = self._split_col(k["v"], table)
-                        self._col_edge(fn, t, c, "READS_COLUMN", line, conf, via=f.get("m"))
+                        self._col_edge(fn, t, c, "READS_COLUMN", line, conf, conn=conn, via=f.get("m"))
             if ml in WRITE_TABLE and table:
-                self.b.add_edge(fn.id, self._table_node(table), "WRITES_TABLE", fn.file, line, conf, via=f.get("m"))
+                self.b.add_edge(fn.id, self._table_node(table), "WRITES_TABLE", fn.file, line, conf, **(conn or self._default_conn_attrs()),
+                                via=f.get("m"))
 
     def _table_node(self, t):
         return self.b.add_node("table", t, lang="sql", attrs={} if t in self.tables else {"inferred": True})
@@ -633,12 +644,107 @@ class LaravelPlugin(FrameworkPlugin):
             walk(src[0], True)
         return keys
 
-    def _pivot_write(self, fn, table: str, f: dict, conf: str):
+    def _pivot_write(self, fn, table: str, f: dict, conf: str, conn=None):
         ml = (f.get("m") or "").lower()
         line = f.get("line")
-        self.b.add_edge(fn.id, self._table_node(table), "WRITES_TABLE", fn.file, line, conf, via=f.get("m"))
+        self.b.add_edge(fn.id, self._table_node(table), "WRITES_TABLE", fn.file, line, conf, **(conn or self._default_conn_attrs()),
+                        via=f.get("m"))
         for col in self._pivot_attr_keys(ml, f.get("args") or []):
-            self._col_edge(fn, table, col, "WRITES_COLUMN", line, conf, via=f.get("m"))
+            self._col_edge(fn, table, col, "WRITES_COLUMN", line, conf, conn=conn, via=f.get("m"))
+
+    # ---- the connection of one table / column edge (attrs.connection; see docs/schema.md)
+    def _default_conn_attrs(self) -> dict:
+        return {"connection": self.default_conn, "connection_default": self.default_conn}
+
+    @staticmethod
+    def _provider_label(fn_id: str) -> str:
+        s = fn_id.split(":", 1)[1] if ":" in fn_id else fn_id
+        cls, sep, m = s.rpartition("::")
+        return f"{cls.rsplit(chr(92), 1)[-1]}::{m}" if sep else s
+
+    def _conn_name(self, fn, ctx, arg) -> tuple[str, str | None]:
+        """(connection name, the method that returns the name) for a connection-name argument: a literal, a `config()`
+        key, a method returning a registered name, or a pattern such as `legacy_{store.id}`; `?` when unresolvable."""
+        lits = ctx.strings_of(arg)
+        if lits:
+            return lits[0], None
+        if arg.get("k") == "func" and (arg.get("n") or "").lower() == "config" and arg.get("args"):
+            cid = self.config_conn_refs.get((arg["args"][0] or {}).get("v"))
+            if cid:
+                return cid.split(":", 1)[1], None
+        for t in sorted(ctx.type_of(arg)):
+            if t.startswith("connname:"):
+                cid = t.split(":", 1)[1]
+                by = (self.b.nodes[cid].attrs or {}).get("registered_by") if cid in self.b.nodes else None
+                return cid.split(":", 1)[1], self._provider_label(by) if by else None
+        r = self.render(fn, arg)
+        if r and "{" in r and not re.fullmatch(r"\{[^{}]*\}", r):
+            return r, None
+        return "?", None
+
+    def _select(self, fn, ctx, arg, via: str) -> dict | None:
+        if not arg:
+            return None
+        name, prov = self._conn_name(fn, ctx, arg)
+        return {"name": name, "via": via, "from": prov}
+
+    def _query_conn(self, fn, ctx, d, line, depth=0) -> dict | None:
+        """The connection a query selects itself: `Model::on(x)`, `DB::connection(x)`, `->setConnection(x)` in the receiver
+        chain, or on the builder variable the chain starts from."""
+        while d and depth < 24:
+            depth += 1
+            k, args = d.get("k"), d.get("args") or []
+            if k == "mcall":
+                ml = (d.get("m") or "").lower()
+                if args and ml == "setconnection":
+                    return self._select(fn, ctx, args[0], "setConnection")
+                if args and ml == "connection" and (d.get("of") or {}).get("k") in ("func", "scall"):
+                    return self._select(fn, ctx, args[0], "->connection")
+                d = d.get("of")
+            elif k == "scall":
+                cls, ml = d.get("class") or "", (d.get("m") or "").lower()
+                if args and cls == FACADES["db"] and ml == "connection":
+                    return self._select(fn, ctx, args[0], "DB::connection")
+                if args and cls in self.models and ml == "on":
+                    return self._select(fn, ctx, args[0], f"{cls.rsplit(chr(92), 1)[-1]}::on")
+                return None
+            elif k == "var":
+                return self._var_conn(fn, ctx, d["n"], line, depth)
+            else:
+                return None
+        return None
+
+    def _var_conn(self, fn, ctx, name, line, depth) -> dict | None:
+        at = line if line is not None else 10 ** 9
+        cands = []
+        for f in fn.facts:
+            fl = f.get("line") or 0
+            if f["t"] == "assign" and f["var"] == name and fl < at:
+                cands.append((fl, 0, f))
+            elif (f["t"] == "call" and f.get("kind") == "method" and (f.get("m") or "").lower() == "setconnection"
+                  and f.get("args") and (f.get("recv") or {}).get("k") == "var" and f["recv"]["n"] == name and fl <= at):
+                cands.append((fl, 1, f))
+        for fl, is_set, f in sorted(cands, key=lambda c: (c[0], c[1]), reverse=True):
+            if is_set:
+                return self._select(fn, ctx, f["args"][0], "setConnection")
+            return self._query_conn(fn, ctx, f["expr"], fl, depth)
+        return None
+
+    def _conn_attrs(self, fn, ctx, recv, line, model=None) -> dict:
+        """Edge attributes for the connection of a query: its own selection, else the model's `$connection`, else the default."""
+        attrs = self._default_conn_attrs()
+        mconn = self.models[model]["connection"] if model in self.models else None
+        short = model.rsplit(chr(92), 1)[-1] if model in self.models else None
+        q = self._query_conn(fn, ctx, recv, line) if recv else None
+        if q:
+            attrs.update(connection=q["name"], connection_via=q["via"])
+            if q["from"]:
+                attrs["connection_from"] = q["from"]
+            if short:
+                attrs.update(connection_model=short, connection_fallback=mconn or self.default_conn)
+        elif mconn:
+            attrs.update(connection=mconn, connection_via=f"{short}::$connection", connection_model=short)
+        return attrs
 
     def _conn_targets(self, ctx: ResolveCtx, arg) -> list[tuple[str, str, str]]:
         """-> [(connection node id, confidence, via)] for a connection-name argument."""
@@ -668,14 +774,16 @@ class LaravelPlugin(FrameworkPlugin):
                         b.add_edge(fn.id, rel["method"].id, "CALLS", fn.file, line, RESOLVED, via="relation-property")
                     elif not prog.find_prop(rt, prop) or prog.find_prop(rt, prop).get("src") == "doc":
                         self._col_edge(fn, self.table_of(rt), prop, "WRITES_COLUMN" if f.get("write") else "READS_COLUMN",
-                                       line, RESOLVED, via="model-attribute", model=rt)
+                                       line, RESOLVED, conn=self._conn_attrs(fn, ctx, f.get("recv"), line, rt),
+                                       via="model-attribute", model=rt)
             return
         if t == "new" and f.get("class") in self.models and self.models[f["class"]]["connection"]:
             self._model_conn(fn, f["class"], line)
         if t == "new" and f.get("class") in self.models and f.get("args"):
             cls = f["class"]
             self.pending_mass.append({"fn": fn, "f": f, "m": "new", "label": f"new {cls.rsplit(chr(92), 1)[-1]}",
-                                      "table": self.table_of(cls), "recv": ("model", cls)})
+                                      "table": self.table_of(cls), "recv": ("model", cls),
+                                      "conn": self._conn_attrs(fn, ctx, None, line, cls)})
         if t != "call":
             return
         kind, m = f["kind"], (f.get("m") or "")
@@ -685,7 +793,8 @@ class LaravelPlugin(FrameworkPlugin):
             cls = f.get("class") or ""
             if cls == FACADES["db"]:
                 if ml == "table" and args and args[0].get("k") == "str":
-                    b.add_edge(fn.id, self._table_node(args[0]["v"].split(" ")[0]), "READS_TABLE", fn.file, line, EXACT, via="DB::table")
+                    b.add_edge(fn.id, self._table_node(args[0]["v"].split(" ")[0]), "READS_TABLE", fn.file, line, EXACT,
+                               **self._default_conn_attrs(), via="DB::table")
                 if ml == "connection":
                     for cid, conf, via in self._conn_targets(ctx, args[0] if args else None):
                         b.add_edge(fn.id, cid, "USES_CONNECTION", fn.file, line, conf, via=f"DB::connection {via}")
@@ -697,7 +806,7 @@ class LaravelPlugin(FrameworkPlugin):
                     self._config_read(fn, args[0]["v"], line, EXACT)
             elif cls in self.models:
                 tbl = self.table_of(cls)
-                self._col_args(fn, tbl, f, RESOLVED, recv=("static", cls))
+                self._col_args(fn, tbl, f, RESOLVED, recv=("static", cls), conn=self._conn_attrs(fn, ctx, None, line, cls))
                 if ml == "on" and args:
                     for cid, conf, via in self._conn_targets(ctx, args[0]):
                         b.add_edge(fn.id, cid, "USES_CONNECTION", fn.file, line, conf, via=f"{cls.split(chr(92))[-1]}::on {via}")
@@ -728,18 +837,22 @@ class LaravelPlugin(FrameworkPlugin):
             types = ctx.type_of(recv)
             for rt in types:
                 if rt.startswith("pivot:") and ml in PIVOT_WRITES:
-                    self._pivot_write(fn, rt.split(":", 1)[1], f, RESOLVED)
+                    self._pivot_write(fn, rt.split(":", 1)[1], f, RESOLVED, conn=self._conn_attrs(fn, ctx, recv, line))
                 elif rt.startswith("builder:"):
-                    self._col_args(fn, self.table_of(rt.split(":", 1)[1]), f, RESOLVED, recv=("builder", rt.split(":", 1)[1]))
+                    mdl = rt.split(":", 1)[1]
+                    self._col_args(fn, self.table_of(mdl), f, RESOLVED, recv=("builder", mdl),
+                                   conn=self._conn_attrs(fn, ctx, recv, line, mdl))
                 elif rt.startswith("qb:"):
                     tbl = rt.split(":", 1)[1]
-                    self._col_args(fn, tbl, f, RESOLVED, recv=("qb", None))
+                    self._col_args(fn, tbl, f, RESOLVED, recv=("qb", None), conn=self._conn_attrs(fn, ctx, recv, line))
                 elif rt in self.models:
                     tbl = self.table_of(rt)
                     if ml in WRITE_TABLE or ml in WRITE_ARRAY0:
-                        self._col_args(fn, tbl, {**f, "m": m}, RESOLVED, recv=("model", rt))
+                        self._col_args(fn, tbl, {**f, "m": m}, RESOLVED, recv=("model", rt),
+                                       conn=self._conn_attrs(fn, ctx, recv, line, rt))
                 elif rt.startswith("conn:") and ml == "table" and args and args[0].get("k") == "str":
-                    b.add_edge(fn.id, self._table_node(args[0]["v"].split(" ")[0]), "READS_TABLE", fn.file, line, RESOLVED, via="connection()->table")
+                    b.add_edge(fn.id, self._table_node(args[0]["v"].split(" ")[0]), "READS_TABLE", fn.file, line, RESOLVED,
+                               **self._conn_attrs(fn, ctx, recv, line), via="connection()->table")
             if ml == "setconnection" and args:
                 for cid, conf, via in self._conn_targets(ctx, args[0]):
                     b.add_edge(fn.id, cid, "USES_CONNECTION", fn.file, line, conf, via=f"setConnection {via}")

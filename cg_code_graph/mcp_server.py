@@ -132,7 +132,7 @@ def _display(p) -> str | None:
 
 
 EMPTY_MARKERS = ("no method matches", "no symbol matches", "not found:", "no node matches", "no matches for",
-                 "nothing depends", "no writers recorded", "no table ", "no path", "no forward path",
+                 "nothing depends", "no writers recorded", "no readers recorded", "no dependents recorded", "no table ", "no path", "no forward path",
                  "has no recorded callers", "no callers found in indexed code", "no direct callers", "no siblings found", "no routes, tables", "no indexed test reaches",
                  "nothing matched the spec", "no channel matches", "no broadcast channels", "no bridge endpoint matches",
                  "no web / native bridge calls", "explore: nothing matched")
@@ -344,7 +344,7 @@ def fmt_path(path: list[dict], limit=8) -> str:
     for p in path[:limit]:
         g = f"!GATED({at(p.get('guard') or '')})" if p.get("gated") else ""
         c = "" if p["confidence"] == "exact" else f"~{p['confidence'][0]}"
-        hops.append(f"{p['kind']}@{at(p['at'])}{c}{g}")
+        hops.append(f"{p['kind']}@{at(p['at'])}{c}{Q.conn_label(p)}{g}")
     more = f" …+{len(path) - limit}" if len(path) > limit else ""
     return " → ".join(hops) + more + f" → {short(path[-1]['to'])}"
 
@@ -370,7 +370,8 @@ def _ename(e: dict) -> str:
 
 @tool
 def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str = "module",
-            include_gated: bool = True, max_per_group: int = 25, paths: bool = True, platform: str | None = None) -> str:
+            include_gated: bool = True, max_per_group: int = 25, paths: bool = True, platform: str | None = None,
+            connection: str | None = None) -> str:
     """Reverse transitive dependents of one or more targets (union), e.g.
     ["orders.customer_id", "connection:warehouse", "connection:tenant_*"].
 
@@ -381,13 +382,16 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
     `group_by` = module | entry_kind | class. Each line: symbol, entry kinds, depth, shortest evidence path
     (hops KIND@file:line; ~r = resolved, ~h = heuristic confidence). At most `max_per_group` lines per top-level
     group (shallowest first). min_confidence: heuristic | resolved | exact.
+    A hop on a database connection other than the default shows `conn=<name>` (dynamic names as a pattern, `?` when it
+    cannot be resolved). connection: only the table / column edges that go to that connection (a dynamic name by its
+    pattern, e.g. `legacy_{store.id}`); no match lists the connections seen.
     platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
     condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
     Dart conditional imports) is left out; the reply's first line names the filter and how many conditions could not
     be evaluated (those stay in)."""
     st = _st()
     pf, pline = _platform(st, platform)
-    res = Q.reaches(st, targets, min_conf=min_confidence, platform=pf)
+    res = Q.reaches(st, targets, min_conf=min_confidence, platform=pf, connection=connection)
     items = [i for i in res["items"] if not i["is_target"]]
     _scope([x for t in res["targets"].values() for x in t] + [i["id"] for i in items])
     code = [i for i in items if i["kind"] in Q.CODE_KINDS]
@@ -404,6 +408,9 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
         pline.append(f"not built for {pf}: {', '.join(short(t) for t in res['platform']['targets_not_built'][:6])}")
     if missing and len(missing) == len(res["targets"]):
         return "\n".join(pline + [f"targets: {tl}"]) + f"\nno node matches {', '.join(map(repr, missing))}; try search() with part of the name (spec forms are listed in the server instructions)"
+    if not items and connection:
+        return "\n".join(pline + [f"targets: {tl}", f"no dependents recorded for {', '.join(res['targets'])} on connection {connection!r} "
+                                  f"(connections seen: {Q.seen_text(res.get('connections_seen') or [])})."])
     if not items:
         return "\n".join(pline) + ("\n" if pline else "") + (f"targets: {tl}\nnothing depends on the target(s) over dependency edges (min_confidence={min_confidence}). "
                 f"try: node() for its direct edges; downstream() for what it reaches; a lower min_confidence")
@@ -479,6 +486,7 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
         _EXTRA.set({"overrides": {k: [{"id": x["id"], "fqn": x["fqn"], "of": x["of"], "edge": x["edge"]} for x in r[k]]
                                   for k in ("overrides", "overridden_by")}})
     out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", *Q.override_lines(r),
+                   *([Q.connections_line(r["connections"])] if r.get("connections") else []),
                    f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
     if not r["callers"] and not r["entry_points"]:
         return "\n".join(out + [Q.explain_no_callers(st, method, r["targets"], min_confidence)])
@@ -645,7 +653,7 @@ def _prop_text(st, spec: str, what: str, rows: list, limit: int) -> str:
 
 
 def _table_writer_lines(rows: list, limit: int) -> list[str]:
-    by = defaultdict(lambda: {"cols": set(), "lines": set(), "ek": {}, "module": None, "conf": set()})
+    by = defaultdict(lambda: {"cols": set(), "lines": set(), "ek": {}, "module": None, "conf": set(), "conns": set()})
     for r in rows:
         b = by[r["src"]]
         if r["kind"] == "WRITES_COLUMN":
@@ -654,6 +662,8 @@ def _table_writer_lines(rows: list, limit: int) -> list[str]:
         b["ek"] = r["entry_kinds"]
         b["module"] = r["module"]
         b["conf"].add(r["confidence"])
+        if Q.conn_shown(r):
+            b["conns"].add(Q.conn_shown(r))
     mods = defaultdict(list)
     for src, b in by.items():
         mods[b["module"] or "?"].append((src, b))
@@ -665,7 +675,8 @@ def _table_writer_lines(rows: list, limit: int) -> list[str]:
                 break
             n += 1
             cols = ",".join(sorted(b["cols"])[:10]) or "(row)"
-            out.append(f"  {short(src)}  {ek_str(b['ek'])}  cols: {cols}  @ {', '.join(sorted(b['lines'])[:4])}  conf={'/'.join(sorted(b['conf']))}")
+            out.append(f"  {short(src)}  {ek_str(b['ek'])}  cols: {cols}  @ {', '.join(sorted(b['lines'])[:4])}  conf={'/'.join(sorted(b['conf']))}"
+                       + (f"  conn={','.join(sorted(b['conns']))}" if b["conns"] else ""))
     return out
 
 
@@ -677,19 +688,19 @@ def _site_lines(rows: list, limit: int) -> list[str]:
     out = []
     for m in sorted(by):
         out.append(f"[{m}]")
-        out += [f"  {r['fqn']}  {r['kind']} {r['dst']}  @{os.path.basename(r['file'] or '?')}:{r['line']} ({r['confidence']})"
+        out += [f"  {r['fqn']}  {r['kind']} {r['dst']}  @{os.path.basename(r['file'] or '?')}:{r['line']} ({r['confidence']}){Q.conn_label(r)}"
                 f"  entries: {','.join(sorted(r['entry_kinds'])) or '-'}" for r in by[m]]
     if len(rows) > limit:
         out.append(f"  … +{len(rows) - limit} more")
     return out
 
 
-def _access_text(st, spec: str, what: str, limit: int) -> str:
+def _access_text(st, spec: str, what: str, limit: int, connection: str | None = None) -> str:
     """Shared body of `readers` / `writers`: the same specs, groups and errors as `cg readers|writers` (#178)."""
-    groups = Q.access(st, spec, what)
+    groups = Q.access(st, spec, what, connection)
     rows = [r for g in groups for r in g["rows"]]
     if not rows:
-        return Q.explain_no_writers(st, spec, what)
+        return Q.explain_no_connection(st, spec, connection, what) if connection else Q.explain_no_writers(st, spec, what)
     if all(g["target_kind"] == "property" for g in groups) and len(groups) == 1:
         return _prop_text(st, spec, what, rows, limit)
     verb = "write" if what == "writers" else "read"
@@ -740,24 +751,27 @@ def lint_async_state(include_tests: bool = False, limit: int = 80, rules: str = 
 
 
 @tool
-def readers(prop: str, limit: int = 60) -> str:
+def readers(prop: str, limit: int = 60, connection: str | None = None) -> str:
     """Who reads a DB table, a column or a stored property. `prop` is `table`, `table:X`, `table.column` / `column:table.column`
     (READS_TABLE / READS_COLUMN edges, grouped by column; heuristic string-literal MENTIONS_COLUMN matches come last and are
     labelled) or `Type.prop` / `Class::$prop` (READS_PROP edges: Swift, Kotlin, Python, TypeScript, PHP). Each site with the
     entry-point kinds that reach it; test code's property reads come last. An unknown spec lists what was tried, the table's
-    columns and close matches."""
+    columns and close matches. A site on a database connection other than the default shows `conn=<name>`; `connection`
+    keeps only the sites on that connection (no match lists the connections seen)."""
     st = _st()
-    return _access_text(st, prop, "readers", limit)
+    return _access_text(st, prop, "readers", limit, connection)
 
 
 @tool
-def writers(table: str, limit: int = 60) -> str:
+def writers(table: str, limit: int = 60, connection: str | None = None) -> str:
     """Who writes a DB table, a column or a stored property. `table` is `table`, `table:X`, `table.column` / `column:table.column`
     (WRITES_TABLE / WRITES_COLUMN edges; for a column, the writers of that column, then a separate "table-level writes (columns
     not recorded)" group) or `Type.prop` / `Class::$prop` (WRITES_PROP edges: Swift, Kotlin, Python, TypeScript, PHP). Grouped by
-    module, with the columns written, evidence lines and the entry-point kinds that reach each writer."""
+    module, with the columns written, evidence lines and the entry-point kinds that reach each writer. A writer on a database
+    connection other than the default shows `conn=<name>`; `connection` keeps only the writers on that connection (no match
+    lists the connections seen)."""
     st = _st()
-    return _access_text(st, table, "writers", limit)
+    return _access_text(st, table, "writers", limit, connection)
 
 
 @tool

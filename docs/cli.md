@@ -15,8 +15,8 @@
 | `coverage --db DB` | One-line summary per repo and per language that is not fully indexed. `--details` / `--all-files` expand it. | [completeness](completeness.md) |
 | `starters --db DB` | Starter queries, each with the matching command and MCP call. | [viz](viz.md) |
 | `link --backend DB --frontend DB --db OUT` | Merge graphs and match client HTTP calls to routes. Two repos: `--backend` / `--frontend`. N repos: repeat `--repo NAME=DB[:role]`. `--report PREFIX` writes `.json` and `.md`. | [workspace](#workspace) |
-| `reaches SPEC...` | Dependents, grouped by entry classification. On a base method, overrides are followed. | [specs](#query-targets-specs) |
-| `impact SPEC` | Callers up to entry points. `--plans-dir` adds external snapshot clients. | [answer shape](#answer-shape) |
+| `reaches SPEC...` | Dependents, grouped by entry classification. On a base method, overrides are followed. A table target also follows its columns. `--connection NAME` keeps one database connection ([connections](#database-connections)). | [specs](#query-targets-specs) |
+| `impact SPEC` | Callers up to entry points. `--plans-dir` adds external snapshot clients. A `connections:` line lists the non-default database connections the function's own table / column edges go to ([connections](#database-connections)). | [answer shape](#answer-shape) |
 | `downstream SPEC` | Forward walk: page, composables, HTTP, routes, services, tables. | [specs](#query-targets-specs) |
 | `path SRC DST` | One shortest evidence chain. No path: reason on stdout, exit 1. | [answer shape](#answer-shape) |
 | `routes` | Guards, what the route reaches, and frontend callers on a linked graph. | [routes and guards](#routes-and-guards) |
@@ -25,8 +25,8 @@
 | `explore QUERY` | Question or spec → source, entry points, call paths, blast radius in one answer. `--budget`, `--json`. | [explore](#explore) |
 | `node SPEC` | Location, fqn, platforms, attrs, and edges (one site, with a count). | `cg node -h` |
 | `stats` | Project, languages, coverage line, node and edge counts. | `cg stats -h` |
-| `writers SPEC` | Writers of a table, a column, or a stored property (`WRITES_TABLE`, `WRITES_COLUMN`, `WRITES_PROP`). `SPEC` is `table`, `table:X`, `table.column`, `column:table.column`, `Type.prop` or `Class::$prop`. A column lists its column writers, then "table-level writes (columns not recorded)". `--json` rows carry `target_kind` (`table`, `column`, `property`). | [spec forms](#readers-and-writers-specs) |
-| `readers SPEC` | Readers of a table (`READS_TABLE`, `READS_COLUMN` grouped by column), a column (`READS_COLUMN`), or a stored property (`READS_PROP`). Same `SPEC` forms as `writers`. Heuristic string matches (`MENTIONS_COLUMN`) come last and are labelled. | [spec forms](#readers-and-writers-specs) |
+| `writers SPEC` | Writers of a table, a column, or a stored property (`WRITES_TABLE`, `WRITES_COLUMN`, `WRITES_PROP`). `SPEC` is `table`, `table:X`, `table.column`, `column:table.column`, `Type.prop` or `Class::$prop`. A column lists its column writers, then "table-level writes (columns not recorded)". `--json` rows carry `target_kind` (`table`, `column`, `property`) and `connection`. `--connection NAME` keeps one database connection. | [spec forms](#readers-and-writers-specs) |
+| `readers SPEC` | Readers of a table (`READS_TABLE`, `READS_COLUMN` grouped by column), a column (`READS_COLUMN`), or a stored property (`READS_PROP`). Same `SPEC` forms as `writers`. Heuristic string matches (`MENTIONS_COLUMN`) come last and are labelled. `--connection NAME` keeps one database connection. | [spec forms](#readers-and-writers-specs) |
 | `siblings SYMBOL` | Hierarchy, the same method on siblings, shared resources, co-callers. | `cg siblings -h` |
 | `roundtrip Type.prop` | Heuristic lossy-write / UI-seed pairs. `--tests` includes test code. Nothing is written to the graph. | [heuristics](#heuristics) |
 | `lint async-state` | Heuristic rules `stale-async-result`, `two-writers`, `incomplete-cache-key`, `echo-suppression`. `--rules` is a subset. `--tests` includes test code. | [heuristics](#heuristics) |
@@ -63,6 +63,7 @@
 | `--max-depth N` | `reaches`, `impact`, `downstream`, `writers`, `readers`, `siblings`, `node`, `stats`, `api-calls`, `tests` | hop cap (`tests`: `0` is any depth) |
 | `--no-paths` | the `--max-depth` commands, plus `routes` | omit evidence chains |
 | `--gate GATE` | the `--max-depth` commands except `tests` | live/gated split; default the scenario that was indexed (`auto`); `none` disables |
+| `--connection NAME` | `reaches`, `writers`, `readers` | only table / column edges on that database connection (`attrs.connection`; a dynamic name by its pattern, `legacy_{store.id}`). [connections](#database-connections) |
 | `--platform TARGET` | `reaches`, `impact`, `downstream`, `path`, `routes`, `search` | one build: `windows`, `linux`, `macos`, `ios`, `android`, `web`. The first line names the filter and how many conditions could not be evaluated. [platforms](platforms.md#queries) |
 | `--max-items N` | list commands (`routes`, `protocols`, `tools`, `external`, `parity`, `platforms`, `plan`, …) | cap listed rows |
 
@@ -155,6 +156,22 @@ table-level writes of books (columns not recorded):
 ```
 
 The table-level group omits a function that already has a column write to that table. Entry kinds are listed per site. `--json` is the flat list of rows; each row has `target_kind` (`table`, `column` or `property`) and `group` (`table`, `column`, `table_level`, `mentions`, `property`). The MCP tools `writers` and `readers` take the same specs and print the same groups.
+
+## Database connections
+
+Table and column edges record the database connection they go to (`attrs.connection`; [PHP](php.md#database-connections-on-table-edges-179), [schema](schema.md#edge-kinds)). Output shows it only when it is not the default:
+
+- `reaches`, `routes --reaches` and `path` add `conn=<name>` to the edge step: `READS_COLUMN[resolved @ app/Services/ArchiveService.php:13 conn=legacy_{store.id}]-> column:books.store_id`, and `READS_COLUMN@ArchiveService.php:13~r conn=legacy_{store.id}` in a route line.
+- `writers` and `readers` add `conn=<name>` to the row; `--json` rows carry `connection` (and `connection_default`) on every row.
+- `impact` on a function prints `connections: <name> (<how>, <file>:<line>; <Model> default: <connection>)` for each non-default connection its own table and column edges use, and nothing when it uses only the default.
+- `--connection NAME` on `reaches`, `writers` and `readers` filters by that name. With no match the reply names what exists:
+
+```text
+$ cg writers books --connection warehouse --db out/api.db
+no writers recorded for table 'books' on connection 'warehouse' (connections seen: mysql 26 edges, legacy_{store.id} 1 edge).
+```
+
+An edge whose connection could not be resolved is `?`. The MCP tools `reaches`, `writers` and `readers` take `connection`; `reaches`, `impact`, `writers` and `readers` print the same labels.
 
 ## Empty results
 

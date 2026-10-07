@@ -292,8 +292,35 @@ def read_spring_datasources(root: Path) -> list:
         out.append(fact)
     return out
 
+
+CONNECTION_EDGE_KINDS = ("READS_TABLE", "WRITES_TABLE", "READS_COLUMN", "WRITES_COLUMN", "MENTIONS_COLUMN")
+
+
+def table_connections(builder) -> int:
+    """`attrs.connections` of a table node: `{connection: edge count}` over its table / column edges that carry
+    `attrs.connection` (most used first). One table name used on several connections stays one node. Not tied to an ORM:
+    a plugin only has to set `attrs.connection` on its table / column edges."""
+    counts: dict[str, dict[str, int]] = {}
+    for e in builder.edges.values():
+        conn = (e.attrs or {}).get("connection")
+        if e.kind not in CONNECTION_EDGE_KINDS or not conn:
+            continue
+        key = e.dst.split(":", 1)[1]
+        tid = f"table:{key}" if e.dst.startswith("table:") else f"table:{key.rsplit('.', 1)[0]}"
+        counts.setdefault(tid, {})
+        counts[tid][conn] = counts[tid].get(conn, 0) + 1
+    n = 0
+    for tid, c in counts.items():
+        node = builder.nodes.get(tid)
+        if node is not None:
+            node.attrs["connections"] = dict(sorted(c.items(), key=lambda kv: (-kv[1], kv[0])))
+            n += 1
+    return n
+
+
 def attach(builder, root: Path) -> dict:
     root = Path(root)
+    table_connections(builder)
     envs = {n.id[len("env:"):]: n for n in builder.nodes.values() if n.kind == "env"}
     conns = [n for n in builder.nodes.values() if n.kind == "connection"]
     # Spring datasources before the empty-check so a repo with only application*.properties still indexes (#41)
@@ -646,6 +673,16 @@ def attach(builder, root: Path) -> dict:
                          (builder.nodes[nid].attrs or {}).get("confidence") or "resolved",
                          op="table", via="laravel connection")
         st["tables"] = st.get("tables", 0) + 1
+    # a table used on several connections: one CONNECTS_TO per connection that maps to a system, not only the first
+    for n in builder.nodes.values():
+        if n.kind != "table":
+            continue
+        for cname in (n.attrs or {}).get("connections") or {}:
+            nid = conn_ext.get(f"connection:{cname}")
+            if nid:
+                builder.add_edge(n.id, nid, "CONNECTS_TO", n.file, n.line,
+                                 (builder.nodes[nid].attrs or {}).get("confidence") or "resolved",
+                                 op="table", via=f"connection {cname}")
 
     # ---- ORM tables without a datasource block: attach to the sole SQL system of the project (#41 step 2)
     # Immich (Kysely + DB_URL), Nest TypeORM (@Entity + DATABASE_URL) when no DataSource fact named them.

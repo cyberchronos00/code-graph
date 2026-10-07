@@ -33,6 +33,7 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 - Blind-spot detectors are the list in [blind spots](completeness.md#blind-spots).
 - Code generated at build or run time, and files outside the indexed root, are absent from the graph and from that list.
 - Generated or copied files need a marker from [Generated files](generated.md): gitattributes, a banner, or a known build path. A generator with none of those is source until `generated.paths` names it.
+- A database connection chosen at run time from data (`Book::on($tenant->connection)`, a name read from a request or a property set in a constructor from an unknown source) is `?` on the table and column edges; `--connection ?` lists them. A name built from a parameter or a local is `?` too. Read / write replicas (`read` / `write` hosts inside one connection) are one connection.
 - Dangling symlinks are skipped with a per-file warning. The TypeScript walker does not follow symlinked directories.
 - References taken from a SCIP index are attributed to the nearest enclosing definition by source range.
 - Go is a SCIP recipe (`plugins/stubs`), not a language plugin. Without a SCIP index its files are `unsupported`. Java is a language plugin ([Java](java.md)): heuristic by default, exact with scip-java when `CG_JAVA_SCIP=1` (one run shared with Kotlin). Spring facts are extracted with Kotlin from the shared JVM module.

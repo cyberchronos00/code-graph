@@ -342,6 +342,9 @@ def main(argv=None):
         p.add_argument("--no-paths", action="store_true")
         p.add_argument("--max-depth", type=int, default=30)
         p.add_argument("--gate", default="auto", help="gate scenario for live/gated split (default: the one indexed; 'none' to disable)")
+        if name in ("reaches", "writers", "readers"):
+            p.add_argument("--connection", help="only the table / column edges that go to this database connection "
+                                                "(a dynamic name by its pattern, e.g. 'legacy_{store.id}'; docs/cli.md)")
         if name in ("reaches", "impact", "downstream"):
             p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
         if name == "impact":
@@ -646,7 +649,7 @@ def main(argv=None):
         return
     if a.cmd == "reaches":
         res = Q.reaches(st, a.specs, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate,
-                        platform=a.platform)
+                        platform=a.platform, connection=a.connection)
         res["completeness"] = _completeness(st, [x for t in res["targets"].values() for x in t] + [i["id"] for i in res["items"]])
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_reaches(res, show_paths=not a.no_paths))
         _note(res["completeness"], a.json)
@@ -668,6 +671,8 @@ def main(argv=None):
                   f"{a.platform}` lists references to it that would not build)"); return
         for line in Q.override_lines(res):
             print(line)
+        if res.get("connections"):
+            print(Q.connections_line(res["connections"]))
         if not res["callers"] and not res["entry_points"]:
             print(Q.explain_no_callers(st, a.spec, res["targets"], a.min_confidence)); return
         print(f"callers (transitive): {len(res['callers'])}")
@@ -702,12 +707,13 @@ def main(argv=None):
         res = RT.roundtrip(st, a.spec, include_tests=a.tests)
         print(RT.to_json(res) if a.json else RT.render(res))
     elif a.cmd in ("writers", "readers"):
-        groups = Q.access(st, a.spec, a.cmd)
+        groups = Q.access(st, a.spec, a.cmd, a.connection)
         rows = [r for g in groups for r in g["rows"]]
         if a.json:
             print(json.dumps(rows, indent=1)); return
         if not rows:
-            print(Q.explain_no_writers(st, a.spec, a.cmd)); return
+            print(Q.explain_no_connection(st, a.spec, a.connection, a.cmd) if a.connection else Q.explain_no_writers(st, a.spec, a.cmd))
+            return
         print("\n".join(Q.render_access(groups)))
         verb = "write" if a.cmd == "writers" else "read"
         nt = sum(1 for r in rows if r.get("test"))

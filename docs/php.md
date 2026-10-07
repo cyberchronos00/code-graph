@@ -49,6 +49,30 @@ $ cg node 'App\Http\Controllers\Admin\BookController::update' --db out/api.db
 
 Keys built at run time stay out (`$data[$field] = ...` in a loop, `Arr::only($data, $allowed)` with a computed list). See [limitations](limitations.md#plans-value-facts-and-the-visual-view).
 
+## Database connections on table edges (#179)
+
+Every `READS_TABLE`, `WRITES_TABLE`, `READS_COLUMN`, `WRITES_COLUMN` edge from Laravel code has `attrs.connection`, the database connection the query goes to. It is taken from, in order:
+
+1. the query's own selection, in the same chain or on the same builder variable: `Book::on($name)->where(...)`, `DB::connection($name)->table('books')`, `$book->setConnection($name)` followed by `$book->update(...)`;
+2. the model's `$connection` property;
+3. `database.default` from `config/database.php`.
+
+`$name` can be a literal, a `config()` key, a method that returns a name registered with `Config::set('database.connections.{$name}', ...)`, or an interpolated string. A dynamic name keeps its pattern (`legacy_{store.id}`); a name that cannot be resolved (a parameter, a property set from elsewhere) is `?`. Mass-assignment writes ([above](#column-writes-by-mass-assignment-177)) get the same attribute from the model they write.
+
+Edges on the default connection carry the attribute too, so `--connection mysql` works. Other attributes: `connection_default` (the project default), `connection_via` (`Book::on`, `DB::connection`, `setConnection`, `Shipment::$connection`; absent on the default), `connection_from` (the method that returns a dynamic name), `connection_model` and `connection_fallback` (the model and the connection it would have used without the override).
+
+```text
+$ cg impact 'ArchiveService::legacyBooks' --no-paths --db out/api.db
+targets: ['method:App\\Services\\ArchiveService::legacyBooks']
+connections: legacy_{store.id} (Book::on via ArchiveService::legacyConnection, app/Services/ArchiveService.php:13; Book default: mysql)
+callers (transitive): 1
+  d=1 [Http/Controllers/Admin] App\Http\Controllers\Admin\ArchiveController::index
+entry points: 1
+  http_route       GET /v1/{store}/admin/archive  conf=resolved
+```
+
+`reaches`, `routes --reaches`, `writers` and `readers` add `conn=<name>` to an edge that is not on the default connection, and `--connection NAME` keeps only the edges on one connection ([CLI](cli.md#database-connections)). A table used on several connections stays one node; its `attrs.connections` counts the edges per connection ([external systems](external.md#tables-on-several-connections)). A connection chosen at run time from data is `?` ([limitations](limitations.md#index-and-answers)).
+
 ## Inline guards
 
 `cg routes` lists access checks a Laravel action runs before its own work on an `inline:` line, separate from route middleware. `--json` stores them on `inline_guards` (`name`, `kind`, `at`, `conditional`).

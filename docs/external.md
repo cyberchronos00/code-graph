@@ -31,6 +31,10 @@ external -CREDENTIAL_FROM-> env:<KEY>          # where the secret is, never its 
 | Docker Engine API | `dockerode` (`new Docker()`, `{ socketPath }`, `{ host, port }`), Python `docker` (`from_env()`, `DockerClient(base_url=...)`, `containers.run`), PHP `docker-php`: `external:docker:<target>` where the target is the socket path (`/var/run/docker.sock` by default), `host:port`, or `env:DOCKER_HOST` when the address is read from it. Plain TCP without TLS is `tls=false`; a TLS client reads `ca` / `cert` / `key` as its credential |
 | Key management | AWS KMS (`KMSClient` + `EncryptCommand({ KeyId })`, `boto3.client('kms')`, aws-sdk-php `KmsClient`) is `external:aws:kms[:key]` (an alias, key id or env key; an ARN is cut to the key id); GCP Secret Manager is `external:gcp:secretmanager[:secret]` and GCP KMS `external:gcp:kms`; Azure Key Vault (`SecretClient(vaultUrl)`, `KeyClient`, `CertificateClient`) is `external:azure:keyvault[:vault-host]` |
 
+### Tables on several connections
+
+A table name used on more than one database connection (`Book::on('warehouse')`, `DB::connection('reporting')->table('books')`, a model with `$connection`) stays one `table` node. Its `attrs.connections` lists every connection seen with the number of table / column edges (`{"mysql": 22, "warehouse": 3}`), and the table gets one `CONNECTS_TO` (`op: table`, `via: connection <name>`) to the system of each connection that maps to one; `attrs.system` stays the model's or the default connection's system. A dynamic connection (`legacy_{store.id}`) or `?` has no system. `cg reaches table:books --connection warehouse` filters the code by connection ([CLI](cli.md#database-connections)).
+
 Confidence is `exact` for a literal host, `resolved` through `.env.example` or compose,
 `heuristic` otherwise. `DB_*` without a driver takes the one SQL client in package.json /
 requirements / pyproject, or the compose service. A Node env wrapper (`env.X`,
