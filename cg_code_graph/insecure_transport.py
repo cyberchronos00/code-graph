@@ -172,6 +172,8 @@ def _is_comment(text: str, pos: int, group: str) -> bool:
     head = text[ls:pos].lstrip()
     if group in ("pkgjson",):
         return False
+    if group == "py" and (re.match(r"(?:from\s+\S+\s+)?import\s", head) or text.count('"""', 0, pos) % 2 or text.count("'''", 0, pos) % 2):
+        return True
     return head.startswith(COMMENT) and not (group in ("php",) and head.startswith("#["))
 
 

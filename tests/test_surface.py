@@ -665,18 +665,21 @@ def test_mcp_attack_surface(dbs, monkeypatch):
 def test_sweep_redacts_credential_attrs_but_not_hosts_flags_or_plain_values():
     from types import SimpleNamespace as NS
     from cg_code_graph.core import redact as R
-    n1 = NS(attrs={"token": "ReportsService", "secret": "payments-signing", "password": "SURF-pw-1", "credential_literal": True, "auth": "unknown", "host": "db.example.test",
+    n1 = NS(doc="Accepts e.g. postgres://app:SURF-pw-5@db.example.test:5432/shop", attrs={"token": "ReportsService", "secret": "payments-signing", "password": "SURF-pw-1", "credential_literal": True, "auth": "unknown", "host": "db.example.test",
                    "entries": [{"key": "api_token", "value": "SURF-tok-2"}, {"key": "locale", "value": "en"}],
-                   "url": "postgres://app:SURF-pw-3@db.example.test:5432/shop"})
+                   "url": "postgres://app:SURF-pw-3@db.example.test:5432/shop",
+                   "reexports": {"ApiKey": "./ApiKey", "Token": "./Token"}})
     e1 = NS(kind="HTTP_CALLS", attrs={"literal_credential": True, "setting": "SECRET_KEY", "default": "SURF-key-4", "env_default_x": "x"})
     b = NS(nodes={"a": n1}, edges={"b": e1})
     R.sweep(b)
     text = repr(n1.attrs) + repr(e1.attrs)
-    assert "SURF-" not in text
+    assert "SURF-" not in text + n1.doc
+    assert n1.doc.startswith("Accepts e.g. postgres://app:" + R.MARK) and "@db.example.test:5432/shop" in n1.doc
     assert n1.attrs["password"].startswith(R.MARK)
     assert n1.attrs["credential_literal"] is True and n1.attrs["auth"] == "unknown"
     assert n1.attrs["host"] == "db.example.test" and "db.example.test:5432" in n1.attrs["url"]
     assert n1.attrs["entries"][1]["value"] == "en"
+    assert n1.attrs["reexports"] == {"ApiKey": "./ApiKey", "Token": "./Token"}
     assert n1.attrs["token"] == "ReportsService" and n1.attrs["secret"] == "payments-signing"
     assert e1.attrs["literal_credential"] is True and e1.attrs["default"].startswith(R.MARK)
 

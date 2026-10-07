@@ -21,10 +21,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Changed
 
+- `cg surface` precision pass from validation on public apps (#47 part 2c): Python `import` lines, docstrings and triple-quoted strings no longer match `tls-off`; a URL kept in a variable keeps its part (`path` / `query`) and a template that begins with the input is a whole URL; `realpath` / `basename` / numeric casts end `ssrf` taint; a `startsWith` / `startswith` / `str_starts_with` check against a literal `http(s)://` prefix counts as an allow-list; the redaction sweep covers node `doc` text and leaves `reexports` names alone. Numbers per corpus are in [docs/validation-log.md](docs/validation-log.md#attack-surface-47).
 - Secret values are no longer stored in the graph. Credential-looking keys and attrs (Laravel config `value` and `env_default`, and a last pass over node and edge attrs) hold `redacted:sha256:<8 hex>`, a short non-reversible fingerprint; non-secret values are unchanged. Re-index to drop old values ([docs/surface.md](docs/surface.md#no-secret-values-in-the-index)).
 
 ### Fixed
 
+- `cg index` no longer stops with `ValueError` in the SSRF pass on a helper that destructures a parameter (`const { url } = connection`) or aliases one in a container (#47 part 2c).
 - axios `delete` / `get` / `head` / `options` `{ data }` and `request({ method, url, data, params })` (module and instance) record `data` as the body and `params` as the query, so a DELETE body no longer gives a false `request_body_missing` (#194).
 - Laravel handler reads (`query` / `input` / `get` / `boolean` / `integer` / `float` / `string` / `date` / `enum` / `has` / `filled` / `only` / `except`, `request('x')`, `$request->prop`, one level into a private method) and `paginate()` (`page`, `cursor`, `per_page`) count as known request keys. An unknown query key is reported only when the route has explicit validation (#195).
 - Elysia `.model()` map values that are identifiers resolve to their `const` `t.Object`, in the same module or through one import or re-export, for `body`, `query`, `params` and `t.Ref` (#196).

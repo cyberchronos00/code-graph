@@ -53,4 +53,10 @@ class FetchController
         $link = $_POST['link'];
         return file_get_contents($link);
     }
+
+    public function download(Request $request)
+    {
+        $path = \realpath(storage_path('covers') . '/' . $request->query('file', ''));
+        readfile($path);
+    }
 }

@@ -275,8 +275,12 @@ def test_fixtures_are_hermetic_and_fake():
     assert (FIX / "ts-express" / "types" / "axios.d.ts").is_file() and (FIX / "ts-nuxt-or-next" / "types" / "axios.d.ts").is_file()
     real = re.compile(r"AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bSK[0-9a-f]{32}\b|sk_live_|sk_test_|ghp_[A-Za-z0-9]{20}")
     for p in FIX.rglob("*"):
-        if p.is_file():
-            assert not real.search(p.read_text()), p
+        if p.is_file() and "__pycache__" not in p.parts:
+            try:
+                text = p.read_text()
+            except UnicodeDecodeError:
+                continue
+            assert not real.search(text), p
 
 
 # ------------------------------------------------------------------ the analysis itself (no graph)
@@ -319,6 +323,35 @@ def test_url_part_unit(lang, expr, tainted, part):
         assert SI.url_part(expr, sp[0][0], env) == part
 
 
+@pytest.mark.parametrize("lang,body,part", [
+    ("js", "const endpoint = `${BASE()}/api/jobs/${id}`\nawait fetch(endpoint)\n", "path"),
+    ("js", "const endpoint = `https://api.bookstore.test/jobs/${id}`\nawait fetch(endpoint)\n", "path"),
+    ("js", "const endpoint = `https://api.bookstore.test/jobs?id=${id}`\nawait fetch(endpoint)\n", "query"),
+    ("js", "const endpoint = `${id}/status`\nawait fetch(endpoint)\n", "url"),
+    ("js", "const endpoint = id\nawait fetch(endpoint)\n", "url"),
+    ("js", "await fetch(`${id}`)\n", "url"),
+    ("js", "const { url } = id\nawait fetch(url)\n", "url"),
+])
+def test_part_survives_a_derived_variable(lang, body, part):
+    env = SI.Env(lang)
+    env.vars["id"] = ("arg", "0")
+    SI.run_assignments(body, env, lang)
+    sinks = SI.find_sinks(body, 1, lang, env, None, lambda ln: True)
+    assert [s.part for s in sinks] == [part]
+    assert all(str(sp[3]).isdigit() for s in sinks for sp in s.spans if sp[2] == "arg")
+
+
+@pytest.mark.parametrize("rhs", ["\\realpath($base . '/' . $f)", "basename($f)", "(int) $f", "intval($f)", "parseInt(f, 10)", "Number(f)", "int(f)",
+                                 "os.path.basename(f)"])
+def test_path_and_number_normalisers_end_the_taint(rhs):
+    assert SI._normalized(rhs)
+
+
+@pytest.mark.parametrize("rhs", ["realpath($f) . '/x'", "trim($f)", "$f", "urldecode(basename($f)) . $g", "intval($f) + 'x' . $u"])
+def test_other_expressions_stay_tainted(rhs):
+    assert not SI._normalized(rhs)
+
+
 @pytest.mark.parametrize("lang,text,expect", [
     ("js", "req.query.url", [("query", "url")]),
     ("js", "req.body['callback']", [("body", "callback")]),
@@ -358,6 +391,33 @@ def test_allow_list_guard_detection():
     SI.run_assignments("\n".join(lines), env, "py")
     assert SI._guard_before(lines, 3, env, "py") is True
     assert SI._guard_before(["host = urlparse(url).hostname", "requests.get(url)"], 1, env, "py") is False
+
+
+@pytest.mark.parametrize("lang,var,lines", [
+    ("js", "target", ["if (!target.startsWith('https://covers.bookstore.test/')) {", "  return res.sendStatus(400)", "}", "await axios.get(target)"]),
+    ("py", "url", ["if not url.startswith('https://covers.bookstore.test/'):", "    abort(400)", "requests.get(url)"]),
+    ("php", "url", ["if (! str_starts_with($url, 'https://covers.bookstore.test/')) {", "    abort(400);", "}", "Http::get($url);"]),
+])
+def test_prefix_checks_count_as_allow_lists(lang, var, lines):
+    env = SI.Env(lang)
+    env.vars[var] = ("query", "url")
+    assert SI._guard_before(lines, len(lines) - 1, env, lang) is True
+
+
+@pytest.mark.parametrize("lang,var,line", [
+    ("js", "target", "const label = target.startsWith('https://covers.bookstore.test/') ? 'cover' : 'other'"),
+    ("js", "target", "if (target.startsWith('/')) { log(target) }"),
+    ("py", "url", "x = url.startswith('ftp')"),
+])
+def test_prefix_text_without_a_host_check_is_not_a_guard(lang, var, line):
+    env = SI.Env(lang)
+    env.vars[var] = ("query", "url")
+    assert SI._guard_before([line, "call(x)"], 1, env, lang) is False
+
+
+@pytest.mark.parametrize("prefix", ["'abc\\", '"https://x.test/\\', "`a\\"])
+def test_literal_prefix_ends_on_a_trailing_backslash(prefix):
+    assert isinstance(SI._literal_prefix(prefix), str)
 
 
 def test_packaged_with_the_wheel():

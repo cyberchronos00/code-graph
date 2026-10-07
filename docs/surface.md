@@ -78,12 +78,12 @@ Each use is recorded as `url_from_input = {source, key, part, via, checked}`: `s
 `header`, `path` or `cookie`; `key` is the input name (`*` when the whole container is used); `part` is what the input
 controls; `via` is `direct` (same function) or `helper` (one level: a handler passes the value to a function whose URL
 uses that parameter, found through the `CALLS` edge); `checked` is true when a comparison with a constant allow-list
-(`in ALLOWED_HOSTS`, `ALLOWED.has(u.host)`, `in_array($host, self::ALLOWED)`) precedes the call. Only names are stored,
+(`in ALLOWED_HOSTS`, `ALLOWED.has(u.host)`, `in_array($host, self::ALLOWED)`) or a `startsWith` / `startswith` / `str_starts_with` test against a literal `https://...` prefix precedes the call. Only names are stored,
 never a value from a request.
 
 | `part` | meaning | reported |
 |---|---|---|
-| `url` | the whole URL, or `new URL(x)` / `urljoin(base, x)` (an absolute `x` replaces the host) | yes |
+| `url` | the whole URL, a template that starts with the input, or `new URL(x)` / `urljoin(base, x)` (an absolute `x` replaces the host) | yes |
 | `host` | the host in `https://${x}/...` or a DNS lookup name | yes |
 | `path`, `query` | input after a fixed host (`https://api.example/${id}`, `...?q=` + x) | no, recorded only |
 | any, with `checked` | an allow-list check precedes the call | no, recorded only |
@@ -277,7 +277,13 @@ readable. Non-secret values (`'currency' => 'EUR'`, a hostname default) are stor
 sees a marker as a literal. `cg node config:...` and a direct database read show the marker, never the value. The
 external-system attrs of #42 parts 3a / 3b and the Python and TypeScript config readers keep addresses, key names and
 locations only, so they have nothing to redact; a test indexes the surface fixtures and fails if a `SURF-` marker
-appears in any table.
+appears in any table. The `doc` text of a node is swept as well, so an example DSN in a comment keeps its host and loses
+its password. A map keyed by source identifiers (`reexports`) is left alone: an exported class named `ApiKey` is a name.
+
+## Validation
+
+Counts, sampled true / false positives per finding type and recall on three intentionally vulnerable apps are in the
+[validation log](validation-log.md#attack-surface-47). `unguarded` is the noisiest type on large apps ([Known limitations](limitations.md#attack-surface)).
 
 ## Not detected yet
 

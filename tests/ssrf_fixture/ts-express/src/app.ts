@@ -49,6 +49,11 @@ async function fetchRaw(req: any, res: any) {
   res.json(await r.json())
 }
 
+async function probeMirror(settings: Record<string, any>) {
+  const { url } = settings
+  return fetch(`${url}/status`)
+}
+
 app.get('/cover', proxyCover)
 app.get('/covers/:isbn', coverByIsbn)
 app.post('/notify', notifyCallback)

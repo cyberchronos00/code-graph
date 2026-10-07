@@ -124,4 +124,4 @@ Callers that are already test nodes are left out.
 - SDK libraries for Rust, Kotlin, Swift and Dart, and SMTP (#44). Broker pairing is [Protocol links](protocols.md).
 - A Prisma schema in a sibling workspace package is not found from the app.
 
-Corpus notes: [external systems](validation-log.md#external-systems-40).
+Corpus notes: [external systems](validation-log.md#external-systems-40); mail, SMS, push and infrastructure SDKs on six real apps: [validation log](validation-log.md#mail--sms--push--infra-sdks-42-parts-3a-and-3b).

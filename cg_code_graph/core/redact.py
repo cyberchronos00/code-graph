@@ -77,6 +77,8 @@ _DIRECT = {"password", "passwd", "pwd", "passphrase", "api_key", "apikey", "acce
            "private_key", "auth_token"}
 _REFERENCE = re.compile(r"^(?:env|config|file|const|literal)[: ]|^\$\{|^[\w./-]+:\d+$")
 STRUCTURAL_EDGES = {"INJECTS", "BOUND_TO", "CREDENTIAL_FROM"}
+# Attr maps keyed by source identifiers: an exported class called `ApiKey` is a name, not a literal under a credential key.
+_IDENTIFIER_MAPS = {"reexports"}
 
 
 def _holds_secret(d: dict, k: str) -> bool:
@@ -94,8 +96,10 @@ def sweep(builder) -> int:
     Laravel config). Booleans such as `credential_literal`, hosts and every other value stay as they are."""
     n = 0
 
-    def walk(x):
+    def walk(x, name=None):
         nonlocal n
+        if name in _IDENTIFIER_MAPS:
+            return x
         if isinstance(x, str):
             if "@" in x and "://" in x:
                 y = redact_url(x)
@@ -109,7 +113,7 @@ def sweep(builder) -> int:
                     x[k] = marker(v)
                     n += 1
                     continue
-                nv = walk(v)
+                nv = walk(v, k)
                 if nv is not v:
                     x[k] = nv
             return x
@@ -121,6 +125,12 @@ def sweep(builder) -> int:
             return x
         return x
     for node in builder.nodes.values():
+        doc = getattr(node, "doc", None)
+        if isinstance(doc, str) and "@" in doc and "://" in doc:
+            y = redact_url(doc)
+            if y != doc:
+                node.doc = y
+                n += 1
         if node.attrs:
             walk(node.attrs)
     for e in builder.edges.values():

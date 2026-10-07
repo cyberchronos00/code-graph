@@ -10,3 +10,4 @@ Route::post('/import', [FetchController::class, 'import']);
 Route::get('/mirror', [FetchController::class, 'mirror']);
 Route::get('/lookup', [FetchController::class, 'lookup']);
 Route::post('/raw', [FetchController::class, 'raw']);
+Route::get('/download', [FetchController::class, 'download']);

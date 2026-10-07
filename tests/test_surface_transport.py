@@ -496,6 +496,9 @@ def test_detectors_without_a_fixture_positive(group, text, kind):
     ("dart", "ClientChannel('localhost', port: 50051, options: const ChannelOptions(credentials: ChannelCredentials.insecure()));"),
     ("py", "# requests.get(url, verify=False)\nrequests.get(url, verify=True)"),
     ("js", "// rejectUnauthorized: false\nconst agent = { rejectUnauthorized: true }"),
+    ("py", "from ssl import CERT_NONE, CERT_REQUIRED\nimport ssl.CERT_NONE"),
+    ("py", 'def make(verify=True):\n    """Pass verify=True; setting client.verify = False later has no effect."""\n    return verify'),
+    ("py", "DOCUMENTATION = r'''\n  opts:\n    - Adds C(-o StrictHostKeyChecking=no) to the ssh options.\n'''\nrequests.get(url, verify=True)"),
 ])
 def test_detectors_without_a_fixture_negative(group, text):
     assert [f for f in IT.scan_text(text, "x", group) if f["kind"] != "grpc-local"] == []

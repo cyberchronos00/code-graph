@@ -215,6 +215,7 @@ class Env:
         self.lang = lang
         self.vars: dict[str, tuple[str, str | None]] = dict(parent.vars) if parent else {}
         self.cont: dict[str, str] = dict(parent.cont) if parent else {}
+        self.parts: dict[str, str] = dict(parent.parts) if parent else {}
         self._rx: dict[str, re.Pattern] = {}
 
     def rx(self, name: str) -> re.Pattern:
@@ -293,6 +294,36 @@ def _rhs_only_source(rhs: str, env: Env) -> str | None:
     return _is_whole_source(r, env)
 
 
+_NORMALIZED = re.compile(
+    r"^(?:\\?(?:realpath|basename|intval|floatval)|\(\s*(?:int|float)\s*\)\s*\(?|parseInt|parseFloat|Number|int|float|os\.path\.basename)\s*\(")
+
+
+def _normalized(rhs: str) -> bool:
+    """The whole right-hand side is a path-normalising or numeric call, so the variable is no longer a URL."""
+    if rhs.startswith(("(int)", "(float)")):
+        return True
+    m = _NORMALIZED.match(rhs)
+    if not m:
+        return False
+    depth = 0
+    for i in range(m.end() - 1, len(rhs)):
+        depth += {"(": 1, ")": -1}.get(rhs[i], 0)
+        if depth == 0:
+            return not rhs[i + 1:].strip()
+    return False
+
+
+def _rhs_part(rhs: str, env: Env) -> str | None:
+    """The URL part the tainted piece of an assignment's right-hand side controls, when it builds a URL string."""
+    fmt = _format_parts(rhs, env)
+    if fmt:
+        text, start = fmt
+        sp = env.spans(text[start:])
+        return url_part(text, sp[0][0] + start, env) if sp else None
+    sp = env.spans(rhs)
+    return url_part(rhs, sp[0][0], env) if sp else None
+
+
 def run_assignments(body: str, env: Env, lang: str) -> None:
     rx = ASSIGN[lang]
     for _ in range(3):
@@ -300,6 +331,8 @@ def run_assignments(body: str, env: Env, lang: str) -> None:
         for m in rx.finditer(body):
             lhs, rhs = m.group("lhs"), m.group("rhs").strip().rstrip(";").strip()
             if lang == "py" and re.search(r"\blambda\b|^\s*(?:def|class|if|elif|for|while)\b", m.group(0)):
+                continue
+            if _normalized(rhs):
                 continue
             whole = _rhs_only_source(rhs, env)
             sp = env.spans(rhs)
@@ -309,14 +342,20 @@ def run_assignments(body: str, env: Env, lang: str) -> None:
             if lhs.startswith(("{", "[")):
                 src = whole or sp[0][2]
                 for nm, key in names:
-                    env.vars.setdefault(nm, (src, key))
+                    env.vars.setdefault(nm, (src, sp[0][3] if src == "arg" else key))
                 continue
             nm = names[0][0]
-            if whole:
+            if whole == "arg":
+                first = sp[0]
+                env.vars.setdefault(nm, (first[2], first[3]))
+            elif whole:
                 env.cont.setdefault(nm, whole)
             else:
                 first = sp[0]
                 env.vars.setdefault(nm, (first[2], first[3]))
+                part = _rhs_part(rhs, env)
+                if part in ("path", "query"):
+                    env.parts.setdefault(nm, part)
 
 
 # ------------------------------------------------------------------ URL part
@@ -330,6 +369,8 @@ def _literal_prefix(prefix: str) -> str:
             while j < n and prefix[j] != c:
                 if prefix[j] == "\\":
                     j += 1
+                    if j >= n:
+                        break
                 elif (c == "`" and prefix[j:j + 2] == "${") or (c in "\"'" and prefix[j] == "{" and re.search(r"[fF]$", prefix[:i + 0] or "")):
                     k = j + 2 if prefix[j] == "$" else j + 1
                     depth = 1
@@ -368,7 +409,7 @@ def url_part(expr: str, start: int, env: Env | None = None) -> str:
     lead = re.match(r"(?:await\s+)?(?:new\s+URL\s*\(|urljoin\s*\(|urllib\.parse\.urljoin\s*\(|new\s+Request\s*\()", e)
     if lead and start >= lead.end():
         return "url"
-    prefix = expr[:start]
+    prefix = re.sub(r"\$?\{$", "", expr[:start])
     lit = _literal_prefix(prefix)
     if "://" in lit:
         after = lit.split("://", 1)[1]
@@ -497,6 +538,9 @@ def _signature_sources(sig: str, head: str, lang: str, env: Env, route_paths: li
                 env.vars[n] = ("param", n)
 
 
+PREFIX_CHECK = re.compile(r"""(?:\.\s*(?:startsWith|startswith)\s*\(\s*|\bstr_starts_with\s*\([^,]+,\s*)['"]https?://[^'"]+/?['"]""")
+
+
 def _guard_before(body_lines: list[str], upto: int, env: Env, lang: str, extra_names=()) -> bool:
     """An allow-list comparison on a tainted value before line index `upto` (heuristic, textual)."""
     for ln in body_lines[:upto]:
@@ -505,6 +549,8 @@ def _guard_before(body_lines: list[str], upto: int, env: Env, lang: str, extra_n
             continue
         if not (env.spans(ln) or any(_var_rx(n, lang).search(ln) for n in extra_names)):
             continue
+        if PREFIX_CHECK.search(ln) and re.search(r"\b(?:if|abort|assert|unless|when|validate|return|throw)\b", ln):
+            return True
         if not (ALLOW_WORD.search(ln) or CONST_NAME.search(ln)):
             continue
         if COMPARE.search(ln) or re.search(r"\b(?:if|abort|assert|unless|when|validate)\b", ln):
@@ -568,6 +614,8 @@ def find_sinks(body: str, base_line: int, lang: str, env: Env, py_lib: str | Non
                 continue
             first = spans[0]
             part = "host" if kind == "dns" else url_part(expr, first[0], env)
+            if kind != "dns" and part == "url" and expr.strip() in env.parts:
+                part = env.parts[expr.strip()]
             rel = line - base_line
             out.append(Sink(kind=kind, lib=lib, line=line, expr=expr, spans=spans, part=part, idx=rel,
                             checked=_guard_before(lines, rel, env, lang)))
@@ -691,7 +739,7 @@ def apply(project, builder) -> dict:
                             penv.vars[nm] = ("arg", str(i))
                     run_assignments(body, penv, lang)
                     for s in find_sinks(body, fn.lo, lang, penv, py_lib, owned):
-                        a = [sp for sp in s.spans if sp[2] == "arg"]
+                        a = [sp for sp in s.spans if sp[2] == "arg" and str(sp[3]).isdigit()]
                         if a:
                             helper_sinks[fn.id].append((int(a[0][3]), s))
 
