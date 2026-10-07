@@ -151,7 +151,9 @@ class LocalSockets(Scan):
             h = handler or fn
             if self.is_test(file, h):
                 return
-            protocol_receive(self.b, p, name, h, file, line, conf, how=how, library=lib, **attrs)
+            nid = protocol_receive(self.b, p, name, h, file, line, conf, how=how, library=lib, **attrs)
+            if attrs.get("mode"):
+                self.b.nodes[nid].attrs["mode"] = attrs["mode"]
         else:
             protocol_send(self.b, p, name, fn, file, line, conf, test=self.is_test(file, fn), role="connect" if p != "dbus" else "invoke",
                           library=lib, how=how, **attrs)
@@ -168,7 +170,7 @@ class LocalSockets(Scan):
 
     def mode_near(self, src, pos, file):
         _fn, lo, hi = self.s.fn_bounds(file, pos)
-        m = re.search(r"\b(?:os\.chmod|chmod|fs\.chmodSync|fs\.promises\.chmod|set_permissions)\s*\([^)]*?(0o?[0-7]{3,4}|from_mode\(\s*0o?[0-7]{3,4})", src[lo:hi])
+        m = re.search(r"\b(?:os\.chmod|chmod|fs\.chmodSync|fs\.promises\.chmod|set_permissions)\s*\([^)]*?(0o?[0-7]{3,4}|from_mode\(\s*0o?[0-7]{3,4}|(?<=['\"])[ugoa]*[ao][ugoa]*[+=][rwxst]*w[rwxst]*(?=['\"]))", src[lo:hi])
         return re.sub(r"from_mode\(\s*", "", m.group(1)) if m else None
 
     def calls(self, src, rx):

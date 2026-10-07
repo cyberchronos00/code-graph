@@ -1829,7 +1829,7 @@ def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
         a = json.loads(e["attrs"] or "{}")
         calls[e["dst"]].append({"caller": e["src"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"],
                                 "url": a.get("url"), "via_helper": a.get("via_helper"), "body_keys": a.get("body_keys"),
-                                "query_keys": a.get("query_keys")})
+                                "query_keys": a.get("query_keys"), "tls_verify": a.get("tls_verify")})
     routes = defaultdict(list)
     for e in st.q("SELECT src, dst, confidence, attrs FROM edges WHERE kind='MATCHES_ROUTE'"):
         ctl = [r["dst"] for r in st.q("SELECT dst FROM edges WHERE src=? AND kind='ROUTES_TO'", (e["dst"],))]
@@ -1881,7 +1881,8 @@ def render_api_calls(rows: list[dict], max_calls=4) -> str:
             out.append("   => (unmatched)")
         for c in r["calls"][:max_calls]:
             h = f" via {c['via_helper']['fn']}" if c.get("via_helper") else ""
-            out.append(f"   <- {c['caller']} @ {c['at']} [{c['confidence']}]{h}")
+            off = "  [tls verify off]" if c.get("tls_verify") is False else ""
+            out.append(f"   <- {c['caller']} @ {c['at']} [{c['confidence']}]{h}{off}")
             bk = _key_names(c.get("body_keys"))
             qk = _key_names(c.get("query_keys"))
             if bk:

@@ -786,10 +786,13 @@ def attack_surface(inbound: bool = False, outbound: bool = False, protocol: str 
     evidence, confidence and the entry points reaching each finding. Findings: hardcoded (literal credential in a DSN,
     SDK constructor or config; the value is never shown), plaintext (external system without TLS, non-loopback host),
     unverified (webhook route that never verifies its signature), unguarded (inbound route / handler with no auth guard,
-    the `routes` rule; strict: route guards only), exposed-listener (TCP / UDP bound to all interfaces). inbound=true
+    the `routes` rule; strict: route guards only), exposed-listener (TCP / UDP bound to all interfaces), tls-off
+    (certificate or SSH host key verification switched off), ipc-exposed (postMessage to '*', world-writable Unix socket,
+    wildcard externally_connectable, Electron nodeIntegration / contextIsolation off; plaintext also covers insecure gRPC
+    channels). inbound=true
     lists routes, webhooks, sockets, consumers and IPC handlers with guard state and whether they reach a write;
     outbound=true lists every external system with address source, credential source and TLS. protocol narrows both;
-    finding: hardcoded | plaintext | unverified | unguarded | exposed-listener; min_confidence: heuristic | resolved |
+    finding: hardcoded | plaintext | unverified | unguarded | exposed-listener | tls-off | ipc-exposed; min_confidence: heuristic | resolved |
     exact. Findings accepted in .cg.yaml surface.ignore are counted (show_ignored lists them). The structured reply
     carries the full result under `surface` (the `cg surface --format json` shape); SARIF is `cg surface --format sarif`.
     Details: `external_systems`, `protocol_links`, `routes`."""

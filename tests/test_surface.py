@@ -28,7 +28,8 @@ from cg_code_graph.link import link_many  # noqa: E402
 FIX = ROOT / "tests" / "surface_fixture"
 NEEDS = {"ts": ("node", "node is not installed (TS extractor)"), "php": ("php", "php is not installed (PHP extractor)")}
 SECRET_RE = re.compile(r"SURF-[A-Z]+-[A-Za-z0-9-]+")
-FINDING_NAMES = ["hardcoded", "plaintext", "unverified", "unguarded", "exposed-listener"]
+FINDING_NAMES = ["hardcoded", "plaintext", "unverified", "unguarded", "exposed-listener"]       # what these fixtures produce
+PART2A_NAMES = ["tls-off", "ipc-exposed"]                                                         # tests/test_surface_transport.py
 
 # (finding, node) pairs each fixture must produce; protocol-level facts only, no line numbers
 EXPECTED = {
@@ -106,7 +107,7 @@ def test_every_finding_type_across_languages(dbs, capsys):
     seen = set()
     for lang in ("py", "ts", "php"):
         seen |= {f for f, _ in pairs(run_json(capsys, dbs(lang))[1])}
-    assert seen == set(FINDING_NAMES) == set(S.FINDINGS)
+    assert seen == set(FINDING_NAMES) == set(S.FINDINGS) - set(PART2A_NAMES)
 
 
 @pytest.mark.parametrize("lang", ["py", "ts", "php"])
@@ -311,8 +312,8 @@ def test_filters(dbs, capsys):
 
 
 def test_unknown_finding_is_a_usage_error(dbs, capsys):
-    rc, _, err = cg(capsys, "surface", "--db", dbs("py"), "--finding", "tls-off")
-    assert rc == 2 and "unknown finding 'tls-off'" in err
+    rc, _, err = cg(capsys, "surface", "--db", dbs("py"), "--finding", "ssrf")
+    assert rc == 2 and "unknown finding 'ssrf'" in err
     rc, _, err = cg(capsys, "surface", "--db", dbs("py"), "--fail-on", "hardcoded,bogus")
     assert rc == 2 and "bogus" in err
 
@@ -336,7 +337,7 @@ def test_sarif_structure(dbs, capsys, lang):
     drv = run["tool"]["driver"]
     assert drv["name"] == "cg"
     rules = {r["id"]: r for r in drv["rules"]}
-    assert set(rules) == {f"cg.surface.{n}" for n in FINDING_NAMES}              # one rule per finding type
+    assert set(rules) == {f"cg.surface.{n}" for n in FINDING_NAMES + PART2A_NAMES}   # one rule per finding type
     assert len(run["results"]) == len(EXPECTED[lang])
     for r in run["results"]:
         assert r["ruleId"] in rules and drv["rules"][r["ruleIndex"]]["id"] == r["ruleId"]
@@ -547,6 +548,81 @@ def test_external_systems_from_3b_are_picked_up_without_leaking(tmp_path, capsys
     assert ("plaintext", "external:docker:10.20.0.5:2375") in found["docker-py"]
 
 
+def _db_text(path) -> list[tuple[str, str]]:
+    """(table.column, text) for every text value of every table of a graph database."""
+    out = []
+    con = sqlite3.connect(path)
+    for (table,) in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
+        cols = [r[1] for r in con.execute(f'PRAGMA table_info("{table}")')]
+        for row in con.execute(f'SELECT * FROM "{table}"'):
+            for col, v in zip(cols, row):
+                if isinstance(v, bytes):
+                    v = v.decode("utf-8", "replace")
+                if isinstance(v, str):
+                    out.append((f"{table}.{col}", v))
+    con.close()
+    return out
+
+
+@pytest.mark.parametrize("lang", ["py", "ts", "php", "rs"])
+def test_no_secret_value_is_stored_in_the_database(tmp_path, lang):
+    """The fixtures' fake secrets must be nowhere in the SQLite file, in any table (not only in command output)."""
+    if lang != "rs":
+        _need(lang)
+    root = tmp_path / lang
+    shutil.copytree(FIX / lang, root, ignore=shutil.ignore_patterns("node_modules", "vendor", "target"))
+    db = tmp_path / f"{lang}.db"
+    index_project(root, db, lang)
+    rows = _db_text(db)
+    assert len(rows) > 100
+    leaks = [(c, m) for c, v in rows for m in re.findall(r"SURF-[A-Za-z0-9-]*", v)]
+    assert not leaks, leaks
+    raw = db.read_bytes()
+    assert b"SURF-" not in raw
+
+
+def test_laravel_config_literals_are_redacted_with_a_fingerprint(dbs):
+    _need("php")
+    con = sqlite3.connect(dbs("php"))
+    attrs = {r[0]: json.loads(r[1] or "{}") for r in con.execute("SELECT id, attrs FROM nodes WHERE kind='config'")}
+    gh = attrs["config:services.github.secret"]["value"]
+    assert re.fullmatch(r"redacted:sha256:[0-9a-f]{8}", gh)
+    assert gh == "redacted:sha256:" + __import__("hashlib").sha256(b"SURF-PHP-GH-SECRET-1d4e").hexdigest()[:8]
+    dflt = attrs["config:services.ledger.token"]["env_default"]
+    assert dflt == ["redacted:sha256:" + __import__("hashlib").sha256(b"SURF-PHP-LEDGER-DEFAULT-d7e2").hexdigest()[:8]]
+
+
+def test_redaction_keeps_non_secret_values_and_url_hosts(tmp_path, capsys):
+    _need("php")
+    root = tmp_path / "php"
+    shutil.copytree(FIX / "php", root, ignore=shutil.ignore_patterns("vendor"))
+    (root / "config" / "shop.php").write_text("""<?php
+
+return [
+    'currency' => 'EUR',
+    'catalog_host' => env('CATALOG_HOST', 'catalog.bookstore.example'),
+    'api_key' => 'SURF-PHP-SHOP-KEY-0001',
+    'replica' => env('SHOP_REPLICA_URL', 'mysql://reader:SURF-PHP-URL-PW-0002@replica.bookstore.example/shop'),
+    'signing' => ['passphrase' => 'SURF-PHP-SIGN-PASS-0003', 'algorithm' => 'sha256'],
+];
+""")
+    db = tmp_path / "shop.db"
+    index_project(root, db, "php")
+    con = sqlite3.connect(db)
+    attrs = {r[0]: json.loads(r[1] or "{}") for r in con.execute("SELECT id, attrs FROM nodes WHERE kind='config'")}
+    assert attrs["config:shop.currency"]["value"] == "EUR"
+    assert attrs["config:shop.catalog_host"]["env_default"] == ["catalog.bookstore.example"]
+    assert attrs["config:shop.signing.algorithm"]["value"] == "sha256"
+    assert attrs["config:shop.api_key"]["value"].startswith("redacted:sha256:")
+    assert attrs["config:shop.signing.passphrase"]["value"].startswith("redacted:sha256:")
+    url = attrs["config:shop.replica"]["env_default"][0]
+    assert url.startswith("mysql://reader:redacted:sha256:") and url.endswith("@replica.bookstore.example/shop")
+    assert not [1 for _, v in _db_text(db) if "SURF-" in v]
+    found = {(f["finding"], f["node"]) for f in run_json(capsys, db)[1]["findings"]}
+    assert ("hardcoded", "config:shop.api_key") in found
+    assert not any(n == "config:shop.currency" for _, n in found)
+
+
 def test_no_secret_values_in_ignored_findings(capsys, tmp_path):
     db = _ignored_copy(tmp_path, '    - {finding: hardcoded, path: "bookshop", reason: sandbox}\n')
     for fmt in ("text", "json", "sarif"):
@@ -584,3 +660,37 @@ def test_mcp_attack_surface(dbs, monkeypatch):
     assert {f["node"] for f in s["surface"]["findings"]} == {"external:amqp:queue.bookstore.example:5672",
                                                               "external:redis:cache.bookstore.example:6379"}
     assert "external:saas:postmark" in s["result"] and "SURF-" not in json.dumps(s)
+
+
+def test_sweep_redacts_credential_attrs_but_not_hosts_flags_or_plain_values():
+    from types import SimpleNamespace as NS
+    from cg_code_graph.core import redact as R
+    n1 = NS(attrs={"token": "ReportsService", "secret": "payments-signing", "password": "SURF-pw-1", "credential_literal": True, "auth": "unknown", "host": "db.example.test",
+                   "entries": [{"key": "api_token", "value": "SURF-tok-2"}, {"key": "locale", "value": "en"}],
+                   "url": "postgres://app:SURF-pw-3@db.example.test:5432/shop"})
+    e1 = NS(kind="HTTP_CALLS", attrs={"literal_credential": True, "setting": "SECRET_KEY", "default": "SURF-key-4", "env_default_x": "x"})
+    b = NS(nodes={"a": n1}, edges={"b": e1})
+    R.sweep(b)
+    text = repr(n1.attrs) + repr(e1.attrs)
+    assert "SURF-" not in text
+    assert n1.attrs["password"].startswith(R.MARK)
+    assert n1.attrs["credential_literal"] is True and n1.attrs["auth"] == "unknown"
+    assert n1.attrs["host"] == "db.example.test" and "db.example.test:5432" in n1.attrs["url"]
+    assert n1.attrs["entries"][1]["value"] == "en"
+    assert n1.attrs["token"] == "ReportsService" and n1.attrs["secret"] == "payments-signing"
+    assert e1.attrs["literal_credential"] is True and e1.attrs["default"].startswith(R.MARK)
+
+
+def test_nest_injects_tokens_are_not_redacted(tmp_path):
+    import shutil
+    src = Path(__file__).parent.parent / "examples" / "bookstore-nest"
+    dst = tmp_path / "nest"
+    shutil.copytree(src, dst, ignore=shutil.ignore_patterns("node_modules"))
+    db = tmp_path / "nest.db"
+    index_project(dst, db, name="nest")
+    con = sqlite3.connect(db)
+    rows = [json.loads(a or "{}") for (a,) in con.execute("select attrs from edges where kind='INJECTS'")]
+    assert len(rows) >= 10
+    assert all(r.get("token") and not str(r["token"]).startswith("redacted:") for r in rows)
+    assert any(r["token"].endswith("#ReportsService") for r in rows) and "REPORT_REPOSITORY" in {r["token"] for r in rows}
+    assert not any("redacted:" in (a or "") for (a,) in con.execute("select attrs from edges where kind='INJECTS'"))

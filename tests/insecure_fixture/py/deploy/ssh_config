@@ -1,0 +1,8 @@
+Host warehouse
+  HostName warehouse.bookstore.example
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+
+Host ledger
+  HostName ledger.bookstore.example
+  StrictHostKeyChecking yes

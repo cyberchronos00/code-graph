@@ -1,0 +1,1 @@
+{"name": "bookshop-ipc", "version": "1.0.0", "main": "src/main.ts", "dependencies": {"electron": "^30.0.0"}}

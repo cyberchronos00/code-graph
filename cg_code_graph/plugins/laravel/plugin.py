@@ -16,6 +16,7 @@ import re
 from collections import defaultdict
 
 from ...core.model import EXACT, HEURISTIC, RESOLVED
+from ...core.redact import looks_secret, redact
 from ...core.plugin import FrameworkPlugin, GraphBuilder, Project
 from ..php.plugin import PhpFunc, PhpProgram, ResolveCtx, module_of
 
@@ -212,10 +213,11 @@ class LaravelPlugin(FrameworkPlugin):
                     key = f"{root}.{n['key']}"
                     attrs = {}
                     if n.get("literal") is not None and not isinstance(n["literal"], (dict, list)):
-                        attrs["value"] = n["literal"]
+                        attrs["value"] = redact(n["literal"], n["key"])
                     if n.get("envs"):
                         attrs["env"] = [e["env"] for e in n["envs"]]
-                        attrs["env_default"] = [e["default"] for e in n["envs"]]
+                        attrs["env_default"] = [redact(e["default"], e["env"] if looks_secret(e["env"]) else n["key"])
+                                                for e in n["envs"]]
                     cid = b.add_node("config", key, file=f, line=n["line"], module="config", lang="php", attrs=attrs)
                     self.config_keys[key] = n
                     b.add_edge(parent_id, cid, "CONFIG_CONTAINS", f, n["line"], EXACT)

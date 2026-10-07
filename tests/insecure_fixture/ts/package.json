@@ -1,0 +1,9 @@
+{
+  "name": "bookshop-transport-ts",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node dist/server.js",
+    "start:dev": "NODE_TLS_REJECT_UNAUTHORIZED=0 node dist/server.js"
+  },
+  "dependencies": {"axios": "^1.7.0", "ssh2": "^1.15.0", "@grpc/grpc-js": "^1.10.0"}
+}

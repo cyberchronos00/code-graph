@@ -69,6 +69,8 @@ Ids and which spellings resolve: the language pages ([Swift](swift.md), [Kotlin]
 
 Webhook facts: a sender `endpoint:webhook:*` node may carry `attrs.subscriber_urls` (`[{url, at}]`); a `SENDS_TO` edge from a stored subscription has `attrs.via = "stored subscription"` and `attrs.source`; `REGISTERS_CALLBACK` has `attrs.body_key`, `attrs.endpoint` (the outbound `http:` endpoint, when known) and `attrs.via = "SDK webhook registration"` for an SDK call; a route's `attrs.webhook` adds `via = "driver"` and `drivers` when its checks come from run-time resolved driver implementations. `cg link` adds `MATCHES_ROUTE` / `MATCHES_ENDPOINT` with `attrs.via = "subscriber url"`. See [protocols](protocols.md#subscriptions-callbacks-and-drivers-152-part-b).
 
+Insecure transport facts: a function, method, module or `file:config:<path>` node may carry `attrs.insecure_transport`, a list of `{kind, line, lib, detail, confidence}` (`kind` is `tls-verify-off`, `ssh-hostkey-off`, `grpc-plaintext`, `ipc-extension-manifest`, `ipc-extension-external` or `ipc-electron`). A `CONNECTS_TO` / `HTTP_CALLS` edge or external node whose call disables verification has `attrs.tls_verify = false`. A listening `endpoint:unix:*` node has `attrs.mode`. Credential-looking config values (Laravel config `value`, `env_default`) are stored as `redacted:sha256:<8 hex>`; see [surface](surface.md#no-secret-values-in-the-index).
+
 Platform conditions, generated-file markers and bridge attrs sit on `nodes.attrs` / `edges.attrs`. The language and boundary pages list the keys (`platforms`, `generated`, `process`, `via`, `dispatch`).
 
 ## Confidence

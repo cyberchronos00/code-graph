@@ -13,12 +13,17 @@ Two surfaces and a set of findings, all read from the graph (no source scan):
              unverified        a webhook route that reads a provider header and never verifies it
              unguarded         an inbound route / handler with no guard (`cg routes --unguarded`; `strict`: route guards only)
              exposed-listener  a TCP / UDP listener bound to all interfaces
+             tls-off           certificate or SSH host key verification switched off (index-time facts, #47 part 2a)
+             ipc-exposed       postMessage to '*', world-writable Unix socket, wildcard externally_connectable,
+                               external extension listener without a sender check, risky Electron webPreferences
+             (plaintext also covers gRPC channels and ports created without TLS)
 
 One finding shape: {finding, severity, confidence, protocol, node, file, line, entry_points, detail, fingerprint}. The
 fingerprint is stable across runs (finding + node id + file, no line number) and is what `surface.ignore` entries in
 .cg.yaml and SARIF `partialFingerprints` use. A secret value is never stored or printed: a finding names the kind and
 the location. Each finding type is produced by one function registered with `@producer("<finding>")` over a shared
-`Ctx`; a new detector adds a `FINDINGS` row and a producer, nothing else.
+`Ctx`; a new detector adds a `FINDINGS` row and a producer, nothing else. A finding name may have several
+producers (`_PRODUCERS` maps a name to a list); `make_finding(variant=...)` keeps their fingerprints apart.
 """
 from __future__ import annotations
 
@@ -30,6 +35,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .core.model import CONFIDENCE_RANK, DEV_ENTRY_KINDS, PROPAGATING
+from .core import redact as _redact
 from .core.store import GraphStore
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -53,8 +59,15 @@ FINDINGS: dict[str, dict] = {
     "exposed-listener": {"severity": "medium", "direction": "inbound", "title": "Listener bound to all interfaces",
                          "help": "A TCP / UDP listener binds 0.0.0.0 / ::. Bind a loopback or specific address "
                                  "unless it is meant to be reachable from the network."},
+    "tls-off": {"severity": "high", "direction": "outbound", "title": "TLS or SSH host verification disabled",
+                "help": "Certificate or SSH host key verification is switched off, so a network attacker can impersonate "
+                        "the peer. Keep verification on and trust a private CA or pin the host key instead."},
+    "ipc-exposed": {"severity": "medium", "direction": "inbound", "title": "IPC endpoint open to untrusted callers",
+                    "help": "A local IPC surface accepts messages from callers it should not trust: a postMessage with "
+                            "target origin '*', a world-writable Unix socket, an extension open to any web page or "
+                            "extension, or an Electron window with Node integration or isolation switched off."},
 }
-_PRODUCERS: dict[str, callable] = {}
+_PRODUCERS: dict[str, list[callable]] = {}
 LOOPBACK = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal", ""}
 _LOC = re.compile(r"^(?P<file>[^:\s][^:]*?):(?P<line>\d+)$")
 DEV_KINDS = set(DEV_ENTRY_KINDS)
@@ -65,7 +78,7 @@ NOT_INBOUND = {"webhook", "queue", "worker", "broadcastchannel"}
 
 def producer(name: str):
     def deco(fn):
-        _PRODUCERS[name] = fn
+        _PRODUCERS.setdefault(name, []).append(fn)
         return fn
     return deco
 
@@ -170,8 +183,11 @@ def _group(rows, key: str) -> dict:
     return out
 
 
-def fingerprint(finding: str, node: str, file: str | None) -> str:
-    return hashlib.sha256(f"{finding}\0{node}\0{file or ''}".encode()).hexdigest()[:16]
+def fingerprint(finding: str, node: str, file: str | None, variant: str | None = None) -> str:
+    """`variant` tells apart findings of one type on the same node and file (SSH vs TLS, one IPC kind vs another);
+    findings without one keep the part 1 value."""
+    tail = f"\0{variant}" if variant else ""
+    return hashlib.sha256(f"{finding}\0{node}\0{file or ''}{tail}".encode()).hexdigest()[:16]
 
 
 def _split_loc(loc: str | None) -> tuple[str, int] | None:
@@ -186,7 +202,7 @@ def _split_loc(loc: str | None) -> tuple[str, int] | None:
 
 def make_finding(ctx: Ctx, finding: str, *, protocol: str | None, node: str, file: str | None, line: int | None,
                  confidence: str, detail: str, entry_ids=(), repo: str | None = None, attrs: dict | None = None,
-                 see: str | None = None, entry_points=None) -> dict:
+                 see: str | None = None, entry_points=None, variant: str | None = None) -> dict:
     repo = ctx.repo_of(None, file) or repo or ctx.repo_of(attrs, None)
     if entry_points is None:
         eps, total = ctx.entry_points(entry_ids)
@@ -194,7 +210,7 @@ def make_finding(ctx: Ctx, finding: str, *, protocol: str | None, node: str, fil
         eps, total = entry_points
     out = {"finding": finding, "severity": FINDINGS[finding]["severity"], "confidence": confidence or "heuristic",
            "protocol": protocol, "node": node, "file": file, "line": line, "entry_points": eps,
-           "entry_point_total": total, "detail": detail, "fingerprint": fingerprint(finding, node, file)}
+           "entry_point_total": total, "detail": detail, "fingerprint": fingerprint(finding, node, file, variant)}
     if repo:
         out["repo"] = repo
     if see:
@@ -203,12 +219,8 @@ def make_finding(ctx: Ctx, finding: str, *, protocol: str | None, node: str, fil
 
 
 # ------------------------------------------------------------------ hardcoded
-SECRET_WORDS = ("PASSWORD", "PASS", "PASSWD", "SECRET", "TOKEN", "SECRET_KEY", "SECRET_ACCESS_KEY", "KEY", "AUTH", "PWD")
-
-
-def secret_key(key: str) -> bool:
-    k = re.sub(r"[^A-Za-z0-9]+", "_", key).upper().strip("_")
-    return any(k.endswith("_" + s) or k == s for s in SECRET_WORDS) and not k.endswith(("_KEY_ID", "_PUBLIC_KEY", "_KEY_PATH"))
+secret_key = _redact.secret_key
+SECRET_WORDS = _redact.SECRET_WORDS
 
 
 def _kind_of_key(key: str) -> str:
@@ -275,10 +287,10 @@ def _hardcoded(ctx: Ctx, strict: bool = False) -> list[dict]:
 
 
 def _placeholder(v) -> bool:
-    if not isinstance(v, str):
-        return True
-    t = v.strip()
-    return not t or t.startswith(("${", "{{", "%(", "<", "$")) or t.lower() in ("null", "none", "false", "true", "changeme?")
+    """A value that is not a literal secret: empty, a `${X}` / `{{x}}` reference, `null`. A redaction marker is a literal."""
+    if _redact.is_redacted(v):
+        return False
+    return _redact.placeholder(v)
 
 
 def _config_literals(ctx: Ctx) -> list[dict]:
@@ -501,6 +513,96 @@ def _exposed(ctx: Ctx, strict: bool = False) -> list[dict]:
     return out
 
 
+# ------------------------------------------------------------------ transport and IPC facts (#47 part 2a)
+def _transport_facts(ctx: Ctx) -> list[tuple[dict, dict]]:
+    """(node row, fact) for every `insecure_transport` fact recorded at index time (cg_code_graph/insecure_transport.py)."""
+    def load():
+        out = []
+        for r in ctx.st.q("SELECT id, file, line, attrs FROM nodes WHERE attrs LIKE '%insecure_transport%'"):
+            a = json.loads(r["attrs"] or "{}")
+            out += [({"id": r["id"], "file": r["file"], "attrs": a}, f) for f in a.get("insecure_transport") or []]
+        return out
+    return ctx.cached("transport_facts", load)
+
+
+def _fact_finding(ctx: Ctx, finding: str, row: dict, fact: dict, protocol: str | None, see: str | None = None,
+                  entry_ids=None, entry_points=None, variant: str | None = None) -> dict:
+    return make_finding(ctx, finding, protocol=protocol, node=row["id"], file=row["file"], line=fact["line"],
+                        confidence=fact["confidence"], repo=ctx.repo_of(row["attrs"], row["file"]), attrs=row["attrs"],
+                        see=see or f"cg node '{row['id']}'", entry_ids=[row["id"]] if entry_ids is None else entry_ids,
+                        entry_points=entry_points, detail=fact["detail"], variant=variant or fact["kind"])
+
+
+@producer("tls-off")
+def _tls_off(ctx: Ctx, strict: bool = False) -> list[dict]:
+    out = []
+    for row, f in _transport_facts(ctx):
+        if f["kind"] not in ("tls-verify-off", "ssh-hostkey-off"):
+            continue
+        sysid = f.get("system")
+        sysnode = ctx.st.node(sysid) if sysid else None
+        if f["kind"] == "ssh-hostkey-off":
+            proto = "ssh"
+        elif sysnode is not None:
+            sa = json.loads(sysnode["attrs"] or "{}")
+            proto = sa.get("protocol") or ("http" if sysid.startswith("http:") else "tls")
+        else:
+            proto = "tls"
+        see = (f"cg external '{sysid}'" if sysid and sysid.startswith("external:") else
+               "cg api-calls" if sysid else None)
+        out.append(_fact_finding(ctx, "tls-off", row, f, proto, see=see))
+    return _dedupe(out)
+
+
+@producer("plaintext")
+def _grpc_plaintext(ctx: Ctx, strict: bool = False) -> list[dict]:
+    """Insecure gRPC channels and ports (a second producer under `plaintext`; `unix:` and loopback targets are not hits)."""
+    out = [_fact_finding(ctx, "plaintext", row, f, "grpc") for row, f in _transport_facts(ctx) if f["kind"] == "grpc-plaintext"]
+    return _dedupe(out)
+
+
+def world_writable(mode) -> bool:
+    m = str(mode or "").strip().lower()
+    if re.fullmatch(r"(?:0o)?[0-7]{3,4}", m):
+        return bool(int(m[2:] if m.startswith("0o") else m, 8) & 0o002)
+    return bool(re.match(r"^[ugoa]*[ao][ugoa]*[+=][rwxst]*w", m))
+
+
+@producer("ipc-exposed")
+def _ipc_exposed(ctx: Ctx, strict: bool = False) -> list[dict]:
+    """IPC that part 1 does not already report as `unguarded`: postMessage to '*', world-writable Unix sockets,
+    wildcard `externally_connectable`, external extension listeners without a sender check, risky Electron prefs."""
+    out = []
+    items = _inbound(ctx, strict).items
+    unguarded = {(i["file"], i["line"]) for i in items if i["guard_state"] == "unguarded"}
+    for e in ctx.st.q("SELECT src, dst, file, line, confidence, attrs FROM edges WHERE kind='SENDS_TO' AND dst LIKE 'endpoint:postmessage:%'"):
+        a = json.loads(e["attrs"] or "{}")
+        if a.get("target_origin") != "*":
+            continue
+        out.append(make_finding(
+            ctx, "ipc-exposed", protocol="postmessage", node=e["src"], file=e["file"], line=e["line"],
+            confidence=e["confidence"], variant="postmessage-send", see=f"cg protocols --pattern '{e['dst']}'",
+            entry_ids=[e["src"]], attrs=a,
+            detail=f"postMessage to {a.get('target') or 'a window'} with target origin '*': any page in that window receives the message"))
+    for it in items:
+        if it["protocol"] == "unix" and world_writable(it.get("mode")):
+            out.append(make_finding(
+                ctx, "ipc-exposed", protocol="unix", node=it["node"], file=it["file"], line=it["line"],
+                confidence=it["confidence"], repo=it.get("repo"), variant="unix-mode", see="cg protocols --listeners",
+                entry_points=(it["entry_points"], it["entry_point_total"]),
+                detail=f"Unix socket {it['name']} is chmod {it['mode']}: any local user can connect"))
+    for row, f in _transport_facts(ctx):
+        if not f["kind"].startswith("ipc-"):
+            continue
+        if f["kind"] == "ipc-extension-external" and (row["file"], f["line"]) in unguarded:
+            continue
+        proto = {"ipc-electron": "electron"}.get(f["kind"], "extension")
+        out.append(_fact_finding(ctx, "ipc-exposed", row, f, proto, entry_ids=[],
+                                 variant=f"{f['kind']}:{hashlib.sha256(f['detail'].encode()).hexdigest()[:6]}",
+                                 entry_points=([{"kind": "message_handler", "count": 1, "sample": row["id"]}], 1)))
+    return _dedupe(out)
+
+
 # ------------------------------------------------------------------ outbound surface
 def _outbound(ctx: Ctx) -> list[dict]:
     items = []
@@ -616,8 +718,9 @@ def surface(st: GraphStore, inbound: bool = False, outbound: bool = False, proto
     floor = CONFIDENCE_RANK[min_confidence]
     ctx = Ctx(st)
     allf: list[dict] = []
-    for fn in _PRODUCERS.values():
-        allf += fn(ctx, strict)
+    for fns in _PRODUCERS.values():
+        for fn in fns:
+            allf += fn(ctx, strict)
 
     def keep(x):
         return (not protocol or x.get("protocol") == protocol) and CONFIDENCE_RANK.get(x.get("confidence"), 1) >= floor

@@ -1,8 +1,10 @@
 # Attack surface
 
 `cg surface` reads facts the index already holds and answers three questions: what does the code expose, what does it
-connect to, and where are credentials and transport protection weak. Nothing is rescanned. A secret value is never
-stored or printed: a finding names the kind and the location.
+connect to, and where are credentials and transport protection weak. Nothing is rescanned: the checks that need source
+text (disabled verification, insecure gRPC channels, risky IPC settings) run once at index time and leave facts on the
+graph. A secret value is never stored or printed: a finding names the kind and the location, and the index keeps only a
+redacted marker for a credential literal ([No secret values in the index](#no-secret-values-in-the-index)).
 
 ```bash
 cg surface --db out/graph.db                          # findings, grouped by type then protocol
@@ -27,10 +29,59 @@ client bundle are not an inbound surface and are left out.
 | finding | triggers | severity |
 |---|---|---|
 | `hardcoded` | an external system or SDK call with a literal credential (`credential_source=literal`, `credential_literal`, an edge with `literal_credential`); a DSN with a password in it; a config key named like a secret (`password`, `token`, `secret`, `*_key`) with a literal value, or an `env('X', 'literal')` default for a secret-looking variable | high |
-| `plaintext` | an external system with `tls=false` and a non-loopback host (`http://`, `ws://`, `redis://`, `amqp://`, `ftp://`, `ldap://`, plain SMTP, a Docker TCP host); also Telnet / TFTP, MQTT on 1883 and SMTP on 25 at `heuristic` | medium |
+| `plaintext` | an external system with `tls=false` and a non-loopback host (`http://`, `ws://`, `redis://`, `amqp://`, `ftp://`, `ldap://`, plain SMTP, a Docker TCP host); also Telnet / TFTP, MQTT on 1883 and SMTP on 25 at `heuristic`; and a gRPC channel or port created without TLS (protocol `grpc`, see below) | medium |
 | `unverified` | a webhook route that reads a provider header and never verifies it ([Protocol links](protocols.md)) | high |
 | `unguarded` | a route or handler with no guard: the `cg routes --unguarded` rule, so an unconditional inline check counts; `--strict` keeps route guards only | medium |
 | `exposed-listener` | a TCP / UDP listener bound to all interfaces (`0.0.0.0`, `::`, no host) | medium |
+| `tls-off` | certificate verification or SSH host key checking switched off in code or configuration (table below) | high |
+| `ipc-exposed` | local IPC open to callers it should not trust (table below), for what `unguarded` does not already report | medium |
+
+### Disabled verification (`tls-off`)
+
+The index records each hit on the function or method that contains it (the module node at file level, a
+`file:config:<path>` node for scripts and config files), as `attrs.insecure_transport`. Test files and test callers are
+skipped and counted (`tests_skipped` in the index stats). `.env` files are never read: only `.env.example` style files,
+compose files, Dockerfiles, `package.json` scripts, CI files, shell scripts, `ssh_config` and `ansible.cfg`.
+
+| language | TLS verification off | SSH host key not checked |
+|---|---|---|
+| Python | `verify=False` (requests, httpx, urllib3), aiohttp `ssl=False`, `ssl._create_unverified_context`, `CERT_NONE`, `check_hostname = False` | paramiko `AutoAddPolicy` / `WarningPolicy`, asyncssh `known_hosts=None` |
+| TypeScript / JavaScript | `rejectUnauthorized: false` (https, tls, undici, got, axios `httpsAgent`), `strictSSL: false`, `process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'` | ssh2 `hostVerifier: () => true` |
+| PHP | `CURLOPT_SSL_VERIFYPEER` false, `CURLOPT_SSL_VERIFYHOST` 0, Guzzle `'verify' => false`, `Http::withoutVerifying()`, stream context `verify_peer(_name) => false` | `StrictHostKeyChecking=no` in strings |
+| Kotlin / Java | trust-all `X509TrustManager` (empty `checkServerTrusted`), a `HostnameVerifier` that returns true, OkHttp `hostnameVerifier { _, _ -> true }` | JSch `setConfig("StrictHostKeyChecking", "no")` |
+| Rust | `danger_accept_invalid_certs(true)` / `danger_accept_invalid_hostnames(true)` | |
+| Go | `InsecureSkipVerify: true` | `ssh.InsecureIgnoreHostKey()` |
+| Dart | `badCertificateCallback = (...) => true` | |
+| scripts, config | `NODE_TLS_REJECT_UNAUTHORIZED=0` in `.env.example`, compose, Dockerfile, `package.json` scripts and CI files (process-wide; the detail says so) | `StrictHostKeyChecking=no` / `UserKnownHostsFile=/dev/null` in shell scripts, CI files and in-repo `ssh_config`; `host_key_checking = False` in `ansible.cfg` and `ANSIBLE_HOST_KEY_CHECKING=False` (heuristic) |
+
+SSH host keys are reported under `tls-off` with protocol `ssh` and a detail that says "SSH host key"; TLS hits have the
+protocol of the system they resolve to (`https`, ...) or `tls`. A hit inside a call that is already a `CONNECTS_TO` edge
+(`cg external`) or an `HTTP_CALLS` edge (`cg api-calls`) also puts `tls_verify: false` on that edge and its external
+system, and both commands print `tls verify off`. Verification left on (`verify=True`, `rejectUnauthorized: true`,
+`StrictHostKeyChecking yes`, a pinned `hostVerifier`) is not a hit. A line inside a comment is not a hit.
+
+### Insecure gRPC (`plaintext`, protocol `grpc`)
+
+A second producer under the `plaintext` name: Python `grpc.insecure_channel` / `add_insecure_port`, TypeScript
+`credentials.createInsecure()` / `ServerCredentials.createInsecure()`, Java and Kotlin `ManagedChannelBuilder...usePlaintext()`,
+Go `grpc.WithInsecure()` / `insecure.NewCredentials()`, Rust tonic `Channel::from_static("http://...")`, Dart
+`ChannelCredentials.insecure()`. A `unix:` target (already a local socket) and a loopback target are not findings; the
+index counts them (`grpc_unix`, `grpc_loopback`). A target that is not a literal is reported at `heuristic`.
+
+### IPC exposure (`ipc-exposed`)
+
+| trigger | protocol | source |
+|---|---|---|
+| `window.postMessage(msg, '*')` | `postmessage` | the `SENDS_TO` edge's `target_origin: "*"` ([Protocol links](protocols.md)) |
+| a Unix socket whose recorded `mode` is world-writable (`0o666`, `0o777`, `o+w`) | `unix` | `attrs.mode` on `endpoint:unix:<path>` |
+| `manifest.json` `externally_connectable` with wildcard `matches` (`*://*/*`, `<all_urls>`) or `ids: ["*"]` | `extension` | index-time pass |
+| `runtime.onConnectExternal` / `onMessageExternal` listener with no `sender.id` / `origin` / `url` check | `extension` | index-time pass |
+| Electron `webPreferences` with `nodeIntegration: true`, `contextIsolation: false` or `webSecurity: false` | `electron` | index-time pass |
+
+A message listener without an origin check, an `onMessageExternal` listener without a sender check, and an exported
+Android component without a permission are `unguarded` findings already ([Link, payload, and guards](limitations.md#link-payload-and-guards)):
+each item is reported under one finding only. A sender with a concrete origin, a `0o600` socket, a pinned manifest and an
+Electron window with the secure defaults are not findings.
 
 Every finding carries `finding`, `severity`, `confidence`, `protocol`, `node`, `file`, `line`, `entry_points`,
 `detail` and `fingerprint`. `entry_points` lists the entry kinds that reach the finding (`kind`, `count`, `sample`; at
@@ -55,6 +106,49 @@ inbound surface: 7 item(s) (1 guarded, 1 secret-checked, 2 unchecked, 3 unguarde
       at bookshop/notify.py:6
       reached from http_route(1)
       fingerprint 3412ee3e89b46e48
+```
+
+Disabled verification, insecure gRPC and IPC exposure on the test fixtures:
+
+```text
+$ cg surface --db out/graph.db --finding tls-off
+== tls-off (8) - TLS or SSH host verification disabled ==
+  ssh
+    HIGH [exact] function:bookshop.catalog.push_stock
+      SSH host key not checked (AutoAddPolicy / WarningPolicy)
+      at bookshop/catalog.py:40
+      reached from no entry point
+      fingerprint 765683799095b51d
+  tls
+    HIGH [resolved] function:bookshop.catalog.sync_catalog
+      certificate verification is switched off (verify=False)
+      at bookshop/catalog.py:9
+      reached from no entry point
+      fingerprint 4a56ab0842be36a3
+
+$ cg surface --db out/graph.db --finding plaintext --protocol grpc
+== plaintext (2) - Plaintext protocol ==
+  grpc
+    MEDIUM [resolved] function:bookshop.catalog.inventory_channel
+      client channel without TLS: inventory.bookstore.example:50051
+      at bookshop/catalog.py:54
+      reached from no entry point
+      fingerprint 718a42ac53b9e2ce
+
+$ cg surface --db out/graph.db --finding ipc-exposed
+== ipc-exposed (8) - IPC endpoint open to untrusted callers ==
+  extension
+    MEDIUM [exact] file:config:extension-open/manifest.json
+      externally_connectable.matches accepts any web page (*://*/*)
+      at extension-open/manifest.json:6
+      reached from message_handler(1)
+      fingerprint f9f6fad48a93744a
+  unix
+    MEDIUM [exact] endpoint:unix:/run/bookshop/agent-open.sock
+      Unix socket /run/bookshop/agent-open.sock is chmod 0o666: any local user can connect
+      at agent/sock.py:10
+      reached from message_handler(1)
+      fingerprint 113ead5ceff1f789
 ```
 
 ## Options
@@ -112,7 +206,20 @@ The `attack_surface` tool takes `inbound`, `outbound`, `protocol`, `finding`, `m
 `show_ignored` and `max_items`. The reply is the text report; the structured reply has the full result under
 `surface` next to the `completeness` object ([MCP server](mcp.md)).
 
+## No secret values in the index
+
+A credential literal is never kept in the graph database. At index time a literal under a key that looks like a
+credential (`password`, `secret`, `token`, `key`, `api_key`, `auth`, `private`, `credential`, `passphrase`, `dsn`, ...)
+is stored as `redacted:sha256:<first 8 hex of the digest>`: it shows that a literal exists and tells two values apart,
+and it cannot be reversed. This covers the Laravel config `value` and `env('X', 'default')` default attrs. A password
+inside any `scheme://user:password@host` string in a node or edge attr gets the same marker, so the host stays
+readable. Non-secret values (`'currency' => 'EUR'`, a hostname default) are stored as before, and `hardcoded` still
+sees a marker as a literal. `cg node config:...` and a direct database read show the marker, never the value. The
+external-system attrs of #42 parts 3a / 3b and the Python and TypeScript config readers keep addresses, key names and
+locations only, so they have nothing to redact; a test indexes the surface fixtures and fails if a `SURF-` marker
+appears in any table.
+
 ## Not detected yet
 
-TLS verification switched off, SSRF candidates, insecure gRPC channels and IPC exposure findings are not produced by
-this version ([Known limitations](limitations.md#attack-surface)). New detectors add a finding type; the shape above does not change.
+SSRF candidates (outbound URLs built from request input) and the validation numbers are not produced by this version
+([Known limitations](limitations.md#attack-surface)). New detectors add a finding type; the shape above does not change.

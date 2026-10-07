@@ -1,0 +1,1 @@
+{"name": "bookstore/transport-php", "require": {"php": "^8.2", "laravel/framework": "^11.0", "guzzlehttp/guzzle": "^7.8"}, "autoload": {"psr-4": {"App\\": "app/"}}}

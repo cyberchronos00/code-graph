@@ -322,6 +322,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     if (aist := apply_android_ipc(project, builder)):
         aist["seconds"] = round(time.time() - t_ai, 2)
         stats["android_ipc"] = aist
+    # disabled TLS / SSH verification, plaintext gRPC channels, IPC exposure facts for `cg surface` (#47 part 2a)
+    from .insecure_transport import apply as apply_insecure_transport
+    if (itst := apply_insecure_transport(project, builder)):
+        stats["insecure_transport"] = itst
     # XPC services and Darwin notifications (#38 part 3)
     from .apple_ipc import apply as apply_apple_ipc
     if (apst := apply_apple_ipc(project, builder)):
@@ -377,6 +381,8 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     t_tag = time.time()
     rows = tag_entries(builder)
     stats["entry_tagging_seconds"] = round(time.time() - t_tag, 2)
+    from .core.redact import sweep as redact_sweep
+    redact_sweep(builder)
     store = GraphStore.create(db_path)
     with gc_paused():
         store.write(builder.nodes.values(), builder.edges.values())

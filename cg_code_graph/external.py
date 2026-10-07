@@ -804,6 +804,7 @@ def external(st, pattern: str | None = None, protocol: str | None = None, source
         for x in st.q("SELECT src, attrs, file, line, confidence FROM edges WHERE dst=? AND kind IN ('CONNECTS_TO','TEST_USES')", (s["id"],)):
             ua = json.loads(x["attrs"] or "{}")
             users.append({"id": x["src"], "op": ua.get("op"), "via": ua.get("via"), "count": ua.get("count"),
+                          "tls_verify": ua.get("tls_verify"),
                           "at": f"{x['file']}:{x['line']}" if x["file"] else None, "confidence": x["confidence"]})
             ids.append(x["src"])
         tables = sorted(u["id"] for u in users if u["id"].startswith("table:"))
@@ -847,6 +848,8 @@ def render_external(res: dict, max_items: int = 60) -> str:
             bits.append(f"auth {a['auth']}")
         if a.get("tls") is not None:
             bits.append("tls" if a["tls"] else "plaintext")
+        if a.get("tls_verify") is False:
+            bits.append("tls verify off")
         if a.get("resource"):
             bits.append(f"resource {a['resource']}")
         if a.get("key_prefixes"):
@@ -863,7 +866,8 @@ def render_external(res: dict, max_items: int = 60) -> str:
             L.append("    reached from " + ", ".join(f"{k}({v})" for k, v in sorted(s["entry_kinds"].items())))
         for u in s["users"][:8]:
             L.append(f"    <- {u['id']}" + (f" @ {u['at']}" if u.get("at") else "") + (f"  ({u['via']})" if u.get("via") else "")
-                     + (f" x{u['count']}" if u.get("count") else ""))
+                     + (f" x{u['count']}" if u.get("count") else "")
+                     + ("  [tls verify off]" if u.get("tls_verify") is False else ""))
         if len(s["users"]) > 8:
             L.append(f"    ... {len(s['users']) - 8} more users")
         if s.get("tables"):

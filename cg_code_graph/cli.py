@@ -208,13 +208,15 @@ def main(argv=None):
     p.add_argument("--tls-off", action="store_true", help="only systems known to be reached without TLS")
     p.add_argument("--max-items", type=int, default=60)
     p = sub.add_parser("surface", help="security views over recorded facts: inbound / outbound attack surface and findings "
-                                        "(hardcoded credentials, plaintext protocols, unverified webhooks, unguarded handlers, "
-                                        "listeners on all interfaces); text, JSON or SARIF; --fail-on for CI gates")
+                                        "(hardcoded credentials, plaintext protocols, disabled TLS / SSH verification, unverified "
+                                        "webhooks, unguarded handlers, listeners on all interfaces, exposed IPC); text, JSON or "
+                                        "SARIF; --fail-on for CI gates")
     p.add_argument("--db", required=True)
     p.add_argument("--inbound", action="store_true", help="list the inbound surface (routes, webhooks, sockets, consumers, IPC)")
     p.add_argument("--outbound", action="store_true", help="list the outbound surface (every external system)")
     p.add_argument("--protocol", help="only this protocol (http, ws, grpc, tcp, redis, postgres, saas, ...)")
-    p.add_argument("--finding", help="only this finding: hardcoded, plaintext, unverified, unguarded, exposed-listener")
+    from .surface import finding_names
+    p.add_argument("--finding", help="only this finding: " + ", ".join(finding_names()))
     p.add_argument("--min-confidence", choices=["heuristic", "resolved", "exact"], default="heuristic",
                    help="drop findings and items below this confidence (default: heuristic, keep all)")
     p.add_argument("--format", choices=["text", "json", "sarif"], default="text")

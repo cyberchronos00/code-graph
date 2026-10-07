@@ -1,0 +1,10 @@
+services:
+  shop:
+    image: bookshop/api:latest
+    environment:
+      - SHOP_API=https://api.bookstore.example
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+  reports:
+    image: bookshop/reports:latest
+    environment:
+      NODE_TLS_REJECT_UNAUTHORIZED: "1"
