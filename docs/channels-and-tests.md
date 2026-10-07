@@ -32,6 +32,27 @@ receiver stays unknown is counted as `realtime_subscriptions_unresolved_receiver
 line under `cg coverage --details`). `resources/js` (and `resources/ts`, `resources/assets/js`)
 of a Laravel app are indexed as TypeScript.
 
+Subscription wrappers: when the whole channel argument of an Echo call is a parameter of the enclosing
+function (`export function privateChannel(name: string) { return echo.private(name) }`), the
+channel is resolved at each call site of that function, the same way as a direct call:
+`` privateChannel(`store.${storeId}.orders`) `` becomes `store.{storeId}.orders`, with the
+wrapper's visibility and one `SUBSCRIBES_CHANNEL` edge per call site (the edge's file and line
+are the call site). One level of nesting is followed: `ordersChannel(id)` calling
+``privateChannel(`store.${id}.orders`)`` is expanded at the callers of `ordersChannel`. Wrappers
+exported from a composable or utility module and imported by callers (including Nuxt
+auto-imports, where the call edge resolves) are expanded the same way. `.listen()` /
+`.listenToAll()` / `.notification()` / `.listenForWhisper()` chained on the wrapper call, or on a
+const holding its result, join the events chained inside the wrapper. Each expanded edge carries
+`via_helper = {fn, at}`: the wrapper called at that site and the `file:line` of its Echo call. When a
+call site passes a template built from the caller's own parameter (`` privateChannel(`store.${storeId}.desk`) ``
+inside `openDesk(storeId)`) and no caller of `openDesk` resolves it, the call site keeps its own name with the
+parameter as a placeholder (`store.{storeId}.desk`), like a direct `echo.private(...)` there. A call site whose whole
+channel is a runtime value or the caller's parameter and that no outer call site resolves emits no `channel_sub` (no
+`{name}` placeholder next to the expanded names). Each such call site is counted as
+`realtime_subscriptions_unresolved_wrapper` (call-site locations under `cg coverage --details`), even when the
+wrapper resolves at other sites; chains deeper than two wrappers are counted as
+`realtime_subscriptions_wrapper_too_deep`. pusher-js `subscribe` wrappers are not expanded.
+
 `cg link` (and `cg index` in one repo) adds `MATCHES_CHANNEL` by pattern shape (
 `board.{boardId}` ↔ `board.{board}`) and `LISTENS_FOR` by class name, `broadcastAs()` (leading
 `.`) or the short class name.

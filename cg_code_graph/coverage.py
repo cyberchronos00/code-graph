@@ -343,6 +343,11 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             at = st.get("realtime_subscriptions_unresolved_receiver_at") or []
             if at:
                 e["realtime_subscriptions_unresolved_receiver_at"] = at[:8]
+        if lang == "typescript" and st and st.get("realtime_subscriptions_unresolved_wrapper"):
+            e["realtime_subscriptions_unresolved_wrapper"] = st["realtime_subscriptions_unresolved_wrapper"]
+            at = st.get("realtime_subscriptions_unresolved_wrapper_at") or []
+            if at:
+                e["realtime_subscriptions_unresolved_wrapper_at"] = at[:8]
         if lang == "python" and st:
             for k in ("roots_mode", "source_roots", "roots_warnings", "roots_ambiguous", "module_name_collisions"):
                 if st.get(k):
@@ -503,13 +508,22 @@ def _entry_text(e: dict) -> str:
 
 
 def realtime_unresolved_lines(e: dict, indent: str = "  ") -> list[str]:
-    """'.private(...)' on a receiver that is not an Echo client, with a channel literal: where to look."""
-    n = e.get("realtime_subscriptions_unresolved_receiver") or 0
-    if not n or e.get("language") != "typescript":
+    """'.private(...)' on a receiver that is not an Echo client, with a channel literal, and subscription wrapper calls whose
+    channel does not resolve: where to look."""
+    if e.get("language") != "typescript":
         return []
-    at = e.get("realtime_subscriptions_unresolved_receiver_at") or []
-    where = f" ({', '.join(at[:5])})" if at else ""
-    return [f"{indent}typescript: {n} .private(...) call{'s' if n != 1 else ''} on an unknown receiver{where}"]
+    out = []
+    n = e.get("realtime_subscriptions_unresolved_receiver") or 0
+    if n:
+        at = e.get("realtime_subscriptions_unresolved_receiver_at") or []
+        where = f" ({', '.join(at[:5])})" if at else ""
+        out.append(f"{indent}typescript: {n} .private(...) call{'s' if n != 1 else ''} on an unknown receiver{where}")
+    w = e.get("realtime_subscriptions_unresolved_wrapper") or 0
+    if w:
+        at = e.get("realtime_subscriptions_unresolved_wrapper_at") or []
+        where = f" ({', '.join(at[:5])})" if at else ""
+        out.append(f"{indent}typescript: {w} subscription wrapper call{'s' if w != 1 else ''} whose channel does not resolve{where}")
+    return out
 
 
 def syntax_error_lines(e: dict, all_files: bool = False, indent: str = "  ") -> list[str]:

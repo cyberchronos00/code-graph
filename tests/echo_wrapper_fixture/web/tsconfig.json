@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": false,
+    "skipLibCheck": true,
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "laravel-echo": ["types/laravel-echo.d.ts"],
+      "pusher-js": ["types/pusher-js.d.ts"],
+      "vue": ["types/vue.d.ts"]
+    }
+  },
+  "include": ["app/**/*", "types/**/*"]
+}

@@ -553,7 +553,8 @@ class TypeScriptPlugin(LanguagePlugin):
                     n.attrs.setdefault("test_only", True)
                 builder.add_edge(sub["src"], nid, "TEST_CALLS" if sub.get("test") else "SUBSCRIBES_CHANNEL", file=sub["file"],
                                  line=sub["line"], confidence=sub["conf"], client=sub["client"], visibility=sub["visibility"],
-                                 events=sub.get("events") or None)
+                                 events=sub.get("events") or None,
+                                 **({"via_helper": sub["via_helper"]} if sub.get("via_helper") else {}))
                 n_sub += 1
         # web / native bridge sends (Capacitor, React Native, Expo) -> endpoint:<protocol>:<module>#<method>
         # Electron IPC (endpoint:electron-ipc:<channel>), context bridge (endpoint:electron-preload:<key>#<member>),

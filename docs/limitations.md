@@ -56,6 +56,7 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 - `cg routes --unguarded` hides a route with an unconditional inline check. `--unguarded --strict` uses route guards only. Preset lists decide which middleware names count as auth ([framework presets](configuration.md#framework-presets)).
 - A project-specific guard name counts when it matches `auth.extra_patterns` or `--auth-pattern`.
 - A sent-but-not-forwarded key is an object literal passed to a helper whose request keys are known, one call level deep. Spreads, runtime keys, and opaque objects are omitted, so no gap is reported for them.
+- A realtime subscription wrapper (the channel is a parameter of the function that calls `echo.private(name)`) is expanded at its call sites, with one extra wrapper level. A third level, a call-site argument that is not a literal or template (a runtime value), a wrapper stored in an object or passed as a callback, and pusher-js `subscribe` wrappers stay unresolved: no `channel_sub` is emitted and `cg coverage --details` counts the call site.
 
 ## Attack surface
 

@@ -2159,6 +2159,7 @@ const callSites = []
 }
 const deferredParamCalls = []   // api calls whose URL depends on an enclosing-function parameter
 const subscriptions = []        // realtime channel subscriptions (laravel-echo, pusher-js, useEcho hooks)
+const deferredParamSubs = []    // Echo subscriptions whose channel depends on an enclosing-function parameter (#193)
 const visits = []               // browser tests opening a page: page.goto('/x'), cy.visit('/x')
 const navSites = []             // {src, file, line, via, locs:[{kind, value, conf, helper}]}
 const vueRoutes = []            // vue-router createRouter route table
@@ -2328,7 +2329,7 @@ function noteUnresolvedReceiver(node) {
     at.push(`${rel(realFile(sf))}:${lineOf(node, sf)}`)
   }
 }
-function realtimeSub(node, callee) {
+function realtimeSub(node, callee, encFn) {
   if (!ts.isCallExpression(node)) return null
   if (ts.isIdentifier(callee) && ECHO_HOOKS[callee.text] && node.arguments[0]) {
     let names
@@ -2349,7 +2350,12 @@ function realtimeSub(node, callee) {
       if (m === 'private' && channelLikeArg(node.arguments[0])) noteUnresolvedReceiver(node)
       return null
     }
-    return { client: 'echo', names: strVals(node.arguments[0]), visibility: ECHO_SUB[m], events: listenedEvents(node), conf: k }
+    // the whole channel is a parameter of the enclosing function (a subscription wrapper); a template that merely embeds one keeps its `{param}` name: expanded at its call sites later
+    const params = new Set()
+    const v = evalStr(node.arguments[0], 0, { params })
+    const dep = encFn && encFn.parameters ? [...params].filter(p => encFn.parameters.some(x => ts.isIdentifier(x.name) && x.name.text === p)) : []
+    if (dep.length && v.vals.every(x => /^\u0001[^\u0002]*\u0002$/.test(x))) return { client: 'echo', names: [], visibility: ECHO_SUB[m], events: listenedEvents(node), conf: k, deferred: { encFn, expr: node.arguments[0] } }
+    return { client: 'echo', names: shapeDedupe(v.vals).map(render), visibility: ECHO_SUB[m], events: listenedEvents(node), conf: k }
   }
   if (m === 'subscribe') {
     const k = clientKind(callee.expression, 'pusher')
@@ -3202,8 +3208,11 @@ function handleCall(node, cur, sf, r, encFn) {
       else http = { client: 'cypress', method: 'GET', urlExpr: node.arguments[0], base: null, baseConf: 'exact', baseVia: [] }
     }
   }
-  const sub = realtimeSub(node, callee)
-  if (sub && sub.names.length) subscriptions.push({ src: cur, file: r, line, ...sub, test: testSf || undefined })
+  const sub = realtimeSub(node, callee, encFn)
+  if (sub && sub.deferred) {
+    const { deferred, names, ...rest } = sub
+    deferredParamSubs.push({ rec: { src: cur, file: r, line, ...rest, test: testSf || undefined }, encFn: deferred.encFn, expr: deferred.expr })
+  } else if (sub && sub.names.length) subscriptions.push({ src: cur, file: r, line, ...sub, test: testSf || undefined })
   if (http) {
     const params = new Set()
     const v = http.urlVals || (http.urlExpr ? evalStr(http.urlExpr, 0, { params }) : { vals: [PH('?')], conf: 'resolved' })
@@ -3250,7 +3259,7 @@ function handleCall(node, cur, sf, r, encFn) {
   const recv = kind === 'CALLS' && ts.isPropertyAccessExpression(callee) ? receiverClasses(callee.expression, t.id) : null
   const br = kind === 'INSTANTIATES' && !inTpl ? branchOf(node, sf) : null
   addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined, recv: recv || undefined, ...(br || {}) })
-  callSites.push({ target: t.id, node, cur, r, line })
+  callSites.push({ target: t.id, node, cur, r, line, encFn })
 }
 
 // `b.run()` landing on `Base.run` (B inherits it): the receiver's project classes (attrs.recv), so `impact B.run` can
@@ -3484,6 +3493,52 @@ for (const d of deferredParamCalls) {
       via_helper: { fn: fid, at: `${d.rec.file}:${d.rec.line}` } })
     expanded++
   }
+}
+
+// Echo subscription wrappers (#193): the channel is a parameter of the enclosing function. Expand it at each call site
+// of the wrapper, and once more at the call sites of a wrapper that forwards its own parameter (2 levels at most);
+// events chained on the wrapper call join the events chained inside the wrapper.
+const placeholderOnly = vals => vals.every(x => /^\u0001[^\u0002]*\u0002$/.test(x))
+const paramsOf = (params, fn) => fn && fn.parameters ? [...params].filter(p => fn.parameters.some(x => ts.isIdentifier(x.name) && x.name.text === p)) : []
+for (const d of deferredParamSubs) {
+  let deep = false
+  const innerAt = `${d.rec.file}:${d.rec.line}`
+  const emit = (v, evNodes, site, fnId) => {
+    if (placeholderOnly(v.vals)) return false
+    const events = new Set(d.rec.events)
+    for (const n of evNodes) listenedEvents(n).forEach(e => events.add(e))
+    subscriptions.push({ ...d.rec, src: site.cur, file: site.r, line: site.line, names: shapeDedupe(v.vals).map(render), events: [...events],
+      conf: d.rec.conf, via_helper: { fn: fnId, at: innerAt } })
+    return true
+  }
+  const fid = declToNode(d.encFn)
+  if (!fid) continue
+  for (const s1 of callSites.filter(c => c.target === fid)) {
+    if (!ts.isCallExpression(s1.node)) continue
+    const p1 = new Set()
+    const v1 = evalStr(d.expr, 0, { fn: d.encFn, args: s1.node.arguments, outer: { params: p1 } })
+    const fwd = paramsOf(p1, s1.encFn)
+    let made = 0
+    if (!fwd.length) { if (emit(v1, [s1.node], s1, fid)) made++ }
+    else {
+      const fid2 = declToNode(s1.encFn)
+      for (const s2 of fid2 ? callSites.filter(c => c.target === fid2) : []) {
+        if (!ts.isCallExpression(s2.node)) continue
+        const p2 = new Set()
+        const v2 = evalStr(d.expr, 0, { fn: d.encFn, args: s1.node.arguments, outer: { fn: s1.encFn, args: s2.node.arguments, outer: { params: p2 } } })
+        if (paramsOf(p2, s2.encFn).length) { deep = true; continue }
+        if (emit(v2, [s1.node, s2.node], s2, fid2)) made++
+      }
+      // no outer call site resolves: keep the call site's own name, the caller's parameter as a {param} placeholder
+      if (!made && emit(v1, [s1.node], s1, fid)) made++
+    }
+    if (!made) {
+      stats.realtime_subscriptions_unresolved_wrapper = (stats.realtime_subscriptions_unresolved_wrapper || 0) + 1
+      const at = (stats.realtime_subscriptions_unresolved_wrapper_at ||= [])
+      if (at.length < 8) at.push(`${s1.r}:${s1.line}`)
+    }
+  }
+  if (deep) stats.realtime_subscriptions_wrapper_too_deep = (stats.realtime_subscriptions_wrapper_too_deep || 0) + 1
 }
 
 const httpFns = new Set(apiCalls.map(a => a.src))
