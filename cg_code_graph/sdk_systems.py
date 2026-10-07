@@ -6,8 +6,13 @@ Not HTTP hosts (`external:http(s):…` is part 1). A client construction plus an
   external:gcs:<bucket-or-env>         google.cloud.storage / @google-cloud/storage
   external:azure-blob:<container-or-env>
   external:aws:<service>[:resource]    sqs, secretsmanager, dynamodb, ses
-  external:saas:stripe
+  external:saas:<provider>             stripe, and (part 3a) sendgrid, mailgun, postmark, resend, twilio, vonage
   external:llm:<provider>              openai / anthropic when the call is not already an attrs.llm_calls edge
+
+Mail and SMS APIs (#42 part 3a) use the same shapes. A literal key is `credential_source=literal` (and
+`credential_literal=true`, for #47), an env / config() / settings key is `CREDENTIAL_FROM env:<KEY>`, no key found is
+`auth=unknown`. Laravel mailers (config/mail.php + config/services.php) and Django `EMAIL_BACKEND` / `ANYMAIL` are one
+shared node per provider, used by every `Mail::` / `send_mail` / notification caller.
 
 CONNECTS_TO carries `via` (library) and `op` (SDK operation). CONFIGURED_BY points at the env key of a
 bucket / queue / table. CREDENTIAL_FROM points at an explicit key; a default credential chain is
@@ -74,6 +79,10 @@ TS_CMD = {
     "DeleteItemCommand": ("dynamodb", "TableName", "DeleteItem"),
     "SendEmailCommand": ("ses", None, "SendEmail"),
 }
+MARK_MAIL = re.compile(
+    r"sendgrid|mailgun|postmark|resend|twilio|vonage|nexmo|anymail|EMAIL_BACKEND|Mail::|Mailable|"
+    r"Notification|django\.core\.mail|send_mail", re.I)
+CONFIG_FILES = ("filesystems.php", "mail.php", "services.php")
 _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)(/|$)|\.(test|spec)\.[cm]?[jt]sx?$|Test\.php$|(^|/)test_.*\.py$")
 _CRED_KW = ("aws_access_key_id", "aws_secret_access_key", "aws_session_token", "accessKeyId", "secretAccessKey", "sessionToken")
 
@@ -87,7 +96,8 @@ def _files(root):
         dns[:] = [d for d in dns if d not in SKIP and not d.startswith(".")]
         for fn in fns:
             ext = os.path.splitext(fn)[1].lower()
-            if ext not in EXTS and fn != "filesystems.php":
+            cfg_php = fn in CONFIG_FILES and os.path.basename(dp) == "config"
+            if ext not in EXTS and not cfg_php:
                 continue
             p = os.path.join(dp, fn)
             try:
@@ -96,7 +106,7 @@ def _files(root):
                 text = open(p, errors="replace").read()
             except OSError:
                 continue
-            if fn == "filesystems.php" or MARK.search(text):
+            if cfg_php or MARK.search(text) or MARK_MAIL.search(text):
                 yield _rel(root, p), text
 
 
@@ -832,18 +842,558 @@ def _collect_php(rel: str, text: str, disks: dict, default: str | None):
     return facts, default
 
 
+# ---------------------------------------------------------------- mail and SMS APIs (#42 part 3a)
+MAIL_PROVIDERS = ("sendgrid", "mailgun", "postmark", "resend", "twilio", "vonage")
+IGNORED_MAILERS = {"smtp", "sendmail", "log", "array", "failover", "roundrobin", "mailpit", "mailtrap"}
+LARAVEL_MAIL_TRANSPORT = {"mailgun": "mailgun", "postmark": "postmark", "resend": "resend", "ses": "ses", "ses-v2": "ses"}
+SECRET_FIELD = re.compile(r"key|token|secret|password|sid|auth", re.I)
+ANYMAIL_ESP = {
+    "amazon_ses": "ses", "sendgrid": "sendgrid", "mailgun": "mailgun", "postmark": "postmark", "resend": "resend",
+    "brevo": "brevo", "mailersend": "mailersend", "mailjet": "mailjet", "mandrill": "mandrill", "postal": "postal",
+    "sparkpost": "sparkpost", "unisender_go": "unisender-go", "scaleway": "scaleway",
+}
+
+
+def _env_keys(expr: str) -> list[str]:
+    keys: list[str] = []
+    for rx in (
+        r"""(?:process\.env|import\.meta\.env|Bun\.env)\.([A-Z][A-Z0-9_]*)""",
+        r"""(?:process\.env|import\.meta\.env)\[\s*['\"]([A-Z][A-Z0-9_]*)['\"]\s*\]""",
+        r"""(?:getenv|\benv)\(\s*['\"]([A-Z][A-Z0-9_]*)['\"]""",
+        r"""environ(?:\.get)?\s*[\[(]\s*['\"]([A-Z][A-Z0-9_]*)['\"]""",
+        r"""\$_(?:ENV|SERVER)\[\s*['\"]([A-Z][A-Z0-9_]*)['\"]""",
+    ):
+        keys += re.findall(rx, expr or "")
+    return list(dict.fromkeys(keys))
+
+
+def _args_at(text: str, open_at: int) -> str:
+    """Text between the '(' at open_at and its matching ')'."""
+    if open_at < 0 or open_at >= len(text) or text[open_at] != "(":
+        return ""
+    depth, i, n = 0, open_at, len(text)
+    while i < n:
+        c = text[i]
+        if c in "'\"`":
+            q = c
+            i += 1
+            while i < n and text[i] != q:
+                i += 2 if text[i] == "\\" else 1
+            i += 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return text[open_at + 1:i]
+        i += 1
+    return text[open_at + 1:open_at + 400]
+
+
+def _cred_expr(expr: str, text: str, cfg: dict | None = None, settings: dict | None = None):
+    """('env', [KEY...]) | ('literal', []) | ('none', []) from the key / token argument of a client."""
+    expr = (expr or "").strip()
+    if re.fullmatch(r"\$?[A-Za-z_]\w*", expr):
+        name = expr.lstrip("$")
+        m = re.search(r"(?:(?:const|let|var)\s+|\bself\.|\bthis\.|\$this->|\$)?\b%s\b\s*(?::[^=\n]+)?=\s*([^;\n]+)" % re.escape(name), text)
+        if m and "==" not in m.group(0):
+            expr = m.group(1)
+    keys = _env_keys(expr)
+    if keys:
+        return ("env", keys)
+    mc = re.search(r"""\bconfig\(\s*['\"]([\w.\-]+)['\"]""", expr)
+    if mc:
+        return (cfg or {}).get(mc.group(1)) or ("none", [])
+    ms = re.search(r"""\bsettings\.([A-Z][A-Z0-9_]*)""", expr)
+    if ms:
+        return (settings or {}).get(ms.group(1)) or ("none", [])
+    if re.search(r"""['\"][^'\"\s]{6,}['\"]""", expr):
+        for lit in re.findall(r"""['\"]([^'\"\s]{6,})['\"]""", expr):
+            if not lit.startswith(("http://", "https://")):
+                return ("literal", [])
+    return ("none", [])
+
+
+def _merge_cred(*creds):
+    """First env / config result, else literal, else none."""
+    for kind in ("env", "literal"):
+        for c in creds:
+            if c and c[0] == kind:
+                return c
+    return ("none", [])
+
+
+def _mail_fact(rel, line, provider, op, via, cred, resource=None, endpoint=None):
+    proto, svc = ("aws", "ses") if provider == "ses" else ("saas", provider)
+    kind, keys = cred
+    if provider == "ses" and kind == "none":
+        auth = "ambient"
+    else:
+        auth = {"env": "explicit", "literal": "explicit"}.get(kind, "unknown")
+    f = _fact(rel, line, proto, svc, None, op, via, auth, keys if kind == "env" else [], endpoint)
+    if not f:
+        return None
+    f["confidence"] = "exact"
+    f["address_source"] = "sdk"
+    f["ensure_env"] = True
+    if kind == "literal":
+        f["literal_credential"] = True
+    if resource:
+        f["resource"] = resource
+    return f
+
+
+def _res_expr(expr: str):
+    """A Mailgun domain argument as an attribute value ('example.com' or 'env:KEY') or None."""
+    ek = _env_in(expr or "")
+    if ek:
+        return f"env:{ek}"
+    lit = _lit_in(expr or "")
+    return lit
+
+
+def _services_php(text: str) -> dict:
+    """config/services.php -> {'services.<provider>.<field>': ('env', [KEY]) | ('literal', [])}."""
+    out = {}
+    i = text.find("return")
+    br = text.find("[", i if i >= 0 else 0)
+    body = _php_array(text, br)
+    j, n, depth = 0, len(body), 0
+    while j < n:
+        m = re.match(r"""\s*['\"]([\w\-]+)['\"]\s*=>\s*\[""", body[j:])
+        if not m or depth != 1:
+            c = body[j]
+            depth += 1 if c == "[" else -1 if c == "]" else 0
+            j += 1
+            continue
+        name = m.group(1)
+        open_b = j + m.end() - 1
+        inner = _php_array(body, open_b)
+        for fm in re.finditer(r"""['\"](\w+)['\"]\s*=>\s*([^,\n\]]+)""", inner[1:-1]):
+            expr = fm.group(2)
+            keys = _env_keys(expr)
+            if keys:
+                out[f"services.{name}.{fm.group(1)}"] = ("env", keys)
+            elif re.fullmatch(r"""\s*['\"][^'\"\s]{6,}['\"]\s*""", expr) and SECRET_FIELD.search(fm.group(1)):
+                out[f"services.{name}.{fm.group(1)}"] = ("literal", [])
+        j = open_b + len(inner)
+    return out
+
+
+def _service_cred(services: dict, name: str):
+    """The credential fields of config/services.php's `name` block (key / token / secret / sid ...)."""
+    envs, literal = [], False
+    for k, v in services.items():
+        parts = k.split(".")
+        if len(parts) == 3 and parts[1] == name and SECRET_FIELD.search(parts[2]):
+            if v[0] == "env":
+                envs += [e for e in v[1] if e not in envs]
+            else:
+                literal = True
+    if envs:
+        return ("env", envs)
+    return ("literal", []) if literal else ("none", [])
+
+
+def _service_domain(services: dict, name: str):
+    v = services.get(f"services.{name}.domain")
+    return f"env:{v[1][0]}" if v and v[0] == "env" else None
+
+
+def _php_mailers(text: str) -> tuple[dict, str | None, str | None]:
+    """config/mail.php -> ({mailer: transport}, default mailer, env key of the default)."""
+    default, env_key = None, None
+    dm = re.search(r"""['\"]default['\"]\s*=>\s*([^\n]+)""", text)
+    if dm:
+        ek = _env_keys(dm.group(1))
+        env_key = ek[0] if ek else None
+        fb = re.search(r"""env\(\s*['\"][^'\"]+['\"]\s*,\s*['\"]([\w\-]+)['\"]\s*\)""", dm.group(1))
+        lit = re.match(r"""\s*['\"]([\w\-]+)['\"]""", dm.group(1))
+        default = fb.group(1) if fb else lit.group(1) if lit else None
+    mailers = {}
+    i = text.find("'mailers'")
+    if i < 0:
+        i = text.find('"mailers"')
+    if i < 0:
+        return mailers, default, env_key
+    body = _php_array(text, text.find("[", i))
+    j, n, depth = 0, len(body), 0
+    while j < n:
+        m = re.match(r"""\s*['\"]([\w\-]+)['\"]\s*=>\s*\[""", body[j:])
+        if not m or depth != 1:
+            c = body[j]
+            depth += 1 if c == "[" else -1 if c == "]" else 0
+            j += 1
+            continue
+        open_b = j + m.end() - 1
+        inner = _php_array(body, open_b)
+        tm = re.search(r"""['\"]transport['\"]\s*=>\s*['\"]([\w\-]+)['\"]""", inner)
+        mailers[m.group(1)] = tm.group(1) if tm else m.group(1)
+        j = open_b + len(inner)
+    return mailers, default, env_key
+
+
+def _env_file_value(root, key: str) -> str | None:
+    for name in (".env", ".env.example"):
+        try:
+            for line in open(os.path.join(root, name), errors="replace"):
+                m = re.match(rf"\s*{key}\s*=\s*['\"]?([\w\-]+)", line)
+                if m:
+                    return m.group(1)
+        except OSError:
+            continue
+    return None
+
+
+def _collect_laravel_mail(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    mailers, default, services = ctx["mailers"], ctx["mail_default"], ctx["services"]
+
+    def transport_fact(line, mailer, op, via):
+        tr = LARAVEL_MAIL_TRANSPORT.get(mailers.get(mailer, mailer))
+        if not tr:
+            return None
+        if tr == "ses":
+            return _mail_fact(rel, line, "ses", op, via, _service_cred(services, "ses"))
+        return _mail_fact(rel, line, tr, op, via, _service_cred(services, tr), resource=_service_domain(services, tr))
+    if default or mailers:
+        for m in re.finditer(r"""\bMail::(send|raw|html|plain|queue|later|sendNow|to|cc|bcc|mailer)\s*\(""", text):
+            name = m.group(1)
+            mailer = default
+            if name == "mailer":
+                lit = re.match(r"""\s*['\"]([\w\-]+)['\"]""", text[m.end():m.end() + 80])
+                mailer = lit.group(1) if lit else default
+            if name in ("to", "cc", "bcc", "mailer"):
+                stmt = text[m.end():m.end() + 500].split(";", 1)[0]
+                sm = re.search(r"""->(send|queue|later|sendNow)\s*\(""", stmt)
+                if not sm:
+                    continue
+                name = sm.group(1)
+            if not mailer or mailer in IGNORED_MAILERS:
+                continue
+            f = transport_fact(_line_at(text, m.start()), mailer, name, "laravel-mail")
+            if f:
+                facts.append(f)
+    for m in re.finditer(r"""function\s+via\s*\([^)]*\)[^{]*\{""", text):
+        body = _brace(text, m.end() - 1)
+        chans = set(re.findall(r"""['\"](\w+)['\"]""", body)) | {c.lower().replace("channel", "") for c in re.findall(r"""(\w+Channel)::class""", body)}
+        line = _line_at(text, m.start())
+        if "mail" in chans and default and default not in IGNORED_MAILERS:
+            f = transport_fact(line, default, "notification", "laravel-notification")
+            if f:
+                facts.append(f)
+        for chan, prov in (("vonage", "vonage"), ("nexmo", "vonage"), ("twilio", "twilio")):
+            if chan in chans:
+                via = "laravel-notification-channels/twilio" if prov == "twilio" else "laravel/vonage-notification-channel"
+                f = _mail_fact(rel, line, prov, "notification", via, _service_cred(services, prov if prov != "vonage" or "vonage" in {k.split(".")[1] for k in services} else "nexmo"))
+                if f:
+                    facts.append(f)
+    return facts
+
+
+def _php_ctor_vars(text: str, ctor: str):
+    """(var, args, pos) for `$var = new X(...)` / `$this->var = Factory::create(...)`; ctor is the regex up to the '('."""
+    for m in re.finditer(r"""(?:\$this->|\$)(\w+)\s*=\s*(?:new\s+)?""" + ctor + r"""\s*\(""", text):
+        yield m.group(1), _args_at(text, m.end() - 1), m.start()
+
+
+def _php_calls(text: str, var: str, suffix: str):
+    for m in re.finditer(r"""(?:\$this->|\$)%s\s*%s""" % (re.escape(var), suffix), text):
+        yield m
+
+
+def _collect_mail_php(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    services = ctx["services"]
+    if not re.search(r"SendGrid|Mailgun|Postmark|Resend|Twilio|Vonage|Nexmo", text):
+        return facts
+
+    def add(provider, line, op, via, cred, resource=None):
+        f = _mail_fact(rel, line, provider, op, via, cred, resource)
+        if f:
+            facts.append(f)
+    for var, args, _p in _php_ctor_vars(text, r"""\\?(?:SendGrid\\)?SendGrid"""):
+        cred = _cred_expr(args.split(",")[0], text, services)
+        for m in _php_calls(text, var, r"->send\("):
+            add("sendgrid", _line_at(text, m.start()), "send", "sendgrid/sendgrid", cred)
+    for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Mailgun\\)?Mailgun::create"""):
+        cred = _cred_expr(args.split(",")[0], text, services)
+        for m in _php_calls(text, var, r"->messages\(\)->send\("):
+            add("mailgun", _line_at(text, m.start()), "messages.send", "mailgun/mailgun-php", cred,
+                _res_expr(_args_at(text, m.end() - 1).split(",")[0]))
+    if "Mailgun" in text:
+        known = {p for v, a, p in _php_ctor_vars(text, r"""\\?(?:Mailgun\\)?Mailgun::create""")}
+        if not known:
+            for m in re.finditer(r"""->messages\(\)->send\(""", text):
+                add("mailgun", _line_at(text, m.start()), "messages.send", "mailgun/mailgun-php", ("none", []),
+                    _res_expr(_args_at(text, m.end() - 1).split(",")[0]))
+    for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Postmark\\)?PostmarkClient"""):
+        cred = _cred_expr(args.split(",")[0], text, services)
+        for m in _php_calls(text, var, r"->(sendEmail|sendEmailBatch|sendEmailWithTemplate)\("):
+            add("postmark", _line_at(text, m.start()), m.group(1), "wildbit/postmark-php", cred)
+    for var, args, _p in _php_ctor_vars(text, r"""\\?Resend::client"""):
+        cred = _cred_expr(args.split(",")[0], text, services)
+        for m in _php_calls(text, var, r"->(emails|batch)->send\("):
+            add("resend", _line_at(text, m.start()), f"{m.group(1)}.send", "resend/resend-php", cred)
+    for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Twilio\\Rest\\)?Client"""):
+        if "Twilio" not in text:
+            continue
+        parts = _split_args(args)
+        cred = _merge_cred(*(_cred_expr(a, text, services) for a in parts[:2]))
+        for m in _php_calls(text, var, r"->(messages|calls)->create\("):
+            add("twilio", _line_at(text, m.start()), f"{m.group(1)}.create", "twilio/sdk", cred)
+    for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Vonage\\)?Client"""):
+        if "Vonage" not in text:
+            continue
+        cred = _merge_cred(*(_cred_expr(a, text, services) for a in _split_args(args + "," + _args_around(text, _p))))
+        for m in _php_calls(text, var, r"->(sms|messages)\(\)->send\("):
+            add("vonage", _line_at(text, m.start()), f"{m.group(1)}.send", "vonage/client", cred)
+    return facts
+
+
+def _args_around(text: str, pos: int) -> str:
+    """The Credentials\\Basic / Keypair arguments a Vonage client is built from (a few lines around its assignment)."""
+    w = text[max(0, pos - 300):pos + 400]
+    m = re.search(r"""Credentials\\(?:Basic|Keypair)\s*\(""", w)
+    return _args_at(w, m.end() - 1) if m else ""
+
+
+def _split_args(args: str) -> list[str]:
+    out, depth, cur, q = [], 0, "", None
+    for c in args:
+        if q:
+            cur += c
+            q = None if c == q else q
+            continue
+        if c in "'\"":
+            q = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        if c == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+            continue
+        cur += c
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+_TS_LHS = r"""(?:(?:const|let|var)\s+(\w+)|this\.(\w+)|(\w+))\s*(?::[^=\n]+)?=\s*(?:await\s+)?"""
+
+
+def _ts_ctor_vars(text: str, ctor: str):
+    for m in re.finditer(_TS_LHS + ctor + r"""\s*\(""", text):
+        var = m.group(1) or m.group(2) or m.group(3)
+        yield var, _args_at(text, m.end() - 1), m.start()
+
+
+def _ts_calls(text: str, var: str, suffix: str):
+    for m in re.finditer(r"""(?:\bthis\.)?\b%s\s*%s""" % (re.escape(var), suffix), text):
+        yield m
+
+
+def _ts_names(text: str, mod: str) -> set[str]:
+    names = set()
+    for m in re.finditer(r"""import\s+(?:\*\s+as\s+)?(\w+)\s*(?:,\s*\{[^}]*\})?\s*from\s*['\"]%s['\"]""" % mod, text):
+        names.add(m.group(1))
+    for m in re.finditer(r"""(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['\"]%s['\"]\s*\)""" % mod, text):
+        names.add(m.group(1))
+    return names
+
+
+def _ts_named(text: str, mod: str) -> set[str]:
+    out = set()
+    for m in re.finditer(r"""import\s+(?:\w+\s*,\s*)?\{([^}]*)\}\s*from\s*['\"]%s['\"]""" % mod, text):
+        for part in m.group(1).split(","):
+            bits = part.strip().split(" as ")
+            if bits[0].strip():
+                out.add(bits[-1].strip())
+    for m in re.finditer(r"""(?:const|let|var)\s+\{([^}]*)\}\s*=\s*require\(\s*['\"]%s['\"]\s*\)""" % mod, text):
+        for part in m.group(1).split(","):
+            bits = part.strip().split(":")
+            if bits[0].strip():
+                out.add(bits[-1].strip())
+    return out
+
+
+def _collect_mail_ts(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    if not re.search(r"@sendgrid/mail|mailgun\.js|['\"]postmark['\"]|['\"]resend['\"]|['\"]twilio['\"]|@vonage/server-sdk", text):
+        return facts
+
+    def add(provider, pos, op, via, cred, resource=None):
+        f = _mail_fact(rel, _line_at(text, pos), provider, op, via, cred, resource)
+        if f:
+            facts.append(f)
+    # @sendgrid/mail: sgMail.setApiKey(key); sgMail.send(msg)
+    sg = _ts_names(text, r"@sendgrid/mail")
+    for var, _a, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?MailService"):
+        sg.add(var)
+    for n in sg:
+        creds = [_cred_expr(_args_at(text, m.end() - 1), text) for m in _ts_calls(text, n, r"\.setApiKey\(")]
+        cred = _merge_cred(*creds)
+        for m in _ts_calls(text, n, r"\.(send|sendMultiple)\("):
+            add("sendgrid", m.start(), m.group(1), "@sendgrid/mail", cred)
+    # mailgun.js: new Mailgun(formData).client({ username, key }); mg.messages.create(domain, data)
+    if "mailgun.js" in text:
+        for var, args, _p in _ts_ctor_vars(text, r"(?:new\s+\w+\s*\([^)]*\)|\w+)\.client"):
+            cred = _cred_expr(args, text)
+            for m in _ts_calls(text, var, r"\.messages\.create\("):
+                add("mailgun", m.start(), "messages.create", "mailgun.js", cred, _res_expr(_args_at(text, m.end() - 1).split(",")[0]))
+    # postmark: new ServerClient(token).sendEmail
+    if re.search(r"['\"]postmark['\"]", text):
+        for var, args, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?ServerClient"):
+            cred = _cred_expr(args.split(",")[0], text)
+            for m in _ts_calls(text, var, r"\.(sendEmail|sendEmailBatch|sendEmailWithTemplate)\("):
+                add("postmark", m.start(), m.group(1), "postmark", cred)
+    # resend: new Resend(key).emails.send
+    if re.search(r"['\"]resend['\"]", text):
+        for var, args, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?Resend"):
+            cred = _cred_expr(args.split(",")[0], text)
+            for m in _ts_calls(text, var, r"\.(emails|batch)\.send\("):
+                add("resend", m.start(), f"{m.group(1)}.send", "resend", cred)
+    # twilio: twilio(sid, token) / new Twilio(sid, token)
+    if re.search(r"['\"]twilio['\"]", text):
+        names = _ts_names(text, r"twilio")
+        ctors = [r"(?:%s)" % "|".join(re.escape(n) for n in names)] if names else []
+        ctors += [r"new\s+(?:\w+\.)?Twilio"]
+        for ctor in ctors:
+            for var, args, _p in _ts_ctor_vars(text, ctor):
+                parts = _split_args(args)
+                cred = _merge_cred(*(_cred_expr(a, text) for a in parts[:2]))
+                for m in _ts_calls(text, var, r"\.(messages|calls|verify)\b[\w.]*\.create\("):
+                    add("twilio", m.start(), f"{m.group(1)}.create", "twilio", cred)
+    # @vonage/server-sdk: new Vonage({ apiKey, apiSecret }).sms.send
+    if "@vonage/server-sdk" in text:
+        for var, args, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?Vonage"):
+            cred = _cred_expr(args, text)
+            for m in _ts_calls(text, var, r"\.(sms|messages)\.send\("):
+                add("vonage", m.start(), f"{m.group(1)}.send", "@vonage/server-sdk", cred)
+    return facts
+
+
+_PY_LHS = r"""(?:self\.)?(\w+)\s*(?::[^=\n]+)?=\s*"""
+
+
+def _py_ctor_vars(text: str, ctor: str):
+    for m in re.finditer(_PY_LHS + ctor + r"""\s*\(""", text):
+        yield m.group(1), _args_at(text, m.end() - 1), m.start()
+
+
+def _py_arg(args: str, *names: str) -> str:
+    """The keyword argument value (first matching name) or the first positional argument."""
+    parts = _split_args(args)
+    for p in parts:
+        k, eq, v = p.partition("=")
+        if eq and k.strip() in names:
+            return v
+    for p in parts:
+        if "=" not in p.split("(")[0]:
+            return p
+    return ""
+
+
+def _collect_mail_py(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    st = ctx["py_settings"]
+    if not re.search(r"sendgrid|twilio|postmarker|\bresend\b|vonage|django\.core\.mail", text, re.I):
+        return facts
+
+    def add(provider, pos, op, via, cred, resource=None):
+        f = _mail_fact(rel, _line_at(text, pos), provider, op, via, cred, resource)
+        if f:
+            facts.append(f)
+    if "sendgrid" in text:
+        for var, args, _p in _py_ctor_vars(text, r"(?:\w+\.)?SendGridAPIClient"):
+            cred = _cred_expr(_py_arg(args, "api_key"), text, None, st)
+            for m in _ts_calls(text, var, r"\.send\("):
+                add("sendgrid", m.start(), "send", "sendgrid", cred)
+    if "twilio" in text:
+        for var, args, _p in _py_ctor_vars(text, r"(?:twilio\.rest\.)?Client"):
+            parts = _split_args(args)
+            cred = _merge_cred(*(_cred_expr(a.partition("=")[2] or a, text, None, st) for a in parts[:2]))
+            for m in _ts_calls(text, var, r"\.(messages|calls)\.create\("):
+                add("twilio", m.start(), f"{m.group(1)}.create", "twilio", cred)
+    if "postmarker" in text:
+        for var, args, _p in _py_ctor_vars(text, r"(?:\w+\.)?PostmarkClient"):
+            cred = _cred_expr(_py_arg(args, "server_token", "token"), text, None, st)
+            for m in _ts_calls(text, var, r"\.emails\.(send|send_batch)\("):
+                add("postmark", m.start(), f"emails.{m.group(1)}", "postmarker", cred)
+    if re.search(r"^\s*(?:import resend|from resend)", text, re.M):
+        am = re.search(r"""\bresend\.api_key\s*=\s*([^\n]+)""", text)
+        cred = _cred_expr(am.group(1), text, None, st) if am else ("none", [])
+        for m in re.finditer(r"""\bresend\.(Emails|Batch)\.send\(""", text):
+            add("resend", m.start(), f"{m.group(1).lower()}.send", "resend", cred)
+    if "vonage" in text:
+        creds = []
+        for _v, args, _p in _py_ctor_vars(text, r"vonage\.Client"):
+            creds += [_cred_expr(_py_arg(args, k), text, None, st) for k in ("key", "api_key")]
+            creds += [_cred_expr(_py_arg(args, k), text, None, st) for k in ("secret", "api_secret")] if "secret" in args else []
+        cred = _merge_cred(*creds)
+        for m in re.finditer(r"""\.(sms\.send_message|send_message|messages\.send)\(""", text):
+            add("vonage", m.start(), m.group(1), "vonage", cred)
+    if "django.core.mail" in text and ctx.get("anymail"):
+        spec = ctx["anymail"]
+        names = {"send_mail", "send_mass_mail", "mail_admins", "mail_managers"}
+        for n in names:
+            for m in re.finditer(r"""(?<![\w.])%s\(""" % n, text):
+                if re.search(r"def\s+%s" % n, text[max(0, m.start() - 8):m.start() + len(n) + 1]):
+                    continue
+                f = _mail_fact(rel, _line_at(text, m.start()), spec["provider"], n, "django-anymail", spec["cred"], spec.get("resource"))
+                if f:
+                    facts.append(f)
+        for m in re.finditer(r"""\b(?:EmailMessage|EmailMultiAlternatives)\s*\(""", text):
+            end = m.end() - 1 + len(_args_at(text, m.end() - 1)) + 2
+            hit = re.match(r"""\s*\.send\(""", text[end:])
+            var = None
+            if not hit:
+                lm = re.search(r"""(\w+)\s*=\s*$""", text[max(0, m.start() - 60):m.start()])
+                var = lm.group(1) if lm else None
+            sites = [m.start()] if hit else [x.start() for x in _ts_calls(text, var, r"\.send\(")] if var else []
+            for pos in sites:
+                f = _mail_fact(rel, _line_at(text, pos), spec["provider"], "send", "django-anymail", spec["cred"], spec.get("resource"))
+                if f:
+                    facts.append(f)
+    return facts
+
+
+def _anymail_settings(text: str, st: dict):
+    """EMAIL_BACKEND = 'anymail.backends.<esp>.EmailBackend' + the ANYMAIL dict -> {provider, cred, resource}."""
+    m = re.search(r"""^EMAIL_BACKEND\s*=\s*['\"]anymail\.backends\.(\w+)\.EmailBackend['\"]""", text, re.M)
+    if not m or m.group(1) not in ANYMAIL_ESP:
+        return None
+    esp, prov = m.group(1), ANYMAIL_ESP[m.group(1)]
+    am = re.search(r"""^ANYMAIL\s*=\s*\{""", text, re.M)
+    body = _brace(text, am.end() - 1) if am else ""
+    cred, resource = ("none", []), None
+    for km in re.finditer(r"""['\"]([A-Z][A-Z0-9_]+)['\"]\s*:\s*([^\n]+)""", body):
+        key, expr = km.group(1), km.group(2)
+        if not key.startswith(esp.upper().replace("AMAZON_", "AMAZON_")) and not key.startswith(prov.upper().replace("-", "_")):
+            continue
+        if re.search(r"DOMAIN", key):
+            resource = _res_expr(expr)
+        elif SECRET_FIELD.search(key):
+            cred = _merge_cred(cred, _cred_expr(expr, text, None, st))
+    return {"provider": prov, "cred": cred, "resource": resource}
+
+
 def collect(root) -> list:
     facts = []
     storage: dict = {}
     disks: dict = {}
     default = None
-    py_chunks, php_chunks = [], []
+    py_chunks, php_chunks, ts_mail = [], [], []
     for rel, text in _files(root):
         ext = os.path.splitext(rel)[1].lower()
         if ext == ".py":
             py_chunks.append((rel, text))
         elif ext in (".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx"):
             facts += _collect_ts(rel, text)
+            ts_mail.append((rel, text))
         elif ext == ".php":
             php_chunks.append((rel, text))
     for rel, text in php_chunks:
@@ -860,6 +1410,34 @@ def collect(root) -> list:
             _collect_py(rel, text, storage)
     for rel, text in py_chunks:
         facts += [f for f in _collect_py(rel, text, storage) if f["via"] != "django-storages" or storage]
+    mail_ctx = {"services": {}, "mailers": {}, "mail_default": None, "py_settings": {}, "anymail": None}
+    for rel, text in php_chunks:
+        if rel.endswith("config/services.php"):
+            mail_ctx["services"].update(_services_php(text))
+        elif rel.endswith("config/mail.php"):
+            mail_ctx["mailers"], mail_ctx["mail_default"], mail_env = _php_mailers(text)
+            mail_ctx["mail_env"] = mail_env
+    if mail_ctx["mailers"] and mail_ctx.get("mail_env"):
+        mail_ctx["mail_default"] = _env_file_value(root, mail_ctx["mail_env"]) or mail_ctx["mail_default"]
+    if mail_ctx["mail_default"] is None:
+        api = [m for m, t in mail_ctx["mailers"].items() if t in LARAVEL_MAIL_TRANSPORT]
+        if len(api) == 1:
+            mail_ctx["mail_default"] = api[0]
+    for rel, text in py_chunks:
+        for m in re.finditer(r"^([A-Z][A-Z0-9_]+)\s*=\s*([^\n]+)", text, re.M):
+            c = _cred_expr(m.group(2), "", None, None)
+            if c[0] != "none":
+                mail_ctx["py_settings"][m.group(1)] = c
+    for rel, text in py_chunks:
+        if "EMAIL_BACKEND" in text:
+            mail_ctx["anymail"] = _anymail_settings(text, mail_ctx["py_settings"]) or mail_ctx["anymail"]
+    for rel, text in php_chunks:
+        facts += _collect_laravel_mail(rel, text, mail_ctx) if not rel.endswith("config/mail.php") else []
+        facts += _collect_mail_php(rel, text, mail_ctx)
+    for rel, text in py_chunks:
+        facts += _collect_mail_py(rel, text, mail_ctx)
+    for rel, text in ts_mail:
+        facts += _collect_mail_ts(rel, text, mail_ctx)
     # dedupe
     seen = set()
     out = []
@@ -939,6 +1517,8 @@ def attach_sdk(builder, root, node, cred, st) -> None:
             attrs["endpoint"] = f["endpoint"]
         if f["auth"] == "ambient":
             attrs["credential_source"] = "ambient"
+        if f.get("resource") and f["protocol"] == "saas":
+            attrs["resource"] = f["resource"]
         nid = node(f["protocol"], f["target"], attrs, f["confidence"])
         if (src, nid) in llm_done and f["protocol"] == "llm":
             continue
@@ -946,11 +1526,24 @@ def attach_sdk(builder, root, node, cred, st) -> None:
         n = builder.nodes[nid]
         if f["auth"] == "explicit":
             n.attrs["auth"] = "explicit"
-            n.attrs["credential_source"] = "env"
+            if f.get("literal_credential"):
+                n.attrs["credential_literal"] = True
+                if n.attrs.get("credential_source") != "env":
+                    n.attrs["credential_source"] = "literal"
+                    n.attrs["credential_at"] = f"{f['file']}:{f['line']}"
+            else:
+                n.attrs["credential_source"] = "env"
+        elif f["auth"] == "unknown":
+            if n.attrs.get("auth") not in ("explicit",):
+                n.attrs["auth"] = "unknown"
         else:
             n.attrs.setdefault("auth", "ambient")
             n.attrs.setdefault("credential_source", "ambient")
-        extra = {"via": f["via"], "op": f["op"], "auth": n.attrs.get("auth") or f["auth"]}
+        extra = {"via": f["via"], "op": f["op"], "auth": f["auth"]}
+        if f.get("literal_credential"):
+            extra["literal_credential"] = True
+        if f.get("resource") and f["protocol"] == "saas":
+            extra["resource"] = f["resource"]
         builder.add_edge(src, nid, "CONNECTS_TO", f["file"], f["line"], f["confidence"], **extra)
         st["connects"] += 1
         if f.get("resource_env"):
@@ -958,6 +1551,9 @@ def attach_sdk(builder, root, node, cred, st) -> None:
             if eid in builder.nodes:
                 builder.add_edge(nid, eid, "CONFIGURED_BY", None, None, f["confidence"])
         if f["auth"] == "explicit" and f.get("creds"):
+            if f.get("ensure_env"):
+                for k in f["creds"]:
+                    builder.add_node("env", k, lang="env")
             cred(nid, f["creds"])
             n.attrs["credential_source"] = "env"
             n.attrs["credential_at"] = f"env:{f['creds'][0]}"

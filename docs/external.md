@@ -22,8 +22,9 @@ external -CREDENTIAL_FROM-> env:<KEY>          # where the secret is, never its 
 | client constructors | Python (`psycopg`, `redis`, `pymongo`, `pika`, `boto3`, …) and Node (`pg`, `ioredis`, `mongoose`, `amqplib`, `knex`, …). A localhost default is not a system |
 | ORM datasources | Prisma `datasource`, TypeORM `DataSource`, Drizzle `dbCredentials`, Laravel tables on `$connection`, PHP `new PDO`, Spring `spring.datasource.url`. sqlite / H2 / HSQLDB / Derby are skipped. The one SQL system in a repo is attached to ORM tables that name none (`via: sole <protocol> system`) |
 | Redis / Elasticsearch | literal key prefixes and `KEY_PREFIX` / `ELASTICSEARCH_INDEX_PREFIX` on `attrs.key_prefixes` / `attrs.indices` |
-| HTTP and SDKs | `external:http(s):<host>:<port>` for a real other-origin host; `external:s3:<bucket>`, `gcs`, `azure-blob`, `aws:<service>`, `saas:stripe`, `llm:<provider>`. Loopback and `${host}` stay unattached. Test-only callers are left out. A PHP `Http` / Guzzle call whose host is a literal is one of these nodes; a base read from `config()` / `env()` stays a client endpoint (sample value from `.env.example` only, never `.env`) and is matched by `cg link` |
+| HTTP and SDKs | `external:http(s):<host>:<port>` for a real other-origin host; `external:s3:<bucket>`, `gcs`, `azure-blob`, `aws:<service>`, `saas:<provider>` (`stripe`, and the mail / SMS APIs `sendgrid`, `mailgun`, `postmark`, `resend`, `twilio`, `vonage`; SES is `aws:ses`), `llm:<provider>`. Loopback and `${host}` stay unattached. Test-only callers are left out. A PHP `Http` / Guzzle call whose host is a literal is one of these nodes; a base read from `config()` / `env()` stays a client endpoint (sample value from `.env.example` only, never `.env`) and is matched by `cg link` |
 | Laravel disks / django-storages | `s3` / `gcs` / `azure` disks. `Storage::disk` and `default_storage.save` connect to that disk |
+| Mail and SMS APIs | PHP `sendgrid/sendgrid`, `mailgun/mailgun-php`, `wildbit/postmark-php`, `resend/resend-php`, `twilio/sdk`, `vonage/client`; TS `@sendgrid/mail`, `mailgun.js`, `postmark`, `resend`, `twilio`, `@vonage/server-sdk`; Python `sendgrid`, `twilio.rest`, `postmarker`, `resend`, `vonage`. Laravel `config/mail.php` mailers (`mailgun`, `postmark`, `resend`, `ses`; `smtp` / `sendmail` / `log` are skipped, SMTP is its own system) read their keys from `config/services.php`; the default mailer (`.env.example` `MAIL_MAILER`, else the `env()` fallback) is used by `Mail::send` / `Mail::to()->send()` / `Mail::raw`, and `Mail::mailer('x')` names one. A notification `via()` returning `mail`, `vonage` or `twilio` connects to that provider. Django `EMAIL_BACKEND = "anymail.backends.<esp>.EmailBackend"` with the `ANYMAIL` dict is one node used by `send_mail` / `send_mass_mail` / `EmailMessage.send` |
 
 Confidence is `exact` for a literal host, `resolved` through `.env.example` or compose,
 `heuristic` otherwise. `DB_*` without a driver takes the one SQL client in package.json /
@@ -47,7 +48,25 @@ systems.
 
 Node attrs: `protocol`, `host`, `port`, `tls`, `resource` (database, bucket),
 `address_source` (literal, env-example, compose, config, env), `credential_source`, `auth` (
-`ambient` or `explicit`).
+`ambient`, `explicit` or `unknown`).
+
+Mail and SMS providers (`external:saas:<provider>`) follow the SDK shapes above: `CONNECTS_TO` carries `via` (the
+library) and `op` (`send`, `messages.create`, `notification`, ...), and a Mailgun domain is `resource` on the edge and
+node (an attribute, not a second node). Credentials: an `env` / `getenv` / `process.env` / `config('services.x.key')` /
+`settings.X` key is `CREDENTIAL_FROM env:<KEY>` (`credential_source` `env`); a key written in the code is
+`credential_source` `literal`, `credential_literal` true on the node and `literal_credential` on the edge (it feeds the
+secret checks); no key found is `auth` `unknown`. SES with no key is `ambient`. Endpoint overrides stay attributes.
+`cg external --protocol saas` lists them and `cg impact external:saas:twilio` reaches the routes and jobs that send.
+
+**Third-party HTTP from TypeScript.** `http` / `https` (`node:` prefix or not) `request` and `get` (an options object with
+`protocol`, `hostname` / `host`, `port`, `path`, `method`; a URL string; `new URL(path, base)`), `undici` `request` /
+`fetch` / `new Client(origin)` / `new Pool(origin)` `.request({ path, method })`, and `got` (`got(url)`, `got.post`,
+`got.extend({ prefixUrl })` instances) are client endpoints, so third-party hosts reach this list as
+`external:https:<host>:443` like `fetch` and axios. The method defaults to `GET` and the scheme comes from the module. A
+host read from `process.env.X` is `origin_kind` `env`; a const map indexed by a parameter (`HOSTS[env]`) gives one
+endpoint per value, `heuristic`. A file that imports one of those modules (or `node-fetch`, `superagent`, `needle`,
+`phin`, `request`) and calls it, with no endpoint made there, is the `ts_unrecognised_http_client` blind spot
+([completeness](completeness.md)); `cg external` and `cg api-calls` end with a `coverage note:` naming it.
 
 The graph never stores a secret. A DSN password becomes `***` before anything else sees it.
 `cg external --source literal` lists hard-coded addresses or credentials.

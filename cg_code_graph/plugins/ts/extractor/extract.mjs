@@ -3154,6 +3154,8 @@ function handleCall(node, cur, sf, r, encFn) {
     const body = ['post', 'put', 'patch'].includes(lower) ? node.arguments[1] : (['get', 'delete', 'head', 'options', 'request'].includes(lower) ? objProp(cfgArg, 'data') : null)
     http = { client: isInstance ? 'axios-instance' : 'axios', method, urlExpr, base, baseConf, baseVia,
       query: qp ? keysOut(requestKeys(qp)) : undefined, body: body ? keysOut(requestKeys(body)) : undefined }
+  } else if (ts.isCallExpression(node) && (http = nodeHttpCall(node, callee))) {
+    // node:http / node:https / undici / got clients (#188)
   } else if (ts.isCallExpression(node) && (http = generatedClientCall(node, callee))) {
     // OpenAPI-generated clients: this.request({ path, method }) / __request(OpenAPI, { method, url })
   } else if (ts.isCallExpression(node) && (http = kyOrInstanceCall(node, callee))) {
@@ -3204,13 +3206,14 @@ function handleCall(node, cur, sf, r, encFn) {
   if (sub && sub.names.length) subscriptions.push({ src: cur, file: r, line, ...sub, test: testSf || undefined })
   if (http) {
     const params = new Set()
-    const v = http.urlExpr ? evalStr(http.urlExpr, 0, { params }) : { vals: [PH('?')], conf: 'resolved' }
+    const v = http.urlVals || (http.urlExpr ? evalStr(http.urlExpr, 0, { params }) : { vals: [PH('?')], conf: 'resolved' })
     const rec = { src: cur, file: r, line, client: http.client, method: http.method, template: inTpl || undefined, test: testSf || undefined,
       urls: shapeDedupe(v.vals).map(render), url_conf: v.conf, base: http.base && shapeDedupe(http.base).map(render), base_conf: http.baseConf, base_via: http.baseVia,
-      expr: http.urlExpr ? http.urlExpr.getText().slice(0, 160) : null, query: http.query, body: http.body, stream: http.stream }
+      expr: http.exprText || (http.urlExpr ? http.urlExpr.getText().slice(0, 160) : null), query: http.query, body: http.body, stream: http.stream,
+      node_client: http.nodeClient || undefined }
     // URL built from a parameter of the enclosing function: expand at its call sites (1 level)
     const depParams = [...params].filter(p => encFn && encFn.parameters && encFn.parameters.some(x => ts.isIdentifier(x.name) && x.name.text === p))
-    if (depParams.length && encFn) deferredParamCalls.push({ rec, encFn, urlExpr: http.urlExpr })
+    if (depParams.length && encFn && http.urlExpr) deferredParamCalls.push({ rec, encFn, urlExpr: http.urlExpr })
     apiCalls.push(rec)
   }
   // Electron IPC / context bridge / Tauri commands -> endpoint:<protocol>:<name> (cg_code_graph/bridges.py)
@@ -3312,6 +3315,159 @@ function kyOrInstanceCall(node, callee) {
   const b = objProp(optsArg, 'json') || objProp(optsArg, 'body')
   return { client: lib === 'ky' ? (inst ? 'ky-instance' : 'ky') : 'ofetch-instance', method, urlExpr: node.arguments[0], base, baseConf, baseVia: inst ? [`${lib}.create`] : [],
     query: q ? keysOut(requestKeys(q)) : undefined, body: b ? keysOut(requestKeys(b)) : undefined }
+}
+
+// ---- Node HTTP clients (#188): node:http / node:https request + get, undici, got ----
+// the module and imported member behind an identifier; member null = the module itself (default / namespace / require binding)
+function importedBinding(id) {
+  id = unwrap(id)
+  if (!id || !ts.isIdentifier(id) || !FW.importSource) return null
+  let d = null
+  try { const sym = checker.getSymbolAtLocation(id); d = sym && (sym.declarations || [])[0] } catch { return null }
+  if (!d) return null
+  const mod = FW.importSource(id)
+  if (!mod) return null
+  const m = mod.replace(/^node:/, '')
+  if (ts.isImportSpecifier(d) || ts.isBindingElement(d)) return { mod: m, member: (d.propertyName || d.name).getText() }
+  return { mod: m, member: null }
+}
+function urlFromExpr(e) {
+  e = unwrap(e)
+  if (e && ts.isIdentifier(e)) { const i = varInit(e); if (i && ts.isNewExpression(i)) e = i }
+  if (e && ts.isNewExpression(e) && ts.isIdentifier(unwrap(e.expression)) && unwrap(e.expression).text === 'URL' && e.arguments && e.arguments[0])
+    return { urlExpr: e.arguments[0], base: e.arguments[1] ? evalStr(e.arguments[1]) : null }
+  return { urlExpr: e, base: null }
+}
+function objLit(e) {
+  e = unwrap(e)
+  if (e && ts.isIdentifier(e)) { const i = varInit(e); if (i) e = i }
+  return e && ts.isObjectLiteralExpression(e) ? e : null
+}
+function methodOf(o, dflt = 'GET') {
+  const m = o && objProp(o, 'method')
+  return m && ts.isStringLiteralLike(unwrap(m)) ? unwrap(m).text.toUpperCase() : dflt
+}
+// `new Client(origin)` / `new Pool(origin)` from undici behind a receiver (variable or class field)
+function undiciPoolOf(expr) {
+  expr = unwrap(expr)
+  let init = null
+  try {
+    const sym = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(expr) ? expr.name : expr)
+    const d = sym && (sym.declarations || [])[0]
+    if (d && (ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d)) && d.initializer) init = unwrap(d.initializer)
+  } catch { }
+  if (!init || !ts.isNewExpression(init) || !init.arguments || !init.arguments[0]) return null
+  const c = unwrap(init.expression)
+  let b = null
+  if (ts.isIdentifier(c)) b = importedBinding(c)
+  else if (ts.isPropertyAccessExpression(c) && ts.isIdentifier(unwrap(c.expression))) { const nb = importedBinding(c.expression); b = nb && nb.member === null ? { mod: nb.mod, member: c.name.text } : null }
+  if (!b || b.mod !== 'undici' || !['Client', 'Pool'].includes(b.member)) return null
+  return { origin: init.arguments[0] }
+}
+// got instances: const api = got.extend({ prefixUrl }) (chains inherit the prefix)
+function gotInstOf(expr, depth = 0) {
+  expr = unwrap(expr)
+  if (!expr || depth > 6) return null
+  if (ts.isIdentifier(expr)) {
+    const b = importedBinding(expr)
+    if (b) return b.mod === 'got' && b.member === null ? { root: true } : null
+    const i = varInit(expr)
+    return i ? gotInstOf(i, depth + 1) : null
+  }
+  if (ts.isCallExpression(expr)) {
+    const c = unwrap(expr.expression)
+    if (ts.isPropertyAccessExpression(c) && c.name.text === 'extend') {
+      const p = gotInstOf(c.expression, depth + 1)
+      return p ? { cfg: expr.arguments[0], parent: p } : null
+    }
+  }
+  return null
+}
+function nodeHostBase(o, scheme) {
+  const h = objProp(o, 'hostname') || objProp(o, 'host')
+  if (!h) return null
+  const hv = evalStr(h)
+  const pr = objProp(o, 'protocol'), pv = pr && ts.isStringLiteralLike(unwrap(pr)) ? unwrap(pr).text.replace(/:$/, '') : null
+  const sch = pv === 'http' || pv === 'https' ? pv : scheme
+  const po = objProp(o, 'port'), pe = po && unwrap(po)
+  const port = pe && (ts.isNumericLiteral(pe) || ts.isStringLiteralLike(pe)) ? pe.text : null
+  const dflt = sch === 'https' ? '443' : '80'
+  const vals = hv.vals.map(v => {
+    if (/^\u0001[^\u0002]*\u0002$/.test(v) && CONF_PH.test(v)) return v      // a configured / env host stays a placeholder origin
+    if (v.includes('://')) return v
+    return `${sch}://${v}${port && port !== dflt && !/:\d+$/.test(v) ? ':' + port : ''}`
+  })
+  const mapIndexed = ts.isElementAccessExpression(unwrap(h)) && !ts.isStringLiteralLike(unwrap(unwrap(h).argumentExpression))
+  return { vals, conf: mapIndexed && vals.length > 1 ? 'heuristic' : hv.conf }
+}
+function nodeHttpCall(node, callee) {
+  if (!FW.importSource) return null
+  let mod = null, member = null, recv = null
+  if (ts.isIdentifier(callee)) {
+    const b = importedBinding(callee)
+    if (b && ['http', 'https', 'undici', 'got'].includes(b.mod)) { mod = b.mod; member = b.member }
+    else if (!b && gotInstOf(callee)) { mod = 'got'; recv = callee }
+  } else if (ts.isPropertyAccessExpression(callee)) {
+    const re = unwrap(callee.expression)
+    const b = ts.isIdentifier(re) ? importedBinding(re) : null
+    if (b && b.member === null && ['http', 'https', 'undici', 'got'].includes(b.mod)) { mod = b.mod; member = callee.name.text }
+    else if (b && b.mod === 'got') { /* named import of got: not a client call */ }
+    else if (callee.name.text === 'request' && undiciPoolOf(re)) { mod = 'undici-pool'; member = 'request'; recv = re }
+    else if (HTTP_METHODS.has(callee.name.text) && gotInstOf(re)) { mod = 'got'; member = callee.name.text; recv = re }
+  }
+  if (!mod) return null
+  const args = node.arguments
+  if (mod === 'http' || mod === 'https') {
+    if (!['request', 'get'].includes(member) || !args[0]) return null
+    const o0 = objLit(args[0])
+    let o = o0, urlExpr = null, base = null, baseConf = 'exact'
+    if (o0) {
+      const hb = nodeHostBase(o0, mod)
+      if (!hb) return null
+      base = hb.vals; baseConf = hb.conf
+      urlExpr = objProp(o0, 'path') || null
+    } else {
+      o = objLit(args[1])
+      const u = urlFromExpr(args[0]); urlExpr = u.urlExpr
+      if (u.base) { base = u.base.vals; baseConf = u.base.conf }
+    }
+    return { client: mod, method: member === 'get' ? 'GET' : methodOf(o), urlExpr, urlVals: urlExpr ? undefined : { vals: ['/'], conf: 'exact' },
+      exprText: o0 ? (urlExpr ? urlExpr.getText().slice(0, 160) : unwrap(args[0]).getText().slice(0, 160)) : undefined,
+      base, baseConf, baseVia: [], nodeClient: true }
+  }
+  if (mod === 'undici') {
+    if (member === 'fetch' && ts.isPropertyAccessExpression(callee)) { /* undici.fetch(url, init) */ }
+    else if (member !== 'request') return null
+    if (!args[0]) return null
+    const u = urlFromExpr(args[0]), o = objLit(args[1])
+    const q = o && objProp(o, 'query'), b = o && objProp(o, 'body')
+    return { client: 'undici', method: methodOf(o), urlExpr: u.urlExpr, base: u.base && u.base.vals, baseConf: u.base ? u.base.conf : 'exact', baseVia: [],
+      query: q ? keysOut(requestKeys(q)) : undefined, body: b ? keysOut(requestKeys(b)) : undefined, nodeClient: true }
+  }
+  if (mod === 'undici-pool') {
+    const pool = undiciPoolOf(recv), o = objLit(args[0])
+    if (!pool || !o) return null
+    const p = objProp(o, 'path'), q = objProp(o, 'query'), b = objProp(o, 'body')
+    const ob = urlFromExpr(pool.origin), ov = evalStr(ob.urlExpr)
+    return { client: 'undici-pool', method: methodOf(o), urlExpr: p || null, urlVals: p ? undefined : { vals: ['/'], conf: 'exact' }, exprText: p ? undefined : o.getText().slice(0, 160),
+      base: ov.vals, baseConf: ov.conf, baseVia: ['undici.Client'],
+      query: q ? keysOut(requestKeys(q)) : undefined, body: b ? keysOut(requestKeys(b)) : undefined, nodeClient: true }
+  }
+  if (mod === 'got') {
+    const verb = member && HTTP_METHODS.has(member) ? member : null
+    if (recv === null && member !== null && !verb) return null     // got.stream / got.paginate / got.extend itself
+    if (!args[0]) return null
+    const o = objLit(args[1])
+    let base = null, baseConf = 'exact'
+    const lookPrefix = (cfg) => { const pf = cfg && objProp(cfg, 'prefixUrl'); return pf ? evalStr(pf) : null }
+    let bv = lookPrefix(o)
+    for (let i = recv ? gotInstOf(recv) : null; !bv && i; i = i.parent) bv = lookPrefix(i.cfg && objLit(i.cfg))
+    if (bv) { base = bv.vals; baseConf = bv.conf }
+    const q = o && (objProp(o, 'searchParams') || objProp(o, 'query')), b = o && (objProp(o, 'json') || objProp(o, 'body'))
+    return { client: 'got', method: verb ? verb.toUpperCase() : methodOf(o), urlExpr: args[0], base, baseConf, baseVia: recv ? ['got.extend'] : [],
+      query: q ? keysOut(requestKeys(q)) : undefined, body: b ? keysOut(requestKeys(b)) : undefined, nodeClient: true }
+  }
+  return null
 }
 
 // 1-level expansion of parameter-dependent URLs at the enclosing function's call sites

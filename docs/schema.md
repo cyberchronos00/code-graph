@@ -28,7 +28,7 @@ On a combined DB only, `payload_checks(endpoint, route, kind, severity, message,
 | Dart | `module`, `class`, `method`, `function`, `http`, `page`, `env` | Pages: Navigator, go_router, auto_route |
 | Protocols | `endpoint` | `endpoint:<protocol>:<name>`. Existing `http`, `route`, `channel`, `message`, `job`, `event` ids stay and are read as endpoints. [Protocol links](protocols.md) |
 | AI | `endpoint`, `agent` | `endpoint:llm_tool:`, `endpoint:mcp_tool:`, `endpoint:mcp_resource:`, `endpoint:mcp_prompt:`; `agent:<name>`. [AI tools](ai-tools.md) |
-| External | `external` | `external:<protocol>:<target>`. Attrs name host, port, TLS and credential source, never the secret. [External systems](external.md) |
+| External | `external` | `external:<protocol>:<target>` (`external:saas:<provider>` for Stripe, SendGrid, Mailgun, Postmark, Resend, Twilio and Vonage). Attrs name host, port, TLS, `auth` (`ambient`, `explicit`, `unknown`) and credential source (`env`, `literal`, `ambient`; `credential_literal` for a key in the code), never the secret. `CONNECTS_TO` carries `via`, `op`, `auth`. [External systems](external.md) |
 | Bridges | `endpoint` | Capacitor, React Native, Flutter, Electron IPC, Tauri. ObjC and missed Java / Kotlin / Swift receivers are `method` nodes with `attrs.bridge_stub`. [Web / native bridges](bridges.md) |
 
 Route paths use `{param}`, `{param?}`, `{rest*}` and `{rest*?}`. A Laravel `route` node may carry `attrs.inline_guards`: objects `{name, kind, at, conditional}` with `kind` one of `policy`, `permission`, `secret`, `role`. `cg routes --json` returns the same list. See [PHP](php.md#inline-guards).

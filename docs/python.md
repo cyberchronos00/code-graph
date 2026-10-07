@@ -84,6 +84,13 @@ Django model fields stay the Django plugin's own `field:` nodes.
 An unknown receiver adds no edge. Writes are assignment, augmented assignment, `del`, in-place list / dict / set / deque methods (`via: mutating`), and item assignment (`self.cache[k] = v`, `via: item`).
 Test-code accesses are `TEST_USES`.
 
+## Mail and SMS clients
+
+`SendGridAPIClient(key).send`, `twilio.rest.Client(sid, token).messages.create`, `PostmarkClient`, `resend.Emails.send`,
+`vonage.Client` and Django `EMAIL_BACKEND = "anymail.backends.<esp>.EmailBackend"` with `ANYMAIL` (used by `send_mail`,
+`send_mass_mail` and `EmailMessage.send`) are `external:saas:<provider>` systems with the key source on
+`CREDENTIAL_FROM` ([External systems](external.md)).
+
 ## Entry points and function references
 
 A function used as a value gets `REFERENCES_FN` from the function, method, class, or module that mentions it.

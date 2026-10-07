@@ -507,7 +507,8 @@ class TypeScriptPlugin(LanguagePlugin):
                     elif origin and origin in api_origins:
                         okind = "api"
                     elif is_config_ph(origin) and origin.startswith("{env."):
-                        okind = "unknown"       # env value not in the repo: the base is some configured server
+                        # env value not in the repo: the base is some configured server (a Node http / undici / got call names it env)
+                        okind = "env" if a.get("node_client") else "unknown"
                     elif is_config_ph(origin):
                         okind = "env" if API_NAME.search(origin) else "other"
                     elif origin and "://" in origin:

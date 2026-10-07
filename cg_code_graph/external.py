@@ -706,6 +706,13 @@ def attach(builder, root: Path) -> dict:
     return {k: v for k, v in st.items() if v} if st["systems"] else {}
 
 
+def _worst_conf(confs) -> str:
+    """The weakest label among the client calls a host node is built from (a const-map host stays heuristic)."""
+    from .core.model import CONFIDENCE_RANK
+    cs = [c for c in confs if c in CONFIDENCE_RANK]
+    return min(cs, key=lambda c: CONFIDENCE_RANK[c]) if cs else "exact"
+
+
 def _attach_http_hosts(builder, node, st) -> None:
     """Group `http` nodes with `origin_kind` other into `external:http(s):<host>:<port>`.
 
@@ -746,7 +753,8 @@ def _attach_http_hosts(builder, node, st) -> None:
             continue
         proto = d["protocol"]
         key = target_of(d["host"], d["port"])
-        g = groups.setdefault((proto, key), {"tls": d["tls"], "scheme": d["scheme"], "paths": set(), "by_src": {}})
+        g = groups.setdefault((proto, key), {"tls": d["tls"], "scheme": d["scheme"], "paths": set(), "by_src": {}, "confs": []})
+        g["confs"].extend(e.confidence for e in calls)
         if a.get("path") and a["path"] not in ("", "/"):
             g["paths"].add(a["path"])
         for e in calls:
@@ -755,14 +763,14 @@ def _attach_http_hosts(builder, node, st) -> None:
         nid = node(proto, key, {
             "scheme": g["scheme"], "tls": g["tls"], "address_source": "literal",
             "paths": sorted(g["paths"]) or None,
-        }, "exact")
+        }, _worst_conf(g["confs"]))
         for src, es in g["by_src"].items():
             es.sort(key=lambda e: ((e.file or ""), e.line or 0))
             e0 = es[0]
             extra = {"via": "http", "op": "request"}
             if len(es) > 1:
                 extra["count"] = len(es)
-            builder.add_edge(src, nid, "CONNECTS_TO", e0.file, e0.line, "exact", **extra)
+            builder.add_edge(src, nid, "CONNECTS_TO", e0.file, e0.line, _worst_conf([e.confidence for e in es]), **extra)
             st["connects"] += 1
 
 

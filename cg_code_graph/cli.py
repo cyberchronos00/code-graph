@@ -569,6 +569,11 @@ def main(argv=None):
         res = external(st, a.pattern, protocol=a.protocol, source=a.source, tls_off=a.tls_off,
                        max_items=max(a.max_items, 200) if a.json else a.max_items)
         print(json.dumps(res, indent=1, default=str) if a.json else render_external(res, max_items=a.max_items))
+        if not a.json:
+            from .coverage import endpoint_note
+            n = endpoint_note(st)
+            if n:
+                print(n)
         return
     if a.cmd == "tools":
         from .aitools import render_tools, tools
@@ -721,6 +726,11 @@ def main(argv=None):
     elif a.cmd == "api-calls":
         rows = Q.api_calls(st, a.spec)
         print(json.dumps(rows, indent=1, default=str) if a.json else Q.render_api_calls(rows))
+        if not a.json:
+            from .coverage import endpoint_note
+            n = endpoint_note(st)
+            if n:
+                print(n)
     elif a.cmd == "stats":
         doc = stats_doc(st)
         print(json.dumps(doc, indent=1, default=str) if a.json else render_stats(st, doc))

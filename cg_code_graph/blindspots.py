@@ -35,6 +35,8 @@ KINDS = {
                                      "Nuxt imports.dirs entry that is not a literal path or glob"),
     "vue_unresolved_navigation": ("route", "typescript",
                                   "Nuxt / Vue / Astro navigation target that matches no page or several pages"),
+    "ts_unrecognised_http_client": ("endpoint", "typescript",
+                                    "outbound HTTP call through an imported client (http, https, undici, got, node-fetch, superagent, ...) that made no endpoint"),
 }
 
 
@@ -415,6 +417,110 @@ def nuxt_unevaluable_import_dirs(root: Path) -> dict | None:
     return _finding("nuxt_unevaluable_import_dirs", hits)
 
 
+# ------------------------------------------------------------------------------------------- TS HTTP clients
+
+HTTP_CLIENT_MODS = ("http", "https", "undici", "got", "node-fetch", "superagent", "needle", "phin", "request")
+_HTTP_VERBS = {"request", "get", "post", "put", "patch", "delete", "del", "head", "options", "fetch", "stream"}
+_HTTP_ONLY = {"request", "get"}      # node:http / node:https: createServer, Agent, ... are not client calls
+_HTTP_MOD_ALT = "|".join(re.escape(m) for m in HTTP_CLIENT_MODS)
+_IMPORT_DEFAULT = re.compile(r"""import\s+(?:type\s+)?(\w+)\s*(?:,\s*\{([^}]*)\}\s*)?from\s*['"](?:node:)?(%s)['"]""" % _HTTP_MOD_ALT)
+_IMPORT_NS = re.compile(r"""import\s+\*\s+as\s+(\w+)\s+from\s*['"](?:node:)?(%s)['"]""" % _HTTP_MOD_ALT)
+_IMPORT_NAMED = re.compile(r"""import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"](?:node:)?(%s)['"]""" % _HTTP_MOD_ALT)
+_REQ_BIND = re.compile(r"""(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?require\(\s*['"](?:node:)?(%s)['"]\s*\)""" % _HTTP_MOD_ALT)
+_REQ_DESTR = re.compile(r"""(?:const|let|var)\s+\{([^}]*)\}\s*=\s*require\(\s*['"](?:node:)?(%s)['"]\s*\)""" % _HTTP_MOD_ALT)
+_TEST_FILE = re.compile(r"(^|/)(tests?|__tests__|e2e|spec|specs|fixtures?)/|\.(test|spec)\.[cm]?[jt]sx?$")
+
+
+def _named(spec: str) -> list[tuple[str, str]]:
+    out = []
+    for part in spec.split(","):
+        bits = [b for b in re.split(r"\s+as\s+|\s+", part.replace("type ", "").strip()) if b]
+        if bits:
+            out.append((bits[0], bits[-1]))
+    return out
+
+
+def _http_client_calls(src: str) -> int | None:
+    """Offset of the first call through an imported HTTP client module in `src`, else None."""
+    binds: dict[str, str] = {}      # name -> module (the module object itself)
+    named: dict[str, str] = {}      # local name -> module (an imported client function)
+    for m in _IMPORT_DEFAULT.finditer(src):
+        binds[m.group(1)] = m.group(3)
+        for imp, loc in _named(m.group(2) or ""):
+            named[loc] = f"{m.group(3)}:{imp}"
+    for m in _IMPORT_NS.finditer(src):
+        binds[m.group(1)] = m.group(2)
+    for m in _IMPORT_NAMED.finditer(src):
+        for imp, loc in _named(m.group(1)):
+            named[loc] = f"{m.group(2)}:{imp}"
+    for m in _REQ_BIND.finditer(src):
+        binds[m.group(1)] = m.group(2)
+    for m in _REQ_DESTR.finditer(src):
+        for imp, loc in _named(m.group(1).replace(":", " as ")):
+            named[loc] = f"{m.group(2)}:{imp}"
+    best = None
+
+    def hit(pos):
+        nonlocal best
+        if best is None or pos < best:
+            best = pos
+
+    for name, mod in binds.items():
+        verbs = _HTTP_ONLY if mod in ("http", "https") else _HTTP_VERBS
+        if mod not in ("http", "https"):
+            m = re.search(r"(?<![\w.$])%s\s*\(" % re.escape(name), src)       # got(url), request(opts), needle(...)
+            if m:
+                hit(m.start())
+        m = re.search(r"(?<![\w.$])%s\s*\.\s*(%s)\s*\(" % (re.escape(name), "|".join(sorted(verbs))), src)
+        if m:
+            hit(m.start())
+    for name, spec in named.items():
+        mod, _, imp = spec.partition(":")
+        ok = imp in (_HTTP_ONLY if mod in ("http", "https") else _HTTP_VERBS | {"Client", "Pool"})
+        if not ok:
+            continue
+        m = re.search(r"(?<![\w.$])(?:new\s+)?%s\s*\(" % re.escape(name), src)
+        if m:
+            hit(m.start())
+    return best
+
+
+def _opaque_origin(origin: str | None) -> bool:
+    """An origin no host can be read from: a bare placeholder that is not a configured / env value, or a templated host."""
+    o = origin or ""
+    if not o:
+        return False
+    if o.startswith("{"):
+        return not o.startswith(("{env.", "{runtimeConfig."))
+    return "://" in o and "{" in o.split("://", 1)[1].split("/", 1)[0]
+
+
+def ts_unrecognised_http_client(root: Path, files: list[str], builder) -> dict | None:
+    """Files that import an HTTP client module (http, https, undici, got, node-fetch, superagent, needle, phin, request)
+    and call it, with no client endpoint made there (a call cg could not follow, or only an origin it could not read)."""
+    if builder is None:
+        return None
+    made: dict[str, bool] = {}
+    for e in builder.edges.values():
+        if e.kind != "HTTP_CALLS" or not e.file:
+            continue
+        n = builder.nodes.get(e.dst)
+        if n is not None and not _opaque_origin((n.attrs or {}).get("origin")):
+            made[e.file] = True
+    hits = []
+    for f in files:
+        if made.get(f) or _TEST_FILE.search(f):
+            continue
+        src = _read(root, f)
+        if not src or not re.search(r"(?:from|require\s*\()\s*['\"](?:node:)?(?:%s)['\"]" % _HTTP_MOD_ALT, src):
+            continue
+        src = _strip_comments(src)
+        pos = _http_client_calls(src)
+        if pos is not None:
+            hits.append((f, _line(src, pos)))
+    return _finding("ts_unrecognised_http_client", hits)
+
+
 # ------------------------------------------------------------------------------------------- driver
 
 def detect(root: str | Path, files_by_ext: dict[str, list[str]], builder=None, programs: dict | None = None) -> list[dict]:
@@ -442,6 +548,7 @@ def detect(root: str | Path, files_by_ext: dict[str, list[str]], builder=None, p
     run(express_loop_routes, root, js)
     run(nuxt_unevaluable_import_dirs, root)
     run(vue_unresolved_navigation, builder)
+    run(ts_unrecognised_http_client, root, js, builder)
     run(laravel_loop_routes, root, php)
     py = programs.get("python")
     if py is not None:

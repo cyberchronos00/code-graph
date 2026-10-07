@@ -59,6 +59,11 @@ not resolve is `ANY` at `heuristic`. `baseUrl()`, `withHeaders`, `withToken`, `w
 `timeout` and `retry` are read along the chain. A helper whose path or verb is a parameter is expanded at its
 call sites (`via`).
 
+SendGrid, Mailgun, Postmark, Resend, Twilio and Vonage SDK clients (`$client = new \SendGrid($key)` then `->send()`,
+`Mailgun::create`, `new Client($sid, $token)` `->messages->create`, ...) and Laravel mailers (`config/mail.php` +
+`config/services.php`, `Mail::` callers, notification `via()` channels) are not client endpoints: they are
+`external:saas:<provider>` systems ([External systems](external.md)).
+
 A constructor-promoted or assigned `$this->baseUrl` is followed from the container (`singleton` / `bind`,
 `new` inside the provider, `when()->needs()->give()`) through `config()`, `config()->get()`,
 `Config::get()`, `$app['config']->get()` and `$app->make('config')->get()` to `env()`. A config array

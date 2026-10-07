@@ -91,9 +91,13 @@ plugin already made an entry point is not reported.
 | `python_decorator_registration` | handler | `@registry.register` with no entry point and no caller (click, typer and MCP are entry points) |
 | `python_registry_assignment` | handler | `registry[key] = fn` and `fn` has no caller |
 | `nuxt_unevaluable_import_dirs` | handler | `imports.dirs` that is not a literal path, when `.nuxt/` is absent |
+| `ts_unrecognised_http_client` | endpoint | a file imports `http`, `https`, `undici`, `got`, `node-fetch`, `superagent`, `needle`, `phin` or `request` and calls it, but no client endpoint was made there (or only one whose host cg could not read) |
 
 Route blind spots affect every route list and every caller answer in that language. Handler
-blind spots affect the registered function and chains that run through it.
+blind spots affect the registered function and chains that run through it. Endpoint blind spots
+affect `cg api-calls`, `cg external` and cross-repo chains that start at an outbound call: those
+commands end with a `coverage note:` naming the files, and `cg coverage` lists them with
+`file:line` samples.
 
 ```text
 $ cg routes --db out/shop.db

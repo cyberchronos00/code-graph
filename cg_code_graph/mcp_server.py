@@ -772,7 +772,10 @@ def external_systems(pattern: str | None = None, protocol: str | None = None, so
     only, never the value), TLS when known. protocol: postgres | mysql | redis | smtp | amqp | mongodb | ldap | ssh |
     ftp | s3 | https ...; source: literal | env | env-example | compose | config; tls_off: only plaintext systems."""
     from .external import external, render_external
-    return render_external(external(_st(), pattern, protocol=protocol, source=source, tls_off=tls_off))
+    from .coverage import endpoint_note
+    out = render_external(external(_st(), pattern, protocol=protocol, source=source, tls_off=tls_off))
+    note = endpoint_note(_st())
+    return out + "\n" + note if note else out
 
 
 @tool

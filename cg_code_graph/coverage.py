@@ -553,9 +553,11 @@ def summary_line(cov: dict | None, repo: str | None = None) -> str:
 
 def _bs_count(bs: list[dict]) -> str:
     r = sum(b["count"] for b in bs if b["category"] == "route")
-    h = sum(b["count"] for b in bs if b["category"] != "route")
+    h = sum(b["count"] for b in bs if b["category"] == "handler")
+    x = sum(b["count"] for b in bs if b["category"] == "endpoint")
     parts = ([f"{r} unmodelled route registration{'s' if r != 1 else ''}"] if r else []) + \
-            ([f"{h} handler{'s' if h != 1 else ''} registered dynamically"] if h else [])
+            ([f"{h} handler{'s' if h != 1 else ''} registered dynamically"] if h else []) + \
+            ([f"{x} file{'s' if x != 1 else ''} with an outbound HTTP call that made no endpoint"] if x else [])
     return ", ".join(parts)
 
 
@@ -911,6 +913,21 @@ def completeness(covs: dict[str, dict | None], languages=None, dirs=None, repos=
     return out
 
 
+def endpoint_note(store) -> str:
+    """`coverage note:` for outbound HTTP calls cg could not turn into endpoints (the `endpoint` blind spots), shown after
+    `cg api-calls` / `cg external`; '' when there are none."""
+    try:
+        covs = for_graph(store)
+    except Exception:  # noqa: BLE001
+        return ""
+    found = [b for cov in covs.values() for b in blind_spots(cov) if b["category"] == "endpoint"]
+    if not found:
+        return ""
+    parts = [f"{b['count']} file{'s' if b['count'] != 1 else ''} call an HTTP client cg made no endpoint for ({', '.join(b['samples'][:3])})"
+             for b in found]
+    return "coverage note: " + "; ".join(parts) + ". Outbound calls from there may be missing; use your normal search and file reading."
+
+
 def completeness_for(store, node_ids=None, categories=("route", "handler"), whole: bool = False, **kw) -> dict:
     try:
         covs = for_graph(store)
@@ -931,11 +948,14 @@ def possibly_more(comp: dict) -> str:
         return ""
     parts = []
     r = sum(b["count"] for b in comp.get("blind_spots", []) if b["category"] == "route")
-    h = sum(b["count"] for b in comp.get("blind_spots", []) if b["category"] != "route")
+    h = sum(b["count"] for b in comp.get("blind_spots", []) if b["category"] == "handler")
+    x = sum(b["count"] for b in comp.get("blind_spots", []) if b["category"] == "endpoint")
     if r:
         parts.append(f"{r} unmodelled route registration{'s' if r != 1 else ''}")
     if h:
         parts.append(f"{h} dynamically registered handler{'s' if h != 1 else ''}")
+    if x:
+        parts.append(f"{x} file{'s' if x != 1 else ''} with an outbound HTTP call that made no endpoint")
     for k, v in comp.get("languages", {}).items():
         if v["complete"]:
             continue
@@ -969,7 +989,7 @@ def answer_note(comp: dict) -> str:
         return ""
     parts = []
     for b in comp.get("blind_spots", []):
-        noun = "route registration" if b["category"] == "route" else "handler registration"
+        noun = {"route": "route registration", "endpoint": "outbound HTTP call"}.get(b["category"], "handler registration")
         parts.append(f"{b['count']} {noun}{'s' if b['count'] != 1 else ''} cg does not model ({b['what']}: {b['sample']})")
     rest = possibly_more({**comp, "blind_spots": []})
     if rest:
