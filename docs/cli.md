@@ -117,7 +117,7 @@ An id that exists in two repos is stored as `repo:` plus the original id (`order
 - `index` leaves generated, copied, and vendored files out unless `--include-generated` (labelled `attrs.generated`; [generated](generated.md)). `--python-root` (repeatable) replaces detection and `python.source_roots`. Workspace `apps` are indexed into one combined graph unless `--no-apps` ([apps and workspace](configuration.md#apps-and-workspace)). `--scip` is repeatable. Starters that miss a 20s budget are named in `starters_skipped`.
 - `impact` marks a held function `(ref: collection | callback | assignment | decorator)` and a dispatch or plugin list `(call through a collection)`. Override lines are `overrides: Base.m` and `overridden by: A.m, B.m`. The base is not a caller of its override; a call of the base declaration is `(via base Base.m)`. `impact` on a base also lists callers of the overrides, `(via override A.m +1)`.
 - `path` to `table:` with no table edge ends at the column that is read or written. A hop that passes keys the next request never sends adds `note: sent but not forwarded: …`.
-- `api-calls` folds a runtime or env base URL (`(base {runtimeConfig.apiBase} = …)`). Endpoints only tests call are marked `(called from tests only)`.
+- `api-calls` folds a runtime or env base URL (`(base {runtimeConfig.apiBase} = …)`). Endpoints only tests call are marked `(called from tests only)`. Each call site lists `body keys:` and `query keys:` when the extractor recorded them (a conditional key ends with `?`). `--json` includes `body_keys` and `query_keys` on the call.
 
 ## Empty results
 

@@ -13,6 +13,7 @@ Route::prefix('v1/{store}')->group(function () {
     Route::get('admin/reports/top/export.{format}', [ReportController::class, 'export']);
     Route::delete('admin/reports/{report}', [ReportController::class, 'destroy']);
     Route::get('admin/inventory', [InventoryController::class, 'index']);
+    Route::post('orders', [OrderController::class, 'place']);
 });
 
 Route::prefix('v1')->group(function () {

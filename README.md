@@ -61,7 +61,7 @@ Go and others: import a SCIP index with `cg index --scip FILE`. Run `cg doctor` 
 
 - `reaches`, `impact`, `path`: every caller, route, job and page that reaches a table, config key or method.
 - `cg affected --base main`: the tests and entry points a change reaches (`--quiet` feeds your test runner).
-- Across repos: `cg link` matches client HTTP calls (frontends and Laravel / Guzzle backends) to server routes.
+- Across repos: `cg link` matches client HTTP calls (frontends and Laravel / Guzzle backends) to server routes, and checks request keys (Laravel FormRequest, Elysia schemas, Nuxt / TypeScript bodies).
 - Route guards: `cg routes --writes --unguarded` lists routes that write with no auth guard. Laravel checks inside the action count as inline guards unless `--strict`.
 - MCP server (`cg-mcp`) so agents query the graph instead of grepping.
 - Visual view (`cg serve`) and plan checks (`cg plan check`) for planned changes.

@@ -45,7 +45,7 @@ const EVENT_METHODS = new Set(['emit', 'emitAsync', 'add', 'addBulk', 'send', 'p
 
 export function collectFrameworkFacts(X) {
   const { ts, checker, sourceFiles, rel, realFile, lineOf, declId, declToNode, resolveSymbol, evalStr, render, unwrap, projectSf, fileNode } = X
-  const classes = [], calls = [], memberCalls = [], env = [], configDefs = [], modules = {}, provideObjs = []
+  const classes = [], calls = [], memberCalls = [], env = [], configDefs = [], modules = {}, provideObjs = [], elysiaModels = []
   const instances = {}
   let budget = 400000   // describe() node budget (very large repos)
 
@@ -120,6 +120,10 @@ export function collectFrameworkFacts(X) {
   // required module's exported object
   const isRequireCall = n => n && ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'require' && n.arguments[0] && ts.isStringLiteralLike(n.arguments[0])
   // object literal an expression evaluates to (identifier -> initializer, require('./x') -> the module's exported object)
+  function describeModelArg(arg) {
+    const lit = objOfExpr(unwrap(arg))
+    return lit ? describe(lit, 0) : describe(arg, 0)
+  }
   function objOfExpr(o, depth = 0) {
     o = o && unwrap(o)
     if (!o || depth > 3) return null
@@ -582,6 +586,15 @@ export function collectFrameworkFacts(X) {
       }
       if (ts.isCallExpression(node)) {
         const c = unwrap(node.expression)
+        if (ts.isPropertyAccessExpression(c) && c.name.text === 'model' && node.arguments[0] && budget > 0) {
+          let owner
+          let top = node
+          while (top.parent && ts.isPropertyAccessExpression(top.parent) && top.parent.expression === top && top.parent.parent && ts.isCallExpression(top.parent.parent)) top = top.parent.parent
+          const od = top.parent && (ts.isVariableDeclaration(top.parent) || ts.isExportAssignment(top.parent) || ts.isPropertyDeclaration(top.parent)) ? top.parent : null
+          const ok = od && keyOfDecl(od)
+          if (ok) { owner = ok; addInstance(ok, od) }
+          elysiaModels.push({ file: r, line: lineOf(c.name, sf), recv: describe(unwrap(c.expression), 0), arg: describeModelArg(node.arguments[0]), owner })
+        }
         if (ts.isPropertyAccessExpression(c)) {
           const m = c.name.text
           const a0 = node.arguments[0] && unwrap(node.arguments[0])
@@ -1011,6 +1024,6 @@ export function collectFrameworkFacts(X) {
     }
     ts.forEachChild(sf, v)
   }
-  return { classes, calls, member_calls: memberCalls, instances, modules, env, config_defs: configDefs, provide_objs: provideObjs, bind_calls: bindCalls, budget_left: budget,
+  return { classes, calls, member_calls: memberCalls, instances, modules, env, config_defs: configDefs, provide_objs: provideObjs, bind_calls: bindCalls, elysia_models: elysiaModels, budget_left: budget,
     mcp, mcp_servers: mcpServers, clients }
 }

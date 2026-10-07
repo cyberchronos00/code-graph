@@ -657,12 +657,13 @@ class ClientEval:
             arg, owner, _bctx = _bound(bind[expr["n"]])
             return self.body_keys(arg, owner, None)
         expr = self._follow_var(expr, fn, bind)
-        if expr and expr.get("k") == "var" and fn:
+        expr = self._unwrap_encoded(expr, fn, bind)
+        if isinstance(expr, dict) and expr.get("k") == "var" and fn:
             names = [p["name"] for p in fn.params]
             if expr.get("n") in names and not any(f.get("t") == "assign" and f.get("var") == expr["n"] for f in fn.facts):
                 return {"keys": [], "conditional": [], "opaque": True, "forwarded": expr["n"],
                         "forwarded_index": names.index(expr["n"])}
-        if not expr or expr.get("k") != "arr":
+        if not isinstance(expr, dict) or expr.get("k") != "arr":
             return {"keys": [], "conditional": [], "opaque": True} if expr else None
         keys, cond = [], []
         opaque = False
@@ -680,13 +681,28 @@ class ClientEval:
             else:
                 opaque = True
         out = {"keys": keys, "conditional": cond}
-        if opaque and not keys:
+        if opaque:
             out["opaque"] = True
         return out
 
+    def _unwrap_encoded(self, expr, fn, bind, seen=None):
+        """One `json_encode($x)` after a same-function assignment. `$x` is followed, including a helper param.
+
+        A second encode is left in place. An argument that is not a descriptor stays unresolved.
+        """
+        seen = seen or set()
+        if not isinstance(expr, dict) or id(expr) in seen:
+            return expr
+        seen.add(id(expr))
+        args = expr.get("args") if expr.get("k") == "func" and _fn_name(expr) == "json_encode" else None
+        if not args or not isinstance(args[0], dict):
+            return expr
+        inner = self._follow_var(args[0], fn, bind)
+        return inner if isinstance(inner, dict) else expr
+
     def _follow_var(self, expr, fn, bind, seen=None):
         seen = seen or set()
-        if not expr or expr.get("k") != "var" or not fn:
+        if not isinstance(expr, dict) or expr.get("k") != "var" or not fn:
             return expr
         name = expr.get("n")
         if bind and name in bind:

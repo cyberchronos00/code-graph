@@ -58,8 +58,11 @@ default. `.env` is not read, an empty example value is shown as the env name onl
 a URL is not stored. A relative `Http::get('/path')` stays relative unless `baseUrl()` was set.
 `rawurlencode`, `urlencode`, `trim`, `strval`, a `(string)` cast and `Str::of(...)->toString()` are
 transparent, so a path segment keeps the variable's last name (`{paymentId}`, `$order->id` -> `{id}`).
-Literal array bodies (`post($url, ['order_id' => ...])`, `withBody(json_encode([...]))`) are `body_keys`
-in the same shape the TypeScript extractor writes.
+Literal array bodies (`post($url, ['order_id' => ...])`, `withBody(json_encode([...]))`, and
+`$json = json_encode($payload)` then `withBody($json)` or Guzzle `'body' => $json`) are `body_keys`
+in the same shape the TypeScript extractor writes. `json_encode` is unwrapped once, after assignments in the same function, and the inner variable is followed
+through a helper parameter. A variable with no assignment stays opaque. `cg api-calls` prints
+those keys under the call site.
 
 ```php
 return $this->http->send($method, rtrim($this->baseUrl, '/') . $path);

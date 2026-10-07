@@ -25,6 +25,79 @@ from ...core.model import CONFIDENCE_RANK
 EXACT, RESOLVED, HEURISTIC = "exact", "resolved", "heuristic"
 REQUEST_BASES = {"illuminate\\http\\request", "illuminate\\foundation\\http\\formrequest"}
 FORM_REQUEST = "illuminate\\foundation\\http\\formrequest"
+_RULE_TYPES = {"integer": "integer", "int": "integer", "numeric": "numeric", "boolean": "boolean", "bool": "boolean",
+               "array": "array", "string": "string"}
+_HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "ANY"}
+_COND_RULES = {"required_if", "required_unless", "required_with", "required_with_all", "required_without",
+               "required_without_all"}
+_COND_METHODS = {"requiredif", "requiredunless", "requiredwith", "requiredwithall", "requiredwithout",
+                 "requiredwithoutall"}
+
+
+def _text_conditional(text: str) -> bool:
+    for tok in text.split("|"):
+        base = tok.split(":", 1)[0].strip()
+        if base in _COND_RULES:
+            return True
+    return False
+
+
+def _expr_conditional(v) -> bool:
+    """`required_if` / `required_with` strings and `Rule::requiredIf()` calls."""
+    if not isinstance(v, dict):
+        return False
+    if v.get("k") == "str":
+        return _text_conditional(v.get("v") or "")
+    if v.get("k") == "scall":
+        return (v.get("m") or "").lower() in _COND_METHODS
+    if v.get("k") == "arr":
+        return any(_expr_conditional(x.get("v") or {}) for x in v.get("items") or [])
+    return False
+
+
+def rule_text(rule) -> tuple:
+    """(text or list of texts, conditional) from a rule descriptor or an already-parsed rule."""
+    if isinstance(rule, dict):
+        cond = _expr_conditional(rule)
+        if rule.get("k") == "str":
+            return rule.get("v"), cond
+        if rule.get("k") == "arr":
+            texts = [x["v"].get("v") for x in rule.get("items") or [] if (x.get("v") or {}).get("k") == "str"]
+            return texts, cond or any(_text_conditional(t) for t in texts if isinstance(t, str))
+        return None, cond
+    if isinstance(rule, str):
+        return rule, _text_conditional(rule)
+    if isinstance(rule, list):
+        return rule, any(_text_conditional(t) for t in rule if isinstance(t, str))
+    return rule, False
+
+
+def parse_laravel_rule(rule, conditional: bool = False) -> dict:
+    """required / nullable / sometimes and a type hint from a FormRequest or validate() rule.
+
+    `required_if`, `required_with` and `Rule::requiredIf` are conditional: the key is not required.
+    """
+    text, cond = rule_text(rule)
+    conditional = conditional or cond
+    tokens: list[str] = []
+    if isinstance(text, str):
+        tokens = [t.strip() for t in text.split("|") if t.strip()]
+    elif isinstance(text, list):
+        tokens = [t.strip() for t in text if isinstance(t, str) and t.strip()]
+    typ = None
+    enum = None
+    for t in tokens:
+        base, _, arg = t.partition(":")
+        if typ is None and base in _RULE_TYPES:
+            typ = _RULE_TYPES[base]
+        if base == "in" and arg:
+            enum = [p for p in arg.split(",") if p != ""]
+            if typ is None:
+                typ = "enum"
+    required = "required" in tokens and not conditional
+    return {"required": required, "nullable": "nullable" in tokens,
+            "sometimes": "sometimes" in tokens or conditional, "conditional": conditional, "type": typ,
+            **({"enum": enum} if enum is not None else {})}
 REQ_SCALAR = {"input", "query", "get", "post", "string", "str", "integer", "boolean", "float", "date", "enum", "validated",
               "has", "filled", "missing", "exists", "json", "array", "collect", "route"}
 REQ_ARRAY = {"validated", "validate", "all", "input", "query", "post", "only", "except", "safe", "toarray", "collect", "json"}
@@ -349,10 +422,10 @@ class ValueAnalysis:
                     if kd.get("k") != "str":
                         continue
                     rule = it.get("v") or {}
-                    rtxt = rule.get("v") if rule.get("k") == "str" else (
-                        [x["v"].get("v") for x in rule.get("items") or [] if (x.get("v") or {}).get("k") == "str"] if rule.get("k") == "arr" else None)
+                    rtxt, cond = rule_text(rule)
                     kid = self._key_node(kd["v"])
-                    b.add_edge(rules.id, kid, "VALIDATES", rules.file, f.get("line"), EXACT, rule=rtxt)
+                    b.add_edge(rules.id, kid, "VALIDATES", rules.file, f.get("line"), EXACT, rule=rtxt,
+                               conditional=True if cond else None)
                     self.stats["validated_keys"] += 1
         for fn in prog.all_funcs:
             if not fn.cls:
@@ -725,4 +798,127 @@ class ValueAnalysis:
         self.flow_request_arrays()
         self.emit_settings_and_inputs()
         self.emit_resolutions()
+        self.attach_route_requests()
         return dict(self.stats)
+
+    def attach_route_requests(self):
+        """Copy the action's request schema onto each route as attrs.request.keys."""
+        fns = {fn.id: fn for fn in self.prog.all_funcs}
+        by_kind: dict[str, dict[str, list]] = {"ROUTES_TO": {}, "VALIDATED_BY": {}, "VALIDATES": {}, "READS_INPUT": {}}
+        for e in self.b.edges.values():
+            if e.kind == "ROUTES_TO":
+                by_kind["ROUTES_TO"].setdefault(e.dst, []).append(e)
+            elif e.kind in by_kind:
+                by_kind[e.kind].setdefault(e.src, []).append(e)
+        n = 0
+        for meth_id, routes in by_kind["ROUTES_TO"].items():
+            fn = fns.get(meth_id)
+            if not fn:
+                continue
+            for e in routes:
+                node = self.b.nodes.get(e.src)
+                if not node or node.kind != "route":
+                    continue
+                method = (node.attrs.get("method") or "").upper()
+                if method not in _HTTP_METHODS:
+                    continue
+                loc = "query" if method in ("GET", "HEAD") else "body"
+                keys, closed = self._schema_keys(fn, loc, by_kind)
+                if not keys:
+                    continue
+                node.attrs["request"] = {"keys": keys, "closed": closed}
+                n += 1
+        self.stats["route_request_keys"] = n
+
+    def _schema_keys(self, fn, location: str, by_kind: dict) -> tuple[list[dict], bool]:
+        merged, seen = [], set()
+        from_rules = []
+
+        def add(keys):
+            for k in keys:
+                if not k.get("name") or k["name"] in seen:
+                    continue
+                seen.add(k["name"])
+                merged.append(k)
+
+        from_rules += self._form_request_keys(fn, location, by_kind)
+        from_rules += self._inline_rule_keys(fn, location)
+        add(from_rules)
+        add(self._validated_reads(fn, location, seen, by_kind))
+        return merged, bool(from_rules)
+
+    def _form_request_keys(self, fn, location: str, by_kind: dict) -> list[dict]:
+        out = []
+        for e in by_kind["VALIDATED_BY"].get(fn.id, []):
+            for ve in by_kind["VALIDATES"].get(e.dst, []):
+                if not ve.dst.startswith("request_key:"):
+                    continue
+                meta = parse_laravel_rule(ve.attrs.get("rule"), conditional=bool(ve.attrs.get("conditional")))
+                out.append({"name": ve.dst[len("request_key:"):], "location": location, "file": ve.file,
+                            "line": ve.line, **meta})
+        return out
+
+    def _keys_from_rule_array(self, arr, file, line, location: str) -> list[dict]:
+        out = []
+        for it in (arr or {}).get("items") or []:
+            kd = it.get("key") or {}
+            if kd.get("k") != "str" or not kd.get("v"):
+                continue
+            rtxt, cond = rule_text(it.get("v") or {})
+            out.append({"name": kd["v"], "location": location, "file": file, "line": line,
+                        **parse_laravel_rule(rtxt, conditional=cond)})
+        return out
+
+    def _is_request_data(self, d, fn) -> bool:
+        if not isinstance(d, dict):
+            return False
+        if self.is_request_recv(d, fn):
+            return True
+        return d.get("k") == "mcall" and (d.get("m") or "").lower() in REQ_ARRAY and self.is_request_recv(d.get("of"), fn)
+
+    def _inline_rule_keys(self, fn, location: str) -> list[dict]:
+        out = []
+        for f in fn.facts:
+            if f.get("t") != "call":
+                continue
+            args = f.get("args") or []
+            if (f.get("kind") == "method" and (f.get("m") or "").lower() == "validate"
+                    and self.is_request_recv(f.get("recv"), fn) and args and args[0].get("k") == "arr"):
+                out += self._keys_from_rule_array(args[0], fn.file, f.get("line"), location)
+            elif f.get("kind") == "static" and (f.get("m") or "").lower() == "make":
+                cls = (f.get("class") or "").split("\\")[-1].lower()
+                if cls == "validator" and len(args) >= 2 and args[1].get("k") == "arr" and self._is_request_data(args[0], fn):
+                    out += self._keys_from_rule_array(args[1], fn.file, f.get("line"), location)
+        return out
+
+    def _validated_reads(self, fn, location: str, have: set, by_kind: dict) -> list[dict]:
+        """`$request->validated()` and `$request->input('x')` add keys. They are not required.
+
+        `$request->route('id')` is a path parameter, not a body or query key. `$request->query('q')`
+        stays on the query string even when the route method would otherwise use the body.
+        """
+        out = []
+        for e in by_kind["READS_INPUT"].get(fn.id, []):
+            via = e.attrs.get("via") or ""
+            flow = [str(x) for x in (e.attrs.get("flow") or [])]
+            blob = " ".join([via, *flow])
+            if "->route(" in blob or not e.dst.startswith("request_key:"):
+                continue
+            kind = None
+            if "validated" in blob:
+                kind = "validated"
+            elif "->input(" in blob or via == "request()":
+                kind = "input"
+            if not kind:
+                continue
+            name = e.dst[len("request_key:"):]
+            if name in have:
+                continue
+            loc = location
+            if "->query(" in blob:
+                loc = "query"
+            elif "->post(" in blob or "->json(" in blob:
+                loc = "body"
+            out.append({"name": name, "location": loc, "file": e.file, "line": e.line, "required": False,
+                        "nullable": False, "sometimes": False, "conditional": False, "type": None, "via": kind})
+        return out

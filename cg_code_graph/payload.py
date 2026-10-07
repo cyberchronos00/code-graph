@@ -1,8 +1,10 @@
 """Payload / field contract check between a client endpoint and the backend route it matched.
 
 Inputs (all from the graphs, no execution):
-  client  HTTP_CALLS edge attrs: body_keys [{key,type,line,file,model?}], response_models [{model,path,line}],
-          response_keys [{key,path,line,cast,coalesce}], status_checks [{op,v,line}], trailing_slash;
+  client  HTTP_CALLS edge attrs: body_keys and query_keys, either the Dart / Kotlin / Swift list
+          [{key,type,line,file,model?}] or the TypeScript / PHP dict {keys, conditional, opaque},
+          response_models [{model,path,line}], response_keys [{key,path,line,cast,coalesce}],
+          status_checks [{op,v,line}], trailing_slash;
           model class attrs json_from / json_to (key, field, type, cast, nullable, required, ref, many), enum_values.
   server  route attrs: request {schemas:[{class,location}], keys:[...]}, response {schemas:[{class,status}],
           shapes:[{status, keys: shape}]} (django/shapes.py), trailing_slash, framework, auth;
@@ -19,14 +21,47 @@ import re
 
 DART_KIND = {"String": "str", "int": "int", "double": "float", "num": "number", "bool": "bool", "List": "list", "Iterable": "list",
              "Set": "list", "Map": "dict", "DateTime": "datetime", "dynamic": "any", "Object": "any", "Uri": "str", "Duration": "any"}
-SERVER_KIND = {"str": "str", "int": "int", "float": "float", "number": "number", "decimal": "decimal", "bool": "bool", "uuid": "str",
-               "datetime": "str", "date": "str", "time": "str", "duration": "any", "list": "list", "dict": "dict", "json": "any",
-               "file": "str", "model": "any", "any": "any", "null": "null", "email": "str", "url": "str", "fk": "int",
-               "m2m": "list", "bytes": "str", "enum": "str"}
+SERVER_KIND = {"str": "str", "string": "str", "int": "int", "integer": "int", "float": "float", "number": "number",
+               "numeric": "number", "decimal": "decimal", "bool": "bool", "boolean": "bool", "uuid": "str",
+               "datetime": "str", "date": "str", "time": "str", "duration": "any", "list": "list", "array": "list",
+               "dict": "dict", "json": "any", "file": "str", "model": "any", "any": "any", "null": "null", "email": "str",
+               "url": "str", "fk": "int", "m2m": "list", "bytes": "str", "enum": "str"}
 
 
 def norm_key(k: str) -> str:
     return re.sub(r"[_\-]", "", k).lower()
+
+
+def _canon_parts(key: str) -> list[str]:
+    """Case-folded path. Numeric indexes and `*` are the same wildcard segment."""
+    out = []
+    for part in str(key).split("."):
+        if part == "*" or part.isdigit():
+            out.append("*")
+        else:
+            out.append(norm_key(part))
+    return out
+
+
+def _struct_parts(key: str) -> list[str]:
+    """Path with indexes folded to `*`, spelling kept, so `items.0.id` matches `items.*.id`."""
+    return ["*" if p == "*" or p.isdigit() else p for p in str(key).split(".")]
+
+
+def _canon_eq(a: str, b: str) -> bool:
+    """Same key under case-folding. `items.book_id` matches `items.*.bookId`."""
+    pa, pb = _canon_parts(a), _canon_parts(b)
+    if pa == pb:
+        return True
+    sa, sb = [p for p in pa if p != "*"], [p for p in pb if p != "*"]
+    return sa == sb and ("*" in pa or "*" in pb)
+
+
+def _route_params(uri: str | None) -> set[str]:
+    return {m.rstrip("?") for m in re.findall(r"\{([^}/]+)\}", uri or "")}
+
+
+_CASE_MW = re.compile(r"convert[_-]?case|camel[_-]?case|snake[_-]?case", re.I)
 
 
 def dart_kind(t: str | None, enums: set[str] | None = None) -> tuple[str | None, bool]:
@@ -149,31 +184,155 @@ class Checker:
                     f"server success responses use {sorted(ok)}", client_check=self.at("fe", sc.get("file"), sc.get("line")))
         return issues
 
-    def check_request(self, ra, call, add):
-        req = ra.get("request") or {}
-        fields = {}
-        for sc in req.get("schemas") or []:
-            if sc.get("location") in ("body", "form", None):
-                for k, v in self.schema_shape(sc["class"]).items():
-                    if not v.get("read_only"):
-                        fields[k] = dict(v, partial=sc.get("partial"))
-        for k in req.get("keys") or []:
-            if k.get("location") in ("body", "form"):
-                fields.setdefault(k["name"], {"type": None, "required": not k.get("optional"), "line": k.get("line"), "file": k.get("file")})
-        body = call.get("body_keys") or []
+    def _call_pos(self, call) -> tuple:
+        """file, line from a link call (`repo/file:line`) or a single-graph call (`file:line`)."""
+        at = call.get("at") or ""
+        file, _, line = at.rpartition(":")
+        if self.fe_name and file.startswith(self.fe_name + "/"):
+            file = file[len(self.fe_name) + 1:]
+        return (file or None), (int(line) if line.isdigit() else None)
+
+    def normalize_keys(self, raw, call) -> tuple[list[dict], bool]:
+        """One list shape for body or query keys: [{key, type, line, file, conditional}].
+
+        Dart, Kotlin and Swift store a list. TypeScript and PHP store `{keys, conditional, opaque}`.
+        Returns (keys, opaque). An opaque body (a spread, FormData, an unknown object) suppresses
+        missing-key reports.
+        """
+        file, line = self._call_pos(call)
+        if not raw:
+            return [], False
+        if isinstance(raw, list):
+            out = []
+            for b in raw:
+                if isinstance(b, str):
+                    out.append({"key": b, "file": file, "line": line})
+                elif isinstance(b, dict) and b.get("key"):
+                    item = dict(b)
+                    item.setdefault("file", file)
+                    item.setdefault("line", line)
+                    out.append(item)
+            return out, False
+        if isinstance(raw, dict):
+            opaque = bool(raw.get("opaque"))
+            src_file = raw.get("file") or file
+            src_line = raw.get("line") if raw.get("line") is not None else line
+            out = []
+            for k in raw.get("keys") or []:
+                if isinstance(k, str):
+                    out.append({"key": k, "conditional": False, "file": src_file, "line": src_line})
+                elif isinstance(k, dict) and k.get("key"):
+                    item = dict(k)
+                    item.setdefault("file", src_file)
+                    item.setdefault("line", src_line)
+                    out.append(item)
+            for k in raw.get("conditional") or []:
+                if isinstance(k, str):
+                    out.append({"key": k, "conditional": True, "file": src_file, "line": src_line})
+                elif isinstance(k, dict) and k.get("key"):
+                    item = dict(k, conditional=True)
+                    item.setdefault("file", src_file)
+                    item.setdefault("line", src_line)
+                    out.append(item)
+            return out, opaque
+        return [], False
+
+    def _field_from_key(self, k: dict) -> dict:
+        if "required" in k:
+            required = bool(k["required"])
+        else:
+            required = not k.get("optional")
+        return {"type": k.get("type"), "required": required, "nullable": k.get("nullable"),
+                "sometimes": bool(k.get("sometimes")), "conditional": bool(k.get("conditional")),
+                "line": k.get("line"), "file": k.get("file"), "enum": k.get("enum")}
+
+    def _diff_fields(self, fields: dict, body: list[dict], opaque: bool, add, *, empty_kind: str | None,
+                     also: list[dict] | None = None, other_fields: dict | None = None,
+                     route_params: set[str] | None = None, fold_case: bool = False):
         if not fields:
-            return []
-        if not body:
-            req_fields = [k for k, v in fields.items() if v.get("required") and not v.get("partial")]
-            if req_fields and not call.get("body_opaque"):
-                add("request_body_missing", "high", f"client sends no JSON body; server requires {req_fields}",
-                    server_field=self.at("be", fields[req_fields[0]].get("file"), fields[req_fields[0]].get("line")))
-            return []
+            return
+        route_params = route_params or set()
+        other_fields = other_fields or {}
+        also = also or []
+
+        def where(v):
+            bits = []
+            if v.get("file"):
+                bits.append(v["file"].rsplit("/", 1)[-1])
+            if v.get("type"):
+                bits.append(str(v["type"]))
+            return f" ({', '.join(bits)})" if bits else ""
+
+        def hard(v) -> bool:
+            return bool(v.get("required") and not v.get("sometimes") and not v.get("conditional")
+                        and not v.get("nullable") and not v.get("partial") and not v.get("default"))
+
+        def exact(server: str, keys: dict) -> dict | None:
+            if server in keys:
+                return keys[server]
+            ss = _struct_parts(server)
+            for c, b in keys.items():
+                if _struct_parts(c) == ss:
+                    return b
+            return None
+
+        def wildcard(server: str, keys: dict) -> dict | None:
+            """`items.book_id` covers `items.*.book_id` when the spelling of each segment matches."""
+            for c, b in keys.items():
+                if c == server:
+                    continue
+                pa, pb = _struct_parts(server), _struct_parts(c)
+                if pa == pb:
+                    return b
+                sa = [p for p in pa if p != "*"]
+                sb = [p for p in pb if p != "*"]
+                if sa == sb and ("*" in pa or "*" in pb):
+                    return b
+            return None
+
+        def prefix(server: str, keys: dict) -> dict | None:
+            """A bare `items` covers `items.*` / `items.*.book_id` when the client did not expand that prefix."""
+            sc = _canon_parts(server)
+            best = None
+            for c, b in keys.items():
+                cc = _canon_parts(c)
+                if len(cc) >= len(sc) or sc[:len(cc)] != cc:
+                    continue
+                deeper = any(len(_canon_parts(o)) > len(cc) and _canon_parts(o)[:len(cc)] == cc for o in keys)
+                if not deeper and (best is None or len(cc) > len(_canon_parts(best[0]))):
+                    best = (c, b)
+            return best[1] if best else None
+
+        def case_variant(server: str, keys: dict) -> str | None:
+            """Folded spelling matches exactly one server field, and that exact field is absent."""
+            if fold_case or exact(server, keys) is not None:
+                return None
+            group = [name for name in fields if _canon_eq(name, server)]
+            if len(group) != 1:
+                return None
+            hits = [c for c in keys if _canon_eq(c, server) and not wildcard(server, {c: keys[c]})]
+            return hits[0] if len(hits) == 1 else None
+
+        if not body and not also:
+            req_fields = [k for k, v in fields.items() if hard(v) and k not in route_params]
+            if req_fields and not opaque:
+                if empty_kind:
+                    add(empty_kind, "high", f"client sends no JSON body; server requires {req_fields}",
+                        server_field=self.at("be", fields[req_fields[0]].get("file"), fields[req_fields[0]].get("line")))
+                else:
+                    for k in req_fields:
+                        v = fields[k]
+                        add("request_missing_required", "high",
+                            f"server requires `{k}`{where(v)}; client sends none", key=k,
+                            server_field=self.at("be", v.get("file"), v.get("line")))
+            return
         ck = {b["key"]: b for b in body}
-        out_n = 0
+        ak = {b["key"]: b for b in also}
         for k, v in fields.items():
-            if k in ck:
-                b = ck[k]
+            if k in route_params:
+                continue
+            b = exact(k, ck)
+            if b is not None:
                 kind, nullable = dart_kind(b.get("type"), self.enums)
                 sk = SERVER_KIND.get(v.get("type") or "", None)
                 if not compatible(kind, sk):
@@ -185,18 +344,82 @@ class Checker:
                         + ("" if b.get("conditional") else " -> a null value fails validation (422)"),
                         key=k, client_field=self.at("fe", b.get("file"), b.get("line")), server_field=self.at("be", v.get("file"), v.get("line")))
                 continue
-            close = [c for c in ck if norm_key(c) == norm_key(k)]
-            if close:
-                add("request_case_mismatch", "high", f"client sends `{close[0]}`, server field is `{k}`", key=k,
-                    client_field=self.at("fe", ck[close[0]].get("file"), ck[close[0]].get("line")),
+            if wildcard(k, ck) is not None or prefix(k, ck) is not None:
+                continue
+            if exact(k, ak) is not None or wildcard(k, ak) is not None or prefix(k, ak) is not None or case_variant(k, ak):
+                continue  # the key was sent on the other location (query vs body)
+            if fold_case and any(_canon_eq(c, k) for c in ck):
+                continue
+            if any(_canon_eq(c, k) for c in ck) and len([name for name in fields if _canon_eq(name, k)]) != 1:
+                continue  # both spellings are declared; the client sent one of them
+            alt = case_variant(k, ck)
+            if alt:
+                add("request_case_mismatch", "medium", f"client sends `{alt}`, server field is `{k}`{where(v)}", key=k,
+                    client_field=self.at("fe", ck[alt].get("file"), ck[alt].get("line")),
                     server_field=self.at("be", v.get("file"), v.get("line")))
-            elif v.get("required") and not v.get("partial") and not v.get("default"):
-                add("request_missing_required", "high", f"server requires `{k}` ({v.get('type')}); client body has {sorted(ck)}", key=k,
-                    client_field=self.at("fe", body[0].get("file"), body[0].get("line")), server_field=self.at("be", v.get("file"), v.get("line")))
+            elif hard(v) and not opaque:
+                add("request_missing_required", "high", f"server requires `{k}`{where(v)}; client body has {sorted(ck)}", key=k,
+                    client_field=self.at("fe", body[0].get("file"), body[0].get("line")) if body else None,
+                    server_field=self.at("be", v.get("file"), v.get("line")))
+        if opaque:
+            return
         for c, b in ck.items():
-            if c not in fields and not any(norm_key(c) == norm_key(k) for k in fields):
-                add("request_unknown_field", "medium", f"client sends `{c}`, which the server schema does not declare (ignored/dropped)",
-                    key=c, client_field=self.at("fe", b.get("file"), b.get("line")))
+            if c in route_params or c in fields or exact(c, {n: {} for n in fields}) is not None:
+                continue
+            if any(_canon_eq(c, k) or _canon_parts(k)[:len(_canon_parts(c))] == _canon_parts(c) for k in fields):
+                continue
+            if c in other_fields or any(_canon_eq(c, k) for k in other_fields):
+                continue
+            add("request_unknown_field", "medium", f"client sends `{c}`, which the server schema does not declare (ignored/dropped)",
+                key=c, client_field=self.at("fe", b.get("file"), b.get("line")))
+
+    def _folds_case(self, ra: dict) -> bool:
+        names = []
+        for m in ra.get("middleware") or []:
+            if isinstance(m, str):
+                names.append(m)
+            elif isinstance(m, dict):
+                names.append(str(m.get("name") or m.get("class") or ""))
+        return any(_CASE_MW.search(n) for n in names)
+
+    def check_request(self, ra, call, add):
+        req = ra.get("request") or {}
+        if req.get("closed") is False:
+            return []
+        unknown = set(req.get("unknown") or [])
+        body_fields, query_fields = {}, {}
+        for sc in req.get("schemas") or []:
+            if sc.get("location") in ("body", "form", None):
+                for k, v in self.schema_shape(sc["class"]).items():
+                    if not v.get("read_only"):
+                        body_fields[k] = dict(v, partial=sc.get("partial"))
+        for k in req.get("keys") or []:
+            loc = k.get("location") or "body"
+            if loc == "form":
+                loc = "body"
+            bucket = query_fields if loc == "query" else body_fields if loc == "body" else None
+            if bucket is not None and k.get("name"):
+                bucket.setdefault(k["name"], self._field_from_key(k))
+        if "body" in unknown:
+            body_fields = {}
+        if "query" in unknown:
+            query_fields = {}
+        if not body_fields and not query_fields:
+            return []
+        params = _route_params(ra.get("uri"))
+        fold = self._folds_case(ra)
+        body, body_opaque = self.normalize_keys(call.get("body_keys"), call)
+        if call.get("body_opaque"):
+            body_opaque = True
+        query, query_opaque = self.normalize_keys(call.get("query_keys"), call)
+        if call.get("query_opaque"):
+            query_opaque = True
+        if "body" not in unknown:
+            self._diff_fields(body_fields, body, body_opaque, add, empty_kind="request_body_missing",
+                              also=query, other_fields=query_fields, route_params=params, fold_case=fold)
+        if "query" not in unknown:
+            self._diff_fields(query_fields, query, query_opaque, add, empty_kind=None,
+                              also=body, other_fields=body_fields, route_params=params, fold_case=fold)
         return []
 
     def check_response(self, ra, call, add):

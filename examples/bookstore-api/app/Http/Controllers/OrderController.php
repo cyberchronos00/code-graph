@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\StoreOrderRequest;
 use App\Models\Order;
 use App\Services\PaymentsClient;
 use App\Services\StockService;
@@ -26,6 +27,13 @@ class OrderController extends Controller
         event(new \App\Events\OrderShipped($order));
 
         return response()->json($order);
+    }
+
+    public function place(StoreOrderRequest $request)
+    {
+        $data = $request->validated();
+
+        return response()->json(['book_id' => $data['book_id'] ?? null, 'quantity' => $data['quantity'] ?? null]);
     }
 
     public function checkout(Order $order, PaymentsClient $payments)

@@ -17,4 +17,11 @@ final class GuzzleOrders
     {
         $this->client->request('PUT', '/catalog', ['json' => ['sku' => 'book']]);
     }
+
+    public function refund(): void
+    {
+        $payload = ['order_id' => '1', 'reason' => 'damaged'];
+        $json = json_encode($payload, JSON_UNESCAPED_SLASHES);
+        $this->client->request('POST', '/refunds', ['body' => $json]);
+    }
 }

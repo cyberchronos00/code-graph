@@ -1834,15 +1834,46 @@ function objProp(obj, name) {
 }
 
 // ---------- request keys (query params / body) ----------
+function ownerFn(n) {
+  let c = n
+  while (c) {
+    if (ts.isFunctionLike(c)) return c
+    c = c.parent
+  }
+  return null
+}
 function requestKeys(e, depth = 0) {
   e = unwrap(e)
   const res = { keys: new Set(), conditional: new Set(), opaque: false }
   if (!e || depth > 4) { res.opaque = true; return res }
   const merge = (o, cond) => { for (const k of o.keys) (cond ? res.conditional : res.keys).add(k); for (const k of o.conditional) res.conditional.add(k); if (o.opaque) res.opaque = true; if (o.forwarded) { res.forwarded = o.forwarded; res.forwarded_index = o.forwarded_index } }
+  const addNested = (name, inner) => {
+    let nested = false
+    for (const k of inner.keys) { res.keys.add(name + '.' + k); nested = true }
+    for (const k of inner.conditional) { res.conditional.add(name + '.' + k); nested = true }
+    if (inner.opaque) res.opaque = true
+    if (!nested) res.keys.add(name)
+  }
   if (ts.isObjectLiteralExpression(e)) {
     for (const p of e.properties) {
       if (ts.isSpreadAssignment(p)) merge(requestKeys(p.expression, depth + 1), false)
-      else if (p.name) res.keys.add(p.name.getText().replace(/['"]/g, ''))
+      else if (p.name) {
+        const name = p.name.getText().replace(/['"]/g, '')
+        const init = ts.isPropertyAssignment(p) ? unwrap(p.initializer) : null
+        if (init && (ts.isObjectLiteralExpression(init) || ts.isArrayLiteralExpression(init))) addNested(name, requestKeys(init, depth + 1))
+        else res.keys.add(name)
+      }
+    }
+    return res
+  }
+  if (ts.isArrayLiteralExpression(e)) {
+    if (!e.elements.length) { res.opaque = true; return res }
+    for (const el of e.elements) {
+      if (!el) { res.opaque = true; continue }
+      const inner = requestKeys(unwrap(el), depth + 1)
+      if (inner.keys.size || inner.conditional.size) addNested('*', inner)
+      else res.opaque = true
+      if (inner.opaque) res.opaque = true
     }
     return res
   }
@@ -1851,6 +1882,14 @@ function requestKeys(e, depth = 0) {
       ? checker.getShorthandAssignmentValueSymbol(e.parent) : checker.getSymbolAtLocation(e)
     const d = sym && (sym.declarations || [])[0]
     if (d && ts.isVariableDeclaration(d) && d.initializer) {
+      const here = ownerFn(e), there = ownerFn(d)
+      if (here && there && here !== there) { res.opaque = true; return res }
+      const init = unwrap(d.initializer)
+      if (ts.isCallExpression(init)) {
+        const callee = unwrap(init.expression)
+        const called = fnDeclOf(checker.getSymbolAtLocation(ts.isPropertyAccessExpression(callee) ? callee.name : callee))
+        if (called && ownerFn(called) && ownerFn(called) !== here) { res.opaque = true; return res }
+      }
       merge(requestKeys(d.initializer, depth + 1), false)
       // later `x.key = ...` assignments in the same function; conditional when nested in an if
       const scope = d.parent && d.parent.parent && d.parent.parent.parent

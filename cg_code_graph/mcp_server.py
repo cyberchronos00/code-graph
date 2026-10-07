@@ -1152,6 +1152,12 @@ def api_calls(filter: str = "all", max_items: int = 60) -> str:
         for c in r["calls"][:3]:
             h = f" via {short(c['via_helper']['fn'])}" if c.get("via_helper") else ""
             out.append(f"   ← {short(c['caller'])} @ {at(c['at'])}{h}")
+            bk = Q._key_names(c.get("body_keys"))
+            qk = Q._key_names(c.get("query_keys"))
+            if bk:
+                out.append(f"      body keys: {', '.join(bk)}")
+            if qk:
+                out.append(f"      query keys: {', '.join(qk)}")
         for g in gaps.get(r["endpoint"], [])[:3]:
             out.append(f"   ! {short(g['caller'])} @ {at(g['call_at'])} passes {', '.join(g['dropped'])}: sent but not forwarded "
                        f"(request sends {', '.join(g['request_keys'])})")

@@ -139,6 +139,7 @@ class ExpressPlugin(FrameworkPlugin):
         st["apps"] = sum(1 for v in self.kinds.values() if v[1] == "app")
         st["routers"] = len({k for k, v in self.kinds.items() if v[1] in ("router", "derived", "param", "name")})
         self._elysia_collect_hooks(hook_calls)
+        self._index_elysia_models()
         for c, keys in route_calls:
             self.route(c, keys, st)
         st["frameworks"] = sorted({v[0] for v in self.kinds.values() if v[0] != "?"})
@@ -353,6 +354,37 @@ class ExpressPlugin(FrameworkPlugin):
                     for mw in mws:
                         self.router_mw[k].append((join_path(kp, p), mw, c["file"], c["line"]))
 
+    def _index_elysia_models(self):
+        """`.model({ name: t.Object(...) })` and `.model(importedMap)` on an Elysia instance."""
+        self.model_by_key = defaultdict(dict)
+        for rec in self.F.get("elysia_models") or []:
+            mapping = obj(rec.get("arg"))
+            if not mapping:
+                continue
+            keys = []
+            if rec.get("owner"):
+                keys.append(rec["owner"])
+            keys += [k for k, _ in self.inst_keys(rec.get("recv") or {}, file_hint=rec.get("file"))]
+            for k in keys:
+                for name, val in mapping.items():
+                    if str(name).startswith("..."):
+                        continue
+                    self.model_by_key[k].setdefault(name, val)
+
+    def _models_visible(self, keys) -> dict:
+        """Models on this instance and on plugins it `.use()`s."""
+        out, seen, stack = {}, set(), [k for k, _ in keys]
+        while stack:
+            k = stack.pop()
+            if k in seen:
+                continue
+            seen.add(k)
+            for name, val in (getattr(self, "model_by_key", {}) or {}).get(k, {}).items():
+                out.setdefault(name, val)
+            for child in self.children.get(k, []):
+                stack.append(child)
+        return out
+
     def _has_routes(self, k) -> bool:
         if self._route_keys is None:
             self._route_keys = {kk for c in self.F.get("calls") or [] if c["method"] in VERBS for kk, _ in self.inst_keys(c.get("recv") or {})}
@@ -469,25 +501,35 @@ class ExpressPlugin(FrameworkPlugin):
             q = obj(obj(schema.get("querystring")).get("properties"))
             if q:
                 attrs["query_fields"] = sorted(q)
-        tb = _typebox_request(opts, c["file"], c["line"])
-        if tb:
-            attrs["request"] = {"keys": tb}
-            body = [f["name"] + ("?" if f.get("optional") else "") for f in tb if f["location"] == "body"]
-            query = [f["name"] + ("?" if f.get("optional") else "") for f in tb if f["location"] == "query"]
-            if body:
-                attrs["body_fields"] = body
-            if query:
-                attrs["query_fields"] = query
+        elysia_models = {}
+        if any(self._fw(k) == "elysia" for k, _ in keys):
+            # one map per instance: a route does not see models from a sibling plugin
+            elysia_models = {k: self._models_visible([(k, "")]) for k, _ in keys}
         if not handler_nodes:
             attrs["handler_unresolved"] = True
         counted = False
+        base_attrs = attrs
         literal = any(p == "" or p.startswith(("/", "*")) or self._plugin_rpc(p) for p in paths if "{" not in p[:1])
         for k, kp in keys:
             fw, kind = self.kinds.get(k, ("?", "name"))
+            attrs = dict(base_attrs)
             if kind == "name" and not handler_nodes:
                 continue
             if kind in ("name", "param") and fw == "?" and not literal:
                 continue   # untyped receiver + non-literal first argument: a map/cache/http-client .get(key), not a route
+            if fw == "elysia":
+                tb, unknown = _typebox_request(opts, c["file"], c["line"], elysia_models.get(k) or {})
+                if tb or unknown:
+                    req = {"keys": tb}
+                    if unknown:
+                        req["unknown"] = unknown
+                    attrs["request"] = req
+                    body = [f["name"] + ("?" if f.get("optional") else "") for f in tb if f["location"] == "body"]
+                    query = [f["name"] + ("?" if f.get("optional") else "") for f in tb if f["location"] == "query"]
+                    if body:
+                        attrs["body_fields"] = body
+                    if query:
+                        attrs["query_fields"] = query
             guards = self._elysia_route_mw(k, c["file"], c["line"]) + route_hooks if fw == "elysia" else []
             prefs = self.prefixes(k, at=(c["file"], c["line"]))
             if not prefs:
@@ -909,6 +951,16 @@ def _hook_fn(args):
     return "local", False, a0
 
 
+def _typebox_type(val):
+    if not isinstance(val, dict):
+        return None
+    call = last_name(val.get("call") or "")
+    if call == "Optional":
+        return _typebox_type((val.get("args") or [None])[0])
+    return {"String": "string", "Number": "numeric", "Numeric": "numeric", "Integer": "integer",
+            "Boolean": "boolean", "Array": "array"}.get(call)
+
+
 def _typebox_fields(d):
     if not isinstance(d, dict):
         return []
@@ -918,16 +970,52 @@ def _typebox_fields(d):
     fields = []
     for name, val in obj(args[0] if args else None).items():
         opt = isinstance(val, dict) and last_name(val.get("call") or "") == "Optional"
-        fields.append({"name": name, "optional": opt})
+        fields.append({"name": name, "optional": opt, "type": _typebox_type(val)})
     return fields
 
 
-def _typebox_request(opts, file, line):
-    out = []
+def _resolve_typebox(d, models, seen=None):
+    """Inline `t.Object`, a model name, or `t.Ref('name')`."""
+    seen = seen or set()
+    if not isinstance(d, dict):
+        return None
+    name = sval(d)
+    if name:
+        if name in seen or name not in models:
+            return None
+        return _resolve_typebox(models[name], models, seen | {name})
+    call = last_name(d.get("call") or "")
+    if call == "Ref":
+        ref = sval((d.get("args") or [None])[0])
+        if not ref or ref in seen or ref not in models:
+            return None
+        return _resolve_typebox(models[ref], models, seen | {ref})
+    if call == "Object":
+        return d
+    return None
+
+
+def _typebox_request(opts, file, line, models=None):
+    """(keys, unknown locations). A named model or `t.Ref` that does not resolve is unknown, not an empty object."""
+    models = models or {}
+    out, unknown = [], []
     for loc, key in (("body", "body"), ("query", "query"), ("params", "params")):
-        for f in _typebox_fields(opts.get(key)):
-            out.append({"name": f["name"], "location": loc, "optional": f["optional"], "file": file, "line": line})
-    return out
+        raw = opts.get(key)
+        if not isinstance(raw, dict):
+            continue
+        if sval(raw) or last_name(raw.get("call") or "") == "Ref":
+            schema = _resolve_typebox(raw, models)
+            if schema is None:
+                unknown.append(loc)
+                continue
+        else:
+            schema = _resolve_typebox(raw, models)
+        for f in _typebox_fields(schema):
+            row = {"name": f["name"], "location": loc, "optional": f["optional"], "file": file, "line": line}
+            if f.get("type"):
+                row["type"] = f["type"]
+            out.append(row)
+    return out, unknown
 
 
 def obj_b(d) -> bool:

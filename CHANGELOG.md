@@ -12,6 +12,9 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 - Laravel inline guards on `cg routes`: `authorize`, `Gate`, permission checks, a FormRequest `authorize()`, controller middleware, and shared-secret compares are listed as `inline:` and count for `--unguarded`. `--unguarded --strict` keeps route-level guards only. See [docs/php.md](docs/php.md#inline-guards).
 - Webhook receivers (#152 part A): Laravel Cashier `handle<Event>` methods and spatie/laravel-webhook-client profiles / `ProcessWebhookJob` classes; Kotlin `when` and Rust `match` event dispatch; a signature header named by a class or module constant; spatie/laravel-route-attributes `#[Get]` / `#[Post]` (with prefix and middleware) and plugin `router.post("github.webhooks")` registrations. Stored subscription event names, subscriber-URL pairing, `REGISTERS_CALLBACK`, and driver-resolved payment gateways are planned. See [docs/protocols.md](docs/protocols.md#webhook-verification).
+- Laravel routes carry `attrs.request.keys` from FormRequest `rules()`, inline `$request->validate` / `Validator::make`, and `$request->validated()` / `$request->input()` reads (reads are not required). `cg link` compares them with TypeScript, Dart, Kotlin and Swift body and query keys (`request_missing_required`, `request_unknown_field`, `request_case_mismatch`). Opaque bodies, conditional rules, and route parameters are not reported. `cg api-calls` prints `body keys:` and `query keys:` under each call site.
+- PHP outbound HTTP follows `json_encode` when the encoded string is stored in a variable before `withBody` or a Guzzle `'body'` option, including through a helper parameter.
+- Elysia named models: `{ body: 'name' }` and `t.Ref('name')` resolve `.model({...})` on the same instance or a plugin it `.use()`s, including an imported const map.
 
 ### Fixed
 

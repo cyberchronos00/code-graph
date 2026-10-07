@@ -58,6 +58,8 @@ def test_bookstore_payments_routes_and_coverage():
         "route:POST /payments",
         "route:GET /payments/{id}",
         "route:POST /payments/{id}/cancel",
+        "route:POST /refunds",
+        "route:POST /refunds/note",
     }
     # onRequest is copied onto every ancestor, so the root route is guarded too
     assert names(r["route:GET /"]) == ["signed-requests (onRequest)"]
@@ -68,6 +70,12 @@ def test_bookstore_payments_routes_and_coverage():
         assert mw["checks"]["effect"] == "rejects"
         assert r[rid]["framework"] == "elysia"
     assert r["route:POST /payments"]["body_fields"] == ["order_id", "amount"]
+    refund = r["route:POST /refunds"]
+    assert refund["body_fields"] == ["order_id", "reason?"]
+    keys = {(k["name"], k["optional"], k.get("type")) for k in refund["request"]["keys"]}
+    assert ("order_id", False, "string") in keys and ("reason", True, "string") in keys
+    note = {(k["name"], k["optional"], k.get("type")) for k in r["route:POST /refunds/note"]["request"]["keys"]}
+    assert note == {("text", False, "string")}
     assert r["route:GET /"]["framework"] == "elysia"
     post = db("pay").execute("SELECT file FROM nodes WHERE id='route:POST /payments'").fetchone()[0]
     assert post == "src/routes/payments.ts"
@@ -112,6 +120,11 @@ def test_chain_group_factory_lazy_and_schemas():
     keys = {(k["location"], k["name"], k["optional"]) for k in post["request"]["keys"]}
     assert ("body", "order_id", False) in keys and ("body", "note", True) in keys
     assert ("query", "cursor", True) in keys and ("params", "id", False) in keys
+    named = {(k["name"], k["optional"], k.get("type")) for k in r["route:POST /orders/named"]["request"]["keys"]}
+    assert ("sku", False, "string") in named and ("qty", True, "numeric") in named
+    missing = r["route:POST /orders/missing"]["request"]
+    assert missing.get("unknown") == ["body"]
+    assert not any(k.get("name") == "password" for k in missing.get("keys") or [])
     assert "payGate (beforeHandle)" in names(post)
     assert "route:GET /orders/files/{wildcard*?}" in r
     assert "route:GET /orders/books/{isbn?}" in r

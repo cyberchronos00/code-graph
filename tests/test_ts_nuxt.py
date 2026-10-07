@@ -88,7 +88,12 @@ def test_link_confidence_and_match_rate():
     assert by["http:GET /api/v1/main/admin/reports/top"]["matched"][0]["confidence"] == "resolved"  # main -> {store}
     assert by["http:DELETE /api/v1/main/admin/reports/{id}"]["matched"][0]["route"] == "route:DELETE /v1/{store}/admin/reports/{report}"
     assert by["http:GET /api/v1/main/admin/reports/top/export.csv"]["matched"][0]["confidence"] == "resolved"
-    assert (res["stats"]["endpoints_matched"], res["stats"]["endpoints"]) == (4, 6)
+    assert (res["stats"]["endpoints_matched"], res["stats"]["endpoints"]) == (5, 7)
+    orders = by["http:POST /api/v1/main/orders"]
+    assert orders["matched"][0]["route"].endswith("POST /v1/{store}/orders")
+    kinds = {(i["kind"], i.get("key")) for i in res["payload_issues"] if i["endpoint"].endswith("/orders")}
+    assert ("request_case_mismatch", "book_id") in kinds
+    assert not any(i["kind"] == "request_missing_required" and i.get("key") == "quantity" for i in res["payload_issues"])
     assert by["http:GET /version.json"]["reason"].startswith("not a backend URL: same-origin")
     assert by["http:GET /api/v1/main/admin/session"]["reason"].startswith("no backend route")  # the sample API has no such route
 
@@ -115,7 +120,7 @@ def test_mcp_tools_on_combined_and_reindex_repo():
         assert "orders" in M.downstream("page:/")
         assert "UNMATCHED" in M.api_calls("unmatched")
         out = M.index(repo="bookstore-web")  # re-index the frontend's own DB, then relink
-        assert out.startswith("re-indexed bookstore-web") and "3/5 call sites matched" in out
+        assert out.startswith("re-indexed bookstore-web") and "4/6 call sites matched" in out
     finally:
         M.STATE.clear(); M.STATE.update(old)
 

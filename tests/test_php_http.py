@@ -56,6 +56,11 @@ def test_helper_expands_to_the_caller_with_env_base_and_body_keys():
     assert dst == "http:POST /payments" and conf == "resolved"
     assert attrs["via_helper"]["fn"] == "PaymentsClient::request"
     assert attrs["body_keys"]["keys"] == ["order_id", "amount"]
+    refund_src = "method:App\\Services\\PaymentsClient::createRefund"
+    assert refund_src in by_src
+    assert by_src[refund_src][0] == "http:POST /refunds"
+    assert by_src[refund_src][2]["body_keys"]["keys"] == ["order_id", "reason"]
+    assert not by_src[refund_src][2]["body_keys"].get("opaque")
     assert "method:App\\Services\\PaymentsClient::request" not in by_src
     text = Q.render_api_calls(Q.api_calls(st(), "POST /payments"))
     assert "body keys: order_id, amount" in text
@@ -71,6 +76,13 @@ def test_facade_guzzle_contextual_verb_and_unresolved_base():
     assert nodes["http:PUT /v1/catalog"]["origin_kind"] == "env"
     put = next(a for s, d, c, a in calls() if d == "http:PUT /v1/catalog")
     assert put["body_keys"]["keys"] == ["sku"]
+    refund = next(a for s, d, c, a in calls() if d == "http:POST /v1/refunds" and a.get("client") == "guzzle")
+    assert refund["body_keys"]["keys"] == ["order_id", "reason"]
+    assert not refund["body_keys"].get("opaque")
+    missing = next(a for s, d, c, a in calls() if d == "http:POST /ping-missing")
+    assert missing["body_keys"].get("opaque") and missing["body_keys"]["keys"] == []
+    double = next(a for s, d, c, a in calls() if d == "http:POST /ping-double")
+    assert double["body_keys"].get("opaque") and "order_id" not in double["body_keys"]["keys"]
     assert nodes["http:GET /v1/ping"]["origin_kind"] == "env"
     assert nodes["http:GET /ping"]["method"] == "GET"
     assert nodes["http:POST /ping"]["method"] == "POST"
@@ -179,7 +191,10 @@ def test_bookstore_links_payments_service(tmp_path):
     res = link_many(
         [("api", str(tmp_path / "api.db"), "both"), ("payments", str(tmp_path / "payments.db"), "both")],
         str(tmp_path / "ws.db"))
-    assert res["stats"]["call_sites_matched"] == res["stats"]["call_sites"] == 2
+    assert res["stats"]["call_sites_matched"] == res["stats"]["call_sites"] == 3
+    kinds = {(i["kind"], i.get("key")) for i in res["payload_issues"]}
+    assert ("request_missing_required", "order_id") in kinds
+    assert ("request_unknown_field", "note") in kinds
     ws = GraphStore(tmp_path / "ws.db")
     impact = Q.impact(ws, "route:POST /payments")
     callers = {c["id"] for c in impact["callers"]}

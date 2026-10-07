@@ -1828,7 +1828,8 @@ def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
     for e in st.q("SELECT src, dst, file, line, confidence, attrs FROM edges WHERE kind='HTTP_CALLS'"):
         a = json.loads(e["attrs"] or "{}")
         calls[e["dst"]].append({"caller": e["src"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"],
-                                "url": a.get("url"), "via_helper": a.get("via_helper"), "body_keys": a.get("body_keys")})
+                                "url": a.get("url"), "via_helper": a.get("via_helper"), "body_keys": a.get("body_keys"),
+                                "query_keys": a.get("query_keys")})
     routes = defaultdict(list)
     for e in st.q("SELECT src, dst, confidence, attrs FROM edges WHERE kind='MATCHES_ROUTE'"):
         ctl = [r["dst"] for r in st.q("SELECT dst FROM edges WHERE src=? AND kind='ROUTES_TO'", (e["dst"],))]
@@ -1881,28 +1882,30 @@ def render_api_calls(rows: list[dict], max_calls=4) -> str:
         for c in r["calls"][:max_calls]:
             h = f" via {c['via_helper']['fn']}" if c.get("via_helper") else ""
             out.append(f"   <- {c['caller']} @ {c['at']} [{c['confidence']}]{h}")
+            bk = _key_names(c.get("body_keys"))
+            qk = _key_names(c.get("query_keys"))
+            if bk:
+                out.append(f"      body keys: {', '.join(bk)}")
+            if qk:
+                out.append(f"      query keys: {', '.join(qk)}")
         if len(r["calls"]) > max_calls:
             out.append(f"   <- ... {len(r['calls']) - max_calls} more")
-        keys = _body_key_names(r["calls"])
-        if keys:
-            out.append(f"   body keys: {', '.join(keys)}")
     return "\n".join(out)
 
 
-def _body_key_names(calls: list[dict]) -> list[str]:
-    """Literal body keys on the call, in first-seen order. The TypeScript shape is `{keys, conditional}`."""
-    seen, out = set(), []
-    for c in calls:
-        bk = c.get("body_keys")
-        names = []
-        if isinstance(bk, dict):
-            names = list(bk.get("keys") or [])
-        elif isinstance(bk, list):
-            names = [x.get("key") for x in bk if isinstance(x, dict) and x.get("key")]
-        for n in names:
-            if n and n not in seen:
-                seen.add(n)
-                out.append(n)
+def _key_names(raw) -> list[str]:
+    """Literal keys, in first-seen order. TypeScript / PHP: `{keys, conditional}`. Dart / Kotlin / Swift: `[{key}]`.
+    Conditional keys are listed with a trailing `?`."""
+    names, cond = [], []
+    if isinstance(raw, dict):
+        names = list(raw.get("keys") or [])
+        cond = list(raw.get("conditional") or [])
+    elif isinstance(raw, list):
+        names = [x.get("key") for x in raw if isinstance(x, dict) and x.get("key") and not x.get("conditional")]
+        cond = [x.get("key") for x in raw if isinstance(x, dict) and x.get("key") and x.get("conditional")]
+    out = [n for n in names if isinstance(n, str) and n]
+    have = set(out)
+    out += [c + "?" for c in cond if isinstance(c, str) and c and c not in have]
     return out
 
 
