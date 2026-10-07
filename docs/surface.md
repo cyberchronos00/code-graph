@@ -330,15 +330,14 @@ The `attack_surface` tool takes `inbound`, `outbound`, `protocol`, `finding`, `m
 ## No secret values in the index
 
 A credential literal is never kept in the graph database. At index time a literal under a key that looks like a
-credential (`password`, `secret`, `token`, `key`, `api_key`, `auth`, `private`, `credential`, `passphrase`, `dsn`, ...)
-is stored as `redacted:hmac:<first 8 hex of HMAC-SHA-256(salt, value)>`: it shows that a literal exists and tells two values apart
+credential (`password`, `secret`, `api_key`, `passphrase`, `dsn`, a token or key value, ...) is stored as `redacted:hmac:<first 8 hex of HMAC-SHA-256(salt, value)>`: it shows that a literal exists and tells two values apart
 within the graph, and it cannot be reversed. The salt is `secrets.token_hex(16)`, created with the database and stored in
 the `meta` table under `redact_salt`; re-indexing and `cg refresh` keep it, a new database gets a new one. The salt is not
 secret from someone who holds the database, but a marker from a leaked screenshot, log or SARIF file cannot be matched
 against a table of common passwords without it, and the same password in two graphs gives two markers. Fingerprints are
 comparable inside one graph only: a `cg link` combined graph keeps the markers of its sources and has no salt of its own,
 and comparing a secret across repos is not supported. Indexes made before part 2d hold `redacted:sha256:`; both prefixes
-count as redacted, and re-indexing replaces the old form. This covers the Laravel config `value` and `env('X', 'default')` default attrs. A password
+count as redacted, and re-indexing replaces the old form. Only the last word of the key (the last dotted segment, split on `_`, `-` and camelCase) decides: it is a credential when it is `password`, `passwd`, `pwd`, `pass`, `passphrase`, `secret` or `dsn`, when the name ends in an explicit compound (`api_key`, `access_key`, `secret_key`, `private_key`, `signing_key`, `encryption_key`, `client_secret`, `webhook_secret`, `auth_token`, `api_token`, `access_token`, `refresh_token`, `bearer_token`), or for Laravel's `app.key` / `APP_KEY`. A bare `key` or `token` as last word is redacted by default, as before. Its value is kept only when the word before it (a dotted segment counts) is one of `primary`, `foreign`, `sort`, `partition`, `route`, `cache`, `idempotency`, `remember`, `csrf`, `xsrf`, `public`, `i18n`, `translation`, `lookup`, `unique`, `index`, `storage`, `prefix` (`primary_key`, `cache.key`, `remember_token`), and the value never decides, because a token can have any shape (lowercase words, dotted, `key-` prefixed). `services.ledger.token` and `LEDGER_TOKEN` therefore stay redacted for any value that has a digit, an upper-case letter or a `base64:` form. `AUTH_GUARD`, `AUTH_PASSWORD_BROKER` and `try_it_credentials_policy` are not credentials, and `*_PUBLIC_KEY`, `*_KEY_ID`, `*_KEY_PATH` and `*_KEY_FILE` never are. This covers the Laravel config `value` and `env('X', 'default')` default attrs. A password
 inside any `scheme://user:password@host` string in a node or edge attr gets the same marker, so the host stays
 readable. Non-secret values (`'currency' => 'EUR'`, a hostname default) are stored as before, and `hardcoded` still
 sees a marker as a literal. `cg node config:...` and a direct database read show the marker, never the value. The

@@ -306,13 +306,13 @@ def _config_literals(ctx: Ctx) -> list[dict]:
         key = r["name"] or r["id"][len("config:"):]
         last = key.split(".")[-1]
         repo = ctx.repo_of(a, r["file"])
-        if secret_key(last) and not _placeholder(a.get("value")):
+        if secret_key(last, a.get("value")) and not _placeholder(a.get("value")):
             out.append(make_finding(ctx, "hardcoded", protocol="config", node=r["id"], file=r["file"], line=r["line"],
                                     confidence="resolved", repo=repo, attrs=a, see=f"cg node '{r['id']}'",
                                     entry_ids=[r["id"]], detail=f"literal {_kind_of_key(last)} in config key {key} (value not shown)"))
         envs, defaults = a.get("env") or [], a.get("env_default") or []
         for env, dflt in zip(envs, defaults):
-            if secret_key(str(env)) and not _placeholder(dflt):
+            if secret_key(str(env), dflt) and not _placeholder(dflt):
                 out.append(make_finding(ctx, "hardcoded", protocol="config", node=r["id"], file=r["file"], line=r["line"],
                                         confidence="heuristic", repo=repo, attrs=a, see=f"cg node '{r['id']}'",
                                         entry_ids=[r["id"]], detail=f"literal default for env {env} in config key {key} (value not shown)"))

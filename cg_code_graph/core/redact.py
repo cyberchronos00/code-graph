@@ -1,7 +1,9 @@
 """Secret values never reach the graph database (#47).
 
-A literal that belongs to a credential-looking key (password, secret, token, key, api_key, auth, private, credential,
-passphrase, dsn, ...) is stored as `redacted:hmac:<first 8 hex of HMAC-SHA-256(graph salt, value)>`: enough to see that
+A literal that belongs to a credential-looking key (its last word is password, secret, dsn, ..., or an
+explicit compound such as api_key; a bare `key` / `token` counts unless a known non-secret word precedes it
+(`primary_key`, `cache.key`), whatever the value looks like; `AUTH_GUARD` or `..._TOKEN_TABLE`
+do not count) is stored as `redacted:hmac:<first 8 hex of HMAC-SHA-256(graph salt, value)>`: enough to see that
 a literal exists and to tell two values apart within one graph, not enough to recover one, and not recognisable by
 hashing a common password. The salt is `secrets.token_hex(16)`, created on the first index of a graph DB, kept in its
 `meta` table (`redact_salt`) and carried over by a re-index or refresh of that DB; a new DB gets a new salt, so markers
@@ -20,29 +22,52 @@ import secrets
 
 MARK = "redacted:hmac:"
 LEGACY_MARK = "redacted:sha256:"
-SECRET_WORDS = ("PASSWORD", "PASS", "PASSWD", "SECRET", "TOKEN", "SECRET_KEY", "SECRET_ACCESS_KEY", "KEY", "AUTH", "PWD")
-_EXTRA_WORDS = {"PASSWORD", "PASSWD", "PWD", "PASSPHRASE", "SECRET", "SECRETS", "TOKEN", "TOKENS", "AUTH", "AUTHORIZATION",
-                "CREDENTIAL", "CREDENTIALS", "PRIVATE", "APIKEY", "DSN", "BEARER", "SALT", "SIGNATURE"}
-_NOT_SECRET_TAIL = ("_KEY_ID", "_PUBLIC_KEY", "_KEY_PATH")
+_SECRET_LAST = {"password", "passwd", "pwd", "pass", "passphrase", "secret", "dsn"}
+_SECRET_COMPOUNDS = {("api", "key"), ("apikey",), ("access", "key"), ("secret", "key"), ("private", "key"),
+                     ("signing", "key"), ("encryption", "key"), ("client", "secret"), ("webhook", "secret"),
+                     ("auth", "token"), ("api", "token"), ("access", "token"), ("refresh", "token"), ("bearer", "token")}
+_BARE_LAST = {"key", "token"}
+SECRET_WORDS = tuple(sorted({w.upper() for w in _SECRET_LAST} | {"_".join(c).upper() for c in _SECRET_COMPOUNDS}
+                            | {w.upper() for w in _BARE_LAST}))
+_NON_SECRET_BEFORE = {"primary", "foreign", "sort", "partition", "route", "cache", "idempotency", "remember", "csrf",
+                      "xsrf", "public", "i18n", "translation", "lookup", "unique", "index", "storage", "prefix"}
 _URL_PW = re.compile(r"(?P<head>\b[A-Za-z][\w+.-]*://[^/\s:@'\"]*:)(?P<pw>[^@/\s'\"]+)(?P<tail>@)")
 _PLACEHOLDER = ("${", "{{", "%(", "<", "$")
 
 
-def secret_key(key: str) -> bool:
-    """The `cg surface` rule for a config key / env name that holds a credential."""
-    k = re.sub(r"[^A-Za-z0-9]+", "_", key).upper().strip("_")
-    return any(k.endswith("_" + s) or k == s for s in SECRET_WORDS) and not k.endswith(_NOT_SECRET_TAIL)
+def _words(segment: str) -> list[str]:
+    spaced = re.sub(r"([a-z])([A-Z])", r"\1_\2", segment)
+    return [w for w in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if w]
 
 
-def looks_secret(key: str) -> bool:
-    """Wider than `secret_key`: any word of the name says credential (private_key_pem, db_dsn, apiKey, auth_header)."""
-    if secret_key(key):
+def secret_key(key: str, value=None) -> bool:
+    """Whether a config key / env name holds a credential, from the words of the name (split on `.`, `_`, `-` and
+    camelCase). A credential when the last word is password, passwd, pwd, pass, passphrase, secret or dsn, when the
+    name ends in an explicit compound (api_key, access_key, signing_key, client_secret, auth_token, refresh_token, ...),
+    or for Laravel's `app.key` / `APP_KEY`. A bare `key` or `token` as last word is a credential by default, as it
+    was in 0.21.0, and is kept only when the word before it (a dotted segment counts) is a known non-secret one
+    (primary, foreign, sort, partition, route, cache, idempotency, remember, csrf, xsrf, public, i18n, translation,
+    lookup, unique, index, storage, prefix). The value never decides: a token can be any shape (lowercase words,
+    dotted, `key-` prefixed), so `value` is accepted for the callers' signature only. A credential word earlier in the name never counts
+    (`AUTH_GUARD`, `AUTH_PASSWORD_BROKER`, `AUTH_PASSWORD_RESET_TOKEN_TABLE`, `try_it_credentials_policy`), and
+    `*_PUBLIC_KEY`, `*_KEY_ID`, `*_KEY_PATH`, `*_KEY_FILE` are not credentials."""
+    key = str(key)
+    words = _words(key.rsplit(".", 1)[-1])
+    if not words:
+        return False
+    all_words = _words(key)
+    if all_words == ["app", "key"]:
         return True
-    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(key))
-    words = [w for w in re.split(r"[^A-Za-z0-9]+", spaced.upper()) if w]
-    if any(w in _EXTRA_WORDS for w in words):
+    if words[-1] in _SECRET_LAST or any(tuple(words[-n:]) in _SECRET_COMPOUNDS for n in (1, 2) if len(words) >= n):
         return True
-    return "KEY" in words and not set(words) & {"PUBLIC", "ID", "PATH", "FILE", "NAME", "PREFIX", "TYPE", "SIZE", "LENGTH"}
+    if words[-1] not in _BARE_LAST:
+        return False
+    if len(all_words) > 1 and all_words[-2] in _NON_SECRET_BEFORE:
+        return False
+    return True
+
+
+looks_secret = secret_key
 
 
 def is_redacted(v) -> bool:
@@ -79,7 +104,7 @@ def redact(value, key: str | None, salt: str):
     by one, anything else unchanged. Non-strings and placeholders pass through."""
     if not isinstance(value, str):
         return value
-    if key is not None and looks_secret(key) and not placeholder(value):
+    if key is not None and looks_secret(key, value) and not placeholder(value):
         return marker(value, salt)
     return redact_url(value, salt)
 
@@ -100,7 +125,7 @@ def _holds_secret(d: dict, k: str) -> bool:
     if k.lower() in _DIRECT:
         return not _REFERENCE.match(str(d[k]))
     if k in _VALUE_KEYS:
-        return any(isinstance(d.get(nk), str) and looks_secret(d[nk]) for nk in _NAME_KEYS)
+        return any(isinstance(d.get(nk), str) and looks_secret(d[nk], d.get(k)) for nk in _NAME_KEYS)
     return False
 
 
