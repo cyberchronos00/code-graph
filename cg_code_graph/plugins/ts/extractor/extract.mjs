@@ -2133,18 +2133,90 @@ function declOfExpr(e) {
     return sym && (sym.declarations || [])[0]
   } catch { return null }
 }
+const CLIENT_NEW = { echo: /new\s+Echo\b/, pusher: /new\s+Pusher\b/ }
+const CLIENT_TYPE = { echo: /\bEcho\b/, pusher: /\bPusher\b/ }
+// `x.value = new Echo(...)` / `new Pusher(...)` in this file, keyed by the text of `x`
+const clientAssigns = new WeakMap()
+function assignedClientBases(sf) {
+  let box = clientAssigns.get(sf)
+  if (box) return box
+  box = { echo: new Set(), pusher: new Set() }
+  const walk = n => {
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const left = unwrap(n.left)
+      if (left && ts.isPropertyAccessExpression(left) && left.name.text === 'value') {
+        const key = left.expression.getText()
+        const rhs = n.right.getText()
+        if (CLIENT_NEW.echo.test(rhs)) box.echo.add(key)
+        if (CLIENT_NEW.pusher.test(rhs)) box.pusher.add(key)
+      }
+    }
+    ts.forEachChild(n, walk)
+  }
+  walk(sf)
+  clientAssigns.set(sf, box)
+  return box
+}
+function typeHasClient(typeNode, lib) {
+  return !!(typeNode && CLIENT_TYPE[lib].test(typeNode.getText()))
+}
+// ref<Echo>() / shallowRef(new Pusher(...)) — the Ref itself, not the client
+function refCallOf(init, lib) {
+  const u = unwrap(init)
+  if (!u || !ts.isCallExpression(u)) return false
+  const c = unwrap(u.expression)
+  if (!ts.isIdentifier(c) || (c.text !== 'ref' && c.text !== 'shallowRef')) return false
+  if (u.typeArguments && [...u.typeArguments].some(t => typeHasClient(t, lib))) return true
+  const arg = u.arguments && u.arguments[0]
+  return !!(arg && (CLIENT_NEW[lib].test(arg.getText()) || castIsClient(arg, lib)))
+}
+function castIsClient(init, lib) {
+  let n = init
+  while (n && (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isSatisfiesExpression?.(n) || ts.isTypeAssertionExpression?.(n) || ts.isNonNullExpression(n))) {
+    if ((ts.isAsExpression(n) || ts.isTypeAssertionExpression?.(n) || ts.isSatisfiesExpression?.(n)) && typeHasClient(n.type, lib)) return true
+    n = n.expression
+  }
+  return false
+}
+// a declaration whose value is the client (new Echo / `as Echo`), including an object-literal field
+function declIsClient(d, lib) {
+  if (!d) return false
+  if (ts.isShorthandPropertyAssignment(d)) {
+    let sym = null
+    try { sym = checker.getShorthandAssignmentValueSymbol(d) } catch { }
+    const vd = sym && (sym.valueDeclaration || (sym.declarations || []).find(x => x !== d))
+    return !!(vd && vd !== d && declIsClient(vd, lib))
+  }
+  if (!(ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d) || ts.isParameter(d) || ts.isPropertySignature(d) || ts.isPropertyAssignment(d))) return false
+  if (d.type && typeHasClient(d.type, lib)) return true
+  const init = d.initializer
+  if (!init) return false
+  return CLIENT_NEW[lib].test(init.getText()) || castIsClient(init, lib)
+}
+function declIsRef(d, lib) {
+  if (!d) return false
+  if (ts.isShorthandPropertyAssignment(d)) {
+    const vd = declOfExpr(d.name)
+    return !!(vd && vd !== d && declIsRef(vd, lib))
+  }
+  if (ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d) || ts.isPropertyAssignment(d)) return refCallOf(d.initializer, lib)
+  return false
+}
 // how sure we are that `expr` is a laravel-echo (lib='echo') / pusher-js (lib='pusher') client: 'exact' | 'resolved' | 'heuristic' | null
 function clientKind(expr, lib) {
   const e = unwrap(expr)
   if (!e) return null
-  const tre = lib === 'echo' ? /\bEcho\b/ : /\bPusher\b/
+  const tre = CLIENT_TYPE[lib]
   const pkg = lib === 'echo' ? 'laravel-echo' : 'pusher-js'
   try { const s = checker.typeToString(checker.getNonNullableType(checker.getTypeAtLocation(e))); if (tre.test(s)) return 'exact' } catch { }
   if (FW.importSource && FW.importSource(e) === pkg) return 'exact'
   const d = declOfExpr(e)
-  if (d && (ts.isVariableDeclaration(d) || ts.isPropertyDeclaration(d) || ts.isParameter(d) || ts.isPropertySignature(d))) {
-    if (d.type && tre.test(d.type.getText())) return 'exact'
-    if (d.initializer && new RegExp('new\\s+' + (lib === 'echo' ? 'Echo' : 'Pusher') + '\\b').test(d.initializer.getText())) return 'exact'
+  if (declIsClient(d, lib)) return 'exact'
+  // Vue ref / shallowRef: echo.value.private(...) when the ref's type argument is the client,
+  // or this file assigns `echo.value = new Echo(...)` / `new Pusher(...)`
+  if (ts.isPropertyAccessExpression(e) && e.name.text === 'value') {
+    const base = unwrap(e.expression)
+    if (base && (declIsRef(declOfExpr(base), lib) || assignedClientBases(e.getSourceFile())[lib].has(base.getText()))) return 'exact'
   }
   const txt = e.getText()
   if (lib === 'echo' && /^(window\.|globalThis\.)?Echo$/.test(txt)) return 'resolved'
@@ -2204,6 +2276,19 @@ function listenedEvents(call) {
   }
   return [...ev]
 }
+function channelLikeArg(arg) {
+  const u = unwrap(arg)
+  if (!u || !(ts.isStringLiteralLike(u) || ts.isTemplateExpression(u) || ts.isNoSubstitutionTemplateLiteral(u))) return false
+  return strVals(arg).some(n => n && n !== '?' && /[A-Za-z0-9]/.test(n))
+}
+function noteUnresolvedReceiver(node) {
+  stats.realtime_subscriptions_unresolved_receiver = (stats.realtime_subscriptions_unresolved_receiver || 0) + 1
+  const at = (stats.realtime_subscriptions_unresolved_receiver_at ||= [])
+  if (at.length < 8) {
+    const sf = node.getSourceFile()
+    at.push(`${rel(realFile(sf))}:${lineOf(node, sf)}`)
+  }
+}
 function realtimeSub(node, callee) {
   if (!ts.isCallExpression(node)) return null
   if (ts.isIdentifier(callee) && ECHO_HOOKS[callee.text] && node.arguments[0]) {
@@ -2220,7 +2305,11 @@ function realtimeSub(node, callee) {
   const m = callee.name.text
   if (ECHO_SUB[m]) {
     const k = clientKind(callee.expression, 'echo')
-    if (!k) return null
+    if (!k) {
+      // .leave() / .disconnect() are not subscriptions; a channel literal on an unknown .private() is counted
+      if (m === 'private' && channelLikeArg(node.arguments[0])) noteUnresolvedReceiver(node)
+      return null
+    }
     return { client: 'echo', names: strVals(node.arguments[0]), visibility: ECHO_SUB[m], events: listenedEvents(node), conf: k }
   }
   if (m === 'subscribe') {

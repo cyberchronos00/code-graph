@@ -21,9 +21,16 @@ stay ordinary `INSTANTIATES` / `DISPATCHES` edges.
 Client (TS / JS / Vue): Laravel Echo (`.private` / `.channel` / `.join` / `.listen` /
 `.listenForWhisper` / `.notification`), pusher-js (`subscribe` / `bind`) and `useEcho` become
 `channel_sub:<name>` with `SUBSCRIBES_CHANNEL`. `` `board.${id}` `` becomes `board.{id}`.
-Listeners chained on the subscription, or on a variable or property that holds it, are its
-events. `resources/js` (and `resources/ts`, `resources/assets/js`) of a Laravel app are
-indexed as TypeScript.
+The receiver may be `Echo` / `new Echo(...)`, `window.Echo`, a name ending in `echo`, a
+`ref()` / `shallowRef()` whose type argument is `Echo` (`echo.value.private(...)`, including
+after `echo.value = new Echo(...)` in the same file), or a store / composable field typed or
+initialised as an Echo client (`store.echo.private(...)`, `useEcho().client.private(...)`).
+The same forms apply to pusher-js (`ref<Pusher>()`, `.subscribe`). Listeners chained on the
+subscription, or on a variable or property that holds it, are its events. `.leave()` and
+`.disconnect()` are not subscriptions. A `.private(...)` call with a channel literal whose
+receiver stays unknown is counted as `realtime_subscriptions_unresolved_receiver` (file and
+line under `cg coverage --details`). `resources/js` (and `resources/ts`, `resources/assets/js`)
+of a Laravel app are indexed as TypeScript.
 
 `cg link` (and `cg index` in one repo) adds `MATCHES_CHANNEL` by pattern shape (
 `board.{boardId}` ↔ `board.{board}`) and `LISTENS_FOR` by class name, `broadcastAs()` (leading

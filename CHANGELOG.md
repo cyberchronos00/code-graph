@@ -8,6 +8,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- A Laravel Echo or pusher-js client held in a Vue `ref()` / `shallowRef()`, or on a Pinia store or composable field, is a channel subscription. `echo.value.private(...).listen(...)` records the channel and the event. `.leave()` and `.disconnect()` do not. `cg coverage --details` lists `.private(...)` calls with a channel literal on a receiver that stays unknown (`realtime_subscriptions_unresolved_receiver`). See [docs/channels-and-tests.md](docs/channels-and-tests.md).
+
 ## [0.19.1] - 2026-10-07
 
 ### Fixed

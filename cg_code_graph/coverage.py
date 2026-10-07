@@ -338,6 +338,11 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             e["syntax_error_files"] = len(se)
             e["parsed_with_errors"] = sum(1 for x in se if not x.get("parse_failed"))
             e["decls_lost"] = sum(x.get("decls_lost", 0) for x in se)
+        if lang == "typescript" and st and st.get("realtime_subscriptions_unresolved_receiver"):
+            e["realtime_subscriptions_unresolved_receiver"] = st["realtime_subscriptions_unresolved_receiver"]
+            at = st.get("realtime_subscriptions_unresolved_receiver_at") or []
+            if at:
+                e["realtime_subscriptions_unresolved_receiver_at"] = at[:8]
         if lang == "python" and st:
             for k in ("roots_mode", "source_roots", "roots_warnings", "roots_ambiguous", "module_name_collisions"):
                 if st.get(k):
@@ -495,6 +500,16 @@ def _entry_text(e: dict) -> str:
         return (f"{e['language']} {e['files']} discovered, {e['indexed']} indexed ({e['status'].replace('_', ' ')} parser)"
                 + (": " + ", ".join(parts) if parts else "") + errs)
     return f"{e['language']} {e['files']} {e['status'].replace('_', ' ')}{errs}"
+
+
+def realtime_unresolved_lines(e: dict, indent: str = "  ") -> list[str]:
+    """'.private(...)' on a receiver that is not an Echo client, with a channel literal: where to look."""
+    n = e.get("realtime_subscriptions_unresolved_receiver") or 0
+    if not n or e.get("language") != "typescript":
+        return []
+    at = e.get("realtime_subscriptions_unresolved_receiver_at") or []
+    where = f" ({', '.join(at[:5])})" if at else ""
+    return [f"{indent}typescript: {n} .private(...) call{'s' if n != 1 else ''} on an unknown receiver{where}"]
 
 
 def syntax_error_lines(e: dict, all_files: bool = False, indent: str = "  ") -> list[str]:
@@ -702,6 +717,7 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
                 out.append(f"    fix: {e['hint']}")
         for e in (cov or {}).get("languages", []):
             out += syntax_error_lines(e, all_files)
+            out += realtime_unresolved_lines(e)
         for e in (cov or {}).get("languages", []):     # which mode an exact-capable language ran in, and why
             if e["language"] in ("kotlin", "swift", "java") and not _is_gap(e) and e.get("reason"):
                 out.append(f"  {e['language']}: {e['files']} files {e['status']}: {e['reason']}")

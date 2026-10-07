@@ -41,17 +41,17 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `plan_baseline`: Fingerprint (sha1 of source lines) every modified target of a plan before implementing it, so
 - `index`: Re-index after editing (static analysis only: never boots the app or touches a database).
 
-## `stats {}`  (1140 chars)
+## `stats {}`  (1292 chars)
 
 ```
 project=bookstore-api+bookstore-web root=None indexed_at=<indexed_at> index_seconds=None
-nodes: method×38, column×29, class×21, config×16, property×12, route×10, http×8, env×7, external_class×7, request_key×7, function×6, module×5, script×5, table×5, composable×4, resolution×4, setting×3, connection×2, external×2, i18n×2, page×2, admin×1, command×1, component×1, field×1, layout×1, store×1, type×1
-edges: CONTAINS×92, CALLS×24, READS_COLUMN×22(gated 1), EXTENDS×17, WRITES_COLUMN×16, READS_ENV×14, READS_INPUT×13, CONFIG_CONTAINS×13, VALIDATES×12, REFERENCES×12, ROUTES_TO×10, READS_PROP×9, HTTP_CALLS×8, CONNECTS_TO×7, WRITES_TABLE×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, HAS_RESOLUTION×4, VALIDATED_BY×3, READS_SETTING×3, INSTANTIATES×3, INJECTS×3, USES_LAYOUT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, READS_CONFIG×2, IMPORTS×2, HANDLED_BY×2, WRITES_PROP×1, USES_STORE×1, RENDERS×1, READS_TABLE×1, MENTIONS_COLUMN×1, HAS_RELATION×1, BINDS×1
-coverage bookstore-api: php 25 exact
-coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
+nodes: method×41, column×29, class×22, config×16, property×13, external_class×10, route×10, http×8, env×7, request_key×7, function×6, script×6, module×5, table×5, composable×4, resolution×4, page×3, setting×3, connection×2, external×2, field×2, i18n×2, admin×1, channel×1, channel_sub×1, command×1, component×1, event×1, layout×1, store×1, type×1
+edges: CONTAINS×97, CALLS×25, READS_COLUMN×23(gated 1), EXTENDS×17, WRITES_COLUMN×16, READS_ENV×14, READS_INPUT×13, CONFIG_CONTAINS×13, VALIDATES×12, REFERENCES×12, READS_PROP×11, ROUTES_TO×10, HTTP_CALLS×8, CONNECTS_TO×7, WRITES_TABLE×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, USES_COMPOSABLE×5, USES_CONNECTION×4(gated 1), MATCHES_ROUTE×4, MAPS_TO_TABLE×4, INSTANTIATES×4, INJECTS×4, HAS_RESOLUTION×4, HANDLED_BY×4, VALIDATED_BY×3, USES_LAYOUT×3, READS_SETTING×3, WRITES_PROP×2, USES_TRAIT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, READS_CONFIG×2, IMPORTS×2, USES_STORE×1, SUBSCRIBES_CHANNEL×1, RENDERS×1, READS_TABLE×1, MENTIONS_COLUMN×1, MATCHES_CHANNEL×1, LISTENS_FOR×1, IMPLEMENTS×1, HAS_RELATION×1, DISPATCHES×1, BROADCASTS_ON×1, BINDS×1
+coverage bookstore-api: php 27 exact
+coverage bookstore-web: typescript 11 exact | generated: 4 files excluded
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `search {'name': 'reserve'}`  (516 chars)
 
@@ -63,7 +63,7 @@ method     method:App\Http\Controllers\StockController::reserve  bookstore-api/a
 method     method:App\Services\StockService::reserveFromWarehouse  bookstore-api/app/Services/StockService.php:30
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `search {'name': 'auth'}`  (142 chars)
 
@@ -72,7 +72,7 @@ middleware / guards / auth matching 'auth' (route attributes): 1 name(s) on 1 ro
   auth:api  (middleware) on 1 route(s): POST /v1/orders
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `routes {'writes': '*'}`  (1642 chars)
 
@@ -102,7 +102,7 @@ POST /v1/orders  @bookstore-api/routes/api.php:21
 guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `routes {'reaches': ['connection:warehouse'], 'unguarded': True}`  (880 chars)
 
@@ -121,7 +121,7 @@ POST /v1/stock/reserve  @bookstore-api/routes/api.php:19  NO AUTH
 guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `routes {'writes': 'books', 'missing': 'auth:api'}`  (874 chars)
 
@@ -140,7 +140,7 @@ PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
 guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `reaches {'targets': ['connection:warehouse', 'table:warehouse_stock'], 'max_per_group': 12}`  (1358 chars)
 
@@ -169,7 +169,7 @@ command (1): bookstore:sync-warehouse
 route (3): GET /v1/{store}/admin/inventory [gated]; POST /v1/orders; POST /v1/stock/reserve
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}}}`
 
 ## `reaches {'targets': ['env:WAREHOUSE_DB_*'], 'group_by': 'entry_kind'}`  (1696 chars)
 
@@ -201,7 +201,7 @@ command (1): bookstore:sync-warehouse
 route (3): GET /v1/{store}/admin/inventory [gated]; POST /v1/orders; POST /v1/stock/reserve
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}}}`
 
 ## `impact {'method': 'StockService::recordSale'}`  (248 chars)
 
@@ -215,7 +215,7 @@ transitive callers: 1; entry points: 1
 callers by module: Http/Controllers×1
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}}}`
 
 ## `callers {'symbol': 'StockService::reserve'}`  (219 chars)
 
@@ -226,7 +226,7 @@ direct callers: 2 (2 sites)
   Http\Controllers\StockController::reserve  CALLS@StockController.php:16 ~r
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}}}`
 
 ## `tests_covering {'target': 'StockService::reserve'}`  (382 chars)
 
@@ -237,21 +237,21 @@ no indexed test reaches the target (the graph has no test code: no test files or
 coverage: every source file cg found is indexed (php, typescript); code outside these languages or generated at runtime is not in the graph.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}}}`
 
 ## `coverage {}`  (553 chars)
 
 ```
-coverage bookstore-api: php 25 exact
+coverage bookstore-api: php 27 exact
   frameworks: laravel | presets: common, php, laravel | config: no .cg.yaml
-coverage bookstore-web: typescript 10 exact | generated: 4 files excluded
+coverage bookstore-web: typescript 11 exact | generated: 4 files excluded
   frameworks: nuxt | presets: common, typescript, nuxt | config: no .cg.yaml
   generated: 4 files excluded (Nuxt build output (.nuxt/) 4)
     Nuxt build output (.nuxt/): .nuxt/axios-shim.d.ts, .nuxt/nuxt.d.ts, .nuxt/types/components.d.ts, .nuxt/types/imports.d.ts
 every source file cg found is indexed; edges still carry their own exact / resolved / heuristic label.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `siblings {'symbol': 'StockService::reserveLocal', 'limit': 6}`  (435 chars)
 
@@ -265,7 +265,7 @@ shared resources:
   Http\Controllers\Admin\BookController::update: column:books.price
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `siblings {'symbol': 'StockService::reserve'}`  (793 chars)
 
@@ -276,7 +276,7 @@ try: siblings('Services\StockService::reserveLocal') (a callee that touches data
 coverage: every source file cg found is indexed (php, typescript); code outside these languages or generated at runtime is not in the graph.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `writers {'table': 'books'}`  (579 chars)
 
@@ -291,7 +291,7 @@ table books: 15 write edges from 4 writers
   Services\StockService::recordSale  route×1  cols: sold_count  @ StockService.php:42  conf=resolved
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `node {'id_or_symbol': 'App\\Http\\Controllers\\Admin\\InventoryController::index'}`  (675 chars)
 
@@ -311,7 +311,7 @@ in: CONTAINS×1, ROUTES_TO×1
   ROUTES_TO: route:GET /v1/{store}/admin/inventory@15
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `path {'source': 'page:/', 'target': 'SalesReportService::remove'}`  (460 chars)
 
@@ -323,7 +323,7 @@ page:app/pages/index.vue
   -CALLS[resolved @ bookstore-api/app/Http/Controllers/ReportController.php:40]-> Services\SalesReportService::remove
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `downstream {'target': 'page:/reports/:id', 'max_per_kind': 10}`  (570 chars)
 
@@ -340,7 +340,7 @@ tables touched (2): orders, stores
   column:stores.settings d8
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `api_calls {'filter': 'unmatched'}`  (489 chars)
 
@@ -356,7 +356,7 @@ POST /payments/{id}/cancel  ⇒ UNMATCHED
    ← Services\PaymentsClient::cancelPayment @ PaymentsClient.php:19 via PaymentsClient::request
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `resolutions {'concept': 'timezone'}`  (2934 chars)
 
@@ -391,7 +391,7 @@ backend resolution sites: 2 in 2 distinct fallback chains; request keys of the c
   app/pages/reports/[id].vue @bookstore-web/app/pages/reports/[id].vue:10 passes date_from to app/composables/useReports.ts#useReports.fetchTop; the request @bookstore-web/app/composables/useReports.ts:9 (GET /api/v1/main/admin/reports/top) sends only category_id, mode, timezone
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `plan_list {}`  (180 chars)
 
@@ -399,7 +399,7 @@ structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php"
 preorders [agreed] Pre-order books: signed-in customers only, never filled from warehouse stock | +1 nodes ~3 modified +3 edges 1 forbidden 1 required | issues #7 | schema errors 0
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 10, "excluded": 1, "indexed": 9, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 11, "excluded": 1, "indexed": 10, "mode": "exact"}}}`
 
 ## `plan_check {'name': 'preorders'}`  (2175 chars)
 
@@ -428,7 +428,7 @@ middleware: POST /v1/stock/reserve lacks auth:api which peer route(s) POST /v1/o
 details=true for every item with file:line evidence and call chains (CLI: plan check without --summary); max_items=N shows more top items.
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}}}`
 
 ## `plan_check {'name': 'preorders', 'details': True, 'max_items': 30}`  (5493 chars)
 
@@ -501,7 +501,7 @@ ENTRY CHAINS (entry point -> modified code)
   route:POST /v1/stock/reserve -ROUTES_TO@api.php:19-> StockController::reserve -CALLS@StockController.php:16-> StockService::reserve
 ```
 
-structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 25, "indexed": 25, "mode": "exact"}}}`
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 27, "indexed": 27, "mode": "exact"}}}`
 
 ## `index (gating fixture, temp db)`  (554 chars)
 

@@ -20,7 +20,7 @@ CALL_LIKE = ["CALLS", "IMPLEMENTED_BY", "OVERRIDDEN_BY", "BOUND_TO", "ROUTES_TO"
              # native code: function pointers / callbacks / dispatch tables
              "REFERENCES_FN",
              # realtime: broadcasting auth route -> channel callbacks; client subscriptions -> backend channels
-             "AUTHORIZES_CHANNEL", "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL",
+             "AUTHORIZES_CHANNEL", "SUBSCRIBES_CHANNEL", "MATCHES_CHANNEL", "LISTENS_FOR",
              # protocol endpoints: web / native bridges (JS / Dart call -> endpoint -> Kotlin / Swift handler)
              "SENDS_TO", "RECEIVED_BY"]
 TS_CODE_KINDS = ("composable", "store", "component", "module")

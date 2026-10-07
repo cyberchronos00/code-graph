@@ -23,6 +23,7 @@ class OrderController extends Controller
             'total' => $result['price'] ?? 0,
         ]);
         $this->stock->recordSale((int) ($result['book_id'] ?? 0));
+        event(new \App\Events\OrderShipped($order));
 
         return response()->json($order);
     }

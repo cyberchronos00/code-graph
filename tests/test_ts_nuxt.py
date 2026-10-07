@@ -35,7 +35,7 @@ REPORTS = "app/composables/useReports.ts#useReports"
 
 def test_page_nodes_and_routes():
     rows = dict(fe().execute("SELECT id, name FROM nodes WHERE kind='page'").fetchall())
-    assert rows == {PAGE: "/reports/:id", "page:app/pages/index.vue": "/"}
+    assert rows == {PAGE: "/reports/:id", "page:app/pages/index.vue": "/", "page:app/pages/orders/index.vue": "/orders"}
     assert fe().execute("SELECT entry_kind FROM nodes WHERE id=?", (PAGE,)).fetchone()[0] == "ui_page"
 
 

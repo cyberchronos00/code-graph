@@ -37,12 +37,12 @@ def test_missing_php_is_skipped_not_fatal(tmp_path):
     st = json.loads(r.stdout)
     assert st["plugins"]["php"]["status"] == "skipped" and "php not installed" in st["plugins"]["php"]["reason"]
     php = lang(st["coverage"], "php")
-    assert php["status"] == "skipped" and php["files"] == 25 and "cg setup php" in php["hint"]
-    assert "not fully covered: php 25 skipped" in r.stderr and "not proof of absence" in r.stderr
+    assert php["status"] == "skipped" and php["files"] == 27 and "cg setup php" in php["hint"]
+    assert "not fully covered: php 27 skipped" in r.stderr and "not proof of absence" in r.stderr
     out = cg("coverage", "--db", tmp_path / "api.db").stdout
-    assert "  php 25 skipped: php not installed" in out and "; fix: install PHP 8.2+" in out          # the summary (#75)
+    assert "  php 27 skipped: php not installed" in out and "; fix: install PHP 8.2+" in out          # the summary (#75)
     out = cg("coverage", "--db", tmp_path / "api.db", "--details").stdout
-    assert "php: 25 files (.php 25) skipped: php not installed" in out and "fix: install PHP 8.2+" in out
+    assert "php: 27 files (.php 27) skipped: php not installed" in out and "fix: install PHP 8.2+" in out
 
 
 @pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
