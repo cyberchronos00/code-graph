@@ -27,11 +27,7 @@ class BookController extends Controller
     public function update(UpdateBookRequest $request, int $id)
     {
         $book = Book::findOrFail($id);
-        $book->update([
-            'title' => $request->input('title'),
-            'price' => $request->input('price'),
-            'stock' => $request->input('stock'),
-        ]);
+        $book->update($request->validated());
 
         return new BookResource($book);
     }

@@ -23,6 +23,32 @@ A plain `= v` is a write. These are writes with `via`, plus the read the walk re
 reads for model attributes and relations are unchanged, so every other edge stays the same. This was checked on koel
 and laravel.io.
 
+## Column writes by mass assignment (#177)
+
+`$book->update($request->validated())`, `Book::create($data)`, `$book->fill(...)`, `new Book($data)` followed by `save()` and a query-builder `->update($data)` write columns whose names are not in the call. cg takes the keys from the request array the argument carries and records `WRITES_COLUMN` at `resolved`, so `cg writers books.age_rating` and `cg routes --reaches books.age_rating` list the route that writes the column.
+
+| argument | keys |
+|---|---|
+| `$request->validated()`, `$request->safe()`, `$request->validate()` | the FormRequest `rules()` keys, or the inline `validate([...])` keys, top-level only (`items.*.qty` is `items`) |
+| `->only([...])` / `->except([...])` on the request or on `safe()` | the literal keys; for `except`, the request's keys minus them |
+| a local or a parameter holding one of these | followed through assignments and call arguments (`$service->save($book, $request->validated())` writes from `save`) |
+| `array_merge($request->validated(), [...])`, `[...$request->validated(), 'k' => v]` | both key sets |
+| `$request->all()`, `input()`, `post()`, `query()`, `json()` | `heuristic`: the model's `$fillable` keys (no rules are consulted, any input key may arrive) |
+
+Receivers: a model instance, `Model::create(...)` / `updateOrCreate` / `firstOrCreate` (the values array), a relation (`$book->reviews()->create(...)`), `new Model($data)` when the same function calls `save()` on it, and `Model::where(...)->update(...)` / `DB::table('books')->update(...)`.
+
+Then the model's mass-assignment rules apply. A key outside a declared `$fillable` gets no edge (a rule key `reviewer_note` that `Book::$fillable` does not list is validated but never written). `$guarded` keys are dropped, `$guarded = []` keeps every rule key, and `$guarded = ['*']` without `$fillable` keeps none. `forceFill` / `forceCreate` ignore both, and query-builder writes (`->update` on a builder, `insert`, `upsert`) never consult `$fillable`. `cg plan check` still reports a new column that `$fillable` lacks as `model_fillable`.
+
+The edge has `attrs.via` (`update(validated())`) and `attrs.keys_from` (`["UpdateBookRequest::rules", "Book::$fillable"]`); `cg node` prints them:
+
+```text
+$ cg node 'App\Http\Controllers\Admin\BookController::update' --db out/api.db
+  outgoing (9):
+    -> WRITES_COLUMN column:books.age_rating  @app/Http/Controllers/Admin/BookController.php:30 resolved  via update(validated()) keys from UpdateBookRequest::rules ∩ Book::$fillable
+```
+
+Keys built at run time stay out (`$data[$field] = ...` in a loop, `Arr::only($data, $allowed)` with a computed list). See [limitations](limitations.md#plans-value-facts-and-the-visual-view).
+
 ## Inline guards
 
 `cg routes` lists access checks a Laravel action runs before its own work on an `inline:` line, separate from route middleware. `--json` stores them on `inline_guards` (`name`, `kind`, `at`, `conditional`).

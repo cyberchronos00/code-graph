@@ -329,6 +329,7 @@ class LaravelPlugin(FrameworkPlugin):
     def _parse_models(self):
         prog, b = self.prog, self.b
         self.models: dict[str, dict] = {}
+        self.pending_mass: list[dict] = []
         for c in prog.classes.values():
             if c.kind != "class" or c.fqcn.startswith("class@anonymous") or prog.is_test_class(c.fqcn):
                 continue
@@ -556,7 +557,7 @@ class LaravelPlugin(FrameworkPlugin):
             return (t.split(" ")[0], c)
         return (default_table, s)
 
-    def _col_args(self, fn, table, f, conf, write_methods=True):
+    def _col_args(self, fn, table, f, conf, write_methods=True, recv=None):
         ml = (f.get("m") or "").lower()
         args = f.get("args") or []
         line = f.get("line")
@@ -586,6 +587,10 @@ class LaravelPlugin(FrameworkPlugin):
                         if k and k.get("k") == "str":
                             t, c = self._split_col(k["v"], table)
                             self._col_edge(fn, t, c, "WRITES_COLUMN", line, conf, via=f.get("m"))
+            if recv and table and (ml in WRITE_ARRAY0 or ml in WRITE_ARRAY1):
+                idx = 1 if ml in WRITE_ARRAY1 and len(args) > 1 else 0
+                if len(args) > idx and (args[idx].get("k") != "arr" or any(it.get("key") is None for it in args[idx]["items"])):
+                    self.pending_mass.append({"fn": fn, "f": f, "table": table, "recv": recv})
             if ml in WRITE_ARRAY1 and args and args[0].get("k") == "arr":
                 for it in args[0]["items"]:
                     k = it.get("key")
@@ -667,6 +672,10 @@ class LaravelPlugin(FrameworkPlugin):
             return
         if t == "new" and f.get("class") in self.models and self.models[f["class"]]["connection"]:
             self._model_conn(fn, f["class"], line)
+        if t == "new" and f.get("class") in self.models and f.get("args"):
+            cls = f["class"]
+            self.pending_mass.append({"fn": fn, "f": f, "m": "new", "label": f"new {cls.rsplit(chr(92), 1)[-1]}",
+                                      "table": self.table_of(cls), "recv": ("model", cls)})
         if t != "call":
             return
         kind, m = f["kind"], (f.get("m") or "")
@@ -688,7 +697,7 @@ class LaravelPlugin(FrameworkPlugin):
                     self._config_read(fn, args[0]["v"], line, EXACT)
             elif cls in self.models:
                 tbl = self.table_of(cls)
-                self._col_args(fn, tbl, f, RESOLVED)
+                self._col_args(fn, tbl, f, RESOLVED, recv=("static", cls))
                 if ml == "on" and args:
                     for cid, conf, via in self._conn_targets(ctx, args[0]):
                         b.add_edge(fn.id, cid, "USES_CONNECTION", fn.file, line, conf, via=f"{cls.split(chr(92))[-1]}::on {via}")
@@ -721,14 +730,14 @@ class LaravelPlugin(FrameworkPlugin):
                 if rt.startswith("pivot:") and ml in PIVOT_WRITES:
                     self._pivot_write(fn, rt.split(":", 1)[1], f, RESOLVED)
                 elif rt.startswith("builder:"):
-                    self._col_args(fn, self.table_of(rt.split(":", 1)[1]), f, RESOLVED)
+                    self._col_args(fn, self.table_of(rt.split(":", 1)[1]), f, RESOLVED, recv=("builder", rt.split(":", 1)[1]))
                 elif rt.startswith("qb:"):
                     tbl = rt.split(":", 1)[1]
-                    self._col_args(fn, tbl, f, RESOLVED)
+                    self._col_args(fn, tbl, f, RESOLVED, recv=("qb", None))
                 elif rt in self.models:
                     tbl = self.table_of(rt)
                     if ml in WRITE_TABLE or ml in WRITE_ARRAY0:
-                        self._col_args(fn, tbl, {**f, "m": m}, RESOLVED)
+                        self._col_args(fn, tbl, {**f, "m": m}, RESOLVED, recv=("model", rt))
                 elif rt.startswith("conn:") and ml == "table" and args and args[0].get("k") == "str":
                     b.add_edge(fn.id, self._table_node(args[0]["v"].split(" ")[0]), "READS_TABLE", fn.file, line, RESOLVED, via="connection()->table")
             if ml == "setconnection" and args:

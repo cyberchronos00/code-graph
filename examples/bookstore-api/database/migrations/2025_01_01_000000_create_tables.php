@@ -27,6 +27,7 @@ return new class extends Migration
             $table->boolean('is_active');
             $table->integer('stock')->nullable();
             $table->integer('sold_count')->default(0);
+            $table->string('age_rating')->nullable();
             $table->timestamps();
         });
         Schema::create('orders', function (Blueprint $table) {

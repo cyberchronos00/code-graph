@@ -321,8 +321,8 @@ def main(argv=None):
     p.add_argument("--quiet", action="store_true", help="pass --quiet to each refresh")
     helps = {"reaches": "everything that depends on the targets, grouped by entry classification",
              "siblings": "code related to a symbol: class hierarchy, the same method in sibling classes, shared resources, co-callers",
-             "writers": "code that writes a table (or column), or a stored property `Type.prop`",
-             "readers": "code that reads a stored property `Type.prop` (READS_PROP)",
+             "writers": "code that writes a table, a column (`table.column`) or a stored property `Type.prop`",
+             "readers": "code that reads a table, a column (`table.column`) or a stored property `Type.prop`",
              "impact": "callers of a method up to their entry points (reverse walk), overrides listed apart",
              "stats": "node / edge counts of a graph DB",
              "node": "one node's details and its incoming / outgoing edges",
@@ -702,17 +702,13 @@ def main(argv=None):
         res = RT.roundtrip(st, a.spec, include_tests=a.tests)
         print(RT.to_json(res) if a.json else RT.render(res))
     elif a.cmd in ("writers", "readers"):
-        rows = Q.writers(st, a.spec) if a.cmd == "writers" else Q.readers(st, a.spec)
+        groups = Q.access(st, a.spec, a.cmd)
+        rows = [r for g in groups for r in g["rows"]]
         if a.json:
             print(json.dumps(rows, indent=1)); return
         if not rows:
             print(Q.explain_no_writers(st, a.spec, a.cmd)); return
-        for r in rows:
-            ek = ",".join(sorted(r["entry_kinds"]))
-            ex = {k: v for k, v in (r.get("attrs") or {}).items() if k in ("receiver", "accessor", "storage")}
-            extra = ("  " + " ".join(f"{k}={v}" for k, v in ex.items())) if ex else ""
-            kind = f"{r['kind']}({r['attrs']['orig']})" if r.get("test") else r['kind']
-            print(f"[{r['module']}] {r['fqn']}  {kind} {r['dst']}  @{r['file']}:{r['line']} ({r['confidence']}){extra}  entries: {ek}")
+        print("\n".join(Q.render_access(groups)))
         verb = "write" if a.cmd == "writers" else "read"
         nt = sum(1 for r in rows if r.get("test"))
         print(f"{len(rows)} {verb} edges, {len({r['src'] for r in rows})} {a.cmd}" + (f" ({nt} from test code)" if nt else ""))
@@ -773,6 +769,14 @@ def node_doc(st, nid: str) -> dict:
     return {"node": n, "out": edges("src", "dst"), "in": edges("dst", "src")}
 
 
+def _mass_note(e: dict) -> str:
+    """`  via update(validated()) keys from UpdateBookRequest::rules ∩ Book::$fillable` for a mass-assignment column write (#177)."""
+    at = e.get("attrs") or {}
+    if e["kind"] != "WRITES_COLUMN" or not at.get("mass_assignment"):
+        return ""
+    return f"  via {at.get('via')}" + (f" keys from {' ∩ '.join(at['keys_from'])}" if at.get("keys_from") else "")
+
+
 def render_node(d: dict) -> str:
     """`cg node` text: the node's location, kind and attrs, then its edges; the same edge from one site (one row per
     gate scenario or accessor) is listed once with a count."""
@@ -801,10 +805,10 @@ def render_node(d: dict) -> str:
         out.append(f"  {'outgoing' if key == 'out' else 'incoming'} ({len(es)}):" if es else f"  {'outgoing' if key == 'out' else 'incoming'}: none")
         seen: dict = {}
         for e in es:
-            k = (e["kind"], e[other], e["file"], e["line"], e["confidence"])
+            k = (e["kind"], e[other], e["file"], e["line"], e["confidence"], _mass_note(e))
             seen[k] = seen.get(k, 0) + 1
-        for (kind, o, f, line, conf), c in seen.items():
-            out.append(f"    {arrow} {kind} {o}  @{f}:{line} {conf}" + (f"  ×{c}" if c > 1 else ""))
+        for (kind, o, f, line, conf, note), c in seen.items():
+            out.append(f"    {arrow} {kind} {o}  @{f}:{line} {conf}{note}" + (f"  ×{c}" if c > 1 else ""))
     return "\n".join(out)
 
 

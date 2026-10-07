@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Book extends Model
 {
-    protected $fillable = ['store_id', 'isbn', 'title', 'price', 'is_active', 'stock', 'sold_count'];
+    protected $fillable = ['store_id', 'isbn', 'title', 'price', 'is_active', 'stock', 'sold_count', 'age_rating'];
 
     public function isSoldOut(): bool
     {

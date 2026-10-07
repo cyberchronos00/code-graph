@@ -25,7 +25,7 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 | `snippet` | that symbol's source: `path:start-end`, then numbered lines |
 | `search` | name / FQN substring, plus route guard and auth names |
 | `routes` | routes with guards; filter by writes, reaches, missing or unguarded ([routes and guards](cli.md#routes-and-guards)) |
-| `writers` / `readers` | writers of a table, column or `Type.prop`; readers of a stored property |
+| `writers` / `readers` | writers or readers of a table, a column (`table.column`, `column:table.column`) or a stored property (`Type.prop`, `Class::$prop`); the same specs, groups and errors as `cg writers` / `cg readers` ([spec forms](cli.md#readers-and-writers-specs)) |
 | `roundtrip` | heuristic: a lossy write of `Type.prop` read back into UI state |
 | `lint_async_state` | heuristic async-state lints |
 | `api_calls` | client HTTP calls, request keys and the matched route |

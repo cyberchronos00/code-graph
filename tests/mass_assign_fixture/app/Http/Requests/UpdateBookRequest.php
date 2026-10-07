@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Requests\Admin;
+namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -9,13 +9,11 @@ class UpdateBookRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'isbn' => 'required|string',
-            'title' => 'required|string',
-            'price' => 'required|numeric',
-            'stock' => 'nullable|integer',
-            'is_active' => 'boolean',
+            'title' => 'sometimes|string',
+            'price' => 'sometimes|integer',
             'age_rating' => 'sometimes|nullable|in:all,teen,adult',
             'reviewer_note' => 'nullable|string',
+            'tags.*.name' => 'string',
         ];
     }
 }

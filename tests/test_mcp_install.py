@@ -126,13 +126,16 @@ def test_host_paths(home, monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "darwin")
     desk = home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
     assert config_path("claude-desktop", "global", root) == desk
-    monkeypatch.setattr(os, "name", "nt")
-    monkeypatch.setattr(sys, "platform", "win32")
-    assert config_path("claude-desktop", "global", root) == home / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
-    assert config_path("windsurf", "global", root) == home / "AppData" / "Roaming" / "devin" / "mcp_config.json"
-    assert config_path("cursor", "global", root) == home / ".cursor" / "mcp.json"
-    with pytest.raises(InstallError, match="not verified"):
-        config_path("zed", "global", root)
+    # a Windows host on POSIX: `os.name` stays patched only inside this block, so pytest's own reporting (which builds
+    # `Path`s) never runs with `os.name == "nt"`
+    with monkeypatch.context() as win:
+        win.setattr(os, "name", "nt")
+        win.setattr(sys, "platform", "win32")
+        assert config_path("claude-desktop", "global", root) == home / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
+        assert config_path("windsurf", "global", root) == home / "AppData" / "Roaming" / "devin" / "mcp_config.json"
+        assert config_path("cursor", "global", root) == home / ".cursor" / "mcp.json"
+        with pytest.raises(InstallError, match="not verified"):
+            config_path("zed", "global", root)
 
 
 def test_entry_shape_per_host(tmp_path):

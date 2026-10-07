@@ -11,6 +11,8 @@ the TS extractor).
 | `setting:<key>` | READS_SETTING / WRITES_SETTING | `getSetting` / `setSetting` on a class that declares them |
 | `resolution:<fn>#<target>@<line>` | HAS_RESOLUTION, FALLS_BACK_TO (`order`, `ambiguous`, `candidates`) | a `??` / `?:` / `match` chain, or a helper with two or more ordered early returns |
 
+The same request arrays feed column writes: when `validated()`, `safe()->only([...])`, `all()` and the like reach the array argument of `update` / `create` / `fill` (directly, through a local, a parameter or `array_merge`), the FormRequest `rules()` keys (or the inline `validate([...])` keys), narrowed by the model's `$fillable` / `$guarded`, become `WRITES_COLUMN` edges with `attrs.via` and `attrs.keys_from` ([PHP](php.md#column-writes-by-mass-assignment-177)).
+
 Request-array flow is a fixpoint over call arguments, through more than one helper. Sources are
 request accessors (`validated()`, `all()`, `input()`, `only()`, … on a receiver typed
 Request or FormRequest), `request()`, arrays built from request keys, and app functions that

@@ -1,5 +1,6 @@
 """`cg affected` (#121 part 1) and file / module specs in `cg tests`."""
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ from cg_code_graph import query as Q
 from cg_code_graph.affected import affected, file_changes, git_changes, render_affected, render_quiet
 from cg_code_graph.core.store import GraphStore
 from cg_code_graph.indexer import index_project
+
+pytestmark = pytest.mark.skipif(not shutil.which("git"), reason="git not installed (the fixture repo is a git repository)")
 
 FILES = {
     "pyproject.toml": '[project]\nname = "affx"\nversion = "0"\n\n[project.scripts]\naffx = "app.cli:main"\n',

@@ -161,7 +161,7 @@ def has_type(host: str) -> bool:
 
 def config_path(host: str, scope: str, root: Path) -> Path:
     """Filesystem path for a host and scope. Claude Code global has no file cg edits."""
-    root = Path(root)
+    root = _child(root)
     if host == "claude" and scope == "global":
         raise InstallError("Claude Code global scope is changed with the claude CLI, not a file")
     if host == "claude-desktop" and scope == "project":

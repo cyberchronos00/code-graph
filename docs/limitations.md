@@ -77,6 +77,7 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 - External clients come from the snapshot file. Private repos are not indexed for that list.
 - Findings come from a hand-refreshed snapshot of issue evidence lines, mapped to the innermost function span.
 - Plan text mentions match exact names (identity columns, relation names) inside `plans.text_mention_dirs`.
+- Mass-assignment column writes (#177) take their keys from FormRequest `rules()` and inline `validate([...])`: keys added at run time (`$data[$field] = ...` in a loop, `Arr::only($data, $allowed)` with a computed list), model mutators and `$casts` that write other columns, and `rules()` that is not a returned array literal are not followed. `$request->all()` / `input()` is `heuristic` and uses `$fillable` (there is no filter by rules). `new Model($data)` counts only when the same function calls `save()` on it. Other frameworks (Django `Model.objects.create(**form.cleaned_data)`, Rails strong params) are not covered.
 - Value-fact concept match is the head word of the target, or of the first source key. `--within` is a substring filter ([Value facts](value-facts.md)).
 - The "returns" form treats source order as fallback order. Locals keep their last assignment. Helper inlining stops at depth 4.
 - A setting → API response → client chain is not followed. Response fields are not nodes.

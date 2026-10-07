@@ -621,13 +621,8 @@ def resolutions(concept: str, within: str | None = None, client: bool = True, de
     return out if len(out) <= max_chars else out[:max_chars] + f"\n… truncated ({len(out)} chars; narrow with `within`)"
 
 
-def _prop_text(st, spec: str, what: str, rows: list, limit: int) -> str:
-    """`readers` / `writers Type.prop` of a stored property (#88): one line per access site, tests last."""
-    if not rows:
-        return Q.explain_no_writers(st, spec, what)
-    nt = sum(1 for r in rows if r.get("test"))
-    out = [f"{spec}: {len(rows)} {'write' if what == 'writers' else 'read'} edges from {len({r['src'] for r in rows})} "
-           f"{what}" + (f" ({nt} from test code)" if nt else "")]
+def _prop_lines(rows: list, limit: int) -> list[str]:
+    out = []
     for r in rows[:limit]:
         a = r.get("attrs") or {}
         ex = " ".join(f"{k}={a[k]}" for k in ("receiver", "accessor", "storage") if k in a)
@@ -636,6 +631,84 @@ def _prop_text(st, spec: str, what: str, rows: list, limit: int) -> str:
                    f"  {ex}  entries: {ek}")
     if len(rows) > limit:
         out.append(f"  … +{len(rows) - limit} more")
+    return out
+
+
+def _prop_text(st, spec: str, what: str, rows: list, limit: int) -> str:
+    """`readers` / `writers Type.prop` of a stored property (#88): one line per access site, tests last."""
+    if not rows:
+        return Q.explain_no_writers(st, spec, what)
+    nt = sum(1 for r in rows if r.get("test"))
+    out = [f"{spec}: {len(rows)} {'write' if what == 'writers' else 'read'} edges from {len({r['src'] for r in rows})} "
+           f"{what}" + (f" ({nt} from test code)" if nt else "")]
+    return "\n".join(out + _prop_lines(rows, limit))
+
+
+def _table_writer_lines(rows: list, limit: int) -> list[str]:
+    by = defaultdict(lambda: {"cols": set(), "lines": set(), "ek": {}, "module": None, "conf": set()})
+    for r in rows:
+        b = by[r["src"]]
+        if r["kind"] == "WRITES_COLUMN":
+            b["cols"].add(r["dst"].split(".", 1)[1])
+        b["lines"].add(f"{os.path.basename(r['file'] or '?')}:{r['line']}")
+        b["ek"] = r["entry_kinds"]
+        b["module"] = r["module"]
+        b["conf"].add(r["confidence"])
+    mods = defaultdict(list)
+    for src, b in by.items():
+        mods[b["module"] or "?"].append((src, b))
+    out, n = [], 0
+    for m in sorted(mods):
+        out.append(f"[{m}]")
+        for src, b in sorted(mods[m]):
+            if n >= limit:
+                break
+            n += 1
+            cols = ",".join(sorted(b["cols"])[:10]) or "(row)"
+            out.append(f"  {short(src)}  {ek_str(b['ek'])}  cols: {cols}  @ {', '.join(sorted(b['lines'])[:4])}  conf={'/'.join(sorted(b['conf']))}")
+    return out
+
+
+def _site_lines(rows: list, limit: int) -> list[str]:
+    """Column / table access sites: `fqn  KIND dst  @file:line (conf)  entries: ...`, grouped by module."""
+    by = defaultdict(list)
+    for r in rows[:limit]:
+        by[r["module"] or "?"].append(r)
+    out = []
+    for m in sorted(by):
+        out.append(f"[{m}]")
+        out += [f"  {r['fqn']}  {r['kind']} {r['dst']}  @{os.path.basename(r['file'] or '?')}:{r['line']} ({r['confidence']})"
+                f"  entries: {','.join(sorted(r['entry_kinds'])) or '-'}" for r in by[m]]
+    if len(rows) > limit:
+        out.append(f"  … +{len(rows) - limit} more")
+    return out
+
+
+def _access_text(st, spec: str, what: str, limit: int) -> str:
+    """Shared body of `readers` / `writers`: the same specs, groups and errors as `cg readers|writers` (#178)."""
+    groups = Q.access(st, spec, what)
+    rows = [r for g in groups for r in g["rows"]]
+    if not rows:
+        return Q.explain_no_writers(st, spec, what)
+    if all(g["target_kind"] == "property" for g in groups) and len(groups) == 1:
+        return _prop_text(st, spec, what, rows, limit)
+    verb = "write" if what == "writers" else "read"
+    kinds = "/".join(dict.fromkeys(g["target_kind"] for g in groups))
+    out = [f"{kinds} {Q._bare_spec(spec)[0]}: {len(rows)} {verb} edges from {len({r['src'] for r in rows})} {what}"]
+    left = limit
+    for g in groups:
+        if left <= 0:
+            out.append("… more groups not shown (raise limit)")
+            break
+        if g["label"]:
+            out.append(g["label"] + ":")
+        if g["target_kind"] == "property":
+            out += _prop_lines(g["rows"], left)
+        elif g["target_kind"] == "table" and g["group"] == "table" and what == "writers":
+            out += _table_writer_lines(g["rows"], left)
+        else:
+            out += _site_lines(g["rows"], left)
+        left -= len(g["rows"])
     return "\n".join(out)
 
 
@@ -668,46 +741,23 @@ def lint_async_state(include_tests: bool = False, limit: int = 80, rules: str = 
 
 @tool
 def readers(prop: str, limit: int = 60) -> str:
-    """Who reads a stored property `Type.prop` (READS_PROP edges: Swift, Kotlin, Python, TypeScript): each site with its receiver (`self`, a
-    typed variable), accessor and the entry-point kinds that reach it; test code's reads come last."""
+    """Who reads a DB table, a column or a stored property. `prop` is `table`, `table:X`, `table.column` / `column:table.column`
+    (READS_TABLE / READS_COLUMN edges, grouped by column; heuristic string-literal MENTIONS_COLUMN matches come last and are
+    labelled) or `Type.prop` / `Class::$prop` (READS_PROP edges: Swift, Kotlin, Python, TypeScript, PHP). Each site with the
+    entry-point kinds that reach it; test code's property reads come last. An unknown spec lists what was tried, the table's
+    columns and close matches."""
     st = _st()
-    return _prop_text(st, prop, "readers", Q.readers(st, prop), limit)
+    return _access_text(st, prop, "readers", limit)
 
 
 @tool
 def writers(table: str, limit: int = 60) -> str:
-    """Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
-    evidence lines and the entry-point kinds that reach each writer. `Type.prop` instead of a table: who writes
-    that stored property (WRITES_PROP edges: Swift, Kotlin, Python, TypeScript)."""
+    """Who writes a DB table, a column or a stored property. `table` is `table`, `table:X`, `table.column` / `column:table.column`
+    (WRITES_TABLE / WRITES_COLUMN edges; for a column, the writers of that column, then a separate "table-level writes (columns
+    not recorded)" group) or `Type.prop` / `Class::$prop` (WRITES_PROP edges: Swift, Kotlin, Python, TypeScript, PHP). Grouped by
+    module, with the columns written, evidence lines and the entry-point kinds that reach each writer."""
     st = _st()
-    if Q.prop_fields(st, table):
-        return _prop_text(st, table, "writers", Q.writers(st, table), limit)
-    rows = Q.writers(st, table)
-    if not rows:
-        return Q.explain_no_writers(st, table)
-    by = defaultdict(lambda: {"cols": set(), "lines": set(), "ek": {}, "module": None, "conf": set()})
-    for r in rows:
-        b = by[r["src"]]
-        if r["kind"] == "WRITES_COLUMN":
-            b["cols"].add(r["dst"].split(".", 1)[1])
-        b["lines"].add(f"{os.path.basename(r['file'] or '?')}:{r['line']}")
-        b["ek"] = r["entry_kinds"]
-        b["module"] = r["module"]
-        b["conf"].add(r["confidence"])
-    out = [f"table {table}: {len(rows)} write edges from {len(by)} writers"]
-    mods = defaultdict(list)
-    for src, b in by.items():
-        mods[b["module"] or "?"].append((src, b))
-    n = 0
-    for m in sorted(mods):
-        out.append(f"[{m}]")
-        for src, b in sorted(mods[m]):
-            if n >= limit:
-                break
-            n += 1
-            cols = ",".join(sorted(b["cols"])[:10]) or "(row)"
-            out.append(f"  {short(src)}  {ek_str(b['ek'])}  cols: {cols}  @ {', '.join(sorted(b['lines'])[:4])}  conf={'/'.join(sorted(b['conf']))}")
-    return "\n".join(out)
+    return _access_text(st, table, "writers", limit)
 
 
 @tool

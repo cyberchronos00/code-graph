@@ -8,6 +8,18 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Laravel: column writes through mass assignment (#177). `$book->update($request->validated())`, `Book::create($data)`, `fill` / `forceFill`, `updateOrCreate`, relation `create`, `new Model($data)` + `save()` and query-builder `->update($data)` now record `WRITES_COLUMN` (`resolved`) for the keys of the request array: FormRequest `rules()` top-level keys or the inline `validate([...])` keys, narrowed by `only` / `except`, followed through locals, parameters, `array_merge` and `[...$request->validated()]`, then filtered by the model's `$fillable` and `$guarded` (a validated key that `$fillable` drops gets no edge; `forceFill` / `forceCreate` and builder writes skip the filter). `$request->all()` / `input()` use the `$fillable` keys at `heuristic`. The edge has `attrs.via` and `attrs.keys_from`, and `cg node` prints them. `cg routes --reaches books.age_rating` and `cg writers books.age_rating` now list the PUT route that writes the column. The bookstore sample gained `age_rating` and `reviewer_note`.
+
+### Changed
+
+- `cg readers` and `cg writers` take column specs (#178): `table`, `table:X`, `table.column`, `column:table.column`, `Type.prop` and `Class::$prop` go through one resolver, and a spec that is both a property and a column lists both groups. `writers` of a column lists the column writers, then a separate "table-level writes (columns not recorded)" group (without functions that already record a column write to that table). `readers` now reads `READS_TABLE` / `READS_COLUMN` (grouped by column) and lists `MENTIONS_COLUMN` last, labelled as heuristic. Errors are language neutral (`no stored property, table or column 'X' in the graph`), list a table's columns and close matches for an unknown column (`table books has no column 'titel'; similar: title`), and show the Swift / Kotlin `field:` hint only when the graph has those languages. `--json` rows carry `target_kind` and `group`. The MCP tools `readers` and `writers` match the CLI. The bookstore sample's `docs/mcp/sample_outputs.md` is regenerated.
+
+### Fixed
+
+- `cg install` / `config_path` no longer builds a `Path` for a Windows host on POSIX under Python 3.11 (`NotImplementedError: cannot instantiate 'WindowsPath'`).
+
 ## [0.21.1] - 2026-10-07
 
 ### Fixed

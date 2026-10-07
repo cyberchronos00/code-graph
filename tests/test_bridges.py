@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from cg_code_graph import bridges as B  # noqa: E402
 from cg_code_graph import query as Q  # noqa: E402
+from cg_code_graph.core.extractors import js_runtime  # noqa: E402
 from cg_code_graph.core.model import EDGE_KINDS, PROPAGATING  # noqa: E402
 from cg_code_graph.core.store import GraphStore  # noqa: E402
 from cg_code_graph.indexer import index_project  # noqa: E402
@@ -21,7 +22,8 @@ from cg_code_graph.plugins.dart.plugin import find_dart  # noqa: E402
 
 FX = ROOT / "tests" / "bridge_fixtures"
 TS_DEPS = ROOT / "cg_code_graph" / "plugins" / "ts" / "extractor" / "node_modules"
-needs_ts = pytest.mark.skipif(not TS_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
+needs_ts = pytest.mark.skipif(not TS_DEPS.exists() or js_runtime() is None,
+                              reason="run `npm ci` in cg_code_graph/plugins/ts/extractor and put node (20+) or bun on PATH")
 needs_dart = pytest.mark.skipif(find_dart() is None, reason="Dart SDK not found (set $DART or put dart on PATH)")
 pytest.importorskip("tree_sitter_kotlin")
 pytest.importorskip("tree_sitter_swift")

@@ -15,7 +15,8 @@ class SyncWarehouseCommand extends Command
     {
         $rows = DB::connection(config('bookstore.warehouse_connection'))->table('warehouse_stock')->get();
         foreach ($rows as $row) {
-            Book::where('isbn', $row->isbn)->update(['stock' => $row->stock]);
+            $levels = (array) $row;
+            Book::where('isbn', $row->isbn)->update($levels);
         }
 
         return 0;

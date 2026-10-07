@@ -11,8 +11,8 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `resolutions`: Every place a concept (e.g. 'timezone', 'locale') is resolved, deterministically: assignment/return sites
 - `roundtrip`: Heuristic (#88): does a stored property `Type.prop` round-trip through a lossy transform? Each write site with
 - `lint_async_state`: Heuristic (#88 phase 3); `rules` is a comma-separated subset (default all). stale-async-result: a write of
-- `readers`: Who reads a stored property `Type.prop` (READS_PROP edges: Swift, Kotlin, Python, TypeScript): each site with its receiver (`self`, a
-- `writers`: Who writes a DB table (WRITES_TABLE / WRITES_COLUMN edges), grouped by module, with the columns written,
+- `readers`: Who reads a DB table, a column or a stored property. `prop` is `table`, `table:X`, `table.column` / `column:table.column`
+- `writers`: Who writes a DB table, a column or a stored property. `table` is `table`, `table:X`, `table.column` / `column:table.column`
 - `channels`: Broadcast channels (Laravel Broadcast::channel, events' broadcastOn, Echo / pusher-js subscriptions on a combined
 - `bridges`: Web / native bridge calls: Capacitor plugins (registerPlugin / Plugins.X -> @CapacitorPlugin @PluginMethod,
 - `protocol_links`: Every protocol endpoint in one view (#31 model): HTTP client endpoints and routes (http / ws / graphql), Pusher
@@ -46,8 +46,8 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 
 ```
 project=bookstore-api+bookstore-web root=None indexed_at=<indexed_at> index_seconds=None
-nodes: method×48, column×29, class×25, config×17, property×13, route×13, external_class×10, http×10, request_key×10, env×8, function×7, module×6, script×6, composable×5, table×5, resolution×4, page×3, setting×3, connection×2, external×2, field×2, i18n×2, type×2, admin×1, channel×1, channel_sub×1, command×1, component×1, event×1, layout×1, store×1
-edges: CONTAINS×107, CALLS×27, READS_COLUMN×23(gated 1), EXTENDS×20, WRITES_COLUMN×18, READS_ENV×16, VALIDATES×15, REFERENCES×15, READS_INPUT×15, CONFIG_CONTAINS×14, ROUTES_TO×13, READS_PROP×13, HTTP_CALLS×10, WRITES_TABLE×8, CONNECTS_TO×7, USES_COMPOSABLE×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, MATCHES_ROUTE×5, VALIDATED_BY×4, USES_CONNECTION×4(gated 1), MAPS_TO_TABLE×4, INSTANTIATES×4, INJECTS×4, HAS_RESOLUTION×4, HANDLED_BY×4, USES_LAYOUT×3, READS_SETTING×3, READS_CONFIG×3, WRITES_PROP×2, USES_TRAIT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, IMPORTS×2, USES_STORE×1, SUBSCRIBES_CHANNEL×1, RENDERS×1, READS_TABLE×1, MENTIONS_COLUMN×1, MATCHES_CHANNEL×1, LISTENS_FOR×1, IMPLEMENTS×1, HAS_RELATION×1, DISPATCHES×1, BROADCASTS_ON×1, BINDS×1
+nodes: method×48, column×30, class×25, config×17, property×13, route×13, request_key×12, external_class×10, http×10, env×8, function×7, module×6, script×6, composable×5, table×5, resolution×4, page×3, setting×3, connection×2, external×2, field×2, i18n×2, type×2, admin×1, channel×1, channel_sub×1, command×1, component×1, event×1, layout×1, store×1
+edges: CONTAINS×108, CALLS×27, READS_COLUMN×23(gated 1), WRITES_COLUMN×20, EXTENDS×20, VALIDATES×17, READS_ENV×16, REFERENCES×15, CONFIG_CONTAINS×14, ROUTES_TO×13, READS_PROP×13, READS_INPUT×12, HTTP_CALLS×10, WRITES_TABLE×8, CONNECTS_TO×7, USES_COMPOSABLE×6, FALLS_BACK_TO×6, CONFIGURED_BY×6, MATCHES_ROUTE×5, VALIDATED_BY×4, USES_CONNECTION×4(gated 1), MAPS_TO_TABLE×4, INSTANTIATES×4, INJECTS×4, HAS_RESOLUTION×4, HANDLED_BY×4, USES_LAYOUT×3, READS_SETTING×3, READS_CONFIG×3, WRITES_PROP×2, USES_TRAIT×2, USES_I18N×2, REFERS_TO×2, REFERENCES_TYPE×2, IMPORTS×2, USES_STORE×1, SUBSCRIBES_CHANNEL×1, RENDERS×1, READS_TABLE×1, MENTIONS_COLUMN×1, MATCHES_CHANNEL×1, LISTENS_FOR×1, IMPLEMENTS×1, HAS_RELATION×1, DISPATCHES×1, BROADCASTS_ON×1, BINDS×1
 coverage bookstore-api: php 30 exact
 coverage bookstore-web: typescript 12 exact | generated: 4 files excluded
 ```
@@ -76,7 +76,7 @@ middleware / guards / auth matching 'auth' (route attributes): 2 name(s) on 2 ro
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
 
-## `routes {'writes': '*'}`  (2517 chars)
+## `routes {'writes': '*'}`  (2509 chars)
 
 ```
 routes reaching a write (any table): 6 of 13 routes
@@ -94,7 +94,7 @@ POST /v1/admin/books  @bookstore-api/routes/api.php:24  NO AUTH
 
 PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:25  NO AUTH
     guards: (none)
-    writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:25 → WRITES_COLUMN@BookController.php:30~r → column:books.title
+    writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:25 → WRITES_TABLE@BookController.php:30~r → table:books
 
 POST /v1/warehouse/sync  @bookstore-api/routes/api.php:27
     guards: (none)
@@ -136,7 +136,7 @@ guards: route-level and global enhancers per framework; Laravel kernel middlewar
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
 
-## `routes {'writes': 'books', 'missing': 'auth:api'}`  (874 chars)
+## `routes {'writes': 'books', 'missing': 'auth:api'}`  (866 chars)
 
 ```
 routes reaching a write to books: 3 of 13 routes | filter: missing a guard matching 'auth:api' -> 2
@@ -148,7 +148,7 @@ POST /v1/admin/books  @bookstore-api/routes/api.php:24  NO AUTH
 
 PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:25  NO AUTH
     guards: (none)
-    writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:25 → WRITES_COLUMN@BookController.php:30~r → column:books.title
+    writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:25 → WRITES_TABLE@BookController.php:30~r → table:books
 
 guards: route-level and global enhancers per framework; Laravel kernel middleware and Django's MIDDLEWARE setting apply to every route and are not repeated per route.
 ```
@@ -266,16 +266,16 @@ every source file cg found is indexed; edges still carry their own exact / resol
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
 
-## `siblings {'symbol': 'StockService::reserveLocal', 'limit': 6}`  (435 chars)
+## `siblings {'symbol': 'StockService::reserveLocal', 'limit': 6}`  (478 chars)
 
 ```
 target: Services\StockService::reserveLocal
 shared resources:
   Http\Controllers\Admin\BookController::store: column:books.is_active, column:books.isbn, column:books.price
+  Http\Controllers\Admin\BookController::update: column:books.is_active, column:books.isbn, column:books.price
   Services\StockService::recordSale: column:books.id
   Http\Controllers\Admin\InventoryController::index: column:books.is_active
   Console\Commands\SyncWarehouseCommand::handle: column:books.isbn
-  Http\Controllers\Admin\BookController::update: column:books.price
 ```
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
@@ -291,17 +291,50 @@ coverage: every source file cg found is indexed (php, typescript); code outside 
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
 
-## `writers {'table': 'books'}`  (579 chars)
+## `writers {'table': 'books'}`  (605 chars)
 
 ```
-table books: 15 write edges from 4 writers
+table books: 17 write edges from 4 writers
 [Console/Commands]
-  Console\Commands\SyncWarehouseCommand::handle  cmd×1  cols: stock  @ SyncWarehouseCommand.php:18  conf=resolved
+  Console\Commands\SyncWarehouseCommand::handle  cmd×1  cols: (row)  @ SyncWarehouseCommand.php:19  conf=resolved
 [Http/Controllers/Admin]
   Http\Controllers\Admin\BookController::store  route×1  cols: is_active,isbn,price,stock,store_id,title  @ BookController.php:15  conf=resolved
-  Http\Controllers\Admin\BookController::update  route×1  cols: price,stock,title  @ BookController.php:30  conf=resolved
+  Http\Controllers\Admin\BookController::update  route×1  cols: age_rating,is_active,isbn,price,stock,title  @ BookController.php:30  conf=resolved
 [Services]
   Services\StockService::recordSale  route×1  cols: sold_count  @ StockService.php:42  conf=resolved
+```
+
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
+
+## `writers {'table': 'books.age_rating'}`  (441 chars)
+
+```
+column books.age_rating: 2 write edges from 2 writers
+[Http/Controllers/Admin]
+  App\Http\Controllers\Admin\BookController::update  WRITES_COLUMN column:books.age_rating  @BookController.php:30 (resolved)  entries: http_route
+table-level writes of books (columns not recorded):
+[Console/Commands]
+  App\Console\Commands\SyncWarehouseCommand::handle  WRITES_TABLE table:books  @SyncWarehouseCommand.php:19 (resolved)  entries: artisan_command
+```
+
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
+
+## `readers {'prop': 'books.is_active'}`  (374 chars)
+
+```
+column books.is_active: 2 read edges from 2 readers
+[Http/Controllers/Admin]
+  App\Http\Controllers\Admin\InventoryController::index  READS_COLUMN column:books.is_active  @InventoryController.php:20 (resolved)  entries: http_route
+[Services]
+  App\Services\StockService::reserveLocal  READS_COLUMN column:books.is_active  @StockService.php:22 (resolved)  entries: http_route
+```
+
+structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
+
+## `readers {'prop': 'books.titel'}`  (158 chars)
+
+```
+table books has no column 'titel'; similar: title. columns: id, store_id, isbn, title, price, is_active, stock, sold_count, age_rating, created_at, updated_at
 ```
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
@@ -430,7 +463,7 @@ middleware: POST /v1/stock/reserve lacks auth:api which peer route(s) POST /v1/o
 
 2 MISSING FROM PLAN (10) by check: caller 2, entry_point 2, admin_surface 1, api_resource 1, external_client 1, model_fillable 1, table_writer 1, validation 1
   - [admin_surface] Filament\Resources\BookResource::form: Filament form for Book ($model @BookResource.php:11); saves bypass the graph's WRITES edges — must expose preorder_until @ bookstore-api/app/Filament/Resources/BookResource.php:13
-  - [api_resource] Http\Resources\BookResource::toArray: serializes Book in API responses (built at BookController.php:24, BookController.php:36); decide whether to expose preorder_until @ bookstore-api/app/Http/Resources/BookResource.php:9
+  - [api_resource] Http\Resources\BookResource::toArray: serializes Book in API responses (built at BookController.php:24, BookController.php:32); decide whether to expose preorder_until @ bookstore-api/app/Http/Resources/BookResource.php:9
   - [caller] OrderController::store: calls modified StockService::reserve @ bookstore-api/app/Http/Controllers/OrderController.php:19
   - [caller] StockController::reserve: calls modified StockService::reserve @ bookstore-api/app/Http/Controllers/StockController.php:16
   - [entry_point] route:POST /v1/admin/books: http_route reaching modified Admin\BookController::store @ bookstore-api/routes/api.php:24
@@ -448,7 +481,7 @@ details=true for every item with file:line evidence and call chains (CLI: plan c
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 30, "indexed": 30, "mode": "exact"}}}`
 
-## `plan_check {'name': 'preorders', 'details': True, 'max_items': 30}`  (5802 chars)
+## `plan_check {'name': 'preorders', 'details': True, 'max_items': 30}`  (5828 chars)
 
 ```
 PLAN CHECK preorders [plan mode] Pre-order books: signed-in customers only, never filled from warehouse stock
@@ -465,8 +498,8 @@ summary: refs 15/15 resolve | MISSING FROM PLAN 10 | review 9 | covered 7 | forb
 2 MISSING FROM PLAN (10): affected by the planned change, not covered by any plan entry
   - [admin_surface] Filament\Resources\BookResource::form: Filament form for Book ($model @BookResource.php:11); saves bypass the graph's WRITES edges — must expose preorder_until
       @ bookstore-api/app/Filament/Resources/BookResource.php:13
-  - [api_resource] Http\Resources\BookResource::toArray: serializes Book in API responses (built at BookController.php:24, BookController.php:36); decide whether to expose preorder_until
-      @ bookstore-api/app/Http/Resources/BookResource.php:9, bookstore-api/app/Http/Controllers/Admin/BookController.php:24, bookstore-api/app/Http/Controllers/Admin/BookController.php:36
+  - [api_resource] Http\Resources\BookResource::toArray: serializes Book in API responses (built at BookController.php:24, BookController.php:32); decide whether to expose preorder_until
+      @ bookstore-api/app/Http/Resources/BookResource.php:9, bookstore-api/app/Http/Controllers/Admin/BookController.php:24, bookstore-api/app/Http/Controllers/Admin/BookController.php:32
   - [caller] OrderController::store: calls modified StockService::reserve
       @ bookstore-api/app/Http/Controllers/OrderController.php:19
   - [caller] StockController::reserve: calls modified StockService::reserve
@@ -479,9 +512,9 @@ summary: refs 15/15 resolve | MISSING FROM PLAN 10 | review 9 | covered 7 | forb
       @ example/bookstore-mobile@4f2c9e1:pages/cart.vue:12
   - [model_fillable] Book::$fillable [property]: Book::$fillable lacks preorder_until (mass assignment would drop it)
       @ bookstore-api/app/Models/Book.php:9
-  - [table_writer] Admin\BookController::update: writes books (price, stock, title); must set/keep new preorder_until [bypasses StockService::reserve]
+  - [table_writer] Admin\BookController::update: writes books (age_rating, is_active, isbn, price, stock…); must set/keep new preorder_until [bypasses StockService::reserve]
       @ bookstore-api/app/Http/Controllers/Admin/BookController.php:30
-  - [validation] Admin\UpdateBookRequest::rules: validates 5 books fields (is_active, isbn, price, stock…) but not preorder_until
+  - [validation] Admin\UpdateBookRequest::rules: validates 6 books fields (age_rating, is_active, isbn, price…) but not preorder_until
       @ bookstore-api/app/Http/Requests/Admin/UpdateBookRequest.php:11
   REVIEW (9): related; confirm unaffected or add to covers/out_of_scope
   - [parallel_method] Warehouse\WarehouseItem::isSoldOut: mirror of Book::isSoldOut; reached from modified code
@@ -496,8 +529,8 @@ summary: refs 15/15 resolve | MISSING FROM PLAN 10 | review 9 | covered 7 | forb
       @ bookstore-api/app/Http/Controllers/Admin/InventoryController.php:20
   - [table_reader] Book::isSoldOut: reads books (sold_count, stock)
       @ bookstore-api/app/Models/Book.php:13
-  - [table_writer] SyncWarehouseCommand::handle: writes books (stock) [bypasses StockService::reserve]
-      @ bookstore-api/app/Console/Commands/SyncWarehouseCommand.php:18
+  - [table_writer] SyncWarehouseCommand::handle: writes books (row) [bypasses StockService::reserve]
+      @ bookstore-api/app/Console/Commands/SyncWarehouseCommand.php:19
   - [text_mention] OrderController::place: mentions book_id (text-match, no graph edge)
       @ bookstore-api/app/Http/Controllers/OrderController.php:36
   - [text_mention] StoreOrderRequest::rules: mentions book_id (text-match, no graph edge)

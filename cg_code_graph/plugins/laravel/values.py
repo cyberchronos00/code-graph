@@ -796,6 +796,8 @@ class ValueAnalysis:
     def run(self) -> dict:
         self.index_calls()
         self.flow_request_arrays()
+        from .massassign import MassAssign
+        self.stats["mass_assignment_columns"] = MassAssign(self).emit(self.lv.pending_mass)
         self.emit_settings_and_inputs()
         self.emit_resolutions()
         self.attach_route_requests()

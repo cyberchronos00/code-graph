@@ -25,8 +25,8 @@
 | `explore QUERY` | Question or spec → source, entry points, call paths, blast radius in one answer. `--budget`, `--json`. | [explore](#explore) |
 | `node SPEC` | Location, fqn, platforms, attrs, and edges (one site, with a count). | `cg node -h` |
 | `stats` | Project, languages, coverage line, node and edge counts. | `cg stats -h` |
-| `writers SPEC` | Writers of a table, a column, or a stored property `Type.prop` (Swift, Kotlin, Python, TypeScript, PHP). | `cg writers -h` |
-| `readers Type.prop` | Readers of a stored property (`READS_PROP`). | `cg readers -h` |
+| `writers SPEC` | Writers of a table, a column, or a stored property (`WRITES_TABLE`, `WRITES_COLUMN`, `WRITES_PROP`). `SPEC` is `table`, `table:X`, `table.column`, `column:table.column`, `Type.prop` or `Class::$prop`. A column lists its column writers, then "table-level writes (columns not recorded)". `--json` rows carry `target_kind` (`table`, `column`, `property`). | [spec forms](#readers-and-writers-specs) |
+| `readers SPEC` | Readers of a table (`READS_TABLE`, `READS_COLUMN` grouped by column), a column (`READS_COLUMN`), or a stored property (`READS_PROP`). Same `SPEC` forms as `writers`. Heuristic string matches (`MENTIONS_COLUMN`) come last and are labelled. | [spec forms](#readers-and-writers-specs) |
 | `siblings SYMBOL` | Hierarchy, the same method on siblings, shared resources, co-callers. | `cg siblings -h` |
 | `roundtrip Type.prop` | Heuristic lossy-write / UI-seed pairs. `--tests` includes test code. Nothing is written to the graph. | [heuristics](#heuristics) |
 | `lint async-state` | Heuristic rules `stale-async-result`, `two-writers`, `incomplete-cache-key`, `echo-suppression`. `--rules` is a subset. `--tests` includes test code. | [heuristics](#heuristics) |
@@ -136,9 +136,29 @@ An id that exists in two repos is stored as `repo:` plus the original id (`order
 - `path` to `table:` with no table edge ends at the column that is read or written. A hop that passes keys the next request never sends adds `note: sent but not forwarded: …`.
 - `api-calls` folds a runtime or env base URL (`(base {runtimeConfig.apiBase} = …)`). Endpoints only tests call are marked `(called from tests only)`. Each call site lists `body keys:` and `query keys:` when the extractor recorded them (a conditional key ends with `?`). A body sent as axios `data` (`delete`, `request`, ...) or `$fetch` `body` is listed too; `params` are the query keys. `--json` includes `body_keys` and `query_keys` on the call.
 
+## Readers and writers specs
+
+`cg writers SPEC` and `cg readers SPEC` use one resolver. A spec that names both a stored property and a column (a Python class field and a table with the same dotted name) lists both groups, each labelled.
+
+| `SPEC` | `writers` | `readers` |
+|---|---|---|
+| `books`, `table:books` | `WRITES_TABLE` and `WRITES_COLUMN` of every column | `READS_TABLE`, then `READS_COLUMN` per column, then `MENTIONS_COLUMN` |
+| `books.title`, `column:books.title` | `WRITES_COLUMN` into the column, then `table-level writes of books (columns not recorded)`: `WRITES_TABLE` edges from functions that record no column write to that table | `READS_COLUMN`, then `MENTIONS_COLUMN` (heuristic string-literal matches, labelled) |
+| `Cart.total`, `Cart::$total`, `field:Cart.total` | `WRITES_PROP` | `READS_PROP` |
+
+```text
+$ cg writers books.age_rating --db out/api.db
+[Http/Controllers/Admin] App\Http\Controllers\Admin\BookController::update  WRITES_COLUMN column:books.age_rating  @app/Http/Controllers/Admin/BookController.php:30 (resolved)  entries: http_route
+table-level writes of books (columns not recorded):
+  [Console/Commands] App\Console\Commands\SyncWarehouseCommand::handle  WRITES_TABLE table:books  @app/Console/Commands/SyncWarehouseCommand.php:19 (resolved)  entries: artisan_command
+2 write edges, 2 writers
+```
+
+The table-level group omits a function that already has a column write to that table. Entry kinds are listed per site. `--json` is the flat list of rows; each row has `target_kind` (`table`, `column` or `property`) and `group` (`table`, `column`, `table_level`, `mentions`, `property`). The MCP tools `writers` and `readers` take the same specs and print the same groups.
+
 ## Empty results
 
-`impact`, `writers`, `siblings`, `path`, `routes`, `search`, and `resolutions` say why a miss happened and name a next query: a missing table lists similar names, a method with no callers lists other incoming edges, a symbol with no siblings points at callees that touch data, and a missing path reports the opposite direction when one exists.
+`impact`, `writers`, `readers`, `siblings`, `path`, `routes`, `search`, and `resolutions` say why a miss happened and name a next query: a missing table lists similar names, an unknown column lists the table's columns and close matches (`table books has no column 'titel'; similar: title. columns: id, store_id, ...`), a spec that matches nothing says what was tried (`no stored property, table or column 'X'`; the Swift / Kotlin `field:` hint appears only when the graph has those languages), a method with no callers lists other incoming edges, a symbol with no siblings points at callees that touch data, and a missing path reports the opposite direction when one exists.
 
 ```text
 $ cg siblings StockService::reserve --db out/graph.db

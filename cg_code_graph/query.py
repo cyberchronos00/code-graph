@@ -1391,25 +1391,121 @@ def prop_access(st: GraphStore, spec: str, kind: str) -> list[dict]:
     return out
 
 
-def readers(st: GraphStore, spec: str) -> list[dict]:
-    """Code that reads a stored property `Type.prop` (READS_PROP)."""
-    return prop_access(st, spec, "READS_PROP")
+def _bare_spec(spec: str) -> tuple[str, str | None]:
+    """`(name, forced kind)`: `table:X` -> (X, 'table'), `column:t.c` -> (t.c, 'column'), anything else -> (spec, None)."""
+    spec = spec.strip()
+    for pre in ("table", "column"):
+        if spec.startswith(pre + ":"):
+            return spec[len(pre) + 1:], pre
+    return spec, None
 
 
-def writers(st: GraphStore, table: str) -> list[dict]:
-    if prop_fields(st, table):          # `writers Type.prop`: a stored property (#88)
-        return prop_access(st, table, "WRITES_PROP")
-    table = table[len("table:"):] if table.startswith("table:") else table   # `writers table:X` == `writers X`
-    rows = st.q("""SELECT e.src, e.kind, e.dst, e.file, e.line, e.confidence, n.module, n.fqn
-                   FROM edges e JOIN nodes n ON n.id = e.src
-                   WHERE (e.kind='WRITES_TABLE' AND e.dst=?) OR (e.kind='WRITES_COLUMN' AND e.dst LIKE ?)
-                   ORDER BY n.module, n.fqn, e.line""", (f"table:{table}", f"column:{table}.%"))
+def _node_or_edge(st: GraphStore, nid: str) -> bool:
+    return bool(st.q("SELECT 1 FROM nodes WHERE id=? LIMIT 1", (nid,)) or st.q("SELECT 1 FROM edges WHERE dst=? LIMIT 1", (nid,)))
+
+
+def access_targets(st: GraphStore, spec: str) -> list[dict]:
+    """What a `readers` / `writers` spec names (#178): `[{target_kind: property|table|column, id|ids, name}]`, possibly more than
+    one (a Python class field and a table with the same dotted name). Forms: `table`, `table:X`, `table.column`,
+    `column:table.column`, `Type.prop`, `Class::$prop`, `field:Type.prop`."""
+    name, forced = _bare_spec(spec)
+    out = []
+    if forced is None:
+        fids = prop_fields(st, spec)
+        if fids:
+            out.append({"target_kind": "property", "ids": fids, "name": spec})
+    if forced in (None, "table") and name and _node_or_edge(st, f"table:{name}"):
+        out.append({"target_kind": "table", "id": f"table:{name}", "name": name})
+    if forced in (None, "column") and "." in name and _node_or_edge(st, f"column:{name}"):
+        out.append({"target_kind": "column", "id": f"column:{name}", "name": name})
+    return out
+
+
+def _site_rows(st: GraphStore, where: str, params: tuple, target_kind: str, group: str, label: str | None = None) -> dict:
+    rows = st.q(f"""SELECT e.src, e.kind, e.dst, e.file, e.line, e.confidence, n.module, n.fqn
+                    FROM edges e JOIN nodes n ON n.id = e.src
+                    WHERE {where} ORDER BY n.module, n.fqn, e.line""", params)
     ents = entry_info(st, list({r["src"] for r in rows}))
     out = []
     for r in rows:
         d = dict(r)
         d["entry_kinds"] = {k: v[0] for k, v in ents.get(r["src"], {}).items()}
+        d["target_kind"], d["group"] = target_kind, group
         out.append(d)
+    return {"target_kind": target_kind, "group": group, "label": label, "rows": out}
+
+
+def access(st: GraphStore, spec: str, what: str) -> list[dict]:
+    """Groups of access sites for `spec` (what = 'readers' | 'writers'): `[{target_kind, group, label, rows}]`, in print order.
+    Stored property: READS_PROP / WRITES_PROP. Column: READS_COLUMN (then MENTIONS_COLUMN, heuristic) or WRITES_COLUMN (then the
+    table-level writes of functions that record no column of that table). Table: READS_TABLE + READS_COLUMN per column (then
+    mentions) or WRITES_TABLE + WRITES_COLUMN."""
+    groups: list[dict] = []
+    targets = access_targets(st, spec)
+    multi = len(targets) > 1
+    for t in targets:
+        tk, name = t["target_kind"], t["name"]
+        tag = f"{tk} {name}: " if multi else ""
+        if tk == "property":
+            rows = prop_access(st, spec, "READS_PROP" if what == "readers" else "WRITES_PROP")
+            for r in rows:
+                r["target_kind"], r["group"] = "property", "property"
+            groups.append({"target_kind": tk, "group": "property", "label": f"stored property {name}" if multi else None, "rows": rows})
+        elif tk == "column" and what == "readers":
+            groups.append(_site_rows(st, "e.kind='READS_COLUMN' AND e.dst=?", (t["id"],), tk, "column",
+                                     f"column {name}" if multi else None))
+            groups.append(_site_rows(st, "e.kind='MENTIONS_COLUMN' AND e.dst=?", (t["id"],), tk, "mentions",
+                                     f"{tag}string mentions of {name} (heuristic, not proven reads)"))
+        elif tk == "column":
+            tbl = name.rsplit(".", 1)[0]
+            groups.append(_site_rows(st, "e.kind='WRITES_COLUMN' AND e.dst=?", (t["id"],), tk, "column", f"column {name}" if multi else None))
+            groups.append(_site_rows(
+                st, """e.kind='WRITES_TABLE' AND e.dst=? AND NOT EXISTS (SELECT 1 FROM edges c WHERE c.src=e.src
+                       AND c.kind='WRITES_COLUMN' AND c.dst LIKE ?)""", (f"table:{tbl}", f"column:{tbl}.%"), tk, "table_level",
+                f"{tag}table-level writes of {tbl} (columns not recorded)"))
+        elif what == "readers":
+            groups.append(_site_rows(st, "e.kind='READS_TABLE' AND e.dst=?", (t["id"],), tk, "table",
+                                     f"{tag}reads of table {name} (no column recorded)"))
+            cols = [r["id"] for r in st.q("SELECT DISTINCT dst AS id FROM edges WHERE kind='READS_COLUMN' AND dst LIKE ? ORDER BY dst",
+                                          (f"column:{name}.%",))]
+            for c in cols:
+                groups.append(_site_rows(st, "e.kind='READS_COLUMN' AND e.dst=?", (c,), tk, "column", f"{tag}reads of column {c[7:]}"))
+            groups.append(_site_rows(st, "e.kind='MENTIONS_COLUMN' AND e.dst LIKE ?", (f"column:{name}.%",), tk, "mentions",
+                                     f"{tag}string mentions of columns of {name} (heuristic, not proven reads)"))
+        else:
+            groups.append(_site_rows(st, "(e.kind='WRITES_TABLE' AND e.dst=?) OR (e.kind='WRITES_COLUMN' AND e.dst LIKE ?)",
+                                     (t["id"], f"column:{name}.%"), tk, "table", f"table {name}" if multi else None))
+    return [g for g in groups if g["rows"]]
+
+
+def readers(st: GraphStore, spec: str) -> list[dict]:
+    """Code that reads a stored property `Type.prop` (READS_PROP), a table (READS_TABLE / READS_COLUMN) or a column
+    (READS_COLUMN, then heuristic MENTIONS_COLUMN). Rows carry `target_kind` and `group` (#178)."""
+    return [r for g in access(st, spec, "readers") for r in g["rows"]]
+
+
+def writers(st: GraphStore, table: str) -> list[dict]:
+    """Code that writes a stored property, a table or a column; table-level writes of a column's table come last (#178)."""
+    return [r for g in access(st, table, "writers") for r in g["rows"]]
+
+
+def render_access(groups: list[dict], limit: int | None = None) -> list[str]:
+    """CLI lines for `access()` groups: rows as `[module] fqn  KIND dst  @file:line (conf)  entries: ...`; a group with a label
+    (table-level writes, mentions, per-column reads, or every group when several targets match) gets an indented header."""
+    out, n = [], 0
+    for g in groups:
+        ind = "  " if g["label"] else ""
+        if g["label"]:
+            out.append(g["label"] + ":")
+        for r in g["rows"]:
+            if limit is not None and n >= limit:
+                break
+            n += 1
+            ek = ",".join(sorted(r["entry_kinds"]))
+            ex = {k: v for k, v in (r.get("attrs") or {}).items() if k in ("receiver", "accessor", "storage")}
+            extra = ("  " + " ".join(f"{k}={v}" for k, v in ex.items())) if ex else ""
+            kind = f"{r['kind']}({r['attrs']['orig']})" if r.get("test") else r["kind"]
+            out.append(f"{ind}[{r['module']}] {r['fqn']}  {kind} {r['dst']}  @{r['file']}:{r['line']} ({r['confidence']}){extra}  entries: {ek}")
     return out
 
 
@@ -2082,23 +2178,71 @@ def explain_no_callers(st: GraphStore, spec: str, targets: list[str], min_conf: 
             f"try: reaches('{s}') for every dependent over all edge kinds; search('{n.get('name') or spec}') for similarly named code.")
 
 
+def _columns_of_table(st: GraphStore, table: str) -> list[str]:
+    return [r["id"][len(f"column:{table}."):] for r in st.q("SELECT id FROM nodes WHERE kind='column' AND id LIKE ? ORDER BY rowid",
+                                                           (f"column:{table}.%",))]
+
+
+def _close(word: str, options: list[str]) -> list[str]:
+    import difflib
+    w = word.lower()
+    near = difflib.get_close_matches(w, [o.lower() for o in options], n=4, cutoff=0.6)
+    near += [o.lower() for o in options if o.lower() not in near and len(w) >= 3 and (w in o.lower() or o.lower() in w)]
+    by_lower = {o.lower(): o for o in options}
+    return list(dict.fromkeys(by_lower[x] for x in near))[:5]
+
+
+def _has_field_langs(st: GraphStore) -> bool:
+    return bool(st.q("SELECT 1 FROM nodes WHERE lang IN ('swift', 'kotlin') LIMIT 1"))
+
+
 def explain_no_writers(st: GraphStore, table: str, what: str = "writers") -> str:
-    if prop_fields(st, table):
-        return (f"no {what} recorded for property {table!r}. Recorded: `self.x` / bare `x` inside its type and `v.x` with "
-                "a known type of `v`; access through an unknown receiver, a `$binding` or a key path is not modelled.")
-    if what == "readers":
-        return f"no stored property {table!r} in the graph (Swift stored properties are `field:` nodes; try `cg search {table}`)."
-    t = table.split(":", 1)[1] if table.startswith("table:") else table
-    if not st.q("SELECT 1 FROM nodes WHERE id=?", (f"table:{t}",)):
-        near = [r["id"][6:] for r in st.q("SELECT id FROM nodes WHERE kind='table' AND id LIKE ? ORDER BY id LIMIT 6", (f"%{t}%",))]
-        allt = [r["id"][6:] for r in st.q("SELECT id FROM nodes WHERE kind='table' ORDER BY id LIMIT 12")]
-        return (f"no table {t!r} in the graph. " + (f"similar: {', '.join(near)}" if near else f"tables: {', '.join(allt) or '(none)'}")
-                + ". Use the DB table name (Django: `<app>_<model>` or Meta.db_table).")
-    reads = st.q("SELECT count(*) c FROM edges WHERE kind IN ('READS_TABLE','READS_COLUMN','MENTIONS_COLUMN') AND (dst=? OR dst LIKE ?)",
-                 (f"table:{t}", f"column:{t}.%"))[0]["c"]
-    return (f"no writers recorded for table {t!r} ({reads} read/mention edges). Writes through raw SQL, bulk helpers or admin "
-            f"form saves may not be modelled. try: reaches(['table:{t}']) for every dependent; routes(writes='{t}') after "
-            "indexing the code that writes it.")
+    """Why `readers` / `writers SPEC` printed nothing: what was tried, close matches, or what is recorded (#178)."""
+    verb = "write" if what == "writers" else "read"
+    targets = access_targets(st, table)
+    name, forced = _bare_spec(table)
+    if targets:
+        parts = []
+        for t in targets:
+            if t["target_kind"] == "property":
+                parts.append(f"no {what} recorded for property {table!r}. Recorded: `self.x` / bare `x` inside its type and `v.x` "
+                             "with a known type of `v`; access through an unknown receiver, a `$binding` or a key path is not modelled.")
+            elif t["target_kind"] == "column":
+                t_, c_ = name.rsplit(".", 1)
+                other = st.q("SELECT count(*) c FROM edges WHERE kind IN ('READS_COLUMN','MENTIONS_COLUMN','WRITES_COLUMN') AND dst=?",
+                             (f"column:{name}",))[0]["c"]
+                parts.append(f"no {what} recorded for column {name!r} ({other} other column edges). "
+                             + ("Writes through raw SQL, bulk helpers or admin form saves may not be modelled. " if what == "writers" else
+                                "Reads through raw SQL, `select *` or `$model->toArray()` may not be modelled. ")
+                             + f"try: reaches(['column:{name}']) for every dependent"
+                             + (f"; `cg writers {t_}` for the table-level writes." if what == "writers" else f"; `cg readers {t_}` for table readers."))
+            else:
+                n = st.q("SELECT count(*) c FROM edges WHERE kind IN ('READS_TABLE','READS_COLUMN','MENTIONS_COLUMN','WRITES_TABLE','WRITES_COLUMN') "
+                         "AND (dst=? OR dst LIKE ?)", (t["id"], f"column:{name}.%"))[0]["c"]
+                parts.append(f"no {what} recorded for table {name!r} ({n} read/write/mention edges). "
+                             + ("Writes through raw SQL, bulk helpers or admin form saves may not be modelled. try: reaches(['table:%s']) "
+                                "for every dependent; routes(writes='%s') after indexing the code that writes it." % (name, name)
+                                if what == "writers" else
+                                "Reads through raw SQL or `select *` may not be modelled. try: reaches(['table:%s']) for every dependent." % name))
+        return " ".join(parts)
+    tried = {"table": "table", "column": "column"}.get(forced or "", "stored property, table or column")
+    msg = f"no {tried} {name!r} in the graph."
+    if "." in name:
+        t_, c_ = name.rsplit(".", 1)
+        if _node_or_edge(st, f"table:{t_}") and forced != "table":
+            cols = _columns_of_table(st, t_)
+            sim = _close(c_, cols)
+            return (f"table {t_} has no column {c_!r}" + (f"; similar: {', '.join(sim)}" if sim else "")
+                    + (f". columns: {', '.join(cols)}" if cols else ". it has no columns recorded"))
+    tables = [r["id"][6:] for r in st.q("SELECT id FROM nodes WHERE kind='table' ORDER BY id")]
+    near = _close(name.split(".", 1)[0] if "." in name else name, tables) if tables else []
+    if forced != "column" and not near:
+        near = [t for t in tables if name in t][:6]
+    msg += (" similar: " + ", ".join(near) + "." if near else " tables: " + (", ".join(tables[:12]) or "(none)") + ".")
+    msg += " Use the DB table name (Django: `<app>_<model>` or Meta.db_table), `table.column`, or `Type.prop`."
+    if _has_field_langs(st):
+        msg += f" (Swift / Kotlin stored properties are `field:` nodes; try `cg search {name}`.)"
+    return msg
 
 
 def explain_no_path(st: GraphStore, src: str, dst: str, min_conf: str = "heuristic") -> str:

@@ -83,6 +83,7 @@ def test_routes_names_routes_hidden_by_min_confidence():
 
 
 @needs_php
+@needs_ts
 def test_routes_reaching_connection_and_gated_only():
     st = db("combined")
     r = by_route(R.routes_report(st, reaches=["connection:warehouse"]))
