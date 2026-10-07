@@ -83,6 +83,22 @@ cg link --repo orders=out/orders.db:backend \
 
 Every repo's client calls are matched to routes on every other server, so a backend may call another backend. A frontend `links:` list limits which servers that app calls ([apps and workspace](configuration.md#apps-and-workspace)). Channels, protocols, payload checks and entry tagging run once on the combined graph. Stats include one row per client/server pair plus totals.
 
+Webhook sections of the `--report` markdown (#152 part B):
+
+- `## Webhook subscriptions paired by URL`: each subscriber URL a sender repo records (seed data, config, `.env.example`) whose path matches a route of another repo (`heuristic` `MATCHES_ROUTE` from the sender endpoint), or `unpaired: <url> (<reason>)`.
+- `## Routes called back by external parties`: routes that a `REGISTERS_CALLBACK` edge names, with the registering function, the body key and the outbound endpoint. These routes are left out of `## Backend routes without a client call`, as are routes a subscriber URL pairs with. The registering repo needs the role `backend` or `both`, because routes of a `frontend` repo are not read.
+
+```text
+## Webhook subscriptions paired by URL
+
+- `route:POST /webhooks/orders` <- subscriber URL https://bookstore-api.test/webhooks/orders (heuristic) from `endpoint:webhook:sender-php:order.paid`; configured at sender-php/database/seeders/WebhookSubscriptionSeeder.php:13
+- unpaired: https://elsewhere.test/hooks/none (not a backend URL (no route shares its first segment: local asset / device bridge / external)) from `endpoint:webhook:sender-php:order.paid`; configured at sender-php/database/seeders/WebhookSubscriptionSeeder.php:18
+
+## Routes called back by external parties
+
+- `route:POST /webhooks/payments/{store}` <- callback URL registered in `PaymentsClient::createPayment` (body key `callback_url`, outbound `http:POST https://pay.provider.test/v1/payments`) at sender-php/app/Services/PaymentsClient.php:15
+```
+
 An id that exists in two repos is stored as `repo:` plus the original id (`orders:class:Order`), and edges that used it are rewritten. `external:` and `endpoint:` ids stay a single node. Every other id is unchanged, so a two-repo link with no shared ids keeps the same ids. `orders:Order` and `orders:class:Order` select that repo; a plain `Order` matches every repo that defines it ([specs](#query-targets-specs)).
 
 `cg index` on a workspace `.cg.yaml` writes one combined `--db` for every app ([apps and workspace](configuration.md#apps-and-workspace)).
@@ -148,6 +164,7 @@ coverage note: 1 route registration cg does not model (Django urlpatterns built 
 - **Scope.** `--writes` or `--writes TABLE`, and/or `--reaches SPEC...`. No scope lists every route.
 - **Auth,** in order: `--auth-pattern` / `.cg.yaml` `auth.extra_patterns`, the preset's auth guards (not `csrf_protect`, `ThrottlerGuard`, `AllowAny`, …), then the auth name pattern. Each guard records `auth_by`. Presets: [configuration](configuration.md#framework-presets).
 - Laravel kernel middleware and Django `MIDDLEWARE` apply to every route and are not repeated.
+- **External callbacks.** A route whose URL the app registers with an external party (`REGISTERS_CALLBACK`) shows `client: external callback (PaymentsClient::createPayment)`; `--json` carries them as `callbacks`. [Webhooks](protocols.md#subscriptions-callbacks-and-drivers-152-part-b)
 - **Filters.** `--unguarded` keeps routes with no auth guard. An unconditional inline check counts, so those routes are left out. `--unguarded --strict` counts route guards only. `--missing NAME` keeps routes whose route guards and inline checks do not contain NAME.
 - **Inline guards (Laravel).** Checks the handler runs before its own work are a separate line, not route middleware. `--json` adds `inline_guards`: `name`, `kind` (`policy`, `permission`, `secret`, `role`), `at`, `conditional`. `auth.extra_patterns` selects project method names when that method rejects, or when the caller aborts on its result. A conditional check stays listed and does not hide the route from `--unguarded`. See [PHP](php.md#inline-guards).
 - `search` matches the same guard names, including inline checks.

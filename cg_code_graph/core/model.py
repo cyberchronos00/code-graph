@@ -72,6 +72,7 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     "READS_PROP": (True, "code reads a stored property (field node: Swift `var x`, `@State`, `@Published`)"),
     "WRITES_PROP": (True, "code writes a stored property (assignment, compound assignment)"),
     "USES_VALUE": (True, "code refers to an enum case, a constant, a static/global variable or an object-like macro"),
+    "REGISTERS_CALLBACK": (False, "function builds a callback URL for one of the app's own routes and registers it with an external party (attrs.body_key, endpoint)"),
     "REFERENCES_FN": (True, "code/data takes a function as a value (callback, dispatch table, handler registration)"),
     "USES_UNSAFE": (True, "code contains an unsafe block or is an unsafe fn (sink node unsafe:<crate>)"),
     "GATED_BY": (True, "code compiled only under a condition: Cargo feature, cfg predicate or preprocessor macro"),

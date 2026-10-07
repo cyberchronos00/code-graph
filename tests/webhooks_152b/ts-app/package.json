@@ -1,0 +1,5 @@
+{
+  "name": "bookstore-hooks-152b",
+  "private": true,
+  "dependencies": { "express": "^4.19.0" }
+}

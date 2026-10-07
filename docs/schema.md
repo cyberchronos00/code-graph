@@ -62,10 +62,12 @@ Ids and which spellings resolve: the language pages ([Swift](swift.md), [Kotlin]
 | UI | `RENDERS`✓, `USES_COMPOSABLE`✓, `USES_STORE`✓, `HTTP_CALLS`✓, `MATCHES_ROUTE`✓ (combined DB), `USES_LAYOUT`, `USES_I18N`, `NAVIGATES_TO` |
 | Properties | `READS_PROP`✓, `WRITES_PROP`✓ (Swift, Kotlin, Python, TypeScript, PHP; see the language pages) |
 | Native | `USES_TYPE`✓, `ACCESSES_FIELD`✓, `USES_VALUE`✓, `REFERENCES_FN`✓, `USES_UNSAFE`✓, `GATED_BY`✓, `INCLUDES`✓ |
-| Boundaries | `SENDS_TO`✓, `RECEIVED_BY`✓, `MATCHES_ENDPOINT`✓, `CONNECTS_TO`✓, `CREDENTIAL_FROM`, `OFFERS_TOOL`✓, `HANDS_OFF_TO`✓ |
+| Boundaries | `SENDS_TO`✓, `RECEIVED_BY`✓, `MATCHES_ENDPOINT`✓, `REGISTERS_CALLBACK` (function -> the app's own route whose URL it registers with an external party; `attrs.body_key`, `attrs.endpoint`, `attrs.via`), `CONNECTS_TO`✓, `CREDENTIAL_FROM`, `OFFERS_TOOL`✓, `HANDS_OFF_TO`✓ |
 | Broadcast | `AUTHORIZES_CHANNEL`✓, `BROADCASTS_ON`, `SUBSCRIBES_CHANNEL`✓, `MATCHES_CHANNEL`✓, `LISTENS_FOR` |
 | Tests | `TEST_CALLS`, `TEST_USES`, `TEST_HTTP`, `TEST_VISITS` (none propagate) |
 | Other | `IMPORTS`, `COPY_OF` (with `--include-generated`), `EMITS_STATE`, `HANDLES_STATE`, `PARSES_JSON`, `USES_SCHEMA` |
+
+Webhook facts: a sender `endpoint:webhook:*` node may carry `attrs.subscriber_urls` (`[{url, at}]`); a `SENDS_TO` edge from a stored subscription has `attrs.via = "stored subscription"` and `attrs.source`; `REGISTERS_CALLBACK` has `attrs.body_key`, `attrs.endpoint` (the outbound `http:` endpoint, when known) and `attrs.via = "SDK webhook registration"` for an SDK call; a route's `attrs.webhook` adds `via = "driver"` and `drivers` when its checks come from run-time resolved driver implementations. `cg link` adds `MATCHES_ROUTE` / `MATCHES_ENDPOINT` with `attrs.via = "subscriber url"`. See [protocols](protocols.md#subscriptions-callbacks-and-drivers-152-part-b).
 
 Platform conditions, generated-file markers and bridge attrs sit on `nodes.attrs` / `edges.attrs`. The language and boundary pages list the keys (`platforms`, `generated`, `process`, `via`, `dispatch`).
 

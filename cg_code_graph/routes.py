@@ -221,6 +221,17 @@ def _clients(st: GraphStore, rid: str, limit=3) -> list[str]:
     return sorted(set(out))[:limit]
 
 
+def fn_label(nid: str) -> str:
+    """`method:App\\Services\\PaymentsClient::createPayment` -> `PaymentsClient::createPayment`."""
+    sid = Q.short_id(nid)
+    return sid.rsplit("\\", 1)[-1] if "::" in sid else sid
+
+
+def _callbacks(st: GraphStore, rid: str, limit=3) -> list[str]:
+    """Functions that register a URL of this route with an external party (REGISTERS_CALLBACK)."""
+    return sorted({fn_label(r["src"]) for r in st.q("SELECT src FROM edges WHERE kind='REGISTERS_CALLBACK' AND dst=?", (rid,))})[:limit]
+
+
 def _groups_for_writes(st: GraphStore, table: str | None) -> dict[str, dict]:
     """table -> {writer node -> first write edge}."""
     if table and table not in ("*", "any", "all"):
@@ -306,7 +317,7 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
               "inline_guards": igs, "inline_auth": any(not x.get("conditional") for x in igs),
               **({"webhook": a["webhook"]} if a.get("webhook") else {}),
               "reaches": sorted(reached.get(rid, []), key=lambda x: x["what"]),
-              "clients": _clients(st, rid)}
+              "clients": _clients(st, rid), "callbacks": _callbacks(st, rid)}
         items.append(it)
     total = len(items)
     flt = []
@@ -467,6 +478,8 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
             out.append(f"    … +{len(i['reaches']) - (6 if not compact else 3)} more")
         if i["clients"]:
             out.append(f"    called from: {'; '.join(i['clients'])}")
+        if i.get("callbacks"):
+            out.append(f"    client: external callback ({'; '.join(i['callbacks'])})")
     if len(items) > max_items:
         out.append(f"\n… +{len(items) - max_items} more routes (raise max_items)")
     out.append("")

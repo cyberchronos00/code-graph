@@ -404,6 +404,10 @@ def _cashier_map():
     if _CASHIER_BY_METHOD is None:
         _CASHIER_BY_METHOD = {_studly_event(e): e for e in _STRIPE_EVENTS}
     return _CASHIER_BY_METHOD
+DRIVER_CALL = re.compile(r"(?:->|\?->|\.)\s*(handleWebhook|handle_webhook|processWebhookRequest|process_webhook_request|"
+                         r"processWebhook|process_webhook|handleWebhookRequest|handle_webhook_request)\s*\(")
+DRIVER_SELF = re.compile(r"(?:\$this|\bself|\bstatic|\bthis|\bparent)\s*$")
+MAX_DRIVERS = 12
 WC_JOB = "WebhookClient\\Jobs\\ProcessWebhookJob"
 WC_PROFILE = "WebhookProfile\\WebhookProfile"
 
@@ -600,6 +604,8 @@ class Webhooks(BrokerScan):
     def __init__(self, project, b, sock=None):
         super().__init__(project, b, sock)
         self.app = getattr(project, "name", None) or self.root.name
+        from .webhook_subs import Subs
+        self.subs = Subs(self)
 
     def run(self) -> dict:
         from .tests_index import is_test_node
@@ -626,7 +632,9 @@ class Webhooks(BrokerScan):
                 continue
             self.route(rid, n, handlers[rid], mw.get(rid, []))
         self.octokit_on()
+        self.subs.callers = callers
         self.senders(callers)
+        self.subs.finish()
         out = {k: v for k, v in self.st.items() if v}
         if out and self.samples:
             out["samples"] = dict(self.samples)
@@ -902,6 +910,56 @@ class Webhooks(BrokerScan):
                 out.append(n.id)
         return out
 
+    def driver_impls(self, bodies, tree) -> list[str]:
+        """Methods implementing a webhook method (`handleWebhook`, `processWebhookRequest`, ...) that a handler calls on
+        an object it gets at run time (`Gateway::driver($name)`, `$this->gateways[$row->gateway]`, a container-resolved
+        interface). Implementations are the methods of that name whose class has an ancestor (interface, abstract
+        driver base) declaring the same method; the handler's own tree and test code are left out."""
+        names = set()
+        for _f, (file, src, lo, hi) in bodies.items():
+            for m in self.finds(DRIVER_CALL, file, src, lo, hi):
+                if not DRIVER_SELF.search(src[max(lo, m.start() - 40):m.start()]):
+                    names.add(m.group(1).lower())
+        if not names:
+            return []
+        out = []
+        for n in sorted(self.b.nodes.values(), key=lambda x: x.id):
+            if n.kind != "method" or n.id.rsplit("::", 1)[-1].lower() not in names or n.id in tree:
+                continue
+            if self.is_test_node(n):
+                continue
+            cid = self._class_of(n.id)
+            if not cid:
+                continue
+            mname = n.id.rsplit("::", 1)[-1]
+            seen, stack, declared = set(), list(self._parents().get(cid, ())), False
+            while stack and not declared:
+                c = stack.pop()
+                if c in seen:
+                    continue
+                seen.add(c)
+                declared = c.startswith(("class:", "interface:")) and f"method:{c.split(':', 1)[1]}::{mname}" in self.b.nodes
+                stack.extend(self._parents().get(c, ()))
+            if declared and self.body(n.id) is not None:
+                out.append(n.id)
+        return out[:MAX_DRIVERS]
+
+    def driver_check(self, bd):
+        """(provider or None, how, loc) when a driver implementation verifies the request itself."""
+        file, src, lo, hi = bd
+        for rx, prov, how, hint in VERIFY:
+            if hint is not None and not hint.search(src):
+                continue
+            for m in self.finds(rx, file, src, lo, hi):
+                p_h = (prov, how) if prov else self.verify_obj(file, src, m.group(1))
+                if p_h:
+                    return p_h[0], p_h[1], f"{file}:{self.s.line_of(file, m.start())}"
+        hm = next(self.finds(HMAC_RX, file, src, lo, hi), None)
+        ct = next(self.finds(CT_RX, file, src, lo, hi), None)
+        if hm and ct and (HDR_RX.search(src, lo, hi) or SIG_HDR_RX.search(src, lo, hi)):
+            return None, "HMAC signature", f"{file}:{self.s.line_of(file, ct.start())}"
+        return None
+
     def cashier_methods(self, hs, rn):
         """(method id, event, file, line) for Cashier `handle<Event>` methods behind this route."""
         classes = set()
@@ -1086,6 +1144,24 @@ class Webhooks(BrokerScan):
                 hm = next((f"{file}:{self.s.line_of(file, m.start())}" for m in self.finds(HMAC_RX, file, src, lo, hi)), None)
             if ct is None:
                 ct = next((f"{file}:{self.s.line_of(file, m.start())}" for m in self.finds(CT_RX, file, src, lo, hi)), None)
+        bs = "\\"
+        impls = self.driver_impls(bodies, set(fns))
+        dbodies, checks = {}, []
+        for f in [x for x in self.tree(impls, 2) if x not in fns and x not in self.shared] if impls else ():
+            bd = self.body(f)
+            if bd is None:
+                continue
+            dbodies[f] = bd
+            file, src, lo, hi = bd
+            for m in HDR_RX.finditer(src, lo, hi):
+                headers.setdefault(m.group(1).lower().replace("_", "-"), f"{file}:{self.s.line_of(file, m.start())}")
+            if (chk := self.driver_check(bd)):
+                owner = self._class_of(f)
+                checks.append((chk[0], f"driver {owner.split(':', 1)[1].split(bs)[-1] if owner else f}", chk[2]))
+        checks.sort(key=lambda c: c[0] is None)
+        drv_ok = (checks[0][0] or "hmac", checks[0][1], checks[0][2]) if checks else None
+        if verified is None and drv_ok:
+            verified = drv_ok
         provs = [HEADERS[h][0] for h in headers]
         provider = next((HEADERS[h][0] for h in headers if HEADERS[h][1] == "event"), provs[0] if provs else None)
         roles = {HEADERS[h][1] for h in headers}
@@ -1116,6 +1192,8 @@ class Webhooks(BrokerScan):
                     sig_hdrs.append(hdr)
         if verified is None and not provs:
             return
+        for im in impls:
+            self.b.add_edge(rid, im, "ROUTES_TO", rn.file, rn.line, HEURISTIC, how="driver", via="driver")
         prov = verified[0] if verified else provider
         if verified and provider and verified[0] in ("hmac", "webhook"):
             prov = provider
@@ -1126,6 +1204,8 @@ class Webhooks(BrokerScan):
         if verified and verified[1] == "Laravel Cashier":
             prov = "stripe"
         wh = {"provider": prov, "verified": bool(verified)}
+        if verified and verified[1].startswith("driver "):
+            wh["via"] = "driver"
         if verified:
             wh.update(how=verified[1], check=verified[2])
             if verified[1].startswith(("Stripe", "svix", "standardwebhooks")):
@@ -1148,10 +1228,14 @@ class Webhooks(BrokerScan):
                 self.recv(rid, prov, ev, mid, file, pos, pos, pos, HEURISTIC, guards)
                 self.flush_branches(mid)
                 events.add(ev)
+        if impls:
+            events |= self.events(rid, prov, list(dbodies), dbodies, headers, verified, driver=True)
+            wh["drivers"] = [im.split(":", 1)[1] for im in impls]
+            self.st["webhook_driver_impls"] += len(impls)
         if events:
             wh["events"] = sorted(events)
 
-    def events(self, rid, prov, fns, bodies, headers, verified):
+    def events(self, rid, prov, fns, bodies, headers, verified, driver=False):
         got = set()
         guards = [f"webhook signature ({verified[1]})"] if verified else []
         for f in fns:
@@ -1191,9 +1275,14 @@ class Webhooks(BrokerScan):
                     conf = conf0 or (EXACT if (v in strong) else HEURISTIC)
                     if verified is None:
                         conf = HEURISTIC if conf == HEURISTIC else EXACT
-                    self.recv(rid, prov, lit, f, file, pos, b_lo, b_hi, conf, guards)
+                    if driver:
+                        conf = HEURISTIC
+                    self.recv(rid, prov, lit, f, file, pos, b_lo, b_hi, conf, guards, via="driver" if driver else None)
                     got.add(lit)
-            self.flush_branches(f)
+            if driver:
+                self.out.pop(f, None)
+            else:
+                self.flush_branches(f)
         return got
 
     def compares(self, file, src, lo, hi, subj, py):
@@ -1278,14 +1367,14 @@ class Webhooks(BrokerScan):
                 else:
                     yield lit, p0, e0, (nl if nl >= 0 else hi), v
 
-    def recv(self, rid, prov, lit, fn, file, pos, b_lo, b_hi, conf, guards):
+    def recv(self, rid, prov, lit, fn, file, pos, b_lo, b_hi, conf, guards, via=None):
         line = self.s.line_of(file, pos)
         name = f"{prov or 'webhook'}:{lit}"
         key = (name, fn)
         if key not in self.done:
             self.done.add(key)
             protocol_receive(self.b, "webhook", name, fn, file, line, conf, guards=guards,
-                             node_attrs={"provider": prov, "event": lit}, route=rid, how="event type")
+                             node_attrs={"provider": prov, "event": lit}, route=rid, how="event type", via=via)
             self.st["webhook_events"] += 1
         lo_l, hi_l = line, self.s.line_of(file, max(b_lo, b_hi - 1))
         self.out[fn].append((name, lo_l, hi_l, file, line, conf, guards, rid))
@@ -1398,15 +1487,26 @@ class Webhooks(BrokerScan):
                 self.send_event(nid, file, lo + hdr[0], None, "http", f"signed POST ({hdr[1]})")
 
     def send_event(self, src, file, pos, event, lib, how, via=None, conf=None):
+        if event is None and (stored := self.subs.stored(src)):
+            names, source = stored
+            for nm in names:
+                self._send_event(src, file, pos, nm, lib, how, "stored subscription", HEURISTIC, source)
+            self.st["webhook_stored_events"] += len(names)
+            return
+        self._send_event(src, file, pos, event, lib, how, via, conf)
+
+    def _send_event(self, src, file, pos, event, lib, how, via=None, conf=None, source=None):
         from .protocols import protocol_send
         name = f"{self.app}:{event if event else '{event}'}"
         line = self.s.line_of(file, pos)
         if ("send", name, src, line) in self.done:
             return
         self.done.add(("send", name, src, line))
-        protocol_send(self.b, "webhook", name, src, file, line, (conf or EXACT) if event else HEURISTIC,
-                      test=self.is_test(file, src), role="publish", node_attrs={"provider": self.app, "event": event},
-                      library=lib, how=how, via=via)
+        nid = protocol_send(self.b, "webhook", name, src, file, line, (conf or EXACT) if event else HEURISTIC,
+                            test=self.is_test(file, src), role="publish", node_attrs={"provider": self.app, "event": event},
+                            library=lib, how=how, via=via, source=source)
+        if not self.is_test(file, src):
+            self.subs.sender_eps.add(nid)
         self.st["webhook_sends"] += 1
         if not event:
             self.miss("webhook_send_event_unknown", f"{file}:{line}")

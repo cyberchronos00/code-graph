@@ -399,6 +399,7 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
                               json.dumps({"client_path": a["path"], "uri_variant": m["uri_variant"], "segments": m["segments"]}), None))
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)", new_edges)
     db.commit()
+    subscriptions = pair_subscriber_urls(db, routes, server_names, allow, folded_self)
     stats.update(link_channels(db, chans, subs, events, on))
     if externals:
         db.execute("INSERT OR REPLACE INTO meta VALUES ('stats', ?)", (json.dumps({"config": {"protocols": {"external": externals}}}),))
@@ -432,8 +433,11 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
                    [(i.get("endpoint"), i.get("route"), i["kind"], i["severity"], i["message"], i.get("client_at"), i.get("server_at"),
                      json.dumps({k: v for k, v in i.items() if k not in ("endpoint", "route", "kind", "severity", "message", "client_at", "server_at")}))
                     for i in issues])
+    callbacks = external_callbacks(db, rmap)
+    called_back = {c["route"] for c in callbacks}
+    called |= {x["route"] for x in subscriptions if x["route"]}
     uncalled = [{"route": r["id"], "at": f"{r['file']}:{r['line']}", "framework": r["attrs"].get("framework"), "auth": r["attrs"].get("auth")}
-                for r in routes if r["id"] not in called and r["attrs"].get("mounted", True) is not False
+                for r in routes if r["id"] not in called and r["id"] not in called_back and r["attrs"].get("mounted", True) is not False
                 and r["attrs"].get("framework") not in ("django-admin",)]
     db.commit()
     # ---- entry tagging over the union
@@ -484,6 +488,9 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
                   "ambiguous_endpoints": sum(1 for r in results if len(r["matched"]) > 1),
                   "payload_issues": dict(sorted({k: sum(1 for i in issues if i["severity"] == k) for k in ("high", "medium", "low", "info")}.items())),
                   "routes_without_client_call": len(uncalled), "pairs": pair_stats,
+                  "webhook_subscriptions_paired": sum(1 for x in subscriptions if x["route"]),
+                  "webhook_subscriptions_unpaired": sum(1 for x in subscriptions if not x["route"]),
+                  "routes_called_back": len(called_back),
                   "link_seconds": round(time.time() - t0, 2)})
     from .coverage import for_graph
     cov = {}
@@ -495,7 +502,77 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
                    repo_roles={name: role for name, _path, role in repos}, link_clients=clients, link_allow=allow,
                    indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()))
     db.close()
-    return {"stats": stats, "results": results, "payload_issues": issues, "uncalled_routes": uncalled}
+    return {"stats": stats, "results": results, "payload_issues": issues, "uncalled_routes": uncalled,
+            "webhook_subscriptions": subscriptions, "external_callbacks": callbacks}
+
+
+def pair_subscriber_urls(db, routes: list[dict], server_names: list[str], allow: dict, folded_self: bool) -> list[dict]:
+    """Sender webhook endpoints that record `attrs.subscriber_urls` (seed data, config, `.env.example`): the URL path
+    is matched against the other repos' routes with the client-call matcher. A match adds MATCHES_ROUTE (heuristic,
+    `via` = subscriber url) from the sender endpoint to the route, and MATCHES_ENDPOINT to the receiver endpoints of
+    that route that carry the same event. Returns one row per (endpoint, url): the route or the reason it has none."""
+    from urllib.parse import urlsplit
+    rows = db.execute("SELECT id, attrs FROM nodes WHERE kind='endpoint' AND attrs LIKE '%subscriber_urls%'").fetchall()
+    if not rows:
+        return []
+    by_server: dict[str, list] = defaultdict(list)
+    for rt in routes:
+        by_server[rt["server"]].append(rt)
+    recv: dict[str, list] = defaultdict(list)
+    for src, route in db.execute("SELECT src, json_extract(attrs,'$.route') FROM edges WHERE kind='RECEIVED_BY' "
+                                 "AND src LIKE 'endpoint:webhook:%' AND json_extract(attrs,'$.route') IS NOT NULL"):
+        recv[route].append(src)
+    event_of = {r[0]: r[1] for r in db.execute("SELECT id, json_extract(attrs,'$.event') FROM nodes WHERE id LIKE 'endpoint:webhook:%'")}
+    existing = {(r[0], r[1], r[2]) for r in db.execute("SELECT src, dst, kind FROM edges WHERE kind IN ('MATCHES_ROUTE','MATCHES_ENDPOINT')")}
+    out, new = [], []
+    for ep, raw in rows:
+        a = json.loads(raw or "{}")
+        repo = a.get("repo")
+        targets = [s for s in server_names if (s != repo or folded_self) and (repo not in allow or s in allow[repo])]
+        pool = [rt for s in targets for rt in by_server[s]]
+        rmap = {r["id"]: r for r in pool}
+        for u in a.get("subscriber_urls") or []:
+            url = u.get("url") if isinstance(u, dict) else u
+            at = u.get("at") if isinstance(u, dict) else None
+            path = urlsplit(url or "").path
+            row = {"endpoint": ep, "url": url, "at": f"{repo}/{at}" if repo and at else at, "route": None, "confidence": None}
+            if not pool:
+                row["reason"] = "no other backend repo to match"
+            elif path in ("", "/"):
+                row["reason"] = "URL has no path"
+            else:
+                res = match_endpoint("POST", path, pool)
+                if not res["matched"]:
+                    row["reason"] = res["reason"]
+                for m in res["matched"]:
+                    rr = rmap[m["route"]]
+                    row["route"] = row["route"] or m["route"]
+                    row["confidence"] = "heuristic"
+                    if (ep, m["route"], "MATCHES_ROUTE") not in existing:
+                        existing.add((ep, m["route"], "MATCHES_ROUTE"))
+                        new.append((ep, m["route"], "MATCHES_ROUTE", rr["file"], rr["line"], "heuristic", CONFIDENCE_RANK["heuristic"],
+                                    json.dumps({"via": "subscriber url", "url": url, "uri_variant": m["uri_variant"]}), None))
+                    for r in recv.get(m["route"], ()):
+                        if r != ep and (ep, r, "MATCHES_ENDPOINT") not in existing and event_of.get(r) and event_of.get(r) == a.get("event"):
+                            existing.add((ep, r, "MATCHES_ENDPOINT"))
+                            new.append((ep, r, "MATCHES_ENDPOINT", rr["file"], rr["line"], "heuristic", CONFIDENCE_RANK["heuristic"],
+                                        json.dumps({"via": "subscriber url", "url": url, "route": m["route"]}), None))
+            out.append(row)
+    db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)", new)
+    db.commit()
+    return out
+
+
+def external_callbacks(db, rmap: dict) -> list[dict]:
+    """REGISTERS_CALLBACK edges (callback URLs an app registers with an external party) onto routes of the merged graph."""
+    out = []
+    for src, dst, file, line, conf, raw in db.execute(
+            "SELECT src, dst, file, line, confidence, attrs FROM edges WHERE kind='REGISTERS_CALLBACK'"):
+        if dst in rmap:
+            a = json.loads(raw or "{}")
+            out.append({"route": dst, "by": src, "at": f"{file}:{line}", "confidence": conf, "body_key": a.get("body_key"),
+                        "endpoint": a.get("endpoint")})
+    return sorted(out, key=lambda c: (c["route"], c["by"], c["body_key"] or ""))
 
 
 def _kind_key(nid: str, kind: str) -> str:
@@ -586,6 +663,23 @@ def write_match_report(res: dict, out_prefix: str) -> None:
     for i in sorted(res.get("payload_issues") or [], key=lambda i: (order.get(i["severity"], 9), i["kind"], i.get("endpoint") or "")):
         ev = ", ".join(x for x in (i.get("client_field") or i.get("client_at"), i.get("server_field") or i.get("server_at")) if x)
         L.append(f"- **{i['severity']}** `{i['kind']}` `{i.get('endpoint')}` -> `{i.get('route')}`: {i['message']} ({ev})")
+    if res.get("webhook_subscriptions"):
+        L += ["", "## Webhook subscriptions paired by URL", ""]
+        grouped: dict = defaultdict(list)
+        for x in res["webhook_subscriptions"]:
+            grouped[(x["url"], x["route"], x.get("reason"), x.get("at"))].append(x["endpoint"])
+        for (url, route, reason, at), eps in sorted(grouped.items(), key=lambda kv: (kv[0][1] is None, str(kv[0]))):
+            who = ", ".join(f"`{e}`" for e in sorted(eps)[:4]) + (f" +{len(eps) - 4}" if len(eps) > 4 else "")
+            if route:
+                L.append(f"- `{route}` <- subscriber URL {url} (heuristic) from {who}; configured at {at}")
+            else:
+                L.append(f"- unpaired: {url} ({reason}) from {who}; configured at {at}")
+    if res.get("external_callbacks"):
+        from .routes import fn_label
+        L += ["", "## Routes called back by external parties", ""]
+        for c in res["external_callbacks"]:
+            extra = f", outbound `{c['endpoint']}`" if c.get("endpoint") else ""
+            L.append(f"- `{c['route']}` <- callback URL registered in `{fn_label(c['by'])}` (body key `{c['body_key']}`{extra}) at {c['at']}")
     L += ["", "## Backend routes without a client call", ""]
     for u in res.get("uncalled_routes") or []:
         L.append(f"- `{u['route']}` ({u.get('framework')}, auth={u.get('auth')}) at {u['at']}")
