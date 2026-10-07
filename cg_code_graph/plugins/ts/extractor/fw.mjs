@@ -122,7 +122,24 @@ export function collectFrameworkFacts(X) {
   // object literal an expression evaluates to (identifier -> initializer, require('./x') -> the module's exported object)
   function describeModelArg(arg) {
     const lit = objOfExpr(unwrap(arg))
-    return lit ? describe(lit, 0) : describe(arg, 0)
+    if (!lit) return describe(arg, 0)
+    const d = describe(lit, 0)
+    // a map value that is an identifier (same module, import or re-export) is followed to its const initializer: one hop
+    if (d && d.obj) for (const p of lit.properties) {
+      const v = ts.isPropertyAssignment(p) ? unwrap(p.initializer) : ts.isShorthandPropertyAssignment(p) ? p.name : null
+      if (!v || !ts.isIdentifier(v)) continue
+      let decl = null
+      try {
+        let sym = checker.getSymbolAtLocation(v)
+        if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym)
+        const ds = (sym && sym.declarations) || []
+        decl = ds.find(x => ts.isVariableDeclaration(x) && projectSf(x.getSourceFile())) || null
+      } catch { decl = null }
+      const init = decl && decl.initializer ? unwrap(decl.initializer) : null
+      const key = p.name.getText().replace(/^['"`]|['"`]$/g, '')
+      if (init && !ts.isIdentifier(init) && key in d.obj) d.obj[key] = describe(init, 1)
+    }
+    return d
   }
   function objOfExpr(o, depth = 0) {
     o = o && unwrap(o)

@@ -121,8 +121,16 @@ of calls, and its middleware.
 
 | result | when |
 |---|---|
-| verified | Stripe `constructEvent`, svix `verify`, GitHub `verify`, Twilio `validateRequest`, Shopify `webhooks.validate`, or an HMAC plus a constant-time compare (or a provider signature header) |
+| verified | Stripe `constructEvent`, svix `verify`, GitHub `verify`, Twilio `validateRequest`, Shopify `webhooks.validate`, or an HMAC plus a constant-time compare (or a provider signature header), or a route middleware that verifies (see below) |
 | unverified | the handler reads `Stripe-Signature`, `X-Hub-Signature-256`, `svix-signature`, … and nothing above checks it |
+
+A verifying middleware marks the route verified. `how` names the middleware and `check` points at the verifying call (the route line when only the name is known). Signs of one:
+
+- an alias such as `verify.<provider>.signature` or `verify-<provider>-webhook` (`.` and `-` read as `_`);
+- a resolved middleware class whose name matches, also when it is reached through an alias;
+- a middleware body with a known verification: an HMAC plus constant-time compare, Stripe `Webhook::constructEvent`, Twilio `RequestValidator` `validate` (`->`, `::` or `.`).
+
+A route is never labeled `SECRET-CHECKED` and `WEBHOOK UNVERIFIED` together. A provider header read with no verifying middleware or call stays `WEBHOOK UNVERIFIED`.
 
 `cg routes` shows a verified check as a guard and flags `WEBHOOK UNVERIFIED`. Provider events
 are never `no_sender`. A signed POST from this repo is a sender of

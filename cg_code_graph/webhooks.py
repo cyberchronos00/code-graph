@@ -56,7 +56,8 @@ VERIFY = [
     (re.compile(r"\bconstruct_?[Ee]vent(?:Async)?\s*\("), "stripe", "Stripe constructEvent", re.compile(r"(?i)stripe")),
     # `x.verify(..)`: the library is the one whose class built `x` (VERIFY_OBJ)
     (re.compile(r"\b(\w+)\s*\.\s*(?:verify|verifyAndReceive)\s*\("), None, None, re.compile(r"""@octokit/webhooks|svix|standardwebhooks|StandardWebhooks""")),
-    (re.compile(r"\bvalidateRequest(?:WithBody)?\s*\(|\bRequestValidator\s*\([^)]*\)\s*\.\s*validate\s*\(|\bvalidator\s*\.\s*validate\s*\("),
+    (re.compile(r"\bvalidateRequest(?:WithBody)?\s*\(|\bRequestValidator\s*\([^)]*\)\s*(?:\.|->)\s*validate\s*\(|"
+                r"\bRequestValidator\s*::\s*validate\s*\(|\$?\bvalidator\s*(?:\.|->)\s*validate\s*\("),
      "twilio", "Twilio request validation", re.compile(r"(?i)twilio")),
     (re.compile(r"\bshopify\s*\.\s*webhooks\s*\.\s*validate\s*\("), "shopify", "Shopify webhooks.validate", None),
 ]
@@ -1027,6 +1028,18 @@ class Webhooks(BrokerScan):
                 self.b.add_edge(rid, t, "ROUTES_TO", n.file, n.line, HEURISTIC, how="webhook-client profile")
 
     # ------------------------------------------------------------ receivers
+    def verifying_middleware(self, rn, mws) -> list[str]:
+        """Route middleware names, and the classes they resolved to, that read as a signature / webhook check.
+
+        Aliases are matched with `.` and `-` read as `_`: `verify.twilio.signature`, `verify-carrier-webhook`.
+        """
+        cands = [x for x in (rn.attrs or {}).get("middleware") or [] if isinstance(x, str)]
+        for m in mws:
+            cls = m.split(":", 1)[-1].split("::", 1)[0].rsplit("\\", 1)[-1]
+            if cls:
+                cands.append(cls)
+        return [x for x in dict.fromkeys(cands) if MW_RX.search(re.sub(r"[.\-]", "_", x))]
+
     def route(self, rid, rn, hs, mws):
         extra = [mid for mid, _ev, _f, _ln in self.cashier_methods(hs, rn)]
         for mid in extra:
@@ -1082,9 +1095,11 @@ class Webhooks(BrokerScan):
             elif hm and (ct or "sig" in roles) and (provs or sig_hdrs):
                 verified = (provider or "hmac", "HMAC signature" + ("" if ct else " (plain comparison)"), ct or hm)
             else:
-                names = [x for x in (rn.attrs or {}).get("middleware") or [] if isinstance(x, str) and MW_RX.search(x)]
+                names = self.verifying_middleware(rn, mws)
                 if names and (provs or sig_hdrs or re.search(r"(?i)hook", rn.id)):
-                    verified = (provider or "webhook", f"middleware {names[0]}", f"{rn.file}:{rn.line}")
+                    nm = PROVIDER_NAMES.search(names[0])
+                    verified = (provider or (nm.group(1).lower().replace("_", "") if nm else "webhook"), f"middleware {names[0]}",
+                                f"{rn.file}:{rn.line}")
         fw = (rn.attrs or {}).get("webhook_framework")
         if (fw == "laravel-cashier" or extra) and verified is None:
             verified = ("stripe", "Laravel Cashier", f"{rn.file}:{rn.line}")

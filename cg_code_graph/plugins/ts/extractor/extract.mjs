@@ -3148,9 +3148,10 @@ function handleCall(node, cur, sf, r, encFn) {
       else { baseConf = 'heuristic'; baseVia = ['instance-origin-unknown'] }
     }
     const lower = callee.name.text
-    const cfgArg = ['get', 'delete', 'head', 'options'].includes(lower) ? node.arguments[1] : node.arguments[2]
+    // get/delete/head/options/request take the config as their only options argument; `data` there is the body
+    const cfgArg = lower === 'request' ? node.arguments[0] : ['get', 'delete', 'head', 'options'].includes(lower) ? node.arguments[1] : node.arguments[2]
     const qp = objProp(cfgArg, 'params')
-    const body = ['post', 'put', 'patch'].includes(lower) ? node.arguments[1] : null
+    const body = ['post', 'put', 'patch'].includes(lower) ? node.arguments[1] : (['get', 'delete', 'head', 'options', 'request'].includes(lower) ? objProp(cfgArg, 'data') : null)
     http = { client: isInstance ? 'axios-instance' : 'axios', method, urlExpr, base, baseConf, baseVia,
       query: qp ? keysOut(requestKeys(qp)) : undefined, body: body ? keysOut(requestKeys(body)) : undefined }
   } else if (ts.isCallExpression(node) && (http = generatedClientCall(node, callee))) {

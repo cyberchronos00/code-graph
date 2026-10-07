@@ -891,34 +891,96 @@ class ValueAnalysis:
                     out += self._keys_from_rule_array(args[1], fn.file, f.get("line"), location)
         return out
 
-    def _validated_reads(self, fn, location: str, have: set, by_kind: dict) -> list[dict]:
-        """`$request->validated()` and `$request->input('x')` add keys. They are not required.
+    _READ_VIA = re.compile(r"^\$request->(input|query|get|post|string|str|integer|boolean|float|date|enum|has|filled|json|array|collect)\(\)$")
+    _PAGINATORS = {"paginate": ("page",), "simplepaginate": ("page",), "cursorpaginate": ("cursor",)}
 
+    def _handler_fns(self, fn):
+        """The handler plus the non-public methods of its own class it calls directly (one level)."""
+        out = [fn]
+        if not fn.cls:
+            return out
+        for i, f in enumerate(fn.facts):
+            if f.get("t") != "call":
+                continue
+            for m, _c in self.targets.get((fn.id, i), []):
+                if m.id != fn.id and m.cls == fn.cls and getattr(m, "visibility", "public") != "public" and m not in out:
+                    out.append(m)
+        return out
+
+    def _read_entry(self, name, file, line, loc, via):
+        return {"name": name, "location": loc, "file": file, "line": line, "required": False, "nullable": False,
+                "sometimes": False, "conditional": False, "type": None, "via": via}
+
+    def _fact_reads(self, fn, location: str) -> list[dict]:
+        """Keys read without a `READS_INPUT` edge: `only([...])` / `except([...])`, `$request->prop`, paginators."""
+        out, rv = [], self.rvars(fn)
+        for f in fn.facts:
+            line = f.get("line")
+            if f.get("t") == "call" and f.get("kind") == "method":
+                m = (f.get("m") or "").lower()
+                if m in ("only", "except") and self.is_request_recv(f.get("recv"), fn):
+                    args = f.get("args") or []
+                    items = [x for a in args for x in ((a.get("items") or []) if a.get("k") == "arr" else [{"v": a}])]
+                    for it in items:
+                        v = it.get("v") or {}
+                        if v.get("k") == "str" and v.get("v"):
+                            out.append(self._read_entry(v["v"], fn.file, line, location, m))
+                elif m in self._PAGINATORS:
+                    for k in self._PAGINATORS[m]:
+                        out.append(self._read_entry(k, fn.file, line, "query", "paginate"))
+                    for a in f.get("args") or []:
+                        if a.get("named") == "perPage" or (a.get("k") == "var" and a.get("n") in ("perPage", "per_page")):
+                            out.append(self._read_entry("per_page", fn.file, line, "query", "paginate"))
+            for d in self._descs(f):
+                self._prop_reads(fn, d, line, location, out)
+        return out
+
+    def _prop_reads(self, fn, d, line, location, out, depth=0):
+        if not isinstance(d, dict) or depth > 10:
+            return
+        if d.get("k") == "prop" and d.get("n") and self.is_request_recv(d.get("of"), fn):
+            out.append(self._read_entry(d["n"], fn.file, line, location, "property"))
+        for v in d.values():
+            if isinstance(v, dict):
+                self._prop_reads(fn, v, line, location, out, depth + 1)
+            elif isinstance(v, list):
+                for x in v:
+                    self._prop_reads(fn, x, line, location, out, depth + 1)
+
+    def _validated_reads(self, fn, location: str, have: set, by_kind: dict) -> list[dict]:
+        """Keys the handler reads, wherever it reads them. They are known but never required.
+
+        Counts: `$request->input|query|get|post|string|integer|boolean|float|date|enum|has|filled('k')`,
+        `request('k')`, `$request->validated()`, `only([...])` / `except([...])`, `$request->prop`, and
+        `paginate()` (`page`, `per_page`). Reads one level into a non-public method of the same class count too.
         `$request->route('id')` is a path parameter, not a body or query key. `$request->query('q')`
         stays on the query string even when the route method would otherwise use the body.
         """
         out = []
-        for e in by_kind["READS_INPUT"].get(fn.id, []):
-            via = e.attrs.get("via") or ""
-            flow = [str(x) for x in (e.attrs.get("flow") or [])]
-            blob = " ".join([via, *flow])
-            if "->route(" in blob or not e.dst.startswith("request_key:"):
-                continue
-            kind = None
-            if "validated" in blob:
-                kind = "validated"
-            elif "->input(" in blob or via == "request()":
-                kind = "input"
-            if not kind:
-                continue
-            name = e.dst[len("request_key:"):]
-            if name in have:
-                continue
-            loc = location
-            if "->query(" in blob:
-                loc = "query"
-            elif "->post(" in blob or "->json(" in blob:
-                loc = "body"
-            out.append({"name": name, "location": loc, "file": e.file, "line": e.line, "required": False,
-                        "nullable": False, "sometimes": False, "conditional": False, "type": None, "via": kind})
+        for h in self._handler_fns(fn):
+            for e in by_kind["READS_INPUT"].get(h.id, []):
+                via = e.attrs.get("via") or ""
+                flow = [str(x) for x in (e.attrs.get("flow") or [])]
+                blob = " ".join([via, *flow])
+                if "->route(" in blob or not e.dst.startswith("request_key:"):
+                    continue
+                kind = None
+                if "validated" in blob:
+                    kind = "validated"
+                elif "->input(" in blob or via == "request()":
+                    kind = "input"
+                elif self._READ_VIA.match(via):
+                    kind = "read"
+                if not kind:
+                    continue
+                name = e.dst[len("request_key:"):]
+                if name in have:
+                    continue
+                loc = location
+                if "->query(" in blob:
+                    loc = "query"
+                elif "->post(" in blob or "->json(" in blob:
+                    loc = "body"
+                out.append(self._read_entry(name, e.file, e.line, loc, kind))
+            out += self._fact_reads(h, location)
         return out

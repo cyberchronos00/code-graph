@@ -37,6 +37,17 @@ Counted:
 
 A check inside a branch is `conditional`. `--unguarded` hides a route with an unconditional inline check. `--unguarded --strict` uses route middleware only. The walk stops at the action's first write. Kernel middleware groups are still not copied onto each route.
 
+## Request keys the handler reads
+
+A route's `attrs.request.keys` holds validated keys (FormRequest `rules()`, `$request->validate`, `Validator::make`) and keys the handler reads. Reads are known but never required. These reads count, anywhere in the handler and one level into a non-public method of the same controller:
+
+- `$request->input` / `query` / `get` / `post` / `string` / `integer` / `float` / `boolean` / `date` / `enum` / `has` / `filled('k')` and `request('k')`;
+- `$request->only([...])` / `except([...])`;
+- the property form `$request->search`;
+- `paginate()` / `simplePaginate()` (`page`), `cursorPaginate()` (`cursor`), and `per_page` when it is read or passed as `$perPage`.
+
+`cg link` reports `request_unknown_field` for a query key only when the route has explicit validation and the key is neither validated nor read (severity `low`; an unknown body key stays `medium`). A route with reads only gives no unknown-key findings.
+
 ## Outbound HTTP
 
 `Illuminate\Support\Facades\Http`, an injected `Illuminate\Http\Client\Factory` or `PendingRequest`, and Guzzle

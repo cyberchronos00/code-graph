@@ -248,7 +248,8 @@ class Checker:
 
     def _diff_fields(self, fields: dict, body: list[dict], opaque: bool, add, *, empty_kind: str | None,
                      also: list[dict] | None = None, other_fields: dict | None = None,
-                     route_params: set[str] | None = None, fold_case: bool = False):
+                     route_params: set[str] | None = None, fold_case: bool = False,
+                     unknown_severity: str = "medium"):
         if not fields:
             return
         route_params = route_params or set()
@@ -370,7 +371,7 @@ class Checker:
                 continue
             if c in other_fields or any(_canon_eq(c, k) for k in other_fields):
                 continue
-            add("request_unknown_field", "medium", f"client sends `{c}`, which the server schema does not declare (ignored/dropped)",
+            add("request_unknown_field", unknown_severity, f"client sends `{c}`, which the server schema does not declare (ignored/dropped)",
                 key=c, client_field=self.at("fe", b.get("file"), b.get("line")))
 
     def _folds_case(self, ra: dict) -> bool:
@@ -419,7 +420,8 @@ class Checker:
                               also=query, other_fields=query_fields, route_params=params, fold_case=fold)
         if "query" not in unknown:
             self._diff_fields(query_fields, query, query_opaque, add, empty_kind=None,
-                              also=body, other_fields=body_fields, route_params=params, fold_case=fold)
+                              also=body, other_fields=body_fields, route_params=params, fold_case=fold,
+                              unknown_severity="low")
         return []
 
     def check_response(self, ra, call, add):

@@ -8,6 +8,18 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- axios `delete` / `get` / `head` / `options` `{ data }` and `request({ method, url, data, params })` (module and instance) record `data` as the body and `params` as the query, so a DELETE body no longer gives a false `request_body_missing` (#194).
+- Laravel handler reads (`query` / `input` / `get` / `boolean` / `integer` / `float` / `string` / `date` / `enum` / `has` / `filled` / `only` / `except`, `request('x')`, `$request->prop`, one level into a private method) and `paginate()` (`page`, `cursor`, `per_page`) count as known request keys. An unknown query key is reported only when the route has explicit validation (#195).
+- Elysia `.model()` map values that are identifiers resolve to their `const` `t.Object`, in the same module or through one import or re-export, for `body`, `query`, `params` and `t.Ref` (#196).
+- A verifying webhook middleware (dotted, dashed or underscored alias, a resolved class, or a body with a known check such as Twilio `RequestValidator::validate`) marks the route verified, so `SECRET-CHECKED` and `WEBHOOK UNVERIFIED` no longer appear on the same route (#197).
+- The coverage header and `coverage note:` on a combined graph name the repo of each "files not indexed" / "heuristic only" fragment (#198).
+
+### Changed
+
+- `request_unknown_field` for a query key is `low` (was `medium`); an unknown body key stays `medium` (#195).
+
 ## [0.20.0] - 2026-10-07
 
 ### Added

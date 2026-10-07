@@ -939,15 +939,16 @@ def possibly_more(comp: dict) -> str:
     for k, v in comp.get("languages", {}).items():
         if v["complete"]:
             continue
-        lang = k.rsplit("/", 1)[-1]
+        repo, _, lang = k.rpartition("/")
         label = LANG_LABEL.get(lang, lang)
+        of = f" ({repo})" if repo else ""   # combined graph: keys are `<repo>/<language>`; two repos must not print identical fragments
         miss = sum(v.get(b, 0) for b in ("parse_failed", "skipped_oversize", "unmapped"))
         if v["mode"] in ("exact", "scip") and miss:
-            parts.append(f"{miss} {label} file{'s' if miss != 1 else ''} not indexed")
+            parts.append(f"{miss} {label} file{'s' if miss != 1 else ''} not indexed{of}")
         elif v["mode"] == "heuristic":
-            parts.append(f"{label} heuristic only")
+            parts.append(f"{label} heuristic only{of}")
         else:
-            parts.append(f"{label} {v['mode'].replace('_', ' ')}")
+            parts.append(f"{label} {v['mode'].replace('_', ' ')}{of}")
     se = comp.get("syntax_errors") or []
     if se:
         x = se[0]

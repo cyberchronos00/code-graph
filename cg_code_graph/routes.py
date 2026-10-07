@@ -436,6 +436,8 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
         gs = ", ".join(f"{g['name']}{' [auth]' if g['auth'] else (' [secret]' if g.get('secret') else '')}" for g in i["guards"]) or "(none)"
         flag = "" if i["has_auth"] or i.get("inline_auth") else ("  SECRET-CHECKED" if i.get("secret_checked") else "  NO AUTH")
         if i.get("webhook") and not i["webhook"].get("verified"):
+            if flag == "  SECRET-CHECKED":
+                flag = ""   # a shared-secret guard does not verify the provider signature: the two labels contradict
             flag += f"  WEBHOOK UNVERIFIED ({i['webhook'].get('provider')})"
         out.append("")
         out.append(f"{i['name']}  @{i['at']}{flag}")
