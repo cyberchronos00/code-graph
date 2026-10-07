@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-07
+
 ### Added
 
 - Laravel inline guards on `cg routes`: `authorize`, `Gate`, permission checks, a FormRequest `authorize()`, controller middleware, and shared-secret compares are listed as `inline:` and count for `--unguarded`. `--unguarded --strict` keeps route-level guards only. See [docs/php.md](docs/php.md#inline-guards).
@@ -1549,7 +1551,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.19.1...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/cyberchronos00/code-graph/compare/v0.19.1...v0.20.0
 [0.19.1]: https://github.com/cyberchronos00/code-graph/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/cyberchronos00/code-graph/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/cyberchronos00/code-graph/compare/v0.17.0...v0.18.0
