@@ -31,7 +31,7 @@ On a combined DB only, `payload_checks(endpoint, route, kind, severity, message,
 | External | `external` | `external:<protocol>:<target>`. Attrs name host, port, TLS and credential source, never the secret. [External systems](external.md) |
 | Bridges | `endpoint` | Capacitor, React Native, Flutter, Electron IPC, Tauri. ObjC and missed Java / Kotlin / Swift receivers are `method` nodes with `attrs.bridge_stub`. [Web / native bridges](bridges.md) |
 
-Route paths use `{param}`, `{param?}`, `{rest*}` and `{rest*?}`.
+Route paths use `{param}`, `{param?}`, `{rest*}` and `{rest*?}`. A Laravel `route` node may carry `attrs.inline_guards`: objects `{name, kind, at, conditional}` with `kind` one of `policy`, `permission`, `secret`, `role`. `cg routes --json` returns the same list. See [PHP](php.md#inline-guards).
 
 ## Enum cases and constants
 

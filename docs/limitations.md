@@ -46,9 +46,10 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 - Server shapes are the declared schema or a returned literal. Framework error bodies (validation 422, auth 401, 500 pages) are absent.
 - Enum checks need `choices=` or a `Literal` / `Enum` annotation.
 - A route guard is a fact the framework plugin recorded on the route: middleware, Nest guards, `Depends`, `auth=`, permission classes.
-- A check inside the handler body (`if (!req.user)`, `request.user.is_authenticated`) is not a guard.
-- Project-wide defaults are not copied onto each route: Laravel kernel groups, Django `MIDDLEWARE`, DRF `DEFAULT_PERMISSION_CLASSES`, and `$this->middleware(...)` in a Laravel constructor.
-- `cg routes --unguarded` lists routes those defaults protect. Preset lists decide which names count as auth ([framework presets](configuration.md#framework-presets)).
+- Laravel checks the action runs before its own work are inline guards, printed under `guards:` as `inline:`. That includes `authorize`, `Gate` with an abort, `abort_if` / `abort_unless` with a permission, a FormRequest `authorize()` that returns more than `true`, `$this->middleware(...)` / `HasMiddleware::middleware()` on the controller (`only` / `except`, including resource and invokable actions), a project check that rejects or whose result the caller aborts on, and a shared-secret `hash_equals` or `===` of `config()` / `env()` against a header or input. A discarded `can()` / `Gate::allows()` result, a check after a write, and a `===` between two request values are not guards. A check in a branch is `conditional`. See [PHP](php.md#inline-guards).
+- A check inside the handler in other frameworks (`if (!req.user)`, `request.user.is_authenticated`) is not a guard.
+- Project-wide defaults are not copied onto each route: Laravel kernel groups, Django `MIDDLEWARE`, DRF `DEFAULT_PERMISSION_CLASSES`. Controller `$this->middleware(...)` and `HasMiddleware::middleware()` are copied onto that controller's routes as inline guards.
+- `cg routes --unguarded` hides a route with an unconditional inline check. `--unguarded --strict` uses route guards only. Preset lists decide which middleware names count as auth ([framework presets](configuration.md#framework-presets)).
 - A project-specific guard name counts when it matches `auth.extra_patterns` or `--auth-pattern`.
 - A sent-but-not-forwarded key is an object literal passed to a helper whose request keys are known, one call level deep. Spreads, runtime keys, and opaque objects are omitted, so no gap is reported for them.
 

@@ -8,6 +8,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- Laravel inline guards on `cg routes`: `authorize`, `Gate`, permission checks, a FormRequest `authorize()`, controller middleware, and shared-secret compares are listed as `inline:` and count for `--unguarded`. `--unguarded --strict` keeps route-level guards only. See [docs/php.md](docs/php.md#inline-guards).
+
 ### Fixed
 
 - A Laravel Echo or pusher-js client held in a Vue `ref()` / `shallowRef()`, or on a Pinia store or composable field, is a channel subscription. `echo.value.private(...).listen(...)` records the channel and the event. `.leave()` and `.disconnect()` do not. `cg coverage --details` lists `.private(...)` calls with a channel literal on a receiver that stays unknown (`realtime_subscriptions_unresolved_receiver`). See [docs/channels-and-tests.md](docs/channels-and-tests.md).

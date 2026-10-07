@@ -49,15 +49,23 @@ def test_routes_reaching_writes_bookstore():
     st = db("combined")
     res = R.routes_report(st, writes="*")
     r = by_route(res)
-    assert res["total_routes"] == 10 and set(r) == {"DELETE /v1/{store}/admin/reports/{report}", "POST /v1/admin/books",
-                                                    "PUT /v1/admin/books/{id}", "POST /v1/orders"}
+    assert res["total_routes"] == 12 and set(r) == {"DELETE /v1/{store}/admin/reports/{report}", "POST /v1/admin/books",
+                                                    "PUT /v1/admin/books/{id}", "POST /v1/orders",
+                                                    "POST /v1/orders/{order}/refund", "POST /v1/warehouse/sync"}
     assert r["POST /v1/orders"]["has_auth"] and guards(r["POST /v1/orders"]) == {"auth:api": True}
     assert not r["DELETE /v1/{store}/admin/reports/{report}"]["has_auth"]
+    assert r["POST /v1/orders/{order}/refund"]["has_auth"]
+    assert r["POST /v1/orders/{order}/refund"]["inline_guards"][0]["name"] == "hasPermission('orders.refund')"
+    assert r["POST /v1/warehouse/sync"]["inline_auth"] and not r["POST /v1/warehouse/sync"]["has_auth"]
     txt = R.render_routes(res, st)
-    assert "4 of 10 routes" in txt and "NO AUTH" in txt and "WRITES_TABLE@SalesReportService.php:24" in txt
+    assert "6 of 12 routes" in txt and "NO AUTH" in txt and "WRITES_TABLE@SalesReportService.php:24" in txt
     assert "called from: page:app/pages/index.vue" in txt  # frontend caller on the combined graph
+    assert "inline: hasPermission('orders.refund') [permission] RefundController::store" in txt
+    assert "inline: ensureValidSecret (hash_equals config:bookstore.sync_secret) [secret]" in txt
     unguarded = R.routes_report(st, writes="*", unguarded=True)
-    assert set(by_route(unguarded)) == set(r) - {"POST /v1/orders"}
+    assert set(by_route(unguarded)) == set(r) - {"POST /v1/orders", "POST /v1/orders/{order}/refund", "POST /v1/warehouse/sync"}
+    strict = R.routes_report(st, writes="*", unguarded=True, strict=True)
+    assert "POST /v1/warehouse/sync" in by_route(strict) and "POST /v1/orders/{order}/refund" not in by_route(strict)
     missing = R.routes_report(st, writes="books", missing="auth:api")
     assert set(by_route(missing)) == {"POST /v1/admin/books", "PUT /v1/admin/books/{id}"}
 

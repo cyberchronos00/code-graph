@@ -816,6 +816,7 @@ class LaravelPlugin(FrameworkPlugin):
     def _routes_out(self):
         b, prog = self.b, self.prog
         aliases = self._middleware_aliases()
+        from ..php.inline_guards import for_action
         n = 0
         for f, r in self.records.items():
             for rt in r.get("routes") or []:
@@ -846,6 +847,10 @@ class LaravelPlugin(FrameworkPlugin):
                             b.nodes[rid].module = module_of(c.file)
                         else:
                             self.stats["routes_unresolved_action"] += 1
+                        igs = for_action(prog, act.get("class"), act.get("method"))
+                        if igs:
+                            b.nodes[rid].attrs["inline_guards"] = igs
+                            self.stats["inline_guards"] += len(igs)
                     for mw in mws:
                         alias = mw.split(":")[0]
                         cls = aliases.get(alias) or (mw if prog.cls(mw) else None)

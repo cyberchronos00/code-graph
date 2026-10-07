@@ -95,7 +95,7 @@ A detected language or framework brings a preset from `cg_code_graph/presets/*.y
 | `react-router` | React Router and Remix route modules (`presets/react-router.yaml`) |
 | `spring` | Spring Security method annotations and `SecurityFilterChain` guard names (`presets/spring.yaml`) |
 
-A guard matches on its name, ignoring namespace and arguments (`auth:sanctum`, `AuthGuard('jwt')`). Project guards match the shared name pattern or `auth.extra_patterns`. Merge order: `common`, languages, frameworks, `.cg.yaml`, then flags. `cg coverage` and `cg routes` name which presets and patterns matched. `cg config show` lists every preset value with its source.
+A guard matches on its name, ignoring namespace and arguments (`auth:sanctum`, `AuthGuard('jwt')`). Project guards match the shared name pattern or `auth.extra_patterns`. The same `auth.extra_patterns` select inline Laravel checks (`$this->assertCanManage($order)`) when the project is indexed. Merge order: `common`, languages, frameworks, `.cg.yaml`, then flags. `cg coverage` and `cg routes` name which presets and patterns matched. `cg config show` lists every preset value with its source.
 
 ## Gate scenarios
 

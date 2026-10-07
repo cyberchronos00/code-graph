@@ -171,7 +171,8 @@ def main(argv=None):
     p.add_argument("--writes", nargs="?", const="*", metavar="TABLE", help="routes reaching a DB write (any table, or TABLE)")
     p.add_argument("--reaches", nargs="+", metavar="SPEC", help="routes reaching any of these nodes (table, column, connection:, env:, Class.method)")
     p.add_argument("--missing", metavar="NAME", help="keep routes with no guard whose name contains NAME (e.g. auth:api, ApiKeyGuard)")
-    p.add_argument("--unguarded", action="store_true", help="keep routes with no auth guard (framework presets, the auth name pattern, .cg.yaml auth.extra_patterns and --auth-pattern)")
+    p.add_argument("--unguarded", action="store_true", help="keep routes with no auth guard (framework presets, the auth name pattern, .cg.yaml auth.extra_patterns and --auth-pattern). An unconditional inline check (Laravel authorize / permission / shared secret) counts; --strict ignores it")
+    p.add_argument("--strict", action="store_true", help="with --unguarded, count only route-level guards (inline checks are still listed)")
     p.add_argument("--auth-pattern", help="extra regex for guard names that count as auth")
     p.add_argument("--min-confidence", default="heuristic", choices=["heuristic", "resolved", "exact"])
     p.add_argument("--max-items", type=int, default=200); p.add_argument("--no-paths", action="store_true"); p.add_argument("--json", action="store_true")
@@ -548,7 +549,7 @@ def main(argv=None):
     if a.cmd == "routes":
         from . import routes as R
         res = R.routes_report(st, writes=a.writes, reaches=a.reaches, missing=a.missing, unguarded=a.unguarded,
-                              auth_pattern=a.auth_pattern, min_conf=a.min_confidence, platform=a.platform)
+                              strict=a.strict, auth_pattern=a.auth_pattern, min_conf=a.min_confidence, platform=a.platform)
         if a.json:
             res["completeness"] = R.route_completeness(st)
         print(json.dumps(res, indent=1, default=str) if a.json else R.render_routes(res, st, max_items=a.max_items, paths=not a.no_paths))

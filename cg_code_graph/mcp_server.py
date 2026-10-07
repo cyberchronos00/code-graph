@@ -904,13 +904,16 @@ def explore(query: str, budget_tokens: int = 3000, max_symbols: int = 4) -> str:
 
 @tool
 def routes(writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
-           unguarded: bool = False, auth_pattern: str | None = None, max_items: int = 40, paths: bool = True,
+           unguarded: bool = False, strict: bool = False, auth_pattern: str | None = None, max_items: int = 40, paths: bool = True,
            min_confidence: str = "heuristic", platform: str | None = None) -> str:
     """Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
     DB write) or writes="<table>", reaches=[specs] (routes that reach any of these nodes: table, column, connection,
     method, env key...). Optional filters: missing="<name>" keeps routes with no guard whose name contains it (e.g.
     "auth:api", "ApiKeyGuard"), unguarded=true keeps routes with no auth guard (the framework presets' auth guards and
-    the auth name pattern; extend with auth_pattern, a regex, or .cg.yaml auth.extra_patterns). Each route: guards, what it reaches with one evidence chain, and the frontend callers on a
+    the auth name pattern; extend with auth_pattern, a regex, or .cg.yaml auth.extra_patterns). An unconditional
+    inline check on a Laravel action (authorize, Gate, a permission check, FormRequest::authorize, controller
+    middleware, a shared-secret compare) is listed under guards as `inline:` and counts for unguarded. strict=true
+    with unguarded counts only route-level guards. Each route: guards, what it reaches with one evidence chain, and the frontend callers on a
     combined graph. Guards come from Laravel middleware, Nest guards/interceptors, Express/Koa/Fastify/Hono/Elysia
     middleware, Next.js middleware.ts / handler wrappers, django-ninja auth= and Django/DRF view access checks.
     min_confidence: keep the default (heuristic) for reviews: every edge still shows its own label, and a stricter
@@ -923,7 +926,7 @@ def routes(writes: str | None = None, reaches: list[str] | None = None, missing:
     st = _st()
     pf, _ = _platform(st, platform)
     _scope(whole=True, categories=("route",), unsupported=False)
-    res = R.routes_report(st, writes=writes, reaches=reaches, missing=missing, unguarded=unguarded,
+    res = R.routes_report(st, writes=writes, reaches=reaches, missing=missing, unguarded=unguarded, strict=strict,
                           auth_pattern=auth_pattern, min_conf=min_confidence, platform=pf)
     return R.render_routes(res, st, max_items=max_items, paths=paths, compact=True)
 

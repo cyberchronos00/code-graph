@@ -1,0 +1,2 @@
+auth:
+  extra_patterns: ["assertCanManage"]

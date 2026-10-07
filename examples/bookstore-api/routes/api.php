@@ -22,6 +22,8 @@ Route::prefix('v1')->group(function () {
     });
     Route::post('admin/books', [AdminBookController::class, 'store']);
     Route::put('admin/books/{id}', [AdminBookController::class, 'update']);
+    Route::middleware(['auth:sanctum'])->post('orders/{order}/refund', [\App\Http\Controllers\RefundController::class, 'store']);
+    Route::post('warehouse/sync', \App\Http\Controllers\WarehouseSyncController::class);
 });
 
 Route::post('orders/{order}/checkout', [OrderController::class, 'checkout']);

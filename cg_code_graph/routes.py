@@ -19,6 +19,9 @@ A route without auth whose guards verify a shared secret or signature (webhook s
 URLs; SECRET_PATTERN) is reported as SECRET-CHECKED instead of NO AUTH, and `unguarded` leaves it out (and says how
 many it left out). The Laravel broadcasting auth route counts as auth: it rejects private / presence subscriptions
 without an authenticated user and runs each channel's callback.
+Laravel checks inside the action (`inline_guards` on the route: authorize, Gate, permission checks, a
+FormRequest `authorize()`, controller middleware, a shared-secret compare) are listed on an `inline:` line.
+`unguarded` hides a route with an unconditional inline check. `strict` keeps the route-level result.
 """
 from __future__ import annotations
 
@@ -234,8 +237,15 @@ def _groups_for_writes(st: GraphStore, table: str | None) -> dict[str, dict]:
     return groups
 
 
+def inline_auth(attrs: dict | None) -> bool:
+    """An unconditional inline check protects the route (Laravel action checks, not route middleware)."""
+    if not attrs:
+        return False
+    return any(isinstance(g, dict) and not g.get("conditional") for g in attrs.get("inline_guards") or [])
+
+
 def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
-                  unguarded: bool = False, auth_pattern: str | None = None, min_conf: str = "heuristic",
+                  unguarded: bool = False, strict: bool = False, auth_pattern: str | None = None, min_conf: str = "heuristic",
                   gate: str | None = "auto", platform: str | None = None, deadline: float | None = None) -> dict:
     """deadline: a time.time() value; past it the traversal stops with query.Deadline (starters' time budget)."""
     gs = guard_setup(st)
@@ -290,29 +300,39 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
             continue
         a = json.loads(n.get("attrs") or "{}")
         g = route_guards(a, mw.get(rid, []), is_auth)
+        igs = [x for x in (a.get("inline_guards") or []) if isinstance(x, dict) and x.get("name")]
         it = {"route": rid, "name": n["name"], "at": _route_loc(n, a), "framework": a.get("framework"), "guards": g,
               "has_auth": any(x["auth"] for x in g), "secret_checked": any(x.get("secret") for x in g),
+              "inline_guards": igs, "inline_auth": any(not x.get("conditional") for x in igs),
               **({"webhook": a["webhook"]} if a.get("webhook") else {}),
               "reaches": sorted(reached.get(rid, []), key=lambda x: x["what"]),
               "clients": _clients(st, rid)}
         items.append(it)
     total = len(items)
     flt = []
+    def _guard_names(i):
+        return [x["name"] for x in i["guards"]] + [x["name"] for x in i.get("inline_guards") or []]
+
     if missing:
         m = missing.lower()
-        items = [i for i in items if not any(m in x["name"].lower() for x in i["guards"])]
+        items = [i for i in items if not any(m in x.lower() for x in _guard_names(i))]
         flt.append(f"missing a guard matching '{missing}'")
     if unguarded:
         secret = [i for i in items if not i["has_auth"] and i["secret_checked"]]
-        items = [i for i in items if not i["has_auth"] and not i["secret_checked"]]
-        flt.append("no auth guard" + (f" ({len(secret)} secret-checked route(s) left out: "
-                                      f"{', '.join(i['name'] for i in secret[:4])}{' …' if len(secret) > 4 else ''})" if secret else ""))
+        if strict:
+            items = [i for i in items if not i["has_auth"] and not i["secret_checked"]]
+            note = "no auth guard (strict: route guards only)"
+        else:
+            items = [i for i in items if not i["has_auth"] and not i["secret_checked"] and not i.get("inline_auth")]
+            note = "no auth guard"
+        flt.append(note + (f" ({len(secret)} secret-checked route(s) left out: "
+                           f"{', '.join(i['name'] for i in secret[:4])}{' …' if len(secret) > 4 else ''})" if secret else ""))
     items.sort(key=lambda i: (i["has_auth"], i["secret_checked"], i["at"], i["name"]))
     below = []
     if mode != "all" and min_conf != "heuristic":
         # a stricter confidence level silently drops routes whose only chain has a resolved / heuristic hop: name them
         mine = {i["route"] for i in items}
-        loose = routes_report(st, writes=writes, reaches=reaches, missing=missing, unguarded=unguarded,
+        loose = routes_report(st, writes=writes, reaches=reaches, missing=missing, unguarded=unguarded, strict=strict,
                               auth_pattern=auth_pattern, min_conf="heuristic", gate=gate, platform=platform)
         below = [i["name"] for i in loose["items"] if i["route"] not in mine]
     return {"below_confidence": below, "mode": mode, "writes": writes, "reaches": reaches or [], "unresolved": unresolved, "filters": flt,
@@ -387,7 +407,7 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
         head = f"{what}: {res['matched']} of {res['total_routes']} indexed routes (possibly more: {more})"
     if res["filters"]:
         head += f" | filter: {'; '.join(res['filters'])} -> {len(items)}"
-    na = sum(1 for i in items if not i["has_auth"] and not i.get("secret_checked"))
+    na = sum(1 for i in items if not i["has_auth"] and not i.get("secret_checked") and not i.get("inline_auth"))
     ns = sum(1 for i in items if not i["has_auth"] and i.get("secret_checked"))
     out = [head, f"auth guard: {len(items) - na - ns} with, {na} without" + (f", {ns} secret-checked (signature / shared secret, no user auth)" if ns else "")
            + " (auth = a framework preset auth guard or a name matching the auth pattern)"]
@@ -414,12 +434,21 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
         return "\n".join(out)
     for i in items[:max_items]:
         gs = ", ".join(f"{g['name']}{' [auth]' if g['auth'] else (' [secret]' if g.get('secret') else '')}" for g in i["guards"]) or "(none)"
-        flag = "" if i["has_auth"] else ("  SECRET-CHECKED" if i.get("secret_checked") else "  NO AUTH")
+        flag = "" if i["has_auth"] or i.get("inline_auth") else ("  SECRET-CHECKED" if i.get("secret_checked") else "  NO AUTH")
         if i.get("webhook") and not i["webhook"].get("verified"):
             flag += f"  WEBHOOK UNVERIFIED ({i['webhook'].get('provider')})"
         out.append("")
         out.append(f"{i['name']}  @{i['at']}{flag}")
         out.append(f"    guards: {gs}")
+        igs = i.get("inline_guards") or []
+        if igs:
+            parts = []
+            for g in igs:
+                kind = g.get("kind") or "permission"
+                if g.get("conditional"):
+                    kind += ", conditional"
+                parts.append(f"{g['name']} [{kind}] {g.get('at') or ''}".rstrip())
+            out.append(f"    inline: {', '.join(parts)}")
         if i.get("webhook"):
             w = i["webhook"]
             ev = w.get("events") or []
@@ -445,6 +474,9 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
     else:
         out.append(f"guards come from route-level facts ({GUARD_SOURCES}); Laravel kernel middleware and Django's MIDDLEWARE "
                    f"setting apply to every route and are not repeated per route.")
+    if any(i.get("inline_guards") for i in items):
+        out.append("inline: access checks the handler runs before its own work (Laravel). "
+                   "--unguarded hides an unconditional one; --unguarded --strict counts route guards only.")
     if more:
         out.append(answer_note(comp))
     return "\n".join(out)

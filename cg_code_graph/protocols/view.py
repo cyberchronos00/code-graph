@@ -24,7 +24,8 @@ a single backend graph does not call every route `no_sender`):
   schema_mismatch  senders and receivers name different message types
   no_consumer      a queue jobs are sent to; the repo starts workers (Procfile, compose, ...) and none consumes it
   unguarded        a receiver reachable from outside (http / ws / graphql routes, Socket.IO handlers, ...) with no
-                   auth guard recorded (the same classification as `cg routes --unguarded`)
+                   auth guard recorded (the same classification as `cg routes --unguarded`, including an
+                   unconditional Laravel inline check)
   external         declared external in .cg.yaml (protocols.external: ["kafka:audit.*"]), a third-party HTTP origin,
                    or a bridge module implemented outside the repo
 Bridge endpoints (Capacitor, React Native, Flutter, Electron, Tauri) keep the checks cg_code_graph/bridges.py computed.
@@ -165,7 +166,7 @@ def _load(st):
 
 def collect(st) -> dict:
     """Every endpoint with senders / receivers / matches / guards / checks (no per-endpoint queries)."""
-    from ..routes import AuthMatcher, guard_setup, route_guards
+    from ..routes import AuthMatcher, guard_setup, inline_auth, route_guards
     nodes, edges = _load(st)
     ep = {nid: dict(n, senders=[], test_senders=[], receivers=[], matches=[], mw=[]) for nid, n in nodes.items()}
     job_of_handler = {}
@@ -283,7 +284,8 @@ def collect(st) -> dict:
             n["guards"] = [x["name"] for x in g]
             has_auth = any(x["auth"] for x in g)
             secret = any(x.get("secret") for x in g)
-            if (p and p.guards) and (n["receivers"] or n["kind"] == "route") and not has_auth and not secret and not n["external"] \
+            if (p and p.guards) and (n["receivers"] or n["kind"] == "route") and not has_auth and not secret \
+                    and not inline_auth(a) and not n["external"] \
                     and not (n["kind"] == "route" and (a.get("mounted", True) is False or a.get("framework") == "django-admin")):
                 ck.append("unguarded")
         else:

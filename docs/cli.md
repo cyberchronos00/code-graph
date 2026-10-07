@@ -148,8 +148,21 @@ coverage note: 1 route registration cg does not model (Django urlpatterns built 
 - **Scope.** `--writes` or `--writes TABLE`, and/or `--reaches SPEC...`. No scope lists every route.
 - **Auth,** in order: `--auth-pattern` / `.cg.yaml` `auth.extra_patterns`, the preset's auth guards (not `csrf_protect`, `ThrottlerGuard`, `AllowAny`, …), then the auth name pattern. Each guard records `auth_by`. Presets: [configuration](configuration.md#framework-presets).
 - Laravel kernel middleware and Django `MIDDLEWARE` apply to every route and are not repeated.
-- **Filters.** `--unguarded` keeps routes with no auth guard. `--missing NAME` keeps routes with no guard whose name contains NAME.
-- `search` matches the same guard names.
+- **Filters.** `--unguarded` keeps routes with no auth guard. An unconditional inline check counts, so those routes are left out. `--unguarded --strict` counts route guards only. `--missing NAME` keeps routes whose route guards and inline checks do not contain NAME.
+- **Inline guards (Laravel).** Checks the handler runs before its own work are a separate line, not route middleware. `--json` adds `inline_guards`: `name`, `kind` (`policy`, `permission`, `secret`, `role`), `at`, `conditional`. `auth.extra_patterns` selects project method names when that method rejects, or when the caller aborts on its result. A conditional check stays listed and does not hide the route from `--unguarded`. See [PHP](php.md#inline-guards).
+- `search` matches the same guard names, including inline checks.
+
+```text
+$ cg routes --db api.db
+POST /v1/orders/{order}/refund  @routes/api.php:25
+    guards: auth:sanctum [auth]
+    inline: hasPermission('orders.refund') [permission] RefundController::store
+POST /v1/warehouse/sync  @routes/api.php:26
+    guards: (none)
+    inline: ensureValidSecret (hash_equals config:bookstore.sync_secret) [secret] WarehouseSyncController::ensureValidSecret
+```
+
+`--unguarded` lists neither route. `--unguarded --strict` lists `POST /v1/warehouse/sync` (no route middleware; the secret check is inline).
 
 ```text
 $ cg routes --writes books --missing auth:api --db out/graph.db

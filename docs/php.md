@@ -23,6 +23,20 @@ A plain `= v` is a write. These are writes with `via`, plus the read the walk re
 reads for model attributes and relations are unchanged, so every other edge stays the same. This was checked on koel
 and laravel.io.
 
+## Inline guards
+
+`cg routes` lists access checks a Laravel action runs before its own work on an `inline:` line, separate from route middleware. `--json` stores them on `inline_guards` (`name`, `kind`, `at`, `conditional`).
+
+Counted:
+
+- `$this->authorize(...)`, `Gate::authorize` / `Gate::denies` / `Gate::allows` with `abort(403)`, `abort_if` / `abort_unless` of `can` / `hasPermission` / `hasRole`, and `$request->user()->cannot(...)`.
+- A FormRequest `authorize()` that does more than `return true`.
+- `$this->middleware('can:...')` in the constructor and `HasMiddleware::middleware()`, including `only` / `except`, copied onto that controller's routes.
+- A call on the same class, trait, or parent (two calls deep) that aborts `401` / `403` or throws `AuthorizationException` / `AccessDeniedHttpException` before any write. The access-check heuristic or `auth.extra_patterns` names that method when it rejects, or when the caller aborts on its result (`abort_unless($this->ensureAccess($order), 403)`). A discarded result does not count: `Gate::allows()` with no abort, `return Gate::allows(...)`, `can()` stored for a template, or `$this->ensureAccess($order)` called and ignored. A check after a write does not count.
+- A shared-secret compare: `hash_equals` or `===` / `!==` of `config()` / `env()` against a request header or input, aborting on mismatch. Kind `secret`. A `===` between two request values is not a secret check, and `==` is not either.
+
+A check inside a branch is `conditional`. `--unguarded` hides a route with an unconditional inline check. `--unguarded --strict` uses route middleware only. The walk stops at the action's first write. Kernel middleware groups are still not copied onto each route.
+
 ## Outbound HTTP
 
 `Illuminate\Support\Facades\Http`, an injected `Illuminate\Http\Client\Factory` or `PendingRequest`, and Guzzle

@@ -1,0 +1,1 @@
+{ "name": "fixture/inline-guards", "require": { "laravel/framework": "^11.0" } }

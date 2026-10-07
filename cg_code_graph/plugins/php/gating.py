@@ -40,6 +40,14 @@ class _S:
 
 TOP, TRUTHY, FALSY, EMPTY = _S("TOP"), _S("TRUTHY"), _S("FALSY"), _S("EMPTY")
 NONE = frozenset()
+ABORT_FNS = ("abort", "abort_if", "abort_unless")
+
+
+def abort_fn(expr) -> str | None:
+    """`abort` / `abort_if` / `abort_unless` when `expr` is that control-skeleton call."""
+    if isinstance(expr, dict) and expr.get("k") == "call" and expr.get("fn") in ABORT_FNS:
+        return expr["fn"]
+    return None
 NONNULL_FUNCS = {"response", "redirect", "view", "collect", "now", "today", "back", "url", "route", "app", "request"}
 SCALAR_RET = {"bool", "int", "float", "string", "array", "mixed", "void", "null", "false", "true", "iterable", "callable", "never", "object", "static", "self"}
 
@@ -442,13 +450,14 @@ class GateEvaluator:
         k = s.get("k")
         if k == "x":
             x = s["x"]
-            if x.get("k") == "call" and x.get("fn") in ("abort", "abort_if", "abort_unless"):
+            aborted = abort_fn(x)
+            if aborted:
                 args = [self.val(fr, a, depth) for a in x.get("args", [])]
-                if x["fn"] == "abort":
+                if aborted == "abort":
                     return True, NONE
                 if args:
                     t = truth(args[0][0])
-                    if (x["fn"] == "abort_if" and t is True) or (x["fn"] == "abort_unless" and t is False):
+                    if (aborted == "abort_if" and t is True) or (aborted == "abort_unless" and t is False):
                         return True, args[0][1]
                 return False, NONE
             self.val(fr, x, depth)

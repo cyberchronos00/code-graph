@@ -1958,6 +1958,9 @@ def search(st: GraphStore, name: str, kind: str | None = None, limit: int = 20, 
                     nm = x.get("name") if isinstance(x, dict) else x
                     if nm and low in str(nm).lower():
                         guards[str(nm)].append({"route": r["id"], "file": r["file"], "line": r["line"], "via": k})
+            for g in a.get("inline_guards") or []:
+                if isinstance(g, dict) and g.get("name") and low in str(g["name"]).lower():
+                    guards[str(g["name"])].append({"route": r["id"], "file": r["file"], "line": r["line"], "via": "inline"})
             for c in a.get("conditions") or []:
                 if isinstance(c, str) and c.startswith("wrapped:") and low in c.lower():
                     guards[c[8:]].append({"route": r["id"], "file": r["file"], "line": r["line"], "via": "urlconf wrapper"})
