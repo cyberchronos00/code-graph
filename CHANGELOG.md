@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-10-07
+
 ### Fixed
 
 - Redaction no longer affects framework settings whose name merely contains a credential word: a key is a credential only when its last word is `password`, `secret`, `dsn` and the like or it ends in an explicit compound (`api_key`, `signing_key`, `client_secret`, `refresh_token`, ...), and `app.key` / `APP_KEY` count too. A bare `key` or `token` as last word is still redacted by default, as in 0.21.0; it keeps its value only after a known non-secret word (`primary_key`, `foreign_key`, `sort_key`, `cache.key`, `remember_token`, `idempotency_key`, ...) whatever its value looks like, so Laravel `AUTH_GUARD`, `AUTH_PASSWORD_BROKER`, `AUTH_PASSWORD_RESET_TOKEN_TABLE` and `try_it_credentials_policy` keep their values while a value of any shape under a bare `key` / `token` stays redacted (#47).
@@ -1591,7 +1593,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.21.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.21.1...HEAD
+[0.21.1]: https://github.com/cyberchronos00/code-graph/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/cyberchronos00/code-graph/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/cyberchronos00/code-graph/compare/v0.19.1...v0.20.0
 [0.19.1]: https://github.com/cyberchronos00/code-graph/compare/v0.19.0...v0.19.1
