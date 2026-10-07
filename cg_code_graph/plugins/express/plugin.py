@@ -405,6 +405,17 @@ class ExpressPlugin(FrameworkPlugin):
             out.append(x)
         return out
 
+    def _scoped_mw(self, k, at, uri):
+        """Mount-path middleware of k (`app.use('/admin', auth)`) registered before the route call that covers `uri`."""
+        out = []
+        for p, x, f, ln in self.router_mw.get(k, []):
+            if p in ("", "/") or (at and f == at[0] and ln > at[1]) or (x[1] in ("?", "inline") and not x[0]):
+                continue
+            pp = express_path(p).rstrip("/")
+            if pp and (uri == pp or uri.startswith(pp + "/")):
+                out.append(x)
+        return out
+
     def prefixes(self, k, depth=0, seen=frozenset(), at=None):
         """[(prefix, confidence, middleware, mounted_from_app)] for router k (`at`: the route call's file, line).
 
@@ -553,7 +564,8 @@ class ExpressPlugin(FrameworkPlugin):
                         if rpc and prior is not None and not prior.attrs.get("plugin_rpc"):
                             continue
                         route_attrs = {**ra, "plugin_rpc": True} if rpc else ra
-                        add_route(b, method, uri, handler_nodes, c["file"], c["line"], fw if fw != "?" else "express", conf, route_attrs, pmw + mw + guards)
+                        add_route(b, method, uri, handler_nodes, c["file"], c["line"], fw if fw != "?" else "express", conf, route_attrs,
+                                  pmw + self._scoped_mw(k, (c["file"], c["line"]), uri) + mw + guards)
                         if not rpc and str(p).startswith("/"):
                             node = b.nodes.get(f"route:{method} {uri}")
                             if node is not None and node.attrs.get("plugin_rpc"):

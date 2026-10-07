@@ -409,6 +409,8 @@ class Inbound:
                 state = "secret-checked"
             elif it.get("inline_auth") and not self.strict:
                 state = "inline-guarded"
+            elif it.get("public") and it.get("public_hidden", True):
+                state = "public"
             else:
                 state = "unguarded"
             self.items.append(self._item(
@@ -416,7 +418,8 @@ class Inbound:
                 file=n.get("file"), line=n.get("line"), attrs=a, state=state,
                 guards=[g["name"] for g in it["guards"]] + [g["name"] for g in it["inline_guards"]],
                 writes=it["route"] in writes, confidence="resolved", entry_kind=n.get("entry_kind") or "http_route",
-                handler_ids=[it["route"]], extra={"webhook": wh} if wh else {}))
+                handler_ids=[it["route"]],
+                extra={**({"webhook": wh} if wh else {}), **{k: it[k] for k in ("public", "unsure") if it.get(k)}}))
         closure = self._write_closure()
         for nid, n in sorted(collect(st).items()):
             if n["kind"] in ("route", "http", "channel", "channel_sub", "event") or n["protocol"] in NOT_INBOUND:
@@ -429,7 +432,13 @@ class Inbound:
             loc = _split_loc(recv.get("at")) or (n["file"], n["line"])
             handlers = [r["handler"] for r in receivers]
             guards = n.get("guards")
-            if "unguarded" in n["checks"]:
+            checked = None
+            if not self.strict and ("unguarded" in n["checks"] or guards is None):
+                checked = self._handler_check(a, a.get("namespace"), loc)
+            if checked and checked.get("guard"):
+                state = "inline-guarded"
+                guards = [*(guards or []), checked["guard"]["name"]]
+            elif "unguarded" in n["checks"]:
                 state = "unguarded"
             elif guards is None:
                 state = "unchecked"
@@ -446,7 +455,25 @@ class Inbound:
                 node=nid, protocol=n["protocol"], transport=a.get("transport") or "tcp", name=n["name"], file=loc[0],
                 line=loc[1], attrs=a, state=state, guards=list(guards or []), writes=any(h in closure for h in handlers),
                 confidence=conf, entry_kind=next((k for k in kinds if k), "message_handler"), handler_ids=[nid],
-                extra=ex))
+                extra={**ex, **({"unsure": checked["unsure"]} if checked and checked.get("unsure") else {})}))
+
+    def _handler_check(self, attrs: dict, namespace: str | None, loc) -> dict | None:
+        """Checks at the top of a message handler, or at `connection` for its namespace (Socket.IO)."""
+        from . import guard_facts as F
+        facts = getattr(self.ctx.st, "_guard_facts", None)
+        if facts is None:
+            facts = self.ctx.st._guard_facts = F.Facts(self.ctx.st)
+        if not loc:
+            return None
+        lines = facts.lines(loc[0])
+        if not lines:
+            return None
+        py = loc[0].endswith(".py")
+        if attrs.get("protocol") == "socketio":
+            c = F.connection_guard(lines, loc[1], attrs.get("namespace"), py=py)
+            if c:
+                return {"guard": c}
+        return F.scan_body(lines, loc[1], py=py)
 
     def _item(self, *, node, protocol, transport, name, file, line, attrs, state, guards, writes, confidence,
               entry_kind, handler_ids, extra) -> dict:
@@ -493,12 +520,22 @@ def _unguarded(ctx: Ctx, strict: bool = False) -> list[dict]:
         if it["guard_state"] != "unguarded":
             continue
         w = " and reaches a write" if it["reaches_write"] else ""
-        out.append(make_finding(
+        confidence, severity, tail = it["confidence"], None, ""
+        if it.get("public"):
+            severity, tail = "low", f" (public by design: {it['public']})"
+        elif it.get("unsure"):
+            confidence, severity, tail = "heuristic", "low", f" (unclear: {it['unsure']})"
+        elif not strict and not it["reaches_write"]:
+            severity = "low"
+        f = make_finding(
             ctx, "unguarded", protocol=it["protocol"], node=it["node"], file=it["file"], line=it["line"],
-            confidence=it["confidence"], repo=it.get("repo"),
+            confidence=confidence, repo=it.get("repo"),
             see=f"cg routes --unguarded" if it["node"].startswith("route:") else f"cg protocols --pattern '{it['node']}'",
             entry_points=(it["entry_points"], it["entry_point_total"]),
-            detail=f"{it['name']} has no auth guard{w}"))
+            detail=f"{it['name']} has no auth guard{w}{tail}")
+        if severity:
+            f["severity"] = severity
+        out.append(f)
     return out
 
 

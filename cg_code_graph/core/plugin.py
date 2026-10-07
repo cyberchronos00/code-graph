@@ -59,6 +59,9 @@ class GraphBuilder:
         # Pigeon API definitions found by the Dart plugin ({Api: {kind: host | flutter, methods, file}}): bridges.py
         # links their native implementations / native callers
         self.pigeon_apis: dict = {}
+        # keyed-hash salt for the markers that stand in for secret values (cg_code_graph/core/redact.py); the indexer
+        # sets it from the graph DB before any plugin runs
+        self.redact_salt: str | None = None
 
     def add_node(self, kind: str, key: str, name: str | None = None, **kw) -> str:
         nid = node_id(kind, key)

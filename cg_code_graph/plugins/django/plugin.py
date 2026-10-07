@@ -445,6 +445,8 @@ class DjangoPlugin(FrameworkPlugin):
             access = self.access_of(h, r.get("viewset"))
             if access:
                 attrs["access"] = access
+            if self.is_drf_view(h, r.get("viewset")) and r.get("framework") != "drf":
+                attrs["drf"] = True        # a DRF view routed with plain `path()`: REST_FRAMEWORK defaults apply to it
             if isinstance(h, (FuncInfo, ClassInfo)):
                 attrs["handler"] = h.id
             entry = r.get("entry_kind") or ("http_route" if r.get("mounted", True) else None)
@@ -464,6 +466,16 @@ class DjangoPlugin(FrameworkPlugin):
                 self.class_hooks(h.cls)
             self.payload_facts(rid, r, h)
         return n
+
+    def is_drf_view(self, h, viewset=None) -> bool:
+        cls = h if isinstance(h, ClassInfo) else (h.cls if isinstance(h, FuncInfo) else None)
+        for c in (cls, viewset):
+            if isinstance(c, ClassInfo) and any(x.startswith("rest_framework") for x in self.prog.lineage(c)):
+                return True
+        if isinstance(h, FuncInfo):
+            return any((dotted(d.func if isinstance(d, ast.Call) else d) or "").split(".")[-1] == "api_view"
+                       for d in h.decorators or [])
+        return False
 
     access_rx = None
 
@@ -513,8 +525,11 @@ class DjangoPlugin(FrameworkPlugin):
             for k in [c] + [x[1] for x in self.prog.mro(c) if x[0] == "type"]:
                 for attr in ("permission_classes", "authentication_classes"):
                     if attr in k.attrs and not any(o["via"] == attr for o in out):
-                        for x in elems(k.attrs[attr][0]):
+                        names = elems(k.attrs[attr][0])
+                        for x in names:
                             add(x.split(".")[-1], attr)
+                        if attr == "permission_classes" and not names and isinstance(k.attrs[attr][0], (ast.List, ast.Tuple)):
+                            add("AllowAny", "permission_classes = []")      # an empty list is public, the same as AllowAny
         return out
 
     def class_hooks(self, c: ClassInfo):

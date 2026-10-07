@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 import time
 from collections import defaultdict, deque
 from pathlib import Path
 
+from .core import redact as redact_mod
 from .core.detect import detect
 from .core.model import ENTRY_KINDS, PROPAGATING
 from .core.plugin import GraphBuilder, Project, gc_paused
@@ -128,8 +130,26 @@ def scip_warnings(plugins: dict) -> list[str]:
     return out
 
 
+def _existing_salt(db_path) -> str | None:
+    """The redact salt of the graph DB at `db_path`, so a re-index keeps its markers comparable."""
+    p = Path(db_path)
+    if not p.is_file():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT value FROM meta WHERE key='redact_salt'").fetchone()
+        finally:
+            con.close()
+        v = json.loads(row[0]) if row else None
+        return v if isinstance(v, str) and v else None
+    except (sqlite3.Error, ValueError):
+        return None
+
+
 def index_project(root: str | Path, db_path: str | Path, name: str | None = None, scip: list[str] | None = None,
-                  gates: str | None = None, python_roots: list[str] | None = None, include_generated: bool = False) -> dict:
+                  gates: str | None = None, python_roots: list[str] | None = None, include_generated: bool = False,
+                  redact_salt: str | None = None) -> dict:
     """Index `root` into a new graph DB. The project config file (.cg.yaml at the root) is read automatically;
     python_roots (`cg index --python-root`) overrides its python.source_roots and `gates` its gates. Generated, copied
     and vendored files (cg_code_graph/core/generated.py) stay out of the graph unless include_generated
@@ -163,6 +183,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
         project.options["dart_keep_generated"] = True
     scan_seconds = round(time.time() - t_scan, 2)
     builder = GraphBuilder()
+    builder.redact_salt = redact_salt or _existing_salt(db_path) or redact_mod.new_salt()
     stats = {"detected": project.detected, "plugins": {}}
     if cfg:
         stats["config"] = {k: v for k, v in cfg.items()}
@@ -386,7 +407,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     rows = tag_entries(builder)
     stats["entry_tagging_seconds"] = round(time.time() - t_tag, 2)
     from .core.redact import sweep as redact_sweep
-    redact_sweep(builder)
+    redact_sweep(builder, builder.redact_salt)
     store = GraphStore.create(db_path)
     with gc_paused():
         store.write(builder.nodes.values(), builder.edges.values())
@@ -415,7 +436,7 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     # starter queries for the visual view / MCP, derived from this graph (each resolves to existing nodes)
     from .starters import generate as gen_starters
     t_st = time.time()
-    store.set_meta(project=project.name, root=str(project.root), stats=stats)    # presets / config for the route guards
+    store.set_meta(project=project.name, root=str(project.root), stats=stats, redact_salt=builder.redact_salt)    # presets / config for the route guards
     gst = GraphStore(db_path)
     try:
         rep: dict = {}

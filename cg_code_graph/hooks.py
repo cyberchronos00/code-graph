@@ -586,7 +586,8 @@ def _refresh_once(root: Path, db: str, name: str | None, quiet: bool, out) -> in
                                     include_generated=include_generated)
             else:
                 result = index_project(index_root, tmp, index_name, python_roots=py_roots,
-                                       include_generated=include_generated)
+                                       include_generated=include_generated,
+                                       redact_salt=meta.get("redact_salt") if db_exists and same_tree else None)
             nodes = _node_count(result, bool(apps))
             if not nodes:
                 _log(db, [f"start {stamp}", f"end {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}",

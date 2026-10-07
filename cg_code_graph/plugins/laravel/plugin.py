@@ -213,10 +213,10 @@ class LaravelPlugin(FrameworkPlugin):
                     key = f"{root}.{n['key']}"
                     attrs = {}
                     if n.get("literal") is not None and not isinstance(n["literal"], (dict, list)):
-                        attrs["value"] = redact(n["literal"], n["key"])
+                        attrs["value"] = redact(n["literal"], n["key"], self.b.redact_salt)
                     if n.get("envs"):
                         attrs["env"] = [e["env"] for e in n["envs"]]
-                        attrs["env_default"] = [redact(e["default"], e["env"] if looks_secret(e["env"]) else n["key"])
+                        attrs["env_default"] = [redact(e["default"], e["env"] if looks_secret(e["env"]) else n["key"], self.b.redact_salt)
                                                 for e in n["envs"]]
                     cid = b.add_node("config", key, file=f, line=n["line"], module="config", lang="php", attrs=attrs)
                     self.config_keys[key] = n

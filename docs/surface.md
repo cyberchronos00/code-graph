@@ -21,7 +21,8 @@ cg surface --db out/graph.db --fail-on hardcoded,unverified   # exit 1 in CI
 | `--outbound` | every `external:` system ([External systems](external.md)) | address source, credential source, TLS, entry points that reach it |
 
 Guard state is `guarded`, `secret-checked` (a signature or shared-secret check), `inline-guarded` (an unconditional
-check inside the action), `unguarded`, or `unchecked` when the protocol records no guards. Socket.IO handlers in a
+check inside the action), `public` (a route in the [public-by-design table](#public-by-design-routes)), `unguarded`, or
+`unchecked` when the protocol records no guards. Socket.IO handlers in a
 client bundle are not an inbound surface and are left out.
 
 ## Findings
@@ -31,11 +32,48 @@ client bundle are not an inbound surface and are left out.
 | `hardcoded` | an external system or SDK call with a literal credential (`credential_source=literal`, `credential_literal`, an edge with `literal_credential`); a DSN with a password in it; a config key named like a secret (`password`, `token`, `secret`, `*_key`) with a literal value, or an `env('X', 'literal')` default for a secret-looking variable | high |
 | `plaintext` | an external system with `tls=false` and a non-loopback host (`http://`, `ws://`, `redis://`, `amqp://`, `ftp://`, `ldap://`, plain SMTP, a Docker TCP host); also Telnet / TFTP, MQTT on 1883 and SMTP on 25 at `heuristic`; and a gRPC channel or port created without TLS (protocol `grpc`, see below) | medium |
 | `unverified` | a webhook route that reads a provider header and never verifies it ([Protocol links](protocols.md)) | high |
-| `unguarded` | a route or handler with no guard: the `cg routes --unguarded` rule, so an unconditional inline check counts; `--strict` keeps route guards only | medium |
+| `unguarded` | a route or handler with no guard after the [guard rules](#how-unguarded-decides): the `cg routes --unguarded` rule plus framework defaults, checks at the top of the handler and the public-route table; `--strict` keeps route guards only | medium when nothing looks like a check and a write is reached; low otherwise; `heuristic` confidence when unclear |
 | `exposed-listener` | a TCP / UDP listener bound to all interfaces (`0.0.0.0`, `::`, no host) | medium |
 | `tls-off` | certificate verification or SSH host key checking switched off in code or configuration (table below) | high |
 | `ipc-exposed` | local IPC open to callers it should not trust (table below), for what `unguarded` does not already report | medium |
 | `ssrf` | the host or the whole URL of an outbound HTTP call is built from request input and no allow-list check precedes it (see "Outbound URLs from request input"); a DNS lookup of request input is reported at the lower severity | high (DNS lookup of input: medium) |
+
+### How `unguarded` decides
+
+`cg surface` starts from the `cg routes` guard state and then, unless `--strict` is given, applies these rules in order. A route that gets a guard from a rule is not reported; a rule that cannot decide leaves it reported at `heuristic` confidence and low severity, with the reason in the detail (`unclear: ...`).
+
+| step | rule | by framework |
+|---|---|---|
+| 1. project defaults | a guard that applies to every route of the project is added to the route | Django REST framework: `REST_FRAMEWORK` `DEFAULT_PERMISSION_CLASSES` of the settings file (an `AllowAny` default is not a guard; a view with `permission_classes = []` is explicitly public); Laravel: global `$middleware` and `$middlewareGroups` of `app/Http/Kernel.php` or `withMiddleware()` of `bootstrap/app.php`, by the group of the route file; Nest: `APP_GUARD` providers (already recorded), removed from a route that has `@Public()` or a similar opt-out decorator (`SkipAuth`, `NoAuth`, `AllowAnonymous`, ...); Express: `app.use(auth)` that comes before the route in the same router and whose mount path covers it (`app.use('/admin', auth)` guards `/admin/*` only); Express `session()`, `cookie-session` and `express-session` are never auth |
+| 2. public by design | the route matches the [public table](#public-by-design-routes) | all |
+| 3. check in the handler | within the first 14 code lines of the handler (not past its end): an `if` / `unless` whose condition mentions a session, user, token, permission, role, admin flag, `Authorization` or API key and that returns, throws, aborts, redirects or answers 401 / 403; or a leading call such as `requireAuth()`, `authorize()`, `verify...()`, `check...()` or `abort_unless()` whose name or argument mentions the user, auth, token, role, permission, signature or key. A Socket.IO endpoint is checked in its connection handler first (`io.use(...)` or `on('connection')`), then in its own first statements. Laravel `auth()->check()`, `Auth::user()` and `$request->user()` are inline guards | all; PHP, Python and TypeScript |
+| 4. unclear | a middleware or decorator whose name looks like a check but is not in the presets, a webhook receiver whose verification is not recognised, a call in the handler whose name looks like a check, a GraphQL endpoint (access is per field) | `heuristic`, low |
+
+Severity: `medium` when no step applied, nothing in the handler looks like a check, and the handler reaches a database write (`cg routes --writes`); `low` for a read-only handler, a [metrics endpoint](#public-by-design-routes) and every `heuristic` case. `--strict` reports every route with no route-level guard at medium severity, as before part 2d.
+
+Per-framework notes: Django resolves a DRF view routed by a plain `path()` as a DRF view, so the settings default applies; Laravel resolves the route file's group (`web`, `api`) and the global stack; Nest reads `@Public()`, `@SkipAuth()`, `@AllowAnonymous()`, `@NoAuth()` and similar decorators as opt-outs; Express guards depend on registration order, because `app.use(auth)` guards only routes registered after it.
+
+### Public-by-design routes
+
+These patterns are matched on the route path (segments are case-insensitive, parameters are ignored). A match makes the route `public` and removes it from `unguarded`. `metrics` is the exception: it stays reported, at low severity.
+
+| class | examples of matching path segments |
+|---|---|
+| sign-in / sign-up / password reset | `login`, `logout`, `signin`, `signup`, `register`, `forgot-password`, `reset-password`, `verify-email`, `csrf` |
+| health check | `health`, `healthz`, `ready`, `readyz`, `live`, `livez`, `ping`, `status`, `up`, `alive` |
+| robots / sitemap / favicon / manifest | `robots.txt`, `sitemap*.xml`, `favicon.ico`, `manifest.json`, `security.txt`, `humans.txt`, `ads.txt` |
+| static assets, media, thumbnails | `static`, `assets`, `public`, `media`, `_next`, `locales`, `fonts`, `images`, `thumbnails`, `avatars`, `emoji`, `logo` |
+| jwks / `.well-known` | `.well-known`, `jwks` |
+| OAuth / OIDC callback or token endpoint | `oauth`, `oidc`, `openid`, `callback`, `authorize`, `sso`, `saml`, `/token` |
+| API schema / documentation | `swagger`, `redoc`, `openapi`, `api-docs`, `/api/schema` |
+| utility endpoint | `version`, `ip`, `geolocation` |
+| scheduled job endpoint | `cron` (the job checks its own key) |
+| tRPC adapter, Auth.js / NextAuth handler | `/api/trpc/*` (each procedure carries its own middleware), `[...nextauth]` |
+| embed pages, shared link, site root | `embeds`, `/s/`, `/share/`, `/public/`, `/` |
+| test / fixture code | `test`, `tests`, `__tests__`, `e2e`, `fixtures`, `*.test`, `*.spec` |
+| metrics (low severity, still reported) | `metrics`, `prometheus`, `stats` |
+
+The table is a heuristic about names. A route named `/status` that is not public is hidden by it; add nothing to the graph for that, but use `--strict` to see every route without a route-level guard. A public route that is not in the table needs a `surface.ignore` entry.
 
 ### Disabled verification (`tls-off`)
 
@@ -148,6 +186,29 @@ Every finding carries `finding`, `severity`, `confidence`, `protocol`, `node`, `
 most five kinds, the total in `entry_point_total`). On a combined graph (`cg link`) each finding also names its `repo`.
 The fingerprint hashes finding, node id and file, never the line, so it survives edits above the finding.
 
+An `unguarded` finding as it prints after part 2d, on the `tests/surface_fixture` apps (the `/health` route is `public` and not listed; the second route reads only):
+
+```text
+$ cg surface --db out/graph.db --finding unguarded
+attack surface: 2 finding(s) (1 medium, 1 low)
+inbound surface: 9 item(s) (1 guarded, 1 public, 1 secret-checked, 4 unchecked, 2 unguarded); outbound surface: 6 system(s)
+
+== unguarded (2) - Inbound handler without a guard ==
+  http
+    MEDIUM [resolved] route:ANY /admin/purge/
+      ANY /admin/purge/ has no auth guard and reaches a write
+      at py/bookshop/urls.py:7
+      reached from http_route(1)
+      fingerprint 4f95d4747c5550f1
+    LOW [resolved] route:ANY /hooks/github-open/
+      ANY /hooks/github-open/ has no auth guard
+      at py/bookshop/urls.py:9
+      reached from http_route(1)
+      fingerprint 36091b3f583debb1
+```
+
+An unclear case adds its reason to the detail and has `heuristic` confidence, for example `ANY /graphql/ has no auth guard (unclear: GraphQL endpoint: access is checked per field)`.
+
 ```text
 $ cg surface --db out/graph.db --finding hardcoded
 attack surface: 2 finding(s) (2 high)
@@ -222,7 +283,7 @@ $ cg surface --db out/graph.db --finding ipc-exposed
 | `--format text\|json\|sarif` | `json` is the full structure; `sarif` is SARIF 2.1.0 |
 | `--fail-on f1,f2` | exit 1 when any listed finding remains after ignores |
 | `--max-items N` | cap on listed findings and items (default 200); totals stay in the summary |
-| `--strict` | `unguarded` counts route guards only |
+| `--strict` | `unguarded` counts route guards only: no framework defaults, no handler checks, no public-route table, medium severity |
 | `--show-ignored` | list the findings `surface.ignore` accepted |
 
 SARIF has one rule per finding type (`cg.surface.<finding>`), `level` from severity (high `error`, medium `warning`),
@@ -270,8 +331,14 @@ The `attack_surface` tool takes `inbound`, `outbound`, `protocol`, `finding`, `m
 
 A credential literal is never kept in the graph database. At index time a literal under a key that looks like a
 credential (`password`, `secret`, `token`, `key`, `api_key`, `auth`, `private`, `credential`, `passphrase`, `dsn`, ...)
-is stored as `redacted:sha256:<first 8 hex of the digest>`: it shows that a literal exists and tells two values apart,
-and it cannot be reversed. This covers the Laravel config `value` and `env('X', 'default')` default attrs. A password
+is stored as `redacted:hmac:<first 8 hex of HMAC-SHA-256(salt, value)>`: it shows that a literal exists and tells two values apart
+within the graph, and it cannot be reversed. The salt is `secrets.token_hex(16)`, created with the database and stored in
+the `meta` table under `redact_salt`; re-indexing and `cg refresh` keep it, a new database gets a new one. The salt is not
+secret from someone who holds the database, but a marker from a leaked screenshot, log or SARIF file cannot be matched
+against a table of common passwords without it, and the same password in two graphs gives two markers. Fingerprints are
+comparable inside one graph only: a `cg link` combined graph keeps the markers of its sources and has no salt of its own,
+and comparing a secret across repos is not supported. Indexes made before part 2d hold `redacted:sha256:`; both prefixes
+count as redacted, and re-indexing replaces the old form. This covers the Laravel config `value` and `env('X', 'default')` default attrs. A password
 inside any `scheme://user:password@host` string in a node or edge attr gets the same marker, so the host stays
 readable. Non-secret values (`'currency' => 'EUR'`, a hostname default) are stored as before, and `hardcoded` still
 sees a marker as a literal. `cg node config:...` and a direct database read show the marker, never the value. The
@@ -283,7 +350,7 @@ its password. A map keyed by source identifiers (`reexports`) is left alone: an 
 ## Validation
 
 Counts, sampled true / false positives per finding type and recall on three intentionally vulnerable apps are in the
-[validation log](validation-log.md#attack-surface-47). `unguarded` is the noisiest type on large apps ([Known limitations](limitations.md#attack-surface)).
+[validation log](validation-log.md#attack-surface-47). `unguarded` is the noisiest type on large apps, and still needs review after part 2d ([Known limitations](limitations.md#attack-surface)).
 
 ## Not detected yet
 

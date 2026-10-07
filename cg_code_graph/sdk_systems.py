@@ -62,7 +62,8 @@ PY_OPS = {
     "sqs": {"send_message", "receive_message", "delete_message", "get_queue_url", "create_queue"},
     "secretsmanager": {"get_secret_value", "create_secret", "put_secret_value", "describe_secret"},
     "dynamodb": {"get_item", "put_item", "query", "scan", "update_item", "delete_item", "batch_get_item"},
-    "ses": {"send_email", "send_raw_email"},
+    "ses": {"send_email", "send_raw_email", "send_bulk_email", "send_templated_email", "create_email_identity",
+            "get_email_identity", "delete_email_identity"},
     "kms": {"encrypt", "decrypt", "generate_data_key", "generate_data_key_without_plaintext", "sign", "verify",
             "re_encrypt", "describe_key", "get_public_key", "create_key", "generate_mac", "verify_mac"},
 }
@@ -91,6 +92,11 @@ TS_CMD = {
     "UpdateItemCommand": ("dynamodb", "TableName", "UpdateItem"),
     "DeleteItemCommand": ("dynamodb", "TableName", "DeleteItem"),
     "SendEmailCommand": ("ses", None, "SendEmail"),
+    "SendBulkEmailCommand": ("ses", None, "SendBulkEmail"),
+    "SendRawEmailCommand": ("ses", None, "SendRawEmail"),
+    "CreateEmailIdentityCommand": ("ses", None, "CreateEmailIdentity"),
+    "GetEmailIdentityCommand": ("ses", None, "GetEmailIdentity"),
+    "DeleteEmailIdentityCommand": ("ses", None, "DeleteEmailIdentity"),
     "EncryptCommand": ("kms", "KeyId", "Encrypt"),
     "DecryptCommand": ("kms", "KeyId", "Decrypt"),
     "GenerateDataKeyCommand": ("kms", "KeyId", "GenerateDataKey"),
@@ -102,12 +108,15 @@ TS_CMD = {
     "GetPublicKeyCommand": ("kms", "KeyId", "GetPublicKey"),
 }
 MARK_MAIL = re.compile(
-    r"sendgrid|mailgun|postmark|resend|twilio|vonage|nexmo|anymail|EMAIL_BACKEND|Mail::|Mailable|"
+    r"sendgrid|mailgun|postmark|resend|nodemailer|twilio|vonage|nexmo|anymail|EMAIL_BACKEND|Mail::|Mailable|"
     r"Notification|django\.core\.mail|send_mail", re.I)
 MARK_INFRA = re.compile(
     r"firebase-admin|firebase_admin|kreait|@google-cloud/(?:firestore|secret-manager|kms)|google\.cloud|Google\\Cloud|"
     r"FcmChannel|ApnChannel|node-apn|apns2|aioapns|pushok|web-push|webpush|WebPush|expo-server-sdk|kubernetes|"
     r"k8s|RenokiCo|dockerode|docker|KMS|Kms|keyvault|messagebird|plivo", re.I)
+# Case-insensitive prefilter on lowered text: much cheaper than re.I alternations. Neither pattern
+# above uses an uppercase escape (\\S, \\W...), so lowering the pattern keeps its meaning.
+MARK_LOWER = re.compile(MARK_MAIL.pattern.lower() + "|" + MARK_INFRA.pattern.lower())
 CONFIG_FILES = ("filesystems.php", "mail.php", "services.php", "firebase.php", "broadcasting.php")
 _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)(/|$)|\.(test|spec)\.[cm]?[jt]sx?$|Test\.php$|(^|/)test_.*\.py$")
 _CRED_KW = ("aws_access_key_id", "aws_secret_access_key", "aws_session_token", "accessKeyId", "secretAccessKey", "sessionToken")
@@ -132,7 +141,7 @@ def _files(root):
                 text = open(p, errors="replace").read()
             except OSError:
                 continue
-            if cfg_php or MARK.search(text) or MARK_MAIL.search(text) or MARK_INFRA.search(text):
+            if cfg_php or MARK.search(text) or MARK_LOWER.search(text.lower()):
                 yield _rel(root, p), text
 
 
@@ -402,6 +411,7 @@ def _py_service_call(call):
     if not call.args or not isinstance(call.args[0], ast.Constant) or not isinstance(call.args[0].value, str):
         return None
     svc = call.args[0].value
+    svc = "ses" if svc == "sesv2" else svc
     return svc if svc in AWS_FIELD else None
 
 
@@ -690,7 +700,7 @@ def _collect_ts(rel: str, text: str):
                 f_auth, f_creds = _explicit_creds_near(cargs)
             f = _fact(rel, _line_at(text, m.start()), "s3" if proto_s == "s3" else "aws",
                       None if proto_s == "s3" else proto_s, res, op,
-                      "@aws-sdk/client-s3" if proto_s == "s3" else f"@aws-sdk/client-{proto_s}",
+                      "@aws-sdk/client-s3" if proto_s == "s3" else "@aws-sdk/client-sesv2" if proto_s == "ses" and "@aws-sdk/client-sesv2" in text else f"@aws-sdk/client-{proto_s}",
                       f_auth, f_creds, None)
             if f:
                 facts.append(f)
@@ -1285,7 +1295,7 @@ def _ts_named(text: str, mod: str) -> set[str]:
 
 def _collect_mail_ts(rel: str, text: str, ctx: dict) -> list:
     facts = []
-    if not re.search(r"@sendgrid/mail|mailgun\.js|['\"]postmark['\"]|['\"]resend['\"]|['\"]twilio['\"]|@vonage/server-sdk", text):
+    if not re.search(r"nodemailer|@sendgrid/mail|mailgun\.js|['\"]postmark['\"]|['\"]resend['\"]|['\"]twilio['\"]|@vonage/server-sdk", text):
         return facts
 
     def add(provider, pos, op, via, cred, resource=None):
@@ -1319,6 +1329,18 @@ def _collect_mail_ts(rel: str, text: str, ctx: dict) -> list:
             cred = _cred_expr(args.split(",")[0], text)
             for m in _ts_calls(text, var, r"\.(emails|batch)\.send\("):
                 add("resend", m.start(), f"{m.group(1)}.send", "resend", cred)
+    # nodemailer: createTransport({ SES: ... }) goes to AWS SES; smtp.resend.com or nodemailer-resend goes to Resend.
+    # Other transports (plain SMTP, sendmail) are the smtp system and stay out of the mail provider list.
+    if re.search(r"['\"]nodemailer['\"]", text):
+        for var, args, _p in _ts_ctor_vars(text, r"(?:\w+\.)?createTransport"):
+            if re.search(r"[{,]\s*SES\b\s*[:,}]|\bSES(?:v2)?Client\b", args):
+                provider, cred = "ses", ("none", [])
+            elif re.search(r"smtp\.resend\.com|\bresend\w*Transport|\bResendTransport\b", args):
+                provider, cred = "resend", _cred_expr(args, text)
+            else:
+                continue
+            for m in _ts_calls(text, var, r"\.sendMail\("):
+                add(provider, m.start(), "sendMail", "nodemailer", cred)
     # twilio: twilio(sid, token) / new Twilio(sid, token)
     if re.search(r"['\"]twilio['\"]", text):
         names = _ts_names(text, r"twilio")

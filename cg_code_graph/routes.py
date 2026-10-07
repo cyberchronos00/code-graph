@@ -115,6 +115,7 @@ class AuthMatcher:
         self.names = presets.guard_names(self.applied, "auth")
         self.not_auth = presets.guard_names(self.applied, "auth", "not_auth")
         self.secret_names = presets.guard_names(self.applied, "secret")
+        self.session_only = presets.guard_names(self.applied, "auth", "session_only")
         self.base = re.compile(AUTH_PATTERN)
         pats = [*auth_patterns, *([extra] if extra else [])]
         self.project = [re.compile(p, re.I) for p in pats]
@@ -126,7 +127,7 @@ class AuthMatcher:
         """'project pattern', 'preset <name>', 'name pattern', or None (not auth)."""
         if any(rx.search(name or "") for rx in self.project):
             return "project pattern"
-        if self.not_auth.contains(name):
+        if self.not_auth.contains(name) or self.session_only.lookup(name):
             return None
         hit = self.names.lookup(name)
         if hit:
@@ -255,6 +256,70 @@ def inline_auth(attrs: dict | None) -> bool:
     return any(isinstance(g, dict) and not g.get("conditional") for g in attrs.get("inline_guards") or [])
 
 
+class GuardRefiner:
+    """Route facts from beyond the route's own middleware (cg_code_graph/guard_facts.py): project-wide defaults, checks
+    at the top of the handler, the Nest @Public() opt-out, and public-by-design routes. Not applied under `--strict`."""
+
+    def __init__(self, st: GraphStore, mw: dict):
+        from . import guard_facts as F
+        self.F = F
+        self.st, self.mw = st, mw
+        self.facts = getattr(st, "_guard_facts", None)
+        if self.facts is None:
+            self.facts = st._guard_facts = F.Facts(st)
+        self.handlers: dict[str, dict] = {}
+        for r in st.q("SELECT e.src, e.file ef, e.line el, n.file nf, n.line nl, n.end_line ne FROM edges e "
+                      "JOIN nodes n ON n.id = e.dst WHERE e.kind='ROUTES_TO' AND e.src LIKE 'route:%'"):
+            self.handlers.setdefault(r["src"], dict(r))
+
+    def _guard_file(self, rid: str, name: str):
+        for e in self.mw.get(rid, []):
+            a = json.loads(e.get("attrs") or "{}")
+            if (a.get("name") or "") == name or Q.short_id(e["dst"]) == name:
+                nd = self.st.node(e["dst"])
+                return nd["file"] if nd else None
+        return None
+
+    def route(self, rid: str, n: dict, a: dict, g: list[dict], igs: list[dict], is_auth):
+        F, extra = self.F, {}
+        file = n.get("file")
+        g = list(g)
+        have = {x["name"].lower() for x in g}
+        for x in self.facts.project_guards(a, file, is_auth):
+            if x["name"].lower() not in have:
+                g.append(x)
+        g, public_by = self.facts.nest_public(a, g, lambda nm: self._guard_file(rid, nm))
+        if public_by:
+            extra["public"] = public_by
+        if any(x["auth"] or x.get("secret") for x in g) or any(not x.get("conditional") for x in igs):
+            return g, igs, extra
+        uri = a.get("uri") or str(n.get("name") or "").split(" ", 1)[-1]
+        reason, hidden = (None, True) if extra.get("public") else F.public_reason(a.get("method"), uri, file)
+        if reason:
+            extra["public"], extra["public_hidden"] = reason, hidden
+        if re.search(r"(?:^|/)graphql(?:$|[/.])", str(a.get("uri") or "").lower()):
+            extra["unsure"] = "GraphQL endpoint: access is checked per field / resolver"
+        h = self.handlers.get(rid)
+        if h:
+            hf, hl = h["nf"] or h["ef"], h["nl"] or h["el"]
+            lines = self.facts.lines(hf)
+            if lines and hl:
+                res = F.scan_body(lines, hl, h["ne"] if h["nf"] else None, py=str(hf).endswith(".py"))
+                if res["guard"]:
+                    gd = res["guard"]
+                    igs = [*igs, {"name": gd["name"], "kind": "inline-check", "at": f"{hf}:{gd['at']}", "conditional": False,
+                                  "how": gd["how"]}]
+                elif res["unsure"] and "unsure" not in extra:
+                    extra["unsure"] = res["unsure"]
+        unknown = [x["name"] for x in g if not x["auth"] and not x.get("secret") and x["kind"] not in ("webhook",)
+                   and F.PLAUSIBLE_CHECK.search(x["name"]) and not F.BENIGN_GUARDS.match(x["name"])]
+        if unknown and "unsure" not in extra:
+            extra["unsure"] = f"unclassified middleware / decorator {unknown[0]}"
+        if "unsure" not in extra and not a.get("webhook") and re.search(r"(?:^|/)webhooks?(?:$|[/.])", str(a.get("uri") or "").lower()):
+            extra["unsure"] = "webhook receiver whose verification is not recognised"
+        return g, igs, extra
+
+
 def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
                   unguarded: bool = False, strict: bool = False, auth_pattern: str | None = None, min_conf: str = "heuristic",
                   gate: str | None = "auto", platform: str | None = None, deadline: float | None = None) -> dict:
@@ -306,15 +371,19 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
             reached[rid].append({"what": label, "via": Q.short_id(w["src"]) if w else None, "depth": gc.depth(rid, i), "path": p, "path_confidence": Q.path_confidence(p),
                                  "gated_only": bool(gate) and not gc.reached(rid, i, live=True)})
     items = []
+    refine = None if strict else GuardRefiner(st, mw)
     for rid, n in routes.items():
         if mode != "all" and rid not in reached:
             continue
         a = json.loads(n.get("attrs") or "{}")
         g = route_guards(a, mw.get(rid, []), is_auth)
         igs = [x for x in (a.get("inline_guards") or []) if isinstance(x, dict) and x.get("name")]
+        extra = {}
+        if refine:
+            g, igs, extra = refine.route(rid, n, a, g, igs, is_auth)
         it = {"route": rid, "name": n["name"], "at": _route_loc(n, a), "framework": a.get("framework"), "guards": g,
               "has_auth": any(x["auth"] for x in g), "secret_checked": any(x.get("secret") for x in g),
-              "inline_guards": igs, "inline_auth": any(not x.get("conditional") for x in igs),
+              "inline_guards": igs, "inline_auth": any(not x.get("conditional") for x in igs), **extra,
               **({"webhook": a["webhook"]} if a.get("webhook") else {}),
               "reaches": sorted(reached.get(rid, []), key=lambda x: x["what"]),
               "clients": _clients(st, rid), "callbacks": _callbacks(st, rid)}

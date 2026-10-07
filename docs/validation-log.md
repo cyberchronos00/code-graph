@@ -1358,7 +1358,7 @@ HTTP hosts already attached as `external:http(s)` are not duplicated.
 Run of `cg index` and `cg surface --format json` on shallow clones of the default branch (October 2026), indexed in
 full unless noted. Clone shas: juice-shop 1618a61, DVWA 088256f, NodeGoat c5cb68a, netbox 726a2bb, saleor bb75f87,
 outline 6e6eaf6, nextcloud/server 21bf334 (whole repo), ansible bf2610e (whole repo), plus for #42 calcom/cal.com 54343aa
-(`apps/web` only, as before), appwrite 8a47c4b, open-webui 8bd8b4f, documenso a166cab. Each finding was compared with
+(web app only, as before), appwrite 8a47c4b, open-webui 8bd8b4f, documenso a166cab. Each finding was compared with
 the cited source line: **TP** is the finding as described, **FP** is a route that is public by design or guarded in a way
 the index does not see, or text that is not code, **unclear** needs a decision from the owner (an opt-in switch, a check in
 another file). Up to 20 findings per type per corpus were sampled (seeded random sample, all when fewer). The counts below
@@ -1401,9 +1401,9 @@ depend on code shapes the index does not model (see [Known limitations](limitati
 | outline | tls-off | 4 | 4 | 4 | 0 | 0 |
 | outline | ipc-exposed | 1 | 1 | 1 | 0 | 0 |
 | outline | unguarded | 28 | 20 | 0 | 19 | 1 |
-| cal.com `apps/web` | tls-off | 1 | 1 | 1 | 0 | 0 |
-| cal.com `apps/web` | ipc-exposed | 2 | 2 | 2 | 0 | 0 |
-| cal.com `apps/web` | unguarded | 99 | 20 | 0 | 17 | 3 |
+| cal.com web app | tls-off | 1 | 1 | 1 | 0 | 0 |
+| cal.com web app | ipc-exposed | 2 | 2 | 2 | 0 | 0 |
+| cal.com web app | unguarded | 99 | 20 | 0 | 17 | 3 |
 | open-webui | ssrf | 4 (14) | 4 | 3 | 1 | 0 |
 | open-webui | tls-off | 2 (4) | 2 | 1 | 0 | 1 |
 | open-webui | ipc-exposed | 2 | 2 | 2 | 0 | 0 |
@@ -1418,30 +1418,72 @@ that are fixed here; `ansible` and `open-webui` lost one or two `tls-off` that w
 
 Notes from the sampled checks:
 
-- `unguarded` is the noisiest type. The false positives have four causes: routes that are public by design (health, robots,
+- `unguarded` is the noisiest type (counts above are from part 2c; part 2d below has the new ones). The false positives have four causes: routes that are public by design (health, robots,
   share links, login, jwks, static, OAuth token endpoints); a check inside the handler (a session lookup, a cron key, a
-  `getServerSession` call, tRPC procedure middleware) that is not a guard fact; a framework-wide default that is set in
-  settings (netbox sets `DEFAULT_PERMISSION_CLASSES` to `TokenPermissions` at `netbox/netbox/settings.py:806`, so all 858
-  findings are false positives, 845 of them from `api/urls.py` router registrations); and Socket.IO events whose auth is
-  checked at `connect` (open-webui) or in the first lines of the handler (7 of 13 sampled handlers). NodeGoat's
-  `session()` middleware is read as an auth guard, so its `/login` and `/signup` routes show as guarded.
-- `tls-off` findings that are real code are mostly opt-in branches: outline sets `rejectUnauthorized: false` for the
-  production Postgres, SMTP without `SMTP_SECURE` and `rediss://` Redis (4/4 TP); ansible and nextcloud set it only when the
-  user switches certificate validation off, so they are `unclear`.
-- `ipc-exposed` is the pattern `postMessage(..., '*')`. All 25 sampled are real instances; whether the payload is sensitive
-  was not judged. documenso's embed pages send recipient tokens and document ids to `'*'`.
-- `hardcoded` and `plaintext` on outline come from `.env.sample` (`DATABASE_URL=postgres://user:pass@...`, `REDIS_URL=redis://redis:6379`),
-  a placeholder DSN and a compose service name. They are by design for example env files.
-- Precision fixes made in this pass (each has a regression case): `from ssl import CERT_NONE`, docstrings and `DOCUMENTATION = r'''...'''`
-  blocks no longer match `tls-off` (open-webui `auths.py:10` and `client.py:28`, ansible `git.py:49`); a derived URL variable
-  keeps its part (``endpoint = `${BASE()}/api/jobs/${id}` `` is a path, not a whole URL: documenso `local.ts:380`); a value wrapped in
-  `realpath` / `basename` / `intval` / `(int)` / `parseInt` / `Number` / `int` / `float` is no longer a URL (appwrite
-  `.semgrep/request-path-to-filesystem.php:52`); a template that starts with the tainted piece (`` `${id}/x` ``) is a whole URL; and an index run that
-  crashed on a destructured parameter (`const { url } = connection`, open-webui and documenso) now completes. Remaining
-  `ssrf` false positive: open-webui `utils/oauth.py:976`, where taint passes through the result of a call that gets the input only as an argument.
+  `getServerSession` call, tRPC procedure middleware) that is not a guard fact; a framework-wide default set in
+  settings (a DRF `DEFAULT_PERMISSION_CLASSES` that applies to every route of one corpus, so all of its sampled findings are false positives, most from router registrations); and Socket.IO events whose auth is
+  checked at `connect` or in the first lines of the handler (7 of 13 sampled handlers in one corpus). NodeGoat's
+  `session()` middleware is read as an auth guard, so its `/login` and `/signup` routes show as guarded (fixed in part 2d).
+- `tls-off`: 4 of 4 sampled true positives in one corpus (pattern: an opt-in branch that switches certificate verification off for a database, mail or cache client); two corpora have 5 sampled findings in total that are `unclear` (verification is off only when the user switches validation off).
+- `ipc-exposed`: 25 of 25 sampled true positives, all one pattern class (a wildcard target origin in `postMessage`). Whether the data sent is sensitive was not judged.
+- `hardcoded` and `plaintext`: one corpus, 2 findings from example env files (a placeholder DSN, a compose service name); both are by design for example files.
+- Precision fixes made in this pass (each has a regression case): `from ssl import CERT_NONE`, docstrings and module documentation string
+  blocks no longer match `tls-off`; a derived URL variable
+  keeps its part (a template that appends a path to a base URL returned by a call is a path, not a whole URL); a value wrapped in
+  `realpath` / `basename` / `intval` / `(int)` / `parseInt` / `Number` / `int` / `float` is no longer a URL; a template that starts with the tainted piece (`` `${id}/x` ``) is a whole URL; and an index run that
+  crashed on a destructured parameter (`const { url } = obj`) now completes. One `ssrf` false positive remains: taint that passes through the result of a call that gets the input only as an argument.
 - Follow-ups, not fixed: guards inside handler bodies and framework defaults (above); taint through call results;
   `getenv('X') ?: 'literal'` and config-object literals as `hardcoded`; `http.createServer` as `plaintext`; file-per-page PHP routes;
   a role check as a guard; the exact items in the recall table. Listed in [Known limitations](limitations.md#attack-surface).
+
+### Part 2d: `unguarded` precision, index time, fingerprints
+
+Same clones as above (base `2542c89`, which equals `origin/main` when this pass ran), indexed in full with `cg index` into a fresh database for the "before" (2542c89, in a separate worktree) and the "after" (this change), and read with `cg surface --finding unguarded --format json`. The "sampled" column is the full list when it has 20 or fewer entries, a seeded random sample of 20 otherwise (seed 47), so every finding below was classified. **TP**: no guard and no check, as described; **FP**: public by design or guarded in a way the index does not see; **unclear**: depends on a setting or a check in other code.
+
+| corpus | before | after | cut | after by severity (confidence) | sampled | TP | FP | unclear |
+|---|---|---|---|---|---|---|---|---|
+| juice-shop | 10 | 8 | 20% | 8 low (7 resolved, 1 heuristic) | 8 | 4 | 1 | 3 |
+| NodeGoat | 0 | 2 | - | 2 low (resolved) | 2 | 0 | 2 | 0 |
+| netbox | 199 | 5 | 97.5% | 5 low (1 resolved, 4 heuristic) | 5 | 0 | 2 | 3 |
+| saleor | 9 | 4 | 56% | 3 medium (resolved), 1 low (heuristic) | 4 | 0 | 0 | 4 |
+| outline | 28 | 5 | 82% | 5 low (resolved) | 5 | 0 | 5 | 0 |
+| cal.com web app | 99 | 18 | 82% | 11 low (resolved), 7 low (heuristic) | 18 | 0 | 10 | 8 |
+| open-webui | 14 | 1 | 93% | 1 low (exact) | 1 | 0 | 1 | 0 |
+| documenso | 0 | 0 | - | - | - | - | - | - |
+
+The 2c table above reports 858 for netbox; recounting the clone used here on 2542c89 gives 199, which is the "before" number in this table.
+
+Target: precision of at least 60% or a cut of at least 80% on netbox, outline and the cal.com web app. **Met by the cut** on all three (97.5%, 82%, 82%). **Not met by precision**: no TP remains on those three, because what is left is public-by-design, checked in code the index does not read, or depends on a setting, and no sampled finding on them was a missing guard. The remaining findings are low severity except saleor's three plugin webhook dispatchers, which stay medium (no guard, no recognised check, a write is reached; each plugin verifies its own request).
+
+Recall on juice-shop's four true positives (all sampled before and after, `server.ts`):
+
+| route | line | before | after |
+|---|---|---|---|
+| `POST /file-upload` | 328 | medium | low, resolved |
+| `POST /profile/image/file` | 329 | medium | low, resolved |
+| `POST /profile/image/url` | 330 | medium | low, resolved |
+| `POST /rest/memories` | 331 | medium | low, heuristic (an unclassified middleware precedes the handler) |
+
+All four are still reported, so there is no recall loss; their severity falls to low because none reaches a database write the graph can see (file system writes are not writes in this model). The two `security.txt` routes (public by design) are no longer reported. NodeGoat's two new findings are tutorial pages: they appear because an Express `session()` middleware is no longer read as authentication, so routes with only `session()` in front of them are now `unguarded` (low) where they used to be `guarded`.
+
+What caused the cuts: framework defaults (DRF `REST_FRAMEWORK` default permission classes, Laravel global and group middleware, Nest `APP_GUARD` and `@Public()`), the public-by-design route list ([Attack surface](surface.md#public-by-design-routes)), checks at the top of a handler or of a Socket.IO connection, Express `app.use(auth)` ordering and mount path, and a DRF `permission_classes = []` taken as explicit public access. `--strict` keeps route-level guards only: on netbox it reports 200 (199 before; one route that only `session()` guarded) and on outline 28, unchanged.
+
+Index time against 8172833 (outline and the cal.com web app, three alternating runs, each run a fresh `cg index` from a separate worktree outside the repository; "before" is 8172833, "after" is this change). The profile on cal.com web app before the change put `ssrf_input.apply` at 5.7 s and `insecure_transport.apply` at 1.3 s of a 17.2 s profiled run. Fixes (output unchanged): `ssrf_input` skips files and functions that contain no sink text, `insecure_transport` checks one lowercase substring list per file before running its 35 regexes and finds the client library only when a rule matches, and the SDK file prefilter in `sdk_systems` lowercases the text once instead of two `re.I` scans. After the change on cal.com web app: `ssrf_input.apply` 0.6 s, `insecure_transport.apply` 0.6 s.
+
+| run | outline s (before / after) | cal.com web app s (before / after) |
+|---|---|---|
+| 1 | 33.47 / 33.18 | 13.42 / 12.43 |
+| 2 | 30.17 / 31.49 | 11.48 / 11.19 |
+| 3 | 27.78 / 28.04 | 9.68 / 11.20 |
+| mean | 30.47 / 30.90 (+1.4%) | 11.53 / 11.61 (+0.7%) |
+
+The box is shared and its speed drifted between sessions. Earlier complete sets, taken on slower periods, are in the same range but noisier (outline before / after: 41.15 / 43.04 s with the first two fixes only, 30.09 / 35.46 s and 38.29 / 40.90 s with all of them; cal.com web app: 14.23 / 17.49, 12.70 / 14.02 and 16.44 / 16.09 s). The target is at most +10% against 8172833; the last alternating set meets it, and the noisy sets show the error of one run is larger than the margin.
+
+Output check, `cg surface --format json` on outline, cal.com web app, open-webui and documenso, with the guard change held fixed (commit before the speed-up vs after): `ssrf`, `tls-off` and `ipc-exposed` findings are identical in all three types on all four corpora (outline 0 / 4 / 1, cal.com web app 0 / 1 / 2, open-webui 4 / 2 / 2, documenso 0 / 0 / 28), as are the node and edge counts and every attr that holds an `insecure_transport`, `url_from_input` or `tls_verify` fact. The only graph change comes from the SES v2 work: documenso gains `external:aws:ses` and 4 `CONNECTS_TO` edges (below).
+
+Mail (#42), documenso re-run: the SES v2 identity commands (`CreateEmailIdentityCommand`, `GetEmailIdentityCommand`, `DeleteEmailIdentityCommand` from `@aws-sdk/client-sesv2`) are now recognised: 1 new external node and 4 `CONNECTS_TO` edges, one from each of the 4 functions that call them (checked against the source). The nodemailer SES and Resend transports are recognised too, but documenso uses neither with a transport the extractor can resolve, so they add nothing there.
+
+Fingerprints: a marker is `redacted:hmac:<8 hex>`, keyed by a per-graph salt in meta `redact_salt`, so a common password no longer gives a known value (the unsalted marker of `password` was `5e884898`) and the same value in two different graphs gives different markers.
 
 ### Redaction check
 
@@ -1450,18 +1492,17 @@ Values counted are strings containing `redacted:sha256:` in any node or edge att
 | corpus | redacted values | what they are |
 |---|---|---|
 | DVWA, NodeGoat, juice-shop, netbox, cal.com, appwrite, open-webui, documenso | 0 | - |
-| saleor | 9 in 3 test functions and their cases | passwords of `scheme://user:pw@host` URLs in pytest parameters (`awssqs://`, `https://`); credentials in test data |
-| ansible | 20 in 3 test functions and their cases | passwords of fake URLs in `test_mask_url` and `test_cache_id`; credentials in test data |
-| nextcloud | 2 | `password` entries of a PHP test array |
-| outline | 1 before the fix, 0 attrs after | `reexports.ApiKey` on `server/models/index.ts`: the name of an exported class, not a credential (wrong redaction, fixed) |
+| saleor | 9 in 3 test functions and their cases | passwords of `scheme://user:pw@host` URLs in test parameters; credentials in test data |
+| ansible | 20 in 3 test functions and their cases | passwords of fake URLs in test functions; credentials in test data |
+| nextcloud | 2 | password entries of a test array |
+| outline | 1 before the fix, 0 attrs after | a re-export whose name contains a credential word: the name of an exported class, not a credential (wrong redaction, fixed) |
 
 All values of saleor, ansible and nextcloud were checked and are credentials in test data, so no wrong redaction there.
-No `*_PASSWORD` / `*_SECRET` default or DSN password from a sampled source file is stored verbatim (the netbox
-`configuration_testing.py` password, the NodeGoat `cookieSecret` / `cryptoKey`, and DVWA's `p@ssw0rd` do not appear in the database; a scan of every
+No `*_PASSWORD` / `*_SECRET` default or DSN password from a sampled source file is stored verbatim (a test-settings password in one corpus, the NodeGoat `cookieSecret` / `cryptoKey`, and DVWA's `p@ssw0rd` do not appear in the database; a scan of every
 string attr of every corpus for `scheme://user:pw@` and for literals under a credential-named attr found none).
-Found and fixed: an example DSN in a doc comment (outline `isDatabaseUrl`, `user:pass`) was kept in the `doc` column, which the sweep did not cover; the sweep now
-replaces URL passwords there too. Not fixed: the marker is an unsalted 8-hex SHA-256 of the value, so a common password
-(`password` gives `5e884898`) can be recognised from the marker.
+Found and fixed: an example DSN with a placeholder password in a doc comment (one corpus) was kept in the `doc` column, which the sweep did not cover; the sweep now
+replaces URL passwords there too. Fixed in part 2d: the marker was an unsalted 8-hex SHA-256 of the value, so a common password
+(`password` gave `5e884898`) could be recognised from it; it is now a keyed HMAC with a per-graph salt (`redacted:hmac:`). The counts above were taken with the old `redacted:sha256:` marker.
 
 ## Mail / SMS / push / infra SDKs (#42 parts 3a and 3b)
 
@@ -1483,7 +1524,7 @@ new edges could not be made. The same harness does detect them: `tests/external_
 on 8172833 and 5 on 871328e. Reasons found by reading each corpus:
 
 - outline and saleor send mail through plain SMTP (`external:smtp:env:SMTP_HOST`, `external:smtp:env:EMAIL_URL`, present before), which 3a leaves out on purpose (`smtp` is an ignored mailer).
-- documenso uses nodemailer transports and a Resend transport package, and AWS SES v2 (`@aws-sdk/client-sesv2`: `CreateEmailIdentityCommand`, `GetEmailIdentityCommand`, `DeleteEmailIdentityCommand`). None of these is recognised: the SES v2 commands are not in the SES table (follow-up).
+- documenso uses nodemailer transports, a Resend transport package and AWS SES v2 identity commands. Before part 2d none was recognised; the SES v2 commands now are (see Part 2d above); its nodemailer and Resend transports are still not resolved.
 - appwrite reaches Twilio, Resend and others through its own `Utopia\Messaging\Adapter` classes, which are not an SDK from the extractor's list (follow-up).
 - cal.com `apps/web` and open-webui have no mail, SMS, push, Firebase, Kubernetes, Docker or key-management SDK calls in the indexed tree.
 
@@ -1492,6 +1533,8 @@ Index time: the 871328e runs are 12% to 54% slower than 8172833 on 9 of 12 corpo
 index passes, not by 3a or 3b: a profile of `apps/web` (profiling inflates it) puts `ssrf_input.apply` at about 28% and `insecure_transport.apply` at about 7% of the index
 time, and the 3a / 3b changes add no external nodes on these corpora. The node and edge counts are identical before and after for every corpus
 except ansible (+3 `file:config:` nodes for shell scripts and YAML).
+
+Part 2d recovered this cost: against 8172833, the mean of three alternating runs is +1.4% on outline and +0.7% on cal.com `apps/web` (all runs in [Part 2d](#part-2d-unguarded-precision-index-time-fingerprints)). The `ssrf` and `insecure_transport` passes skip files and functions that cannot contain a sink or a rule hit, and the SDK file prefilter lowercases once.
 
 ## TypeScript / JavaScript frameworks
 

@@ -556,7 +556,7 @@ def effective(root: str | Path, python_roots: list[str] | None = None, gates: st
         row(f"platforms.{k}", pc.get(k, True), f"{fname} platforms.{k}" if k in pc else f"built-in ({what})")
     row("auth.token_pattern", PR.values("common", "auth", "token_pattern"), "preset common")
     for section in ("auth", "secret"):
-        for key in ("guards", "not_auth") if section == "auth" else ("guards",):
+        for key in ("guards", "not_auth", "session_only") if section == "auth" else ("guards",):
             for p in plan["presets"]:
                 g = PR.values(p, section, key, default=None)
                 if g:

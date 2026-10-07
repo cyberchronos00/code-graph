@@ -15,3 +15,9 @@ auth:
     - {name: basicAuth, source: "hono/basic-auth, express-basic-auth"}
     - {name: bearerAuth, source: "hono/bearer-auth"}
     - {name: jwt, source: "hono/jwt, koa-jwt"}
+  # create a session, they do not require a login: never an auth guard on their own (`app.use(session())`)
+  session_only:
+    - {name: session, source: "express-session: creates a session cookie, does not require a login"}
+    - {name: expressSession, source: "express-session"}
+    - {name: cookieSession, source: "cookie-session: creates a session cookie, does not require a login"}
+    - {name: cookie-session, source: "cookie-session"}

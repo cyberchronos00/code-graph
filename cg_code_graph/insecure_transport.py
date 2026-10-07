@@ -277,13 +277,27 @@ def _php_lib(text: str) -> str | None:
     return None
 
 
+# Every RULES pattern contains one of these words (lowercase; Rust is not gated: its tonic rule has no fixed word).
+# Most files have none, so one substring pass replaces the 35 regex scans.
+_GATE = re.compile(
+    "verify|verifier|ssl|insecure|plaintext|cert_none|check_hostname|rejectunauthorized|node_tls_reject_unauthorized|"
+    "withoutverifying|danger_accept_invalid|checkservertrusted|badcertificatecallback|set_missing_host_key_policy|"
+    "known_hosts|knownhostsfile|stricthostkeychecking|host_key_checking|newcredentials|_create_unverified_context")
+
+
 def scan_text(text: str, rel: str, group: str) -> list[dict]:
     """Facts in one file's text (no graph access): [{kind, line, lib, detail, confidence, pos}]."""
+    if group != "rs" and not _GATE.search(text.lower()):
+        return []
     out: list[dict] = []
     seen: set = set()
-    py_lib = _py_lib(text) if group == "py" else None
-    php_lib = _php_lib(text) if group == "php" else None
-    js_lib = _js_lib(text) if group == "js" else None
+    libs: dict = {}
+
+    def lib_of(name: str, fn):
+        """The client library imported by the file, found the first time a rule needs it."""
+        if name not in libs:
+            libs[name] = fn(text)
+        return libs[name]
     has_tonic = group == "rs" and "tonic" in text
     has_asyncssh = group == "py" and "asyncssh" in text
     for kind, groups, rx, lib, detail, conf in RULES:
@@ -298,6 +312,9 @@ def scan_text(text: str, rel: str, group: str) -> list[dict]:
             if (kind, line) in seen:
                 continue
             c, lb, dt = conf, lib, detail
+            py_lib = lib_of("py", _py_lib) if group == "py" else None
+            php_lib = lib_of("php", _php_lib) if group == "php" else None
+            js_lib = lib_of("js", _js_lib) if group == "js" else None
             if lb == "@pylib":
                 lb = py_lib or "python-http"
                 c = "resolved" if py_lib else "heuristic" if conf == "@pyconf" else conf

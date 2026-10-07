@@ -5,6 +5,8 @@ Fixtures (tests/surface_fixture): py (Django), ts (Express), php (Laravel), rs (
 start with `SURF-`; test_no_secret_values greps every output format for each of them. The SARIF 2.1.0 schema
 (tests/sarif-schema-2.1.0.json, OASIS, https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/) is vendored
 for the schema check, which is skipped when `jsonschema` is not importable."""
+import hashlib
+import hmac
 import json
 import re
 import shutil
@@ -37,7 +39,7 @@ EXPECTED = {
         ("hardcoded", "external:postgres:db.bookstore.example:5432"), ("hardcoded", "external:saas:postmark"),
         ("plaintext", "external:amqp:queue.bookstore.example:5672"), ("plaintext", "external:redis:cache.bookstore.example:6379"),
         ("unverified", "route:ANY /hooks/github-open/"),
-        ("unguarded", "route:ANY /admin/purge/"), ("unguarded", "route:ANY /health/"), ("unguarded", "route:ANY /hooks/github-open/"),
+        ("unguarded", "route:ANY /admin/purge/"), ("unguarded", "route:ANY /hooks/github-open/"),      # /health/ is public by design (2d)
         ("exposed-listener", "endpoint:tcp:7100"),
     },
     "ts": {
@@ -52,7 +54,7 @@ EXPECTED = {
         ("hardcoded", "config:services.github.secret"), ("hardcoded", "config:services.ledger.token"),
         ("plaintext", "external:http:ledger.bookstore.example:80"),
         ("unverified", "route:POST /hooks/github-open"),
-        ("unguarded", "route:DELETE /admin/orders"), ("unguarded", "route:GET /health"), ("unguarded", "route:POST /hooks/github-open"),
+        ("unguarded", "route:DELETE /admin/orders"), ("unguarded", "route:POST /hooks/github-open"),
         ("exposed-listener", "endpoint:tcp:7300"),
     },
 }
@@ -133,7 +135,7 @@ def test_entry_points_reach_findings(dbs, capsys):
     assert [e["kind"] for e in pm["entry_points"]] == ["http_route"]          # create_order -> send_receipt
     assert pm["entry_points"][0]["sample"] == "route:ANY /orders/"
     assert by[("exposed-listener", "endpoint:tcp:7100")]["entry_points"][0]["kind"] == "message_handler"
-    assert by[("unguarded", "route:ANY /health/")]["entry_points"][0]["kind"] == "http_route"
+    assert by[("unguarded", "route:ANY /admin/purge/")]["entry_points"][0]["kind"] == "http_route"
 
 
 def test_entry_points_are_capped_and_counted(tmp_path):
@@ -282,7 +284,7 @@ def test_other_systems_show_up_without_code_changes(tmp_path):
 def test_text_output(dbs, capsys):
     rc, out, _ = cg(capsys, "surface", "--db", dbs("php"), "--inbound", "--outbound")
     assert rc == 0
-    for frag in ("attack surface: 10 finding(s)", "== hardcoded (4)", "== plaintext (1)", "== unverified (1)", "== unguarded (3)",
+    for frag in ("attack surface: 9 finding(s)", "== hardcoded (4)", "== plaintext (1)", "== unverified (1)", "== unguarded (2)",
                  "== exposed-listener (1)", "== inbound surface", "== outbound surface", "config/database.php:12",
                  "app/Services/Mailers.php:10", "reached from http_route(1)", "fingerprint ", "webhook github NOT verified",
                  "reaches a write", "bind all", "value not shown"):
@@ -308,7 +310,7 @@ def test_filters(dbs, capsys):
     _, all_ = run_json(capsys, db)
     assert ("hardcoded", "config:services.ledger.token") in pairs(all_)
     _, res = run_json(capsys, db, "--max-items", "2")
-    assert len(res["findings"]) == 2 and res["findings_total"] == 10
+    assert len(res["findings"]) == 2 and res["findings_total"] == 9
 
 
 def test_unknown_finding_is_a_usage_error(dbs, capsys):
@@ -348,7 +350,7 @@ def test_sarif_structure(dbs, capsys, lang):
         assert (FIX / lang / pl["artifactLocation"]["uri"]).is_file()
         assert re.fullmatch(r"[0-9a-f]{16}", r["partialFingerprints"]["cg/surface/v1"])
     levels = {r["ruleId"].split(".")[-1]: r["level"] for r in run["results"]}
-    assert levels["hardcoded"] == "error" and levels["unguarded"] == "warning"
+    assert levels["hardcoded"] == "error" and levels["unguarded"] in ("warning", "note")
 
 
 def test_sarif_validates_against_the_2_1_0_schema(dbs, capsys):
@@ -402,24 +404,24 @@ def test_ignore_by_path_id_and_fingerprint(dbs, capsys, tmp_path):
     - {{finding: plaintext, fingerprint: {fp}, reason: compose-internal cache}}
 """)
     rc, res = run_json(capsys, db, "--show-ignored")
-    gone = {("unguarded", "route:ANY /admin/purge/"), ("unguarded", "route:ANY /health/"),
+    gone = {("unguarded", "route:ANY /admin/purge/"),
             ("unguarded", "route:ANY /hooks/github-open/"), ("hardcoded", "external:saas:postmark"),
             ("plaintext", "external:redis:cache.bookstore.example:6379")}
     assert pairs(res) == EXPECTED["py"] - gone
-    assert res["ignored_count"] == 5 and {(f["finding"], f["node"]) for f in res["ignored"]} == gone
+    assert res["ignored_count"] == 4 and {(f["finding"], f["node"]) for f in res["ignored"]} == gone
     reasons = {f["ignored_by"]["reason"] for f in res["ignored"]}
     assert reasons == {"public pages by design", "sandbox key", "compose-internal cache"}
     # the unverified finding on the same route is a different finding type: still reported
     assert ("unverified", "route:ANY /hooks/github-open/") in pairs(res)
     rc, out, _ = cg(capsys, "surface", "--db", db)
-    assert "5 ignored (--show-ignored lists them)" in out and "route:ANY /admin/purge/" not in out
+    assert "4 ignored (--show-ignored lists them)" in out and "route:ANY /admin/purge/" not in out
     rc, out, _ = cg(capsys, "surface", "--db", db, "--show-ignored")
-    assert "== ignored (5)" in out and "ignored: sandbox key" in out
+    assert "== ignored (4)" in out and "ignored: sandbox key" in out
     sarif = json.loads(cg(capsys, "surface", "--db", db, "--show-ignored", "--format", "sarif")[1])
     sup = [r for r in sarif["runs"][0]["results"] if r.get("suppressions")]
-    assert len(sup) == 5 and {r["suppressions"][0]["justification"] for r in sup} == reasons
+    assert len(sup) == 4 and {r["suppressions"][0]["justification"] for r in sup} == reasons
     plain = json.loads(cg(capsys, "surface", "--db", db, "--format", "sarif")[1])
-    assert len(plain["runs"][0]["results"]) == len(EXPECTED["py"]) - 5
+    assert len(plain["runs"][0]["results"]) == len(EXPECTED["py"]) - 4
 
 
 def test_ignored_findings_do_not_fail_the_gate(capsys, tmp_path):
@@ -586,10 +588,12 @@ def test_laravel_config_literals_are_redacted_with_a_fingerprint(dbs):
     con = sqlite3.connect(dbs("php"))
     attrs = {r[0]: json.loads(r[1] or "{}") for r in con.execute("SELECT id, attrs FROM nodes WHERE kind='config'")}
     gh = attrs["config:services.github.secret"]["value"]
-    assert re.fullmatch(r"redacted:sha256:[0-9a-f]{8}", gh)
-    assert gh == "redacted:sha256:" + __import__("hashlib").sha256(b"SURF-PHP-GH-SECRET-1d4e").hexdigest()[:8]
+    assert re.fullmatch(r"redacted:hmac:[0-9a-f]{8}", gh)
+    salt = json.loads(con.execute("SELECT value FROM meta WHERE key='redact_salt'").fetchone()[0])
+    keyed = lambda v: "redacted:hmac:" + hmac.new(salt.encode(), v, hashlib.sha256).hexdigest()[:8]     # noqa: E731
+    assert gh == keyed(b"SURF-PHP-GH-SECRET-1d4e")
     dflt = attrs["config:services.ledger.token"]["env_default"]
-    assert dflt == ["redacted:sha256:" + __import__("hashlib").sha256(b"SURF-PHP-LEDGER-DEFAULT-d7e2").hexdigest()[:8]]
+    assert dflt == [keyed(b"SURF-PHP-LEDGER-DEFAULT-d7e2")]
 
 
 def test_redaction_keeps_non_secret_values_and_url_hosts(tmp_path, capsys):
@@ -613,10 +617,10 @@ return [
     assert attrs["config:shop.currency"]["value"] == "EUR"
     assert attrs["config:shop.catalog_host"]["env_default"] == ["catalog.bookstore.example"]
     assert attrs["config:shop.signing.algorithm"]["value"] == "sha256"
-    assert attrs["config:shop.api_key"]["value"].startswith("redacted:sha256:")
-    assert attrs["config:shop.signing.passphrase"]["value"].startswith("redacted:sha256:")
+    assert attrs["config:shop.api_key"]["value"].startswith("redacted:hmac:")
+    assert attrs["config:shop.signing.passphrase"]["value"].startswith("redacted:hmac:")
     url = attrs["config:shop.replica"]["env_default"][0]
-    assert url.startswith("mysql://reader:redacted:sha256:") and url.endswith("@replica.bookstore.example/shop")
+    assert url.startswith("mysql://reader:redacted:hmac:") and url.endswith("@replica.bookstore.example/shop")
     assert not [1 for _, v in _db_text(db) if "SURF-" in v]
     found = {(f["finding"], f["node"]) for f in run_json(capsys, db)[1]["findings"]}
     assert ("hardcoded", "config:shop.api_key") in found
@@ -671,7 +675,7 @@ def test_sweep_redacts_credential_attrs_but_not_hosts_flags_or_plain_values():
                    "reexports": {"ApiKey": "./ApiKey", "Token": "./Token"}})
     e1 = NS(kind="HTTP_CALLS", attrs={"literal_credential": True, "setting": "SECRET_KEY", "default": "SURF-key-4", "env_default_x": "x"})
     b = NS(nodes={"a": n1}, edges={"b": e1})
-    R.sweep(b)
+    R.sweep(b, "unit-test-salt")
     text = repr(n1.attrs) + repr(e1.attrs)
     assert "SURF-" not in text + n1.doc
     assert n1.doc.startswith("Accepts e.g. postgres://app:" + R.MARK) and "@db.example.test:5432/shop" in n1.doc

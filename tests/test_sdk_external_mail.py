@@ -144,3 +144,24 @@ def test_cg_external_protocol_saas_and_impact(tmp_path):
     from cg_code_graph import query as Q
     imp = Q.impact(st, "external:saas:mailgun")
     assert "route:POST /orders/{id}/ship" in {e["id"] for e in imp["entry_points"]}
+
+
+def test_ses_v2_and_nodemailer_ts(tmp_path):
+    st = _index(tmp_path, "mail-sms-ts")
+    ct = _ct(st)
+    ses = {s.replace("#", ".").rsplit(".", 1)[-1]: a for s, d, a in ct if d == "external:aws:ses"}
+    assert ses["sesv2Send"]["op"] == "SendEmail" and ses["sesv2Send"]["via"] == "@aws-sdk/client-sesv2"
+    assert ses["sesv2Identity"]["op"] == "CreateEmailIdentity"
+    assert ses["nodemailerSes"]["op"] == "sendMail" and ses["nodemailerSes"]["via"] == "nodemailer"
+    assert _edge(ct, "resend", "nodemailerResend")["via"] == "nodemailer"
+    assert _edge(ct, "resend", "nodemailerSmtpResend")["op"] == "sendMail"
+    assert ("external:saas:resend", "env:RESEND_API_KEY") in _creds(st)
+    assert not any(s.endswith("nodemailerPlainSmtp") and d.startswith(("external:saas:", "external:aws:")) for s, d, _a in ct)
+
+
+def test_ses_v2_py(tmp_path):
+    st = _index(tmp_path, "mail-sms-py")
+    ses = {s.replace("#", ".").rsplit(".", 1)[-1]: a for s, d, a in _ct(st) if d == "external:aws:ses"}
+    assert ses["send_v2"]["op"] == "send_email"
+    assert ses["verify_domain"]["op"] == "create_email_identity"
+    assert not any(d == "external:aws:sesv2" for _s, d, _a in _ct(st))

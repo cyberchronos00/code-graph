@@ -580,6 +580,12 @@ def _url_expr(args: list[str], idx, lang: str, tail: str | None = None) -> str |
     return _kwarg(args, "url")
 
 
+def has_sink(text: str, lang: str) -> bool:
+    """Cheap pre-test: some sink pattern occurs in `text` (a superset of what `find_sinks` reports). A function or file
+    without one cannot yield a fact, so its taint environment is never built."""
+    return any(rx.search(text) for _k, _l, rx, _i in SINKS[lang])
+
+
 def find_sinks(body: str, base_line: int, lang: str, env: Env, py_lib: str | None, owned) -> list[Sink]:
     out: list[Sink] = []
     lines = body.split("\n")
@@ -704,6 +710,9 @@ def apply(project, builder) -> dict:
     for rel, lst in fns.items():
         text = texts[rel].split("\n")
         lang = lst[0].lang
+        if not has_sink(texts[rel], lang):
+            st["tests_skipped"] += sum(1 for fn in lst if is_test_node(fn.node) or (fn.node.attrs or {}).get("test_only"))
+            continue
         py_lib = _py_client_lib(texts[rel]) if lang == "py" else None
         envs: dict[str, Env] = {}
         for fn in sorted(lst, key=lambda x: (x.lo, -x.hi)):
@@ -716,6 +725,8 @@ def apply(project, builder) -> dict:
                     if parent is None or (cand.hi - cand.lo) < (parent.hi - parent.lo):
                         parent = cand
             body = "\n".join(text[fn.lo - 1:fn.hi])
+            if not has_sink(body, lang):
+                continue
             sig = _signature(text[fn.lo - 1:fn.lo + 7], fn.node.name or "", lang)
             sig_text, head = sig if sig else ("", "")
             owned = lambda ln, fn=fn: owner_of(rel, ln) == fn.id  # noqa: E731

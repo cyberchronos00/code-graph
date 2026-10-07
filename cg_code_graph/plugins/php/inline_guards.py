@@ -27,6 +27,7 @@ _PREDICATE = {
 }
 _PERM = {"can", "cannot", "check", "haspermission", "hasanypermission", "hasallpermissions", "hasdirectpermission"}
 _ROLE = {"hasrole", "hasanyrole", "hasallroles", "hasexactroles"}
+_WHO = {"check", "user", "guest", "id"}
 _GATE = {"authorize", "denies", "allows", "check", "any", "none"}
 _REQ = {"header", "bearertoken", "input", "query", "post", "cookie", "json"}
 _AUTH_EXC = ("AuthorizationException", "AccessDeniedHttpException")
@@ -299,6 +300,21 @@ class Finder:
             return self._secret_guard(hit, at, conditional)
         return self._auth_desc(pred, at, conditional)
 
+    @staticmethod
+    def _authentication(d) -> str | None:
+        """`auth()->check()`, `Auth::check()` / `Auth::user()` and `$request->user()`: is anyone logged in."""
+        k, m = d.get("k"), (d.get("m") or "")
+        ml = m.lower()
+        if k == "scall" and str(d.get("class") or "").split("\\")[-1] == "Auth" and ml in _WHO:
+            return f"Auth::{m}()"
+        if k == "mcall" and ml in _WHO:
+            of = d.get("of") or {}
+            if of.get("k") in ("func", "call") and str(of.get("n") or of.get("fn") or "").lower() == "auth":
+                return f"auth()->{m}()"
+            if ml == "user" and not d.get("args"):
+                return "request->user()"
+        return None
+
     def _auth_desc(self, d, at: str, conditional: bool) -> dict | None:
         if not isinstance(d, dict):
             return None
@@ -307,6 +323,9 @@ class Finder:
         ml = m.lower()
         if k == "mcall" and ml in _PREDICATE:
             return self._perm_guard(m, d.get("args"), at, conditional)
+        who = self._authentication(d)
+        if who:
+            return {"name": who, "kind": "role", "at": at, "conditional": conditional}
         if k == "scall" and self._gate({"class": d.get("class")}) and ml in _GATE:
             ab = _ability(d.get("args"))
             return self._policy_guard(_quote(f"Gate::{m}", ab), at, conditional)

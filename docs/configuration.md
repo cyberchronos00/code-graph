@@ -94,7 +94,7 @@ A detected language or framework brings a preset from `cg_code_graph/presets/*.y
 | `php`, `python`, `typescript`, `dart`, `rust`, `c_cpp`, `kotlin`, `java`, `swift` | per-language skip lists |
 | `laravel` | auth and signature middleware, plan prefixes, text-mention dirs |
 | `django`, `djangorestframework`, `django-ninja` | view access decorators, DRF permissions, ninja auth |
-| `nest`, `nextjs`, `express`, `nuxt` | Nest guards, Next.js auth helpers, Express-family middleware, Nuxt session helpers |
+| `nest`, `nextjs`, `express`, `nuxt` | Nest guards, Next.js auth helpers, Express-family middleware, Nuxt session helpers; the Express preset also lists `session_only` middleware (`session()`, `cookie-session`), which creates a session but is never an auth guard |
 | `react-router` | React Router and Remix route modules (`presets/react-router.yaml`) |
 | `spring` | Spring Security method annotations and `SecurityFilterChain` guard names (`presets/spring.yaml`) |
 
