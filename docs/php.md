@@ -62,7 +62,10 @@ call sites (`via`).
 SendGrid, Mailgun, Postmark, Resend, Twilio and Vonage SDK clients (`$client = new \SendGrid($key)` then `->send()`,
 `Mailgun::create`, `new Client($sid, $token)` `->messages->create`, ...) and Laravel mailers (`config/mail.php` +
 `config/services.php`, `Mail::` callers, notification `via()` channels) are not client endpoints: they are
-`external:saas:<provider>` systems ([External systems](external.md)).
+`external:saas:<provider>` systems ([External systems](external.md)). So are MessageBird and Plivo clients, `minishlink/web-push`,
+`edamov/pushok`, Laravel FCM / APNs notification channels, `kreait/firebase-php`, `renoki-co/php-k8s`, `docker-php`, aws-sdk-php
+`KmsClient` and Google Secret Manager (`external:gcp:<service>`, `external:k8s:<api-group>`, `external:docker:<target>`,
+`external:aws:kms`).
 
 A constructor-promoted or assigned `$this->baseUrl` is followed from the container (`singleton` / `bind`,
 `new` inside the provider, `when()->needs()->give()`) through `config()`, `config()->get()`,

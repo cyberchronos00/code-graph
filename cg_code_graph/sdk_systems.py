@@ -5,14 +5,24 @@ Not HTTP hosts (`external:http(s):…` is part 1). A client construction plus an
   external:s3:<bucket-or-env>          boto3 / @aws-sdk/client-s3 / Laravel s3 disks / django-storages
   external:gcs:<bucket-or-env>         google.cloud.storage / @google-cloud/storage
   external:azure-blob:<container-or-env>
-  external:aws:<service>[:resource]    sqs, secretsmanager, dynamodb, ses
-  external:saas:<provider>             stripe, and (part 3a) sendgrid, mailgun, postmark, resend, twilio, vonage
+  external:aws:<service>[:resource]    sqs, secretsmanager, dynamodb, ses, kms
+  external:saas:<provider>             stripe, (3a) sendgrid, mailgun, postmark, resend, twilio, vonage, messagebird, plivo;
+                                       (3b) apns, webpush, expo-push
+  external:gcp:<service>[:resource]    (3b) fcm, firestore[:collection], firebase-rtdb, firebase-auth, secretmanager[:secret], kms
+  external:azure:<service>[:resource]  (3b) keyvault[:vault-host]
+  external:k8s:<api-group>             (3b) core-v1, apps-v1, batch-v1 ... (`namespace` on the edge when literal)
+  external:docker:<socket|host:port|env:DOCKER_HOST>   (3b) Docker Engine API; plain TCP is `tls=false`
   external:llm:<provider>              openai / anthropic when the call is not already an attrs.llm_calls edge
 
 Mail and SMS APIs (#42 part 3a) use the same shapes. A literal key is `credential_source=literal` (and
 `credential_literal=true`, for #47), an env / config() / settings key is `CREDENTIAL_FROM env:<KEY>`, no key found is
 `auth=unknown`. Laravel mailers (config/mail.php + config/services.php) and Django `EMAIL_BACKEND` / `ANYMAIL` are one
 shared node per provider, used by every `Mail::` / `send_mail` / notification caller.
+
+Push, Firebase server SDKs, Kubernetes / Docker API clients and key management (#42 part 3b) reuse these shapes. A
+service-account / kubeconfig path written in code is `credential_source=file` (+ `credential_file`), a path read from
+an env key is `CREDENTIAL_FROM env:<KEY>`, default credentials / in-cluster config / the local Docker socket are
+`auth=ambient`. Browser and mobile Firebase client SDKs are not server systems and are not detected.
 
 CONNECTS_TO carries `via` (library) and `op` (SDK operation). CONFIGURED_BY points at the env key of a
 bucket / queue / table. CREDENTIAL_FROM points at an explicit key; a default credential chain is
@@ -43,8 +53,9 @@ MARK = re.compile(
 ENV_PY = re.compile(r"""^(?:os\.)?(?:environ(?:\.get)?|getenv)$""")
 AWS_FIELD = {
     "s3": "Bucket", "sqs": "QueueUrl", "secretsmanager": "SecretId", "dynamodb": "TableName", "ses": None,
+    "kms": "KeyId",
 }
-AWS_PROTO = {"s3": "s3", "sqs": "aws", "secretsmanager": "aws", "dynamodb": "aws", "ses": "aws"}
+AWS_PROTO = {"s3": "s3", "sqs": "aws", "secretsmanager": "aws", "dynamodb": "aws", "ses": "aws", "kms": "aws"}
 PY_OPS = {
     "s3": {"put_object", "get_object", "delete_object", "head_object", "copy_object", "upload_file",
            "upload_fileobj", "download_file", "list_objects_v2", "create_bucket", "put_object_acl"},
@@ -52,6 +63,8 @@ PY_OPS = {
     "secretsmanager": {"get_secret_value", "create_secret", "put_secret_value", "describe_secret"},
     "dynamodb": {"get_item", "put_item", "query", "scan", "update_item", "delete_item", "batch_get_item"},
     "ses": {"send_email", "send_raw_email"},
+    "kms": {"encrypt", "decrypt", "generate_data_key", "generate_data_key_without_plaintext", "sign", "verify",
+            "re_encrypt", "describe_key", "get_public_key", "create_key", "generate_mac", "verify_mac"},
 }
 BUCKET_SETTINGS = {
     "s3": ("AWS_STORAGE_BUCKET_NAME", "AWS_S3_BUCKET_NAME", "AWS_BUCKET"),
@@ -78,11 +91,24 @@ TS_CMD = {
     "UpdateItemCommand": ("dynamodb", "TableName", "UpdateItem"),
     "DeleteItemCommand": ("dynamodb", "TableName", "DeleteItem"),
     "SendEmailCommand": ("ses", None, "SendEmail"),
+    "EncryptCommand": ("kms", "KeyId", "Encrypt"),
+    "DecryptCommand": ("kms", "KeyId", "Decrypt"),
+    "GenerateDataKeyCommand": ("kms", "KeyId", "GenerateDataKey"),
+    "GenerateDataKeyWithoutPlaintextCommand": ("kms", "KeyId", "GenerateDataKeyWithoutPlaintext"),
+    "SignCommand": ("kms", "KeyId", "Sign"),
+    "VerifyCommand": ("kms", "KeyId", "Verify"),
+    "ReEncryptCommand": ("kms", "SourceKeyId", "ReEncrypt"),
+    "DescribeKeyCommand": ("kms", "KeyId", "DescribeKey"),
+    "GetPublicKeyCommand": ("kms", "KeyId", "GetPublicKey"),
 }
 MARK_MAIL = re.compile(
     r"sendgrid|mailgun|postmark|resend|twilio|vonage|nexmo|anymail|EMAIL_BACKEND|Mail::|Mailable|"
     r"Notification|django\.core\.mail|send_mail", re.I)
-CONFIG_FILES = ("filesystems.php", "mail.php", "services.php")
+MARK_INFRA = re.compile(
+    r"firebase-admin|firebase_admin|kreait|@google-cloud/(?:firestore|secret-manager|kms)|google\.cloud|Google\\Cloud|"
+    r"FcmChannel|ApnChannel|node-apn|apns2|aioapns|pushok|web-push|webpush|WebPush|expo-server-sdk|kubernetes|"
+    r"k8s|RenokiCo|dockerode|docker|KMS|Kms|keyvault|messagebird|plivo", re.I)
+CONFIG_FILES = ("filesystems.php", "mail.php", "services.php", "firebase.php", "broadcasting.php")
 _TEST_PATH = re.compile(r"(^|/)(tests?|__tests__|spec)(/|$)|\.(test|spec)\.[cm]?[jt]sx?$|Test\.php$|(^|/)test_.*\.py$")
 _CRED_KW = ("aws_access_key_id", "aws_secret_access_key", "aws_session_token", "accessKeyId", "secretAccessKey", "sessionToken")
 
@@ -106,7 +132,7 @@ def _files(root):
                 text = open(p, errors="replace").read()
             except OSError:
                 continue
-            if cfg_php or MARK.search(text) or MARK_MAIL.search(text):
+            if cfg_php or MARK.search(text) or MARK_MAIL.search(text) or MARK_INFRA.search(text):
                 yield _rel(root, p), text
 
 
@@ -257,6 +283,25 @@ def _line_at(text: str, idx: int) -> int:
     return text.count("\n", 0, idx) + 1
 
 
+def _kms_norm(res):
+    """A KMS KeyId literal as the key id or alias (an ARN is cut to `key/<id>` -> `<id>` or `alias/<name>`)."""
+    if not res or res[0] != "lit":
+        return res
+    v = res[1]
+    m = re.search(r"(?:^|:)(?:key/([\w-]+)|(alias/[\w/_-]+))$", v)
+    if m:
+        return ("lit", m.group(1) or m.group(2))
+    return ("lit", v) if re.fullmatch(r"alias/[\w/_-]+|[0-9a-fA-F-]{8,}|mrk-\w+", v) else None
+
+
+def _kms_res(expr: str):
+    ek = _env_keys(expr or "")
+    if ek:
+        return ("env", ek[0])
+    m = re.search(r"""['\"]([^'\"\s]+)['\"]""", expr or "")
+    return _kms_norm(("lit", m.group(1))) if m else None
+
+
 def _target(protocol: str, service: str | None, resource) -> str | None:
     if protocol in ("s3", "gcs", "azure-blob"):
         if not resource:
@@ -269,8 +314,18 @@ def _target(protocol: str, service: str | None, resource) -> str | None:
             return service
         extra = resource[1] if resource[0] == "lit" else f"env:{resource[1]}"
         return f"{service}:{extra}"
-    if protocol in ("saas", "llm"):
+    if protocol in ("saas", "llm", "k8s"):
         return service
+    if protocol in ("gcp", "azure"):
+        if not service:
+            return None
+        if not resource:
+            return service
+        return f"{service}:{resource[1] if resource[0] == 'lit' else 'env:' + resource[1]}"
+    if protocol == "docker":
+        if not resource:
+            return None
+        return resource[1] if resource[0] == "lit" else f"env:{resource[1]}"
     return None
 
 
@@ -453,7 +508,7 @@ def _collect_py(rel: str, text: str, storage: dict):
                 if pv and pv[0] == "lit" and "://" in pv[1]:
                     res = _resource(pv[1])
                 elif pv:
-                    res = pv
+                    res = _kms_norm(pv) if svc == "kms" else pv
         endpoint = None
         ev = _py_kw(call, "endpoint_url")
         if ev is not None:
@@ -623,12 +678,20 @@ def _collect_ts(rel: str, text: str):
             # params are often declared just above the command; do not read a sliced env key
             window = body[max(0, m.start() - 900):m.end() + 500]
             res = _resource(_prop(window, field) or "", methods) if field else None
+            if proto_s == "kms":
+                cargs = _args_at(text, m.end() - 1)
+                res = _kms_res(_prop(cargs, field) or "")
             if proto_s == "s3" and (res is None or (res[0] == "env" and res[1].endswith("_"))):
                 res = _resource("this.getBucket()", methods) or res
+            f_auth, f_creds = auth, creds
+            if proto_s == "kms":
+                prev = [c for c in re.finditer(r"""new\s+(?:[\w$.]+\.)?KMSClient\s*\(""", text) if c.start() < m.start()]
+                cargs = _args_at(text, prev[-1].end() - 1) if prev else ""
+                f_auth, f_creds = _explicit_creds_near(cargs)
             f = _fact(rel, _line_at(text, m.start()), "s3" if proto_s == "s3" else "aws",
                       None if proto_s == "s3" else proto_s, res, op,
                       "@aws-sdk/client-s3" if proto_s == "s3" else f"@aws-sdk/client-{proto_s}",
-                      auth, creds, None)
+                      f_auth, f_creds, None)
             if f:
                 facts.append(f)
         if s3:
@@ -1381,6 +1444,1046 @@ def _anymail_settings(text: str, st: dict):
     return {"provider": prov, "cred": cred, "resource": resource}
 
 
+# ---------------------------------------------------------------- push, Firebase, Kubernetes, Docker, key management (#42 part 3b)
+_FILE_RX = re.compile(r"""['\"]([^'\"\s]+\.(?:json|p8|pem|p12|key|ya?ml)|[^'\"\s]*\.kube/[^'\"\s]+|[^'\"\s]*kube/config|[^'\"\s]*kubeconfig[^'\"\s]*)['\"]""", re.I)
+_GCP_DEFAULT_ENV = "GOOGLE_APPLICATION_CREDENTIALS"
+_CHAIN = re.compile(r"""\s*(?:\?->|->|\?\.|\.)\s*(\w+)\s*\(""")
+_LOOKUP_SKIP = {"document", "doc", "collection", "where", "order_by", "orderBy", "limit", "limit_to_last", "limitToLast",
+                "select", "offset", "start_at", "startAt", "start_after", "startAfter", "end_at", "endAt", "child",
+                "file", "getReference", "withConverter"}
+K8S_PHP_KIND = {
+    "pod": "core-v1", "service": "core-v1", "configmap": "core-v1", "secret": "core-v1", "namespace": "core-v1",
+    "persistentvolumeclaim": "core-v1", "persistentvolume": "core-v1", "serviceaccount": "core-v1", "node": "core-v1",
+    "deployment": "apps-v1", "statefulset": "apps-v1", "daemonset": "apps-v1", "replicaset": "apps-v1",
+    "job": "batch-v1", "cronjob": "batch-v1", "ingress": "networking-v1", "networkpolicy": "networking-v1",
+}
+
+
+def _resolve_ident(expr: str, text: str) -> str:
+    expr = (expr or "").strip()
+    if re.fullmatch(r"\$?[A-Za-z_]\w*", expr):
+        name = expr.lstrip("$")
+        m = re.search(r"(?:(?:const|let|var)\s+|\bself\.|\bthis\.|\$this->|\$)?\b%s\b\s*(?::[^=\n]+)?=\s*([^;\n]+)" % re.escape(name), text)
+        if m and "==" not in m.group(0):
+            return m.group(1)
+        im = re.search(r"""import\s+%s\s+from\s+(['\"][^'\"]+['\"])""" % re.escape(name), text)
+        if im:
+            return im.group(1)
+    return expr
+
+
+def _cred_or_file(expr: str, text: str, cfg: dict | None = None, settings: dict | None = None):
+    """('env', [KEY]) | ('file', [path]) | ('literal', []) | ('none', []) for a key / key-file argument."""
+    expr = _resolve_ident(expr, text)
+    keys = _env_keys(expr)
+    if keys:
+        return ("env", keys)
+    if re.search(r"""\bconfig\(|\bsettings\.""", expr):
+        return _cred_expr(expr, text, cfg, settings)
+    m = _FILE_RX.search(expr)
+    if m:
+        return ("file", [m.group(1)])
+    if re.search(r"""private_key|privateKey|BEGIN (?:RSA |EC )?PRIVATE""", expr):
+        return ("literal", [])
+    return _cred_expr(expr, text, cfg, settings)
+
+
+def _res_tuple(expr: str):
+    keys = _env_keys(expr or "")
+    if keys:
+        return ("env", keys[0])
+    lit = _lit_in(expr or "")
+    return ("lit", lit) if lit and lit.lower() not in LOOPBACK else None
+
+
+def _sys_fact(rel, line, proto, svc, resource, op, via, cred=("none", []), default="ambient", endpoint=None,
+              node_attrs=None, edge_attrs=None):
+    kind, keys = cred[0], list(cred[1])
+    creds: list = []
+    if kind == "env":
+        auth, creds = "explicit", keys
+    elif kind in ("literal", "file"):
+        auth = "explicit"
+    elif kind == "ambient":
+        auth = "ambient"
+    else:
+        auth = default
+    f = _fact(rel, line, proto, svc, resource, op, via, auth, creds, endpoint)
+    if not f:
+        return None
+    f["confidence"] = "resolved" if resource and resource[0] == "env" else "exact"
+    f["ensure_env"] = True
+    if kind == "literal":
+        f["literal_credential"] = True
+    if kind == "file":
+        f["cred_file"] = keys[0] if keys else "file"
+    f["node_attrs"] = node_attrs or {}
+    f["edge_attrs"] = dict(edge_attrs or {})
+    if kind == "file":
+        f["edge_attrs"]["credential_file"] = f["cred_file"]
+    return f
+
+
+def _scoped(text: str, var: str, start: int, suffix: str):
+    """Calls on `var` between its constructor at `start` and the next assignment to the same name."""
+    eq = text.find("=", start)
+    nxt = re.compile(r"(?:\$this->|\$|\bthis\.|\bself\.)?\b%s\b\s*(?::[^=\n]+)?=[^=]" % re.escape(var)).search(text, eq + 1) if eq >= 0 else None
+    end = nxt.start() if nxt else len(text)
+    php = text[start:start + len(var) + 8].lstrip().startswith(("$", "\\$"))
+    pat = r"(?:\$this->|\$)%s\s*%s" % (re.escape(var), suffix) if php else r"(?:\bthis\.|\bself\.)?\b%s\s*%s" % (re.escape(var), suffix)
+    for m in re.finditer(pat, text):
+        if start < m.start() < end:
+            yield m
+
+
+def _chain_names(text: str, pos: int) -> list:
+    """Method names of the call chain that starts at pos (just after a call's closing paren)."""
+    out, i = [], pos
+    while True:
+        m = _CHAIN.match(text, i)
+        if not m:
+            return out
+        out.append(m.group(1))
+        i = m.end() - 1 + len(_args_at(text, m.end() - 1)) + 2
+
+
+def _verb(text: str, pos: int, default: str, skip=_LOOKUP_SKIP) -> str:
+    for n in _chain_names(text, pos):
+        if n not in skip:
+            return n
+    return default
+
+
+def _call_end(text: str, open_at: int) -> int:
+    return open_at + len(_args_at(text, open_at)) + 2
+
+
+def _first_arg(args: str) -> str:
+    parts = _split_args(args)
+    return parts[0] if parts else ""
+
+
+def _all_env(creds: list):
+    """Every env key across the given credentials (a TLS client needs ca + cert + key), else the first file."""
+    keys = [k for c in creds if c[0] == "env" for k in c[1]]
+    if keys:
+        return ("env", list(dict.fromkeys(keys)))
+    return next((c for c in creds if c[0] in ("file", "literal")), ("none", []))
+
+
+def _sole(creds: list):
+    """The one credential every init in a project agrees on (fallback for files that do not init the SDK)."""
+    uniq = {(c[0], tuple(c[1])) for c in creds if c}
+    return (next(iter(uniq))[0], list(next(iter(uniq))[1])) if len(uniq) == 1 else None
+
+
+def _split_vault(expr: str):
+    """An Azure Key Vault URL argument as ('lit', host) | ('env', KEY)."""
+    ex = _resolve_ident(expr, "")
+    m = re.search(r"""https://([A-Za-z0-9.-]+\.[A-Za-z]{2,})""", ex)
+    if m:
+        return ("lit", m.group(1).lower())
+    keys = _env_keys(expr or "")
+    return ("env", keys[0]) if keys else None
+
+
+def _vault_res(expr: str, text: str):
+    expr = _resolve_ident(expr, text)
+    return _split_vault(expr)
+
+
+def _secret_name(expr: str):
+    """GCP Secret Manager `projects/<p>/secrets/<name>[/versions/<v>]` literal -> ('lit', name); env key -> ('env', KEY)."""
+    m = re.search(r"""secrets/([A-Za-z0-9_-]+)""", expr or "")
+    if m:
+        return ("lit", m.group(1))
+    keys = _env_keys(expr or "")
+    return ("env", keys[0]) if keys else None
+
+
+def _k8s_group(api: str) -> str:
+    name = re.sub(r"Api$", "", api)
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", name).lower()
+
+
+def _ns_lit(args: str):
+    m = re.search(r"""\bnamespace\s*[:=]\s*['\"]([\w.-]+)['\"]""", args)
+    if m:
+        return m.group(1)
+    first = _first_arg(args)
+    lm = re.fullmatch(r"""['\"]([\w.-]+)['\"]""", first.strip()) if first else None
+    return lm.group(1) if lm else None
+
+
+def _docker_target(base: str):
+    """(resource tuple | None, tls bool | None) for a base_url / DOCKER_HOST style address."""
+    base = (base or "").strip()
+    keys = _env_keys(base)
+    if keys:
+        return ("env", keys[0]), None
+    m = re.search(r"""['\"]((?:unix|npipe|tcp|http|https|ssh)://[^'\"]*|/[^'\"\s]*\.sock[^'\"]*)['\"]""", base)
+    if not m:
+        return None, None
+    v = m.group(1)
+    if v.startswith(("ssh://",)):
+        return None, None
+    if v.startswith(("npipe://",)):
+        return ("lit", v[len("npipe://"):] or v), None
+    if v.startswith("unix://"):
+        return ("lit", v[len("unix://"):] or "/var/run/docker.sock"), None
+    if v.startswith("/"):
+        return ("lit", v), None
+    scheme, _, rest = v.partition("://")
+    host = rest.split("/", 1)[0]
+    if ":" not in host:
+        host += ":2376" if scheme == "https" else ":2375"
+    return ("lit", host), scheme == "https"
+
+
+DOCKER_SOCK = ("lit", "/var/run/docker.sock")
+DOCKER_TS_OPS = (
+    r"createContainer|listContainers|getContainer|run|pull|listImages|getImage|buildImage|createNetwork|listNetworks|"
+    r"getNetwork|createVolume|listVolumes|getVolume|info|version|ping|getEvents|listServices|createService|"
+    r"getService|listNodes|listSecrets|createSecret|loadImage|prune\w*"
+)
+DOCKER_PY_NS = r"containers|images|networks|volumes|services|swarm|secrets|configs|nodes|plugins"
+FB_SKIP = {"collection", "doc", "document"}
+
+
+def _ts_receivers(text: str, accessor: str, extra: tuple = ()) -> list:
+    """Regexes for expressions that evaluate to a service object: the accessor call or variables assigned from it."""
+    recv = [accessor] if accessor else []
+    if accessor:
+        for m in re.finditer(_TS_LHS + r"(?:%s)(?!\s*\.)" % accessor, text):
+            recv.append(r"(?:\bthis\.)?\b%s\b" % re.escape(m.group(1) or m.group(2) or m.group(3)))
+    for var in extra:
+        recv.append(r"(?:\bthis\.)?\b%s\b" % re.escape(var))
+    return recv
+
+
+def _ts_fb_cred(text: str):
+    m = re.search(r"""\bcert\s*\(""", text)
+    if m:
+        return _cred_or_file(_args_at(text, m.end() - 1), text)
+    if re.search(r"""\bapplicationDefault\s*\(""", text):
+        return ("ambient", [])
+    if _GCP_DEFAULT_ENV in text:
+        return ("env", [_GCP_DEFAULT_ENV])
+    return None
+
+
+def _py_imported(text: str, mod: str) -> set:
+    names = set()
+    for m in re.finditer(r"""from\s+%s\s+import\s+(\([^)]*\)|[^\n]+)""" % re.escape(mod), text):
+        for part in m.group(1).strip("()").replace("\n", " ").split(","):
+            bits = part.strip().split(" as ")
+            if bits[0].strip():
+                names.add(bits[-1].strip())
+    return names
+
+
+def _py_fb_cred(text: str, st: dict):
+    m = re.search(r"""\bCertificate\s*\(""", text)
+    if m:
+        return _cred_or_file(_args_at(text, m.end() - 1), text, None, st)
+    if re.search(r"""\bApplicationDefault\s*\(""", text):
+        return ("ambient", [])
+    if _GCP_DEFAULT_ENV in text:
+        return ("env", [_GCP_DEFAULT_ENV])
+    return None
+
+
+def _php_fb_cred(text: str, ctx: dict):
+    m = re.search(r"""->withServiceAccount\s*\(""", text)
+    if m:
+        return _cred_or_file(_args_at(text, m.end() - 1), text, ctx["services"])
+    if _GCP_DEFAULT_ENV in text:
+        return ("env", [_GCP_DEFAULT_ENV])
+    return None
+
+
+def _php_local_cred(text: str, pos: int, ctx: dict):
+    """The `->withServiceAccount(...)` of the Factory built in the same method as the call at pos, if any."""
+    lo = max(0, pos - 500)
+    win = text[lo:pos]
+    fn = win.rfind("function ")
+    if fn >= 0:
+        lo, win = lo + fn, win[fn:]
+    ms = list(re.finditer(r"""->withServiceAccount\s*\(""", win))
+    if not ms:
+        return ("ambient", []) if re.search(r"""new\s+\\?(?:Kreait\\Firebase\\)?Factory\b""", win) else None
+    start = lo + ms[-1].end() - 1
+    return _cred_or_file(_args_at(text, start), text, ctx["services"])
+
+
+def _firebase_config_cred(text: str):
+    """config/firebase.php (kreait/laravel-firebase) `credentials` -> env key or file path."""
+    m = re.search(r"""['\"]credentials['\"]\s*=>""", text)
+    if not m:
+        return None
+    snip = text[m.end():m.end() + 260]
+    keys = _env_keys(snip)
+    if keys:
+        return ("env", keys[:1])
+    fm = _FILE_RX.search(snip)
+    return ("file", [fm.group(1)]) if fm else None
+
+
+def _apn_config_cred(text: str):
+    m = re.search(r"""['\"]apn['\"]\s*=>\s*\[""", text)
+    if not m:
+        return None
+    body = _php_array(text, m.end() - 1)
+    keys = [k for k in _env_keys(body) if SECRET_FIELD.search(k)] or _env_keys(body)
+    return ("env", keys[:1]) if keys else None
+
+
+# -------- Firebase (server SDKs) and Google Firestore, TypeScript
+def _collect_firebase_ts(rel: str, text: str, ctx: dict) -> list:
+    if "firebase-admin" not in text and "@google-cloud/firestore" not in text:
+        return []
+    facts = []
+    named = {mod: _ts_named(text, f"firebase-admin/{mod}") for mod in ("messaging", "firestore", "auth", "database", "storage")}
+    ns = _ts_names(text, "firebase-admin")
+    cred = _ts_fb_cred(text) or ctx.get("fb_ts") or ("ambient", [])
+
+    def accessor(mod, fn, method):
+        alts = []
+        if fn in named[mod]:
+            alts.append(r"\b%s\s*\([^)]*\)" % fn)
+        for n in ns:
+            alts.append(r"\b%s\.%s\s*\(\s*\)" % (re.escape(n), method))
+        return "|".join(alts)
+
+    def add(proto, svc, pos, resource, op, via="firebase-admin", c=None, **kw):
+        f = _sys_fact(rel, _line_at(text, pos), proto, svc, resource, op, via, c or cred, **kw)
+        if f:
+            facts.append(f)
+    acc = accessor("messaging", "getMessaging", "messaging")
+    if acc:
+        for r in _ts_receivers(text, acc):
+            for m in re.finditer(r"(?:%s)\s*\.\s*(send\w*|subscribeToTopic|unsubscribeFromTopic)\s*\(" % r, text):
+                add("gcp", "fcm", m.start(), None, m.group(1))
+    acc = accessor("auth", "getAuth", "auth")
+    if acc:
+        for r in _ts_receivers(text, acc):
+            for m in re.finditer(r"(?:%s)\s*\.\s*(\w+)\s*\(" % r, text):
+                add("gcp", "firebase-auth", m.start(), None, m.group(1))
+    acc = accessor("database", "getDatabase", "database")
+    if acc:
+        for r in _ts_receivers(text, acc):
+            for m in re.finditer(r"(?:%s)\s*\.\s*ref\s*\(" % r, text):
+                add("gcp", "firebase-rtdb", m.start(), None, _verb(text, _call_end(text, m.end() - 1), "ref"))
+    fs_acc = accessor("firestore", "getFirestore", "firestore")
+    extra_vars = []
+    via_fs = "firebase-admin"
+    if "@google-cloud/firestore" in text:
+        gfs = _ts_named(text, "@google-cloud/firestore")
+        for var, args, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?Firestore"):
+            extra_vars.append(var)
+            kf = _prop(args, "keyFilename")
+            if kf:
+                cred = _cred_or_file(kf, text)
+            via_fs = "@google-cloud/firestore"
+    for r in _ts_receivers(text, fs_acc, tuple(extra_vars)):
+        for m in re.finditer(r"(?:%s)\s*\.\s*(collection|doc|collectionGroup|runTransaction|batch|bulkWriter)\s*\(" % r, text):
+            name = m.group(1)
+            args = _args_at(text, m.end() - 1)
+            end = _call_end(text, m.end() - 1)
+            if name in ("collection", "doc", "collectionGroup"):
+                first = _first_arg(args)
+                res = _res_tuple(first.split("/")[0] + "'") if name == "doc" and "/" in first else _res_tuple(first)
+                if name == "doc" and not res:
+                    res = None
+                add("gcp", "firestore", m.start(), res, _verb(text, end, name), via_fs, c=cred)
+            else:
+                add("gcp", "firestore", m.start(), None, name, via_fs, c=cred)
+    acc = accessor("storage", "getStorage", "storage")
+    if acc:
+        sb = re.search(r"""storageBucket\s*:\s*([^,\n}]+)""", text)
+        for r in _ts_receivers(text, acc):
+            for m in re.finditer(r"(?:%s)\s*\.\s*bucket\s*\(" % r, text):
+                first = _first_arg(_args_at(text, m.end() - 1)) or (sb.group(1) if sb else "")
+                res = _res_tuple(first)
+                if res:
+                    add("gcs", None, m.start(), res, _verb(text, _call_end(text, m.end() - 1), "bucket"))
+    return facts
+
+
+def _collect_firebase_py(rel: str, text: str, ctx: dict) -> list:
+    if "firebase_admin" not in text and "google.cloud" not in text:
+        return []
+    facts = []
+    st = ctx["py_settings"]
+    names = _py_imported(text, "firebase_admin") | set(re.findall(r"""\bfirebase_admin\.(\w+)""", text))
+    cred = _py_fb_cred(text, st) or ctx.get("fb_py") or ("ambient", [])
+    gnames = _py_imported(text, "google.cloud")
+    has_fb = "firebase_admin" in text
+
+    def add(proto, svc, pos, resource, op, via="firebase-admin", c=None):
+        f = _sys_fact(rel, _line_at(text, pos), proto, svc, resource, op, via, c or cred)
+        if f:
+            facts.append(f)
+
+    def mod(name):
+        return r"(?:firebase_admin\.)?%s" % name
+    if has_fb and "messaging" in names:
+        for m in re.finditer(r"(?<![\w.])%s\.(send\w*|subscribe_to_topic|unsubscribe_from_topic)\s*\(" % mod("messaging"), text):
+            add("gcp", "fcm", m.start(), None, m.group(1))
+    if has_fb and "auth" in names:
+        for m in re.finditer(r"(?<![\w.])%s\.(\w+)\s*\(" % mod("auth"), text):
+            add("gcp", "firebase-auth", m.start(), None, m.group(1))
+    if has_fb and "db" in names and not re.search(r"^\s*db\s*=", text, re.M):
+        for m in re.finditer(r"(?<![\w.])%s\.reference\s*\(" % mod("db"), text):
+            add("gcp", "firebase-rtdb", m.start(), None, _verb(text, _call_end(text, m.end() - 1), "reference"))
+    fs_mod = ("firestore" in names and has_fb) or "firestore" in gnames
+    if fs_mod:
+        ctor = r"(?:firebase_admin\.)?firestore\.(?:client|Client|AsyncClient)"
+        recv = [r"%s\s*\([^)]*\)" % ctor]
+        via = "google-cloud-firestore" if "firestore" in gnames and not has_fb else "firebase-admin"
+        c = cred
+        for var, args, _p in _py_ctor_vars(text, ctor):
+            recv.append(r"(?:\bself\.)?\b%s\b" % re.escape(var))
+            sa = re.search(r"""from_service_account_json\(|credentials\s*=\s*([^,)]+)""", args)
+            if via != "firebase-admin" and sa:
+                c = _cred_or_file(args, text, None, st)
+        for r in recv:
+            for m in re.finditer(r"(?:%s)\s*\.\s*(collection|collection_group|document|transaction|batch)\s*\(" % r, text):
+                name = m.group(1)
+                args = _args_at(text, m.end() - 1)
+                end = _call_end(text, m.end() - 1)
+                if name in ("collection", "collection_group"):
+                    add("gcp", "firestore", m.start(), _res_tuple(_first_arg(args)), _verb(text, end, name), via, c)
+                else:
+                    add("gcp", "firestore", m.start(), None, name, via, c)
+    if has_fb and "storage" in names:
+        sb = re.search(r"""['\"]storageBucket['\"]\s*:\s*([^,}\n]+)""", text)
+        for m in re.finditer(r"(?<![\w.])%s\.bucket\s*\(" % mod("storage"), text):
+            first = _first_arg(_args_at(text, m.end() - 1)) or (sb.group(1) if sb else "")
+            res = _res_tuple(first)
+            if res:
+                add("gcs", None, m.start(), res, _verb(text, _call_end(text, m.end() - 1), "bucket"))
+    return facts
+
+
+# -------- Firebase (kreait/firebase-php, Laravel), Firestore client, FCM / APNs notification channels
+def _php_receivers(text: str, direct: str, hint: str) -> list:
+    recv = [direct]
+    for m in re.finditer(r"""(?:\$this->|\$)(\w+)\s*=\s*[^;]*?(?:%s)\s*;""" % direct, text):
+        recv.append(r"(?:\$this->|\$)%s\b" % re.escape(m.group(1)))
+    for m in re.finditer(r"""\b(?:\\?[\w\\]*\\)?%s\s+\$(\w+)""" % hint, text):
+        recv.append(r"(?:\$this->|\$)%s\b" % re.escape(m.group(1)))
+    return recv
+
+
+def _collect_firebase_php(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    cred = _php_fb_cred(text, ctx) or ctx.get("fb_php") or ctx.get("fb_php_cfg") or ("ambient", [])
+
+    def add(proto, svc, pos, resource, op, via, c=None):
+        f = _sys_fact(rel, _line_at(text, pos), proto, svc, resource, op, via, c or _php_local_cred(text, pos, ctx) or cred)
+        if f:
+            facts.append(f)
+    if re.search(r"Kreait|Firebase::|Google\\Cloud\\Firestore", text):
+        for r in _php_receivers(text, r"->createMessaging\(\)|Firebase::messaging\(\)|app\(\s*['\"]firebase\.messaging['\"]\s*\)", "Messaging"):
+            for m in re.finditer(r"(?:%s)\s*->\s*(send|sendMulticast|sendAll|validate|subscribeToTopic|unsubscribeFromTopic)\s*\(" % r, text):
+                add("gcp", "fcm", m.start(), None, m.group(1), "kreait/firebase-php")
+        for r in _php_receivers(text, r"->createAuth\(\)|Firebase::auth\(\)|app\(\s*['\"]firebase\.auth['\"]\s*\)", "Auth"):
+            for m in re.finditer(r"(?:%s)\s*->\s*(verifyIdToken|createUser|getUser\w*|updateUser|deleteUser|createCustomToken|"
+                                 r"listUsers|setCustomUserClaims|verifySessionCookie|revokeRefreshTokens|signIn\w*)\s*\(" % r, text):
+                add("gcp", "firebase-auth", m.start(), None, m.group(1), "kreait/firebase-php")
+        for r in _php_receivers(text, r"->createDatabase\(\)|Firebase::database\(\)|app\(\s*['\"]firebase\.database['\"]\s*\)", "Database"):
+            for m in re.finditer(r"(?:%s)\s*->\s*getReference\s*\(" % r, text):
+                add("gcp", "firebase-rtdb", m.start(), None, _verb(text, _call_end(text, m.end() - 1), "getReference"), "kreait/firebase-php")
+        kr = _php_receivers(text, r"->createFirestore\(\)|Firebase::firestore\(\)|app\(\s*['\"]firebase\.firestore['\"]\s*\)", "Firestore")
+        recv = [r + r"\s*->\s*database\(\)" for r in kr]
+        for m in re.finditer(r"""(?:\$this->|\$)(\w+)\s*=\s*[^;]*?->database\(\)\s*;""", text):
+            recv.append(r"(?:\$this->|\$)%s\b" % re.escape(m.group(1)))
+        for m in re.finditer(r"""\bFirestoreClient\s+\$(\w+)""", text):
+            recv.append(r"(?:\$this->|\$)%s\b" % re.escape(m.group(1)))
+        via = "kreait/firebase-php"
+        fc = []
+        for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Google\\Cloud\\Firestore\\)?FirestoreClient"""):
+            recv.append(r"(?:\$this->|\$)%s\b" % re.escape(var))
+            via = "google/cloud-firestore"
+            kf = _php_prop(args, "keyFilePath") or _php_prop(args, "keyFile")
+            if kf:
+                fc.append(_cred_or_file(kf, text, ctx["services"]))
+        c = _sole(fc)
+        for r in recv:
+            for m in re.finditer(r"(?:%s)\s*->\s*(collection|collectionGroup|document|runTransaction|batch)\s*\(" % r, text):
+                name = m.group(1)
+                if name in ("collection", "collectionGroup"):
+                    add("gcp", "firestore", m.start(), _res_tuple(_first_arg(_args_at(text, m.end() - 1))),
+                        _verb(text, _call_end(text, m.end() - 1), name), via, c)
+                else:
+                    add("gcp", "firestore", m.start(), None, name, via, c)
+        sb = re.search(r"""['\"]storage_bucket['\"]\s*=>\s*([^,\n]+)""", text)
+        for r in _php_receivers(text, r"->createStorage\(\)|Firebase::storage\(\)|app\(\s*['\"]firebase\.storage['\"]\s*\)", "Storage"):
+            for m in re.finditer(r"(?:%s)\s*->\s*getBucket\s*\(" % r, text):
+                res = _res_tuple(_first_arg(_args_at(text, m.end() - 1)) or (sb.group(1) if sb else ""))
+                if res:
+                    add("gcs", None, m.start(), res, _verb(text, _call_end(text, m.end() - 1), "getBucket"), "kreait/firebase-php")
+    for m in re.finditer(r"""function\s+via\s*\([^)]*\)[^{]*\{""", text):
+        body = _brace(text, m.end() - 1)
+        line = _line_at(text, m.start())
+        if re.search(r"""FcmChannel::class|['\"]fcm['\"]""", body):
+            f = _sys_fact(rel, line, "gcp", "fcm", None, "notification", "laravel-notification-channels/fcm",
+                          ctx.get("fb_php_cfg") or cred)
+            if f:
+                facts.append(f)
+        if re.search(r"""ApnChannel::class|['\"]apn['\"]""", body):
+            f = _sys_fact(rel, line, "saas", "apns", None, "notification", "laravel-notification-channels/apn",
+                          ctx.get("apn_cfg") or ("none", []), "unknown")
+            if f:
+                facts.append(f)
+    return facts
+
+
+# -------- push: APNs, Web Push, Expo
+def _collect_push_ts(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+
+    def add(svc, pos, op, via, cred, default="unknown"):
+        f = _sys_fact(rel, _line_at(text, pos), "saas", svc, None, op, via, cred, default)
+        if f:
+            facts.append(f)
+    for mod in ("@parse/node-apn", "apn"):
+        if not re.search(r"""['\"]%s['\"]""" % re.escape(mod), text):
+            continue
+        names = _ts_names(text, mod)
+        ctors = [r"new\s+(?:%s)\.Provider" % "|".join(re.escape(n) for n in names)] if names else []
+        if "Provider" in _ts_named(text, mod):
+            ctors.append(r"new\s+Provider")
+        for ctor in ctors:
+            for var, args, _p in _ts_ctor_vars(text, ctor):
+                cred = _cred_or_file(args, text)
+                for m in _scoped(text, var, _p, r"\.send\("):
+                    add("apns", m.start(), "send", mod, cred)
+    if re.search(r"""['\"]web-push['\"]""", text):
+        names = _ts_names(text, "web-push")
+        creds = []
+        for n in names:
+            for m in _ts_calls(text, n, r"\.setVapidDetails\("):
+                parts = _split_args(_args_at(text, m.end() - 1))
+                creds.append(_cred_or_file(parts[2], text) if len(parts) > 2 else ("none", []))
+        cred = _merge_cred(*creds) if creds else ("none", [])
+        for n in names:
+            for m in _ts_calls(text, n, r"\.sendNotification\("):
+                add("webpush", m.start(), "sendNotification", "web-push", cred)
+    if "expo-server-sdk" in text:
+        for var, args, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?Expo"):
+            cred = _cred_expr(_prop(args, "accessToken") or "", text)
+            for m in _scoped(text, var, _p, r"\.sendPushNotificationsAsync\("):
+                add("expo-push", m.start(), "sendPushNotificationsAsync", "expo-server-sdk", cred)
+    return facts
+
+
+def _collect_push_py(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    st = ctx["py_settings"]
+
+    def add(svc, pos, op, via, cred):
+        f = _sys_fact(rel, _line_at(text, pos), "saas", svc, None, op, via, cred, "unknown")
+        if f:
+            facts.append(f)
+    if "apns2" in text:
+        creds = [_cred_or_file(_args_at(text, m.end() - 1), text, None, st)
+                 for m in re.finditer(r"""\b(?:TokenCredentials|CertificateCredentials)\s*\(""", text)]
+        cred = _merge_cred(*creds) if creds else ("none", [])
+        creds = [c for c in creds if c[0] == "file"]
+        if cred[0] == "none" and creds:
+            cred = creds[0]
+        for var, _a, _p in _py_ctor_vars(text, r"(?:\w+\.)?APNsClient"):
+            for m in _scoped(text, var, _p, r"\.(send_notification\w*)\("):
+                add("apns", m.start(), m.group(1), "apns2", cred)
+    if "aioapns" in text:
+        for var, args, _p in _py_ctor_vars(text, r"(?:\w+\.)?APNs"):
+            cred = _cred_or_file(args, text, None, st)
+            for m in _scoped(text, var, _p, r"\.send_notification\("):
+                add("apns", m.start(), "send_notification", "aioapns", cred)
+    if "pywebpush" in text:
+        for m in re.finditer(r"""(?<![\w.])webpush\s*\(""", text):
+            if re.search(r"def\s+$", text[max(0, m.start() - 8):m.start()]):
+                continue
+            arg = _py_arg(_args_at(text, m.end() - 1), "vapid_private_key") if "vapid_private_key" in _args_at(text, m.end() - 1) else ""
+            add("webpush", m.start(), "webpush", "pywebpush", _cred_or_file(arg, text, None, st) if arg else ("none", []))
+    return facts
+
+
+def _collect_push_php(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    services = ctx["services"]
+
+    def add(svc, pos, op, via, cred):
+        f = _sys_fact(rel, _line_at(text, pos), "saas", svc, None, op, via, cred, "unknown")
+        if f:
+            facts.append(f)
+    if "Pushok" in text:
+        creds = [_cred_or_file(_args_at(text, m.end() - 1), text, services)
+                 for m in re.finditer(r"""\b(?:Token|Certificate)::create\s*\(""", text)]
+        cred = _merge_cred(*creds) if creds else ("none", [])
+        if cred[0] == "none":
+            cred = next((c for c in creds if c[0] == "file"), cred)
+        for var, _a, _p in _php_ctor_vars(text, r"""\\?(?:Pushok\\)?Client"""):
+            for m in _scoped(text, var, _p, r"->(push)\("):
+                add("apns", m.start(), "push", "edamov/pushok", cred)
+    if "Minishlink" in text:
+        for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Minishlink\\WebPush\\)?WebPush"""):
+            pk = _php_prop(_resolve_ident(_first_arg(args), text), "privateKey")
+            cred = _cred_or_file(pk, text, services) if pk else ("none", [])
+            for m in _scoped(text, var, _p, r"->(sendOneNotification|queueNotification|flush)\("):
+                add("webpush", m.start(), m.group(1), "minishlink/web-push", cred)
+    return facts
+
+
+# -------- Kubernetes API clients
+def _last_before(loads: list, pos: int):
+    best = ("ambient", [])
+    for p, c in loads:
+        if p < pos:
+            best = c
+    return best
+
+
+def _collect_k8s_ts(rel: str, text: str, ctx: dict) -> list:
+    if "@kubernetes/client-node" not in text:
+        return []
+    facts = []
+    loads = []
+    for m in re.finditer(r"""\.(loadFromFile|loadFromDefault|loadFromCluster|loadFromString|loadFromOptions)\s*\(""", text):
+        c = _cred_or_file(_args_at(text, m.end() - 1), text) if m.group(1) == "loadFromFile" else ("ambient", [])
+        loads.append((m.start(), c if c[0] in ("env", "file") else ("ambient", [])))
+    for m in re.finditer(r"""(?:(?:const|let|var)\s+(\w+)|this\.(\w+)|(\w+))\s*(?::[^=\n]+)?=\s*[\w.]+\.makeApiClient\(\s*(?:\w+\.)?(\w+Api)\s*\)""", text):
+        var, api = m.group(1) or m.group(2) or m.group(3), m.group(4)
+        cred = _last_before(loads, m.start())
+        for c in _scoped(text, var, m.start(), r"\.((?:list|read|create|delete|patch|replace|connect|get)\w*)\("):
+            ns = _ns_lit(_args_at(text, c.end() - 1))
+            f = _sys_fact(rel, _line_at(text, c.start()), "k8s", _k8s_group(api), None, c.group(1),
+                          "@kubernetes/client-node", cred, edge_attrs={"namespace": ns})
+            if f:
+                facts.append(f)
+    return facts
+
+
+def _collect_k8s_py(rel: str, text: str, ctx: dict) -> list:
+    if "kubernetes" not in text:
+        return []
+    facts = []
+    st = ctx["py_settings"]
+    loads = []
+    for m in re.finditer(r"""\b(?:load_kube_config|new_client_from_config|load_config|load_incluster_config)\s*\(""", text):
+        args = _args_at(text, m.end() - 1)
+        c = _cred_or_file(_py_arg(args, "config_file") if "config_file" in args else args, text, None, st) if args.strip() else ("ambient", [])
+        loads.append((m.start(), c if c[0] in ("env", "file") else ("ambient", [])))
+    apis = set(re.findall(r"""client\.(\w+Api)\b""", text)) | {n for n in _py_imported(text, "kubernetes.client") if n.endswith("Api")}
+    for api in apis:
+        recv = [r"(?:kubernetes\.)?(?:client\.)?%s\s*\([^)]*\)" % re.escape(api)]
+        for var, _a, _p in _py_ctor_vars(text, r"(?:kubernetes\.)?(?:client\.)?%s" % re.escape(api)):
+            recv.append(r"(?:\bself\.)?\b%s\b" % re.escape(var))
+        for r in recv:
+            for m in re.finditer(r"(?:%s)\s*\.\s*((?:list|read|create|delete|patch|replace|connect|get)\w*)\s*\(" % r, text):
+                ns = _ns_lit(_args_at(text, m.end() - 1))
+                f = _sys_fact(rel, _line_at(text, m.start()), "k8s", _k8s_group(api), None, m.group(1), "kubernetes",
+                              _last_before(loads, m.start()),
+                              edge_attrs={"namespace": ns})
+                if f:
+                    facts.append(f)
+    return facts
+
+
+def _collect_k8s_php(rel: str, text: str, ctx: dict) -> list:
+    if "RenokiCo" not in text and "KubernetesCluster" not in text:
+        return []
+    facts = []
+    cluster = r"KubernetesCluster::(fromKubeConfigYamlFile|fromKubeConfigYaml|fromKubeConfigVariable|fromUrl|inClusterConfiguration)\s*\("
+    cred = ("ambient", [])
+    for m in re.finditer(cluster, text):
+        if m.group(1) in ("fromKubeConfigYamlFile", "fromKubeConfigYaml"):
+            c = _cred_or_file(_args_at(text, m.end() - 1), text, ctx["services"])
+            if c[0] in ("env", "file"):
+                cred = c
+    for var, _a, _p in _php_ctor_vars(text, r"""\\?(?:RenokiCo\\PhpK8s\\)?KubernetesCluster::\w+"""):
+        for m in re.finditer(r"""(?:\$this->|\$)%s\s*->\s*(\w+)\(\)\s*->\s*(\w+)\s*\(""" % re.escape(var), text):
+            grp = K8S_PHP_KIND.get(m.group(1).lower())
+            if grp:
+                f = _sys_fact(rel, _line_at(text, m.start()), "k8s", grp, None, f"{m.group(1)}.{m.group(2)}", "renoki-co/php-k8s", cred)
+                if f:
+                    facts.append(f)
+        for m in re.finditer(r"""(?:\$this->|\$)%s\s*->\s*(get(?:All)?(\w+?)s?(?:ByName)?)\s*\(""" % re.escape(var), text):
+            grp = K8S_PHP_KIND.get(m.group(2).lower().rstrip("s"))
+            if grp:
+                f = _sys_fact(rel, _line_at(text, m.start()), "k8s", grp, None, m.group(1), "renoki-co/php-k8s", cred)
+                if f:
+                    facts.append(f)
+    return facts
+
+
+# -------- Docker Engine API clients
+def _docker_fact(rel, text, pos, target, tls, op, via, cred=None):
+    res, ttls = target
+    if res is None:
+        return None
+    tls_v = tls if tls is not None else ttls
+    plain_tcp = res[0] == "lit" and re.search(r":\d+$", res[1]) and not res[1].startswith("/")
+    if tls_v is None and plain_tcp:
+        tls_v = False
+    sock = res[0] == "lit" and res[1].startswith(("/", "\\\\"))
+    c = cred or (("ambient", []) if sock or res[0] == "env" else ("none", []))
+    default = "ambient" if sock or res[0] == "env" else "unknown"
+    return _sys_fact(rel, _line_at(text, pos), "docker", None, res, op, via, c, default, node_attrs={"tls": tls_v})
+
+
+def _collect_docker_ts(rel: str, text: str, ctx: dict) -> list:
+    if not re.search(r"""['\"]dockerode['\"]""", text):
+        return []
+    facts = []
+    names = _ts_names(text, "dockerode")
+    ctors = [r"new\s+(?:%s)" % "|".join(re.escape(n) for n in names)] if names else []
+    for ctor in ctors:
+        for var, args, _p in _ts_ctor_vars(text, ctor):
+            sp = _prop(args, "socketPath")
+            host = _prop(args, "host")
+            port = _prop(args, "port")
+            tls = None
+            cred = None
+            if sp:
+                target = _docker_target(sp)
+                if target[0] is None:
+                    target = (_res_tuple(sp), None)
+            elif host:
+                hk = _env_keys(host)
+                if hk:
+                    target = (("env", hk[0]), None)
+                else:
+                    hl = _lit_in(host)
+                    pl = re.search(r"""\d{2,5}""", port or "")
+                    target = ((("lit", f"{hl}:{pl.group(0) if pl else 2375}") if hl else None), None)
+                proto = _prop(args, "protocol") or ""
+                has_tls = bool(re.search(r"""\b(?:ca|cert|key)\s*:""", args)) or "https" in proto
+                tls = True if has_tls else False if target[0] and target[0][0] == "lit" else None
+                if has_tls:
+                    cred = _all_env([_cred_or_file(_prop(args, k) or "", text) for k in ("ca", "cert", "key")])
+            else:
+                target = (DOCKER_SOCK, None)
+            for m in _scoped(text, var, _p, r"\.(%s)\(" % DOCKER_TS_OPS):
+                op = m.group(1)
+                if op in ("getContainer", "getImage", "getNetwork", "getVolume", "getService"):
+                    op = f"{op}.{_verb(text, _call_end(text, m.end() - 1), '', skip=set())}".rstrip(".")
+                f = _docker_fact(rel, text, m.start(), target, tls, op, "dockerode", cred)
+                if f:
+                    facts.append(f)
+    return facts
+
+
+def _collect_docker_py(rel: str, text: str, ctx: dict) -> list:
+    if not re.search(r"^\s*(?:import docker|from docker)", text, re.M):
+        return []
+    facts = []
+    ctor = r"docker\.(?:from_env|DockerClient|APIClient|client\.DockerClient)"
+    recv = [(r"%s\s*\([^)]*\)" % ctor, None)]
+    for m in re.finditer(_PY_LHS + r"(%s)\s*\(" % ctor, text):
+        recv.append((r"(?:\bself\.)?\b%s\b" % re.escape(m.group(1)), (m.group(2), _args_at(text, m.end() - 1), m.start())))
+    for r, spec in recv:
+        if spec:
+            kind, args = spec[0], spec[1]
+            bu = _py_arg(args, "base_url") if "base_url" in args or (args.strip() and "=" not in args.split(",")[0]) else ""
+            if kind.endswith("from_env"):
+                target = (DOCKER_SOCK, None)
+                tls = None
+            else:
+                target = _docker_target(bu)
+                tls = None
+            tls_arg = bool(re.search(r"\btls\s*=", args)) and not re.search(r"tls\s*=\s*(False|None)", args)
+            cred = None
+            if tls_arg:
+                tls = True
+                cred = _tls_cred(text, args)
+            elif target[0] and target[0][0] == "lit" and re.search(r":\d+$", target[0][1]):
+                tls = False if target[1] is None else target[1]
+        else:
+            target, tls, cred = (DOCKER_SOCK, None), None, None
+        for m in re.finditer(r"(?:%s)\s*\.\s*(?:(%s)\s*\.\s*(\w+)|(ping|info|version|events|df|login|create_container|"
+                             r"containers|images|pull|build|exec_create))\s*\(" % (r, DOCKER_PY_NS), text):
+            op = f"{m.group(1)}.{m.group(2)}" if m.group(1) else m.group(3)
+            f = _docker_fact(rel, text, m.start(), target, tls, op, "docker", cred)
+            if f:
+                facts.append(f)
+    return facts
+
+
+def _tls_cred(text: str, args: str):
+    tm = re.search(r"""tls\s*=\s*(\w+)""", args)
+    body = args
+    if tm:
+        am = re.search(r"""%s\s*=\s*(?:docker\.(?:tls\.)?)?TLSConfig\s*\(""" % re.escape(tm.group(1)), text)
+        if am:
+            body = _args_at(text, am.end() - 1)
+    c = _cred_or_file(body, text)
+    if c[0] == "none":
+        fm = _FILE_RX.search(body)
+        if fm:
+            c = ("file", [fm.group(1)])
+    return c
+
+
+def _collect_docker_php(rel: str, text: str, ctx: dict) -> list:
+    if "Docker\\" not in text and "DockerClientFactory" not in text:
+        return []
+    facts = []
+    target = (DOCKER_SOCK, None)
+    tls = None
+    rs = re.search(r"""['\"]remote_socket['\"]\s*=>\s*([^,\n\]]+)""", text)
+    if rs:
+        target = _docker_target(rs.group(1))
+        ssl = re.search(r"""['\"]ssl['\"]\s*=>\s*(true|false)""", text)
+        if ssl:
+            tls = ssl.group(1) == "true"
+    for var, _a, _p in _php_ctor_vars(text, r"""\\?(?:Docker\\)?Docker::create"""):
+        for m in re.finditer(r"""(?:\$this->|\$)%s\s*->\s*((?:container|image|network|volume|system|exec)\w*)\s*\(""" % re.escape(var), text):
+            f = _docker_fact(rel, text, m.start(), target, tls, m.group(1), "docker-php/docker-php")
+            if f:
+                facts.append(f)
+    return facts
+
+
+# -------- key management: AWS KMS (PHP), GCP Secret Manager / KMS, Azure Key Vault
+def _collect_kms_php(rel: str, text: str, ctx: dict) -> list:
+    if "KmsClient" not in text:
+        return []
+    facts = []
+    for m in re.finditer(r"""->\s*(encrypt|decrypt|generateDataKey|generateDataKeyWithoutPlaintext|sign|verify|reEncrypt|describeKey|getPublicKey)\s*\(""", text):
+        res = _kms_res(_php_prop(text[m.end():m.end() + 400], "KeyId") or "")
+        ctor = text[max(0, m.start() - 700):m.start()]
+        explicit = bool(re.search(r"""['\"](?:key|credentials|secret)['\"]\s*=>""", ctor))
+        creds = re.findall(r"""env\(\s*['\"](AWS_(?:ACCESS_KEY_ID|SECRET_ACCESS_KEY))['\"]""", ctor) if explicit else []
+        f = _fact(rel, _line_at(text, m.start()), "aws", "kms", res, m.group(1), "aws-sdk-php", "explicit" if explicit else "ambient", creds)
+        if f:
+            f["ensure_env"] = True
+            facts.append(f)
+    return facts
+
+
+def _gcp_client_cred(args: str, text: str, st=None):
+    for k in ("keyFilename", "keyFile", "keyFilePath", "credentials"):
+        v = _prop(args, k) or _php_prop(args, k) or ""
+        if v:
+            return _cred_or_file(v, text, None, st)
+    kw = re.search(r"""(?:credentials|key_file)\s*=\s*([^,)]+)""", args)
+    return _cred_or_file(kw.group(1), text, None, st) if kw else ("ambient", [])
+
+
+def _collect_gcp_keys_ts(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    for mod, ctor, svc, ops in (
+        ("@google-cloud/secret-manager", "SecretManagerServiceClient", "secretmanager",
+         r"accessSecretVersion|addSecretVersion|createSecret|getSecret|deleteSecret|listSecrets"),
+        ("@google-cloud/kms", "KeyManagementServiceClient", "kms",
+         r"encrypt|decrypt|asymmetricSign|asymmetricDecrypt|getPublicKey|createCryptoKey|macSign|macVerify"),
+    ):
+        if mod not in text:
+            continue
+        for var, args, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?%s" % ctor):
+            cred = _gcp_client_cred(args, text)
+            for m in _scoped(text, var, _p, r"\.(%s)\(" % ops):
+                body = _args_at(text, m.end() - 1)
+                res = _secret_name(_prop(body, "name") or body) if svc == "secretmanager" else None
+                f = _sys_fact(rel, _line_at(text, m.start()), "gcp", svc, res, m.group(1), mod, cred)
+                if f:
+                    facts.append(f)
+    return facts
+
+
+def _collect_gcp_keys_py(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    st = ctx["py_settings"]
+    for mod, ctor, svc, ops in (
+        ("secretmanager", "SecretManagerServiceClient", "secretmanager",
+         r"access_secret_version|add_secret_version|create_secret|get_secret|delete_secret|list_secrets"),
+        ("kms", "KeyManagementServiceClient", "kms",
+         r"encrypt|decrypt|asymmetric_sign|asymmetric_decrypt|get_public_key|create_crypto_key|mac_sign|mac_verify"),
+    ):
+        if "google.cloud" not in text or mod not in text:
+            continue
+        for var, args, _p in _py_ctor_vars(text, r"(?:\w+\.)*%s(?:\.from_service_account_(?:file|json))?" % ctor):
+            ctor_call = text[_p:_p + 400]
+            sa = re.search(r"""from_service_account_(?:file|json)\s*\(""", ctor_call.split("\n", 1)[0])
+            cred = _cred_or_file(args, text, None, st) if sa else _gcp_client_cred(args, text, st)
+            if sa and cred[0] == "none":
+                cred = ("ambient", [])
+            for m in _scoped(text, var, _p, r"\.(%s)\(" % ops):
+                body = _args_at(text, m.end() - 1)
+                res = _secret_name(body) if svc == "secretmanager" else None
+                if svc == "secretmanager" and res is None:
+                    nm = re.search(r"""\bname\s*=\s*(\w+)""", body) or re.search(r"""['\"]name['\"]\s*:\s*(\w+)""", body)
+                    res = _secret_name(_resolve_ident(nm.group(1), text)) if nm else None
+                f = _sys_fact(rel, _line_at(text, m.start()), "gcp", svc, res, m.group(1), "google-cloud-" + mod, cred)
+                if f:
+                    facts.append(f)
+    return facts
+
+
+def _collect_gcp_keys_php(rel: str, text: str, ctx: dict) -> list:
+    if "SecretManagerServiceClient" not in text and "KeyManagementServiceClient" not in text:
+        return []
+    facts = []
+    for ctor, svc, ops in (
+        ("SecretManagerServiceClient", "secretmanager", r"accessSecretVersion|addSecretVersion|createSecret|getSecret|deleteSecret|listSecrets"),
+        ("KeyManagementServiceClient", "kms", r"encrypt|decrypt|asymmetricSign|asymmetricDecrypt|getPublicKey"),
+    ):
+        for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Google\\Cloud\\\w+\\V1\\)?%s""" % ctor):
+            cred = _gcp_client_cred(args, text)
+            for m in _scoped(text, var, _p, r"->(%s)\(" % ops):
+                body = _args_at(text, m.end() - 1)
+                res = None
+                if svc == "secretmanager":
+                    res = _secret_name(_resolve_ident(_first_arg(body), text))
+                    if res is None:
+                        sm = re.search(r"""secret(?:Version)?Name\s*\(([^)]*)\)""", text)
+                        if sm:
+                            parts = _split_args(sm.group(1))
+                            res = _res_tuple(parts[1]) if len(parts) > 1 else None
+                f = _sys_fact(rel, _line_at(text, m.start()), "gcp", svc, res, m.group(1), "google/cloud-" + ("secret-manager" if svc == "secretmanager" else "kms"), cred)
+                if f:
+                    facts.append(f)
+    return facts
+
+
+AZURE_KV = (
+    ("@azure/keyvault-secrets", "SecretClient", r"getSecret|setSecret|deleteSecret|beginDeleteSecret|listPropertiesOfSecrets|updateSecretProperties"),
+    ("@azure/keyvault-keys", "KeyClient", r"getKey|createKey|createRsaKey|deleteKey|beginDeleteKey|listPropertiesOfKeys"),
+    ("@azure/keyvault-certificates", "CertificateClient", r"getCertificate|createCertificate|beginCreateCertificate|listPropertiesOfCertificates"),
+)
+
+
+def _azure_cred(expr: str, text: str, st=None):
+    """The credential argument of a Key Vault client: a client-secret / certificate credential reads keys, else ambient."""
+    ex = _resolve_ident(expr, text)
+    m = re.search(r"""\b(ClientSecretCredential|ClientCertificateCredential)\s*\(""", ex)
+    if not m:
+        return ("ambient", [])
+    mm = re.search(r"""\b%s\s*\(""" % m.group(1), text)
+    c = _cred_or_file(_args_at(text, mm.end() - 1) if mm else "", text, None, st)
+    return c if c[0] != "none" else ("ambient", [])
+
+
+def _collect_azure_kv_ts(rel: str, text: str, ctx: dict) -> list:
+    facts = []
+    for mod, ctor, ops in AZURE_KV:
+        if mod not in text:
+            continue
+        for var, args, _p in _ts_ctor_vars(text, r"new\s+(?:\w+\.)?%s" % ctor):
+            res = _vault_res(_first_arg(args), text)
+            cred = _azure_cred((_split_args(args) + ["", ""])[1], text)
+            for m in _scoped(text, var, _p, r"\.(%s)\(" % ops):
+                f = _sys_fact(rel, _line_at(text, m.start()), "azure", "keyvault", res, m.group(1), mod, cred)
+                if f:
+                    facts.append(f)
+    return facts
+
+
+def _collect_azure_kv_py(rel: str, text: str, ctx: dict) -> list:
+    if "azure.keyvault" not in text:
+        return []
+    facts = []
+    st = ctx["py_settings"]
+    for cls, ops, mod in (
+        ("SecretClient", r"get_secret|set_secret|delete_secret|begin_delete_secret|list_properties_of_secrets", "azure-keyvault-secrets"),
+        ("KeyClient", r"get_key|create_key|create_rsa_key|delete_key|begin_delete_key|list_properties_of_keys", "azure-keyvault-keys"),
+        ("CertificateClient", r"get_certificate|begin_create_certificate|list_properties_of_certificates", "azure-keyvault-certificates"),
+    ):
+        for var, args, _p in _py_ctor_vars(text, r"(?:\w+\.)*%s" % cls):
+            res = _vault_res(_py_arg(args, "vault_url"), text)
+            cred = _azure_cred(_py_arg(args, "credential"), text, st)
+            for m in _scoped(text, var, _p, r"\.(%s)\(" % ops):
+                f = _sys_fact(rel, _line_at(text, m.start()), "azure", "keyvault", res, m.group(1), mod, cred)
+                if f:
+                    facts.append(f)
+    return facts
+
+
+# -------- MessageBird and Plivo (SMS)
+def _collect_sms_extra(rel: str, text: str, ctx: dict) -> list:
+    if not re.search(r"messagebird|plivo", text, re.I):
+        return []
+    facts = []
+    ext = os.path.splitext(rel)[1].lower()
+    services = ctx["services"]
+    st = ctx["py_settings"]
+
+    def add(provider, pos, op, via, cred):
+        f = _mail_fact(rel, _line_at(text, pos), provider, op, via, cred)
+        if f:
+            facts.append(f)
+    if ext == ".php":
+        for var, args, _p in _php_ctor_vars(text, r"""\\?(?:MessageBird\\)?Client"""):
+            if "MessageBird" in text:
+                cred = _cred_expr(_first_arg(args), text, services)
+                for m in _scoped(text, var, _p, r"->messages->create\("):
+                    add("messagebird", m.start(), "messages.create", "messagebird/php-rest-api", cred)
+        for var, args, _p in _php_ctor_vars(text, r"""\\?(?:Plivo\\)?RestClient"""):
+            if "Plivo" in text:
+                cred = _merge_cred(*(_cred_expr(a, text, services) for a in _split_args(args)[:2]))
+                for m in _scoped(text, var, _p, r"->messages->create\("):
+                    add("plivo", m.start(), "messages.create", "plivo/plivo-php", cred)
+    elif ext == ".py":
+        if "messagebird" in text:
+            for var, args, _p in _py_ctor_vars(text, r"(?:messagebird\.)?Client"):
+                cred = _cred_expr(_py_arg(args, "access_key"), text, None, st)
+                for m in _scoped(text, var, _p, r"\.(message_create|message_bulk_create)\("):
+                    add("messagebird", m.start(), m.group(1), "messagebird", cred)
+        if "plivo" in text:
+            for var, args, _p in _py_ctor_vars(text, r"(?:plivo\.)?RestClient"):
+                cred = _merge_cred(*(_cred_expr(a.partition("=")[2] or a, text, None, st) for a in _split_args(args)[:2]))
+                for m in _scoped(text, var, _p, r"\.messages\.create\("):
+                    add("plivo", m.start(), "messages.create", "plivo", cred)
+    else:
+        if re.search(r"""['\"]messagebird['\"]""", text):
+            names = _ts_names(text, "messagebird")
+            ctors = []
+            for n in names:
+                ctors += [r"%s\.initClient" % re.escape(n), re.escape(n)]
+            for ctor in ctors:
+                for var, args, _p in _ts_ctor_vars(text, ctor):
+                    cred = _cred_expr(_first_arg(args), text)
+                    for m in _scoped(text, var, _p, r"\.messages\.create\("):
+                        add("messagebird", m.start(), "messages.create", "messagebird", cred)
+            for m in re.finditer(r"""require\(\s*['\"]messagebird['\"]\s*\)\s*\(([^)]*)\)\s*\.messages\.create\(""", text):
+                add("messagebird", m.start(), "messages.create", "messagebird", _cred_expr(m.group(1), text))
+        if re.search(r"""['\"]plivo['\"]""", text):
+            names = _ts_names(text, "plivo")
+            for n in names:
+                for var, args, _p in _ts_ctor_vars(text, r"new\s+%s\.Client" % re.escape(n)):
+                    cred = _merge_cred(*(_cred_expr(a, text) for a in _split_args(args)[:2]))
+                    for m in _scoped(text, var, _p, r"\.messages\.create\("):
+                        add("plivo", m.start(), "messages.create", "plivo", cred)
+            for var, args, _p in _ts_ctor_vars(text, r"new\s+Client"):
+                if "Client" in _ts_named(text, "plivo"):
+                    cred = _merge_cred(*(_cred_expr(a, text) for a in _split_args(args)[:2]))
+                    for m in _scoped(text, var, _p, r"\.messages\.create\("):
+                        add("plivo", m.start(), "messages.create", "plivo", cred)
+    return facts
+
+
+def _collect_infra(files, ctx) -> list:
+    """Part 3b collectors over every candidate file (ctx carries project-wide init credentials and config)."""
+    facts = []
+    for rel, text in files:
+        ext = os.path.splitext(rel)[1].lower()
+        if ext == ".py":
+            fns = (_collect_firebase_py, _collect_push_py, _collect_k8s_py, _collect_docker_py,
+                   _collect_gcp_keys_py, _collect_azure_kv_py, _collect_sms_extra)
+        elif ext == ".php":
+            fns = (_collect_firebase_php, _collect_push_php, _collect_k8s_php, _collect_docker_php,
+                   _collect_kms_php, _collect_gcp_keys_php, _collect_sms_extra)
+        else:
+            fns = (_collect_firebase_ts, _collect_push_ts, _collect_k8s_ts, _collect_docker_ts,
+                   _collect_gcp_keys_ts, _collect_azure_kv_ts, _collect_sms_extra)
+        for fn in fns:
+            facts += fn(rel, text, ctx)
+    return facts
+
+
 def collect(root) -> list:
     facts = []
     storage: dict = {}
@@ -1438,6 +2541,16 @@ def collect(root) -> list:
         facts += _collect_mail_py(rel, text, mail_ctx)
     for rel, text in ts_mail:
         facts += _collect_mail_ts(rel, text, mail_ctx)
+    infra = py_chunks + php_chunks + ts_mail
+    mail_ctx["fb_ts"] = _sole([c for _r, x in ts_mail if (c := _ts_fb_cred(x)) and "firebase-admin" in x])
+    mail_ctx["fb_py"] = _sole([c for _r, x in py_chunks if (c := _py_fb_cred(x, mail_ctx["py_settings"])) and "firebase_admin" in x])
+    mail_ctx["fb_php"] = _sole([c for _r, x in php_chunks if (c := _php_fb_cred(x, mail_ctx)) and "Kreait" in x])
+    for rel, text in php_chunks:
+        if rel.endswith("config/firebase.php"):
+            mail_ctx["fb_php_cfg"] = _firebase_config_cred(text) or mail_ctx.get("fb_php_cfg")
+        elif rel.endswith(("config/broadcasting.php", "config/services.php")):
+            mail_ctx["apn_cfg"] = _apn_config_cred(text) or mail_ctx.get("apn_cfg")
+    facts += _collect_infra(infra, mail_ctx)
     # dedupe
     seen = set()
     out = []
@@ -1519,6 +2632,7 @@ def attach_sdk(builder, root, node, cred, st) -> None:
             attrs["credential_source"] = "ambient"
         if f.get("resource") and f["protocol"] == "saas":
             attrs["resource"] = f["resource"]
+        attrs.update(f.get("node_attrs") or {})
         nid = node(f["protocol"], f["target"], attrs, f["confidence"])
         if (src, nid) in llm_done and f["protocol"] == "llm":
             continue
@@ -1526,7 +2640,12 @@ def attach_sdk(builder, root, node, cred, st) -> None:
         n = builder.nodes[nid]
         if f["auth"] == "explicit":
             n.attrs["auth"] = "explicit"
-            if f.get("literal_credential"):
+            if f.get("cred_file"):
+                if n.attrs.get("credential_source") not in ("env", "literal"):
+                    n.attrs["credential_source"] = "file"
+                    n.attrs["credential_file"] = f["cred_file"]
+                    n.attrs["credential_at"] = f"{f['file']}:{f['line']}"
+            elif f.get("literal_credential"):
                 n.attrs["credential_literal"] = True
                 if n.attrs.get("credential_source") != "env":
                     n.attrs["credential_source"] = "literal"
@@ -1544,6 +2663,7 @@ def attach_sdk(builder, root, node, cred, st) -> None:
             extra["literal_credential"] = True
         if f.get("resource") and f["protocol"] == "saas":
             extra["resource"] = f["resource"]
+        extra.update({k: v for k, v in (f.get("edge_attrs") or {}).items() if v not in (None, "")})
         builder.add_edge(src, nid, "CONNECTS_TO", f["file"], f["line"], f["confidence"], **extra)
         st["connects"] += 1
         if f.get("resource_env"):

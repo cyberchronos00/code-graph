@@ -89,7 +89,15 @@ Test-code accesses are `TEST_USES`.
 `SendGridAPIClient(key).send`, `twilio.rest.Client(sid, token).messages.create`, `PostmarkClient`, `resend.Emails.send`,
 `vonage.Client` and Django `EMAIL_BACKEND = "anymail.backends.<esp>.EmailBackend"` with `ANYMAIL` (used by `send_mail`,
 `send_mass_mail` and `EmailMessage.send`) are `external:saas:<provider>` systems with the key source on
-`CREDENTIAL_FROM` ([External systems](external.md)).
+`CREDENTIAL_FROM` ([External systems](external.md)). `messagebird` and `plivo` clients are the same kind of system.
+
+## Push, Firebase, Kubernetes, Docker and key management
+
+`firebase_admin` (`messaging.send`, `firestore.client().collection(...)`, `auth.verify_id_token`, `db.reference`, `storage.bucket`),
+`apns2` / `aioapns`, `pywebpush`, `kubernetes` (`client.CoreV1Api().list_namespaced_pod` after `config.load_incluster_config()`),
+`docker` (`from_env()`, `DockerClient(base_url=...)`), `boto3.client('kms')`, `google.cloud.secretmanager` / `kms` and
+`azure.keyvault.*` are `external:gcp:*`, `external:saas:*`, `external:k8s:*`, `external:docker:*`, `external:aws:kms` and
+`external:azure:keyvault` systems ([External systems](external.md)).
 
 ## Entry points and function references
 
