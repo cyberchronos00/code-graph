@@ -779,6 +779,28 @@ def external_systems(pattern: str | None = None, protocol: str | None = None, so
 
 
 @tool
+def attack_surface(inbound: bool = False, outbound: bool = False, protocol: str | None = None, finding: str | None = None,
+                   min_confidence: str = "heuristic", show_ignored: bool = False, strict: bool = False,
+                   max_items: int = 60) -> str:
+    """Security views over recorded facts (#47): findings plus the inbound / outbound attack surface, with file:line
+    evidence, confidence and the entry points reaching each finding. Findings: hardcoded (literal credential in a DSN,
+    SDK constructor or config; the value is never shown), plaintext (external system without TLS, non-loopback host),
+    unverified (webhook route that never verifies its signature), unguarded (inbound route / handler with no auth guard,
+    the `routes` rule; strict: route guards only), exposed-listener (TCP / UDP bound to all interfaces). inbound=true
+    lists routes, webhooks, sockets, consumers and IPC handlers with guard state and whether they reach a write;
+    outbound=true lists every external system with address source, credential source and TLS. protocol narrows both;
+    finding: hardcoded | plaintext | unverified | unguarded | exposed-listener; min_confidence: heuristic | resolved |
+    exact. Findings accepted in .cg.yaml surface.ignore are counted (show_ignored lists them). The structured reply
+    carries the full result under `surface` (the `cg surface --format json` shape); SARIF is `cg surface --format sarif`.
+    Details: `external_systems`, `protocol_links`, `routes`."""
+    from . import surface as S
+    res = S.surface(_st(), inbound=inbound, outbound=outbound, protocol=protocol, finding=finding,
+                    min_confidence=min_confidence, max_items=max_items, strict=strict, show_ignored=show_ignored)
+    _EXTRA.set({"surface": res})
+    return S.render_surface(res, max_items=max_items)
+
+
+@tool
 def llm_tools(pattern: str | None = None, framework: str | None = None, unmatched: bool = False, agent: str | None = None) -> str:
     """LLM tools and MCP primitives (#66): tools offered to a model (OpenAI / Anthropic schema literals, LangChain @tool /
     StructuredTool / BaseTool, Agents SDK @function_tool, LlamaIndex FunctionTool, dict registries and if / match branches

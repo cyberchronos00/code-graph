@@ -57,6 +57,14 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 - A project-specific guard name counts when it matches `auth.extra_patterns` or `--auth-pattern`.
 - A sent-but-not-forwarded key is an object literal passed to a helper whose request keys are known, one call level deep. Spreads, runtime keys, and opaque objects are omitted, so no gap is reported for them.
 
+## Attack surface
+
+- `cg surface` part 1 reads recorded facts only. It does not detect TLS or SSH host-key verification switched off (`verify=False`, `rejectUnauthorized: false`, `InsecureSkipVerify`, `AutoAddPolicy`), outbound URLs built from request input (SSRF candidates), insecure gRPC channels, or IPC exposure findings (`postMessage` without an origin check, `externally_connectable`, exported Android components, Unix sockets with open permissions).
+- `hardcoded` sees the credentials the external-system and SDK extractors flag as literal, DSNs with a password, and Laravel config literals. A literal in a Python or TypeScript settings value that no extractor ties to a system is not reported, and the config check is by key name (`password`, `token`, `secret`, `*_key`).
+- `plaintext` needs a known non-loopback host and `tls=false`. A host from an environment variable with no example value is not reported. SMTP on port 587 is not called plaintext, because STARTTLS cannot be seen.
+- `unguarded` and `unverified` follow the guard facts of [Link, payload, and guards](#link-payload-and-guards). Protocols that record no guards show `unchecked` and are never reported unguarded. Routes that are public by design need a `surface.ignore` entry.
+- On a combined graph two repos naming the same external address share one node, so a credential literal recorded on the node belongs to the first repo; literal credentials passed at a call site keep their own repo and file.
+
 ## Plans, value facts, and the visual view
 
 - Plan completeness rules are the named set: writers, readers, callers, clients, mirrors, identity columns, text mentions, and declared precedents. Anything else needs a plan entry or a `precedents` regex ([Planned changes](plans.md)).

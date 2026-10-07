@@ -26,6 +26,11 @@ Records project-specific knowledge once, for the CLI, the MCP server and the vis
     protocols:
       external: ["kafka:audit.*", "http:GET /status"]   # <protocol>:<name glob> handled outside the analysed repos
                                              # (not reported as no_receiver / no_sender by cg protocols)
+    surface:
+      ignore:                                # accepted risks of `cg surface` (reason is required)
+        - {finding: unguarded, path: "app/Http/Controllers/HealthController.php", reason: public health probe}
+        - {finding: plaintext, id: "external:redis:cache:6379", reason: compose-internal network}
+        - {finding: hardcoded, fingerprint: 3f9a1c0b7d2e4a55, reason: rotated test key}
     gates: config/gates.json                 # gate scenarios file (cg index --gates)
     plans:
       dir: docs/plans                        # plans directory (--plans-dir)
@@ -53,7 +58,7 @@ SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None:
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
     "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
     "platforms": {"targets", "paths", "file_suffixes", "path_conventions"}, "include": None, "apps": None,
-    "rust": {"targets"}, "protocols": {"external"}, "lossy": None,
+    "rust": {"targets"}, "protocols": {"external"}, "lossy": None, "surface": {"ignore"},
 }
 APP_KEYS = ("name", "root", "role", "links")
 APP_ROLES = ("backend", "frontend")
@@ -298,6 +303,9 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
         if bad:
             raise ConfigError(f"{fname}: protocols.external: {bad[0]!r} is not <protocol>:<name glob> (e.g. kafka:audit.*)")
         out["protocols"] = {"external": ext}
+    sf = _section(data, "surface", fname)
+    if sf is not None and sf.get("ignore") is not None:
+        out["surface"] = {"ignore": _surface_ignores(sf["ignore"], f"{fname}: surface.ignore")}
     if data.get("gates") is not None:
         out["gates"] = norm_root(data["gates"], f"{fname}: gates")
     pl = _section(data, "plans", fname)
@@ -316,6 +324,38 @@ def parse(data: Any, fname: str = ".cg.yaml") -> dict:
     ignored = sorted(str(k) for k in set(data) - KNOWN_KEYS)
     if ignored:
         out["ignored_keys"] = ignored
+    return out
+
+
+SURFACE_IGNORE_KEYS = ("finding", "path", "id", "fingerprint", "reason")
+
+
+def _surface_ignores(v: Any, where: str) -> list[dict]:
+    """`surface.ignore`: [{finding, path | id | fingerprint, reason}]; the reason is required."""
+    from .surface import FINDINGS
+    if not isinstance(v, list):
+        raise ConfigError(f"{where}: expected a list of {{finding, path | id | fingerprint, reason}} entries")
+    out = []
+    for i, e in enumerate(v):
+        w = f"{where}[{i}]"
+        if not isinstance(e, dict):
+            raise ConfigError(f"{w}: expected a mapping with finding, path | id | fingerprint and reason")
+        bad = sorted(str(k) for k in set(e) - set(SURFACE_IGNORE_KEYS))
+        if bad:
+            raise ConfigError(f"{w}: unknown key {bad[0]!r} (allowed: {', '.join(SURFACE_IGNORE_KEYS)})")
+        f = e.get("finding")
+        if f not in FINDINGS:
+            raise ConfigError(f"{w}: finding {f!r} is not one of {', '.join(FINDINGS)}")
+        reason = e.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ConfigError(f"{w}: reason is required (say why the risk is accepted)")
+        sel = {k: e[k] for k in ("path", "id", "fingerprint") if e.get(k) is not None}
+        if not sel:
+            raise ConfigError(f"{w}: give at least one of path, id or fingerprint")
+        for k, x in sel.items():
+            if not isinstance(x, str) or not x.strip():
+                raise ConfigError(f"{w}: {k} must be a non-empty string")
+        out.append({"finding": f, **{k: x.strip() for k, x in sel.items()}, "reason": reason.strip()})
     return out
 
 

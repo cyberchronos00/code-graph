@@ -34,6 +34,7 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 | `protocol_links` | protocol endpoints and their checks ([Protocol links](protocols.md)) |
 | `llm_tools` | LLM and MCP tools, resources and prompts ([AI tools](ai-tools.md)) |
 | `external_systems` | databases, caches, brokers and other hosts ([External systems](external.md)) |
+| `attack_surface` | findings and the inbound / outbound surface; same filters as `cg surface` ([Attack surface](surface.md)) |
 | `tests_covering` | tests that reach a symbol, route or table |
 | `affected` | tests and entry points reached by changed files or a git diff ([CLI reference](cli.md#affected)) |
 | `resolutions` | where a concept's value is decided ([Value facts](value-facts.md)) |

@@ -207,6 +207,21 @@ def main(argv=None):
     p.add_argument("--source", help="address or credential source: literal, env, env-example, compose, config")
     p.add_argument("--tls-off", action="store_true", help="only systems known to be reached without TLS")
     p.add_argument("--max-items", type=int, default=60)
+    p = sub.add_parser("surface", help="security views over recorded facts: inbound / outbound attack surface and findings "
+                                        "(hardcoded credentials, plaintext protocols, unverified webhooks, unguarded handlers, "
+                                        "listeners on all interfaces); text, JSON or SARIF; --fail-on for CI gates")
+    p.add_argument("--db", required=True)
+    p.add_argument("--inbound", action="store_true", help="list the inbound surface (routes, webhooks, sockets, consumers, IPC)")
+    p.add_argument("--outbound", action="store_true", help="list the outbound surface (every external system)")
+    p.add_argument("--protocol", help="only this protocol (http, ws, grpc, tcp, redis, postgres, saas, ...)")
+    p.add_argument("--finding", help="only this finding: hardcoded, plaintext, unverified, unguarded, exposed-listener")
+    p.add_argument("--min-confidence", choices=["heuristic", "resolved", "exact"], default="heuristic",
+                   help="drop findings and items below this confidence (default: heuristic, keep all)")
+    p.add_argument("--format", choices=["text", "json", "sarif"], default="text")
+    p.add_argument("--fail-on", help="comma-separated finding types; exit 1 when any remains after ignores")
+    p.add_argument("--max-items", type=int, default=200)
+    p.add_argument("--strict", action="store_true", help="unguarded: count route guards only (an inline check does not protect)")
+    p.add_argument("--show-ignored", action="store_true", help="also list findings accepted by .cg.yaml surface.ignore")
     p = sub.add_parser("tools", help="LLM tools and MCP tools / resources / prompts: handler, tables it reaches, agents "
                                       "offering it, callers, checks; agents, dynamic dispatch, model calls")
     p.add_argument("pattern", nargs="?", help="tool name, substring or glob")
@@ -575,6 +590,8 @@ def main(argv=None):
             if n:
                 print(n)
         return
+    if a.cmd == "surface":
+        return surface_cmd(a, st)
     if a.cmd == "tools":
         from .aitools import render_tools, tools
         res = tools(st, a.pattern, framework=a.framework, unmatched=a.unmatched, agent=a.agent,
@@ -832,6 +849,26 @@ def _note(comp: dict, as_json: bool) -> None:
         n = answer_note(comp)
         if n:
             print(n)
+
+
+def surface_cmd(a, st) -> int:
+    """`cg surface`: exit 0, or 1 when a --fail-on finding remains after ignores; 2 for a bad finding name."""
+    from . import surface as S
+    fail_on = [x.strip() for x in a.fail_on.split(",") if x.strip()] if a.fail_on else []
+    try:
+        res = S.surface(st, inbound=a.inbound, outbound=a.outbound, protocol=a.protocol, finding=a.finding,
+                        min_confidence=a.min_confidence, fail_on=fail_on, max_items=a.max_items, strict=a.strict,
+                        show_ignored=a.show_ignored)
+    except ValueError as ex:
+        print(f"cg surface: {ex}", file=sys.stderr)
+        return 2
+    if a.format == "json":
+        print(S.to_json(res))
+    elif a.format == "sarif":
+        print(json.dumps(S.to_sarif(res), indent=1))
+    else:
+        print(S.render_surface(res, max_items=a.max_items))
+    return 1 if res["failed"] else 0
 
 
 def config_cmd(a) -> int:

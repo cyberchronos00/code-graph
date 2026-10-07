@@ -17,6 +17,7 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `bridges`: Web / native bridge calls: Capacitor plugins (registerPlugin / Plugins.X -> @CapacitorPlugin @PluginMethod,
 - `protocol_links`: Every protocol endpoint in one view (#31 model): HTTP client endpoints and routes (http / ws / graphql), Pusher
 - `external_systems`: External systems the code connects to (#40): databases, caches, brokers, mail relays, directories, file-transfer
+- `attack_surface`: Security views over recorded facts (#47): findings plus the inbound / outbound attack surface, with file:line
 - `llm_tools`: LLM tools and MCP primitives (#66): tools offered to a model (OpenAI / Anthropic schema literals, LangChain @tool /
 - `tests_covering`: Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
 - `affected`: Tests and entry points a change reaches. files are whole repo-relative paths; base is a git

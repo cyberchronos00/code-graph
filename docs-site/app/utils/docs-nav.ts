@@ -53,6 +53,7 @@ export const docGroups: DocGroup[] = [
       { slug: 'bridges', title: 'Bridges' },
       { slug: 'protocols', title: 'Protocols' },
       { slug: 'external', title: 'External' },
+      { slug: 'surface', title: 'Attack surface' },
       { slug: 'ai-tools', title: 'AI tools' },
       { slug: 'channels-and-tests', title: 'Channels, tests' }
     ]

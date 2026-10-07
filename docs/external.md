@@ -121,7 +121,7 @@ Callers that are already test nodes are left out.
 - Node clients built from a caller-supplied options object, or from a template string.
 - Spring `application.yml` beyond `spring.datasource.url`, Rails `database.yml`, Helm and
   Terraform values, compose files outside the root.
-- Mail, SMS, push and the Kubernetes API. Broker pairing is [Protocol links](protocols.md).
+- SDK libraries for Rust, Kotlin, Swift and Dart, and SMTP (#44). Broker pairing is [Protocol links](protocols.md).
 - A Prisma schema in a sibling workspace package is not found from the app.
 
 Corpus notes: [external systems](validation-log.md#external-systems-40).
