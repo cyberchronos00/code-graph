@@ -8,12 +8,12 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-07
+
 ### Added
 
 - `cg surface` part 2d (#47), `unguarded` precision: framework defaults count as guards (Django REST framework `REST_FRAMEWORK` permission classes and an empty `permission_classes` as explicit public access, Laravel global and group middleware from `Kernel.php` / `bootstrap/app.php`, Nest `@Public()` opt-outs, Express `app.use(auth)` by order and mount path), a check at the top of a handler or of a Socket.IO connection is an inline guard, and a table of public-by-design routes (health, sign-in, static, OAuth callbacks, `.well-known`, ...) gets the guard state `public` and is not reported. A case the index cannot decide stays reported at `heuristic` confidence and low severity with the reason in the detail; `medium` is kept for no guard, nothing that looks like a check, and a write reached. `--strict` keeps route-level guards only. New module `cg_code_graph/guard_facts.py`; Express preset key `auth.session_only`. On netbox, outline and cal.com `apps/web` the finding count falls by 97.5%, 82% and 82% and the four juice-shop true positives stay (see the validation log).
 - AWS SES v2 (`@aws-sdk/client-sesv2` commands, `boto3.client("sesv2")`) and nodemailer SES and Resend transports (`createTransport({ SES })`, `smtp.resend.com`, `nodemailer-resend`) as `external:aws:ses` / `external:saas:resend` systems (#42).
-
-
 - `cg surface` part 2b (#47): finding `ssrf` for outbound URLs built from request input, closing the #42 "URLs from input" criterion. An index-time pass (`cg_code_graph/ssrf_input.py`) follows request input (Express / Nest / Next / h3 / Hono / Elysia, Laravel and `$_GET`, Django / Flask / FastAPI) through local variables, templates, `sprintf` / `.format`, `new URL` / `urljoin` and one helper level into `fetch` / axios / got / undici / node http, Laravel `Http` / Guzzle / curl / `file_get_contents`, requests / httpx / aiohttp / `urlopen`, and DNS lookups. The fact `url_from_input = {source, key, part, via, checked}` sits on the `HTTP_CALLS` / `CONNECTS_TO` edge (or an `insecure_transport` fact of kind `ssrf` / `dns-input` on the function); `cg api-calls` and `cg external` print `url from input (query.url, url)`. A host or whole-URL flow is a high finding (`resolved` direct, `heuristic` through a helper); a DNS lookup of input is medium; a path- or query-only input on a fixed host and an allow-listed host are recorded, not reported ([docs/surface.md](docs/surface.md)).
 - Laravel Echo subscription wrappers (#193): when the whole channel of `echo.private(name)` / `.channel` / `.join` is a parameter of the enclosing function, it is resolved at each call site of that function (literal, template literal or concatenation, so `` privateChannel(`store.${storeId}.orders`) `` is `store.{storeId}.orders`), one `SUBSCRIBES_CHANNEL` edge per call site with `via_helper = {fn, at}`. One nested wrapper level and wrappers imported from composable modules are followed, and `.listen()` events chained on the wrapper call attach to the expanded channel. `cg channels` shows the frontend subscriber and the matched server event. A call site that passes a template built from its caller's parameter keeps that name with a `{param}` placeholder when no outer call site resolves it. A call site with a runtime-valued channel emits no `channel_sub` and is listed by `cg coverage --details` (`realtime_subscriptions_unresolved_wrapper`); deeper chains are counted as `realtime_subscriptions_wrapper_too_deep`. See [docs/channels-and-tests.md](docs/channels-and-tests.md).
 - `cg surface` part 2a (#47): an index-time pass (`cg_code_graph/insecure_transport.py`) records `attrs.insecure_transport` facts on the enclosing function or file node and `tls_verify: false` on the outbound edge. New findings `tls-off` (high, outbound: disabled TLS verification in Python, TypeScript, PHP, Rust, Kotlin, Go and others, plus SSH host keys not checked) and `ipc-exposed` (medium, inbound: `postMessage` `'*'`, world-writable Unix sockets, wildcard `externally_connectable`, external listeners without a sender check, Electron `webPreferences`). Insecure gRPC channels are a second `plaintext` producer (`unix:` and loopback targets are only counted). Test files are skipped and counted, `.env` is never read, and `cg external` shows `tls verify off` ([docs/surface.md](docs/surface.md)).
@@ -28,28 +28,21 @@ commands, output and the graph schema; such changes are listed under **Changed**
 - Redaction markers are now `redacted:hmac:<8 hex>`, an HMAC-SHA-256 keyed by a per-graph salt stored in `meta.redact_salt` (`secrets.token_hex(16)`); the salt is created with the database and kept on re-index and `cg refresh`. A common password no longer gives a known marker. Markers compare inside one graph only; `cg link` combined graphs keep the markers of their sources (#47 part 2d). Old `redacted:sha256:` values still count as redacted.
 - Express `session()`, `express-session` and `cookie-session` are no longer read as an auth guard (preset key `auth.session_only`); `cg routes` and `cg surface` show routes that only have a session middleware as unguarded.
 - Attack-surface validation text now gives neutral counts and the pattern class, not file paths or data names, for third-party corpora (#47 part 2d).
-
-
 - `cg surface` precision pass from validation on public apps (#47 part 2c): Python `import` lines, docstrings and triple-quoted strings no longer match `tls-off`; a URL kept in a variable keeps its part (`path` / `query`) and a template that begins with the input is a whole URL; `realpath` / `basename` / numeric casts end `ssrf` taint; a `startsWith` / `startswith` / `str_starts_with` check against a literal `http(s)://` prefix counts as an allow-list; the redaction sweep covers node `doc` text and leaves `reexports` names alone. Numbers per corpus are in [docs/validation-log.md](docs/validation-log.md#attack-surface-47).
 - Secret values are no longer stored in the graph. Credential-looking keys and attrs (Laravel config `value` and `env_default`, and a last pass over node and edge attrs) hold `redacted:sha256:<8 hex>`, a short non-reversible fingerprint; non-secret values are unchanged. Re-index to drop old values ([docs/surface.md](docs/surface.md#no-secret-values-in-the-index)).
+- An `external:https:<host>` node and its `CONNECTS_TO` edges carry the weakest label of the client calls behind them (a const-map host is `heuristic`, not `exact`).
+- `cg coverage` counts `endpoint` blind spots separately from handler registrations.
+- `request_unknown_field` for a query key is `low` (was `medium`); an unknown body key stays `medium` (#195).
 
 ### Fixed
 
 - Index time of `cg index` on TypeScript-heavy projects: the SSRF and insecure-transport passes skip files and functions that cannot contain a hit, and the SDK prefilter lowercases once. On outline and cal.com `apps/web` the mean of three alternating runs is within 2% of 8172833 (it was 26% to 31% slower); the findings and the graph are identical (#47 part 2d).
-
-
 - `cg index` no longer stops with `ValueError` in the SSRF pass on a helper that destructures a parameter (`const { url } = connection`) or aliases one in a container (#47 part 2c).
 - axios `delete` / `get` / `head` / `options` `{ data }` and `request({ method, url, data, params })` (module and instance) record `data` as the body and `params` as the query, so a DELETE body no longer gives a false `request_body_missing` (#194).
 - Laravel handler reads (`query` / `input` / `get` / `boolean` / `integer` / `float` / `string` / `date` / `enum` / `has` / `filled` / `only` / `except`, `request('x')`, `$request->prop`, one level into a private method) and `paginate()` (`page`, `cursor`, `per_page`) count as known request keys. An unknown query key is reported only when the route has explicit validation (#195).
 - Elysia `.model()` map values that are identifiers resolve to their `const` `t.Object`, in the same module or through one import or re-export, for `body`, `query`, `params` and `t.Ref` (#196).
 - A verifying webhook middleware (dotted, dashed or underscored alias, a resolved class, or a body with a known check such as Twilio `RequestValidator::validate`) marks the route verified, so `SECRET-CHECKED` and `WEBHOOK UNVERIFIED` no longer appear on the same route (#197).
 - The coverage header and `coverage note:` on a combined graph name the repo of each "files not indexed" / "heuristic only" fragment (#198).
-
-### Changed
-
-- An `external:https:<host>` node and its `CONNECTS_TO` edges carry the weakest label of the client calls behind them (a const-map host is `heuristic`, not `exact`).
-- `cg coverage` counts `endpoint` blind spots separately from handler registrations.
-- `request_unknown_field` for a query key is `low` (was `medium`); an unknown body key stays `medium` (#195).
 
 ## [0.20.0] - 2026-10-07
 
@@ -1594,7 +1587,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/cyberchronos00/code-graph/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/cyberchronos00/code-graph/compare/v0.19.1...v0.20.0
 [0.19.1]: https://github.com/cyberchronos00/code-graph/compare/v0.19.0...v0.19.1
 [0.19.0]: https://github.com/cyberchronos00/code-graph/compare/v0.18.0...v0.19.0
