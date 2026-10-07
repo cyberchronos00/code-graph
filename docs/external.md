@@ -51,7 +51,7 @@ a project subclass and `super()`), `mysql2`, `mongoose`, `amqplib`, `new Kafka({
 `Sequelize`, `knex`, `ldapjs`, `S3Client`, `ssh2`, `basic-ftp`. sqlite dialects are not
 systems.
 
-Node attrs: `protocol`, `host`, `port`, `tls`, `tls_verify` (`false` when a call turns certificate verification off; `cg external` prints `tls verify off`, see [surface](surface.md)), `resource` (database, bucket),
+Node attrs: `protocol`, `host`, `port`, `tls`, `tls_verify` (`false` when a call turns certificate verification off; `cg external` prints `tls verify off`, see [surface](surface.md)), `url_from_input` on the `CONNECTS_TO` / `HTTP_CALLS` edges of a call whose URL is built from request input (`cg external` and `cg api-calls` print `url from input (query.url, url)`, see [surface](surface.md#outbound-urls-from-request-input-ssrf)), `resource` (database, bucket),
 `address_source` (literal, env-example, compose, config, env), `credential_source`, `auth` (
 `ambient`, `explicit` or `unknown`).
 

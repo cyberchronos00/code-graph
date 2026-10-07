@@ -1818,6 +1818,9 @@ def render_downstream(res: dict, show_paths=True, max_per_kind=60, kinds_order=(
     return "\n".join(out)
 
 
+from .ssrf_input import url_input_marker  # noqa: E402
+
+
 def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
     """Client HTTP endpoints with call sites and matched backend routes (combined DB).
     flt: 'all' | 'unmatched' | substring of the endpoint/route/caller/file | a glob with `*` (any characters, `/`
@@ -1829,7 +1832,8 @@ def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
         a = json.loads(e["attrs"] or "{}")
         calls[e["dst"]].append({"caller": e["src"], "at": f"{e['file']}:{e['line']}", "confidence": e["confidence"],
                                 "url": a.get("url"), "via_helper": a.get("via_helper"), "body_keys": a.get("body_keys"),
-                                "query_keys": a.get("query_keys"), "tls_verify": a.get("tls_verify")})
+                                "query_keys": a.get("query_keys"), "tls_verify": a.get("tls_verify"),
+                                "url_from_input": a.get("url_from_input")})
     routes = defaultdict(list)
     for e in st.q("SELECT src, dst, confidence, attrs FROM edges WHERE kind='MATCHES_ROUTE'"):
         ctl = [r["dst"] for r in st.q("SELECT dst FROM edges WHERE src=? AND kind='ROUTES_TO'", (e["dst"],))]
@@ -1882,6 +1886,7 @@ def render_api_calls(rows: list[dict], max_calls=4) -> str:
         for c in r["calls"][:max_calls]:
             h = f" via {c['via_helper']['fn']}" if c.get("via_helper") else ""
             off = "  [tls verify off]" if c.get("tls_verify") is False else ""
+            off += f"  [{url_input_marker(c['url_from_input'])}]" if c.get("url_from_input") else ""
             out.append(f"   <- {c['caller']} @ {c['at']} [{c['confidence']}]{h}{off}")
             bk = _key_names(c.get("body_keys"))
             qk = _key_names(c.get("query_keys"))

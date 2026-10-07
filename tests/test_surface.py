@@ -29,7 +29,7 @@ FIX = ROOT / "tests" / "surface_fixture"
 NEEDS = {"ts": ("node", "node is not installed (TS extractor)"), "php": ("php", "php is not installed (PHP extractor)")}
 SECRET_RE = re.compile(r"SURF-[A-Z]+-[A-Za-z0-9-]+")
 FINDING_NAMES = ["hardcoded", "plaintext", "unverified", "unguarded", "exposed-listener"]       # what these fixtures produce
-PART2A_NAMES = ["tls-off", "ipc-exposed"]                                                         # tests/test_surface_transport.py
+PART2A_NAMES = ["tls-off", "ipc-exposed", "ssrf"]                                                # tests/test_surface_transport.py, tests/test_ssrf.py
 
 # (finding, node) pairs each fixture must produce; protocol-level facts only, no line numbers
 EXPECTED = {
@@ -312,8 +312,8 @@ def test_filters(dbs, capsys):
 
 
 def test_unknown_finding_is_a_usage_error(dbs, capsys):
-    rc, _, err = cg(capsys, "surface", "--db", dbs("py"), "--finding", "ssrf")
-    assert rc == 2 and "unknown finding 'ssrf'" in err
+    rc, _, err = cg(capsys, "surface", "--db", dbs("py"), "--finding", "sql-injection")
+    assert rc == 2 and "unknown finding 'sql-injection'" in err
     rc, _, err = cg(capsys, "surface", "--db", dbs("py"), "--fail-on", "hardcoded,bogus")
     assert rc == 2 and "bogus" in err
 

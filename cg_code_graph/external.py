@@ -29,6 +29,7 @@ nodes (`http` → port 80, `https` → 443, or the explicit port) with CONNECTS_
 from __future__ import annotations
 
 from . import presets
+from .ssrf_input import url_input_marker
 
 import json
 import re
@@ -804,7 +805,7 @@ def external(st, pattern: str | None = None, protocol: str | None = None, source
         for x in st.q("SELECT src, attrs, file, line, confidence FROM edges WHERE dst=? AND kind IN ('CONNECTS_TO','TEST_USES')", (s["id"],)):
             ua = json.loads(x["attrs"] or "{}")
             users.append({"id": x["src"], "op": ua.get("op"), "via": ua.get("via"), "count": ua.get("count"),
-                          "tls_verify": ua.get("tls_verify"),
+                          "tls_verify": ua.get("tls_verify"), "url_from_input": ua.get("url_from_input"),
                           "at": f"{x['file']}:{x['line']}" if x["file"] else None, "confidence": x["confidence"]})
             ids.append(x["src"])
         tables = sorted(u["id"] for u in users if u["id"].startswith("table:"))
@@ -867,7 +868,8 @@ def render_external(res: dict, max_items: int = 60) -> str:
         for u in s["users"][:8]:
             L.append(f"    <- {u['id']}" + (f" @ {u['at']}" if u.get("at") else "") + (f"  ({u['via']})" if u.get("via") else "")
                      + (f" x{u['count']}" if u.get("count") else "")
-                     + ("  [tls verify off]" if u.get("tls_verify") is False else ""))
+                     + ("  [tls verify off]" if u.get("tls_verify") is False else "")
+                     + (f"  [{url_input_marker(u['url_from_input'])}]" if u.get("url_from_input") else ""))
         if len(s["users"]) > 8:
             L.append(f"    ... {len(s['users']) - 8} more users")
         if s.get("tables"):

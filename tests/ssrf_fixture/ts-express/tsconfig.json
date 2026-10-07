@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "commonjs", "moduleResolution": "node", "strict": false,
+    "esModuleInterop": true, "skipLibCheck": true, "baseUrl": ".",
+    "paths": { "axios": ["types/axios.d.ts"], "express": ["types/express.d.ts"] }
+  },
+  "include": ["src", "types"]
+}

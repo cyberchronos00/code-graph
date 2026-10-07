@@ -35,6 +35,7 @@ client bundle are not an inbound surface and are left out.
 | `exposed-listener` | a TCP / UDP listener bound to all interfaces (`0.0.0.0`, `::`, no host) | medium |
 | `tls-off` | certificate verification or SSH host key checking switched off in code or configuration (table below) | high |
 | `ipc-exposed` | local IPC open to callers it should not trust (table below), for what `unguarded` does not already report | medium |
+| `ssrf` | the host or the whole URL of an outbound HTTP call is built from request input and no allow-list check precedes it (see "Outbound URLs from request input"); a DNS lookup of request input is reported at the lower severity | high (DNS lookup of input: medium) |
 
 ### Disabled verification (`tls-off`)
 
@@ -59,6 +60,65 @@ protocol of the system they resolve to (`https`, ...) or `tls`. A hit inside a c
 (`cg external`) or an `HTTP_CALLS` edge (`cg api-calls`) also puts `tls_verify: false` on that edge and its external
 system, and both commands print `tls verify off`. Verification left on (`verify=True`, `rejectUnauthorized: true`,
 `StrictHostKeyChecking yes`, a pinned `hostVerifier`) is not a hit. A line inside a comment is not a hit.
+
+### Outbound URLs from request input (`ssrf`)
+
+An index-time pass (`cg_code_graph/ssrf_input.py`) walks each non-test function: it collects request-input sources,
+follows local variables assigned from them (also template / f-string / concatenation / `sprintf` / `.format` / `%`,
+`new URL(x)` and `urljoin`), and looks at the URL argument of outbound calls and DNS lookups. `cg surface` only reads the
+result; nothing is rescanned.
+
+| language | request input | outbound sinks | DNS lookups |
+|---|---|---|---|
+| TypeScript / JavaScript | `req.query` / `body` / `params` / `headers` / `cookies`, `getQuery(event)`, `readBody(event)`, `getRouterParam(event, 'k')`, `c.req.query()` / `param()` / `json()`, `request.nextUrl.searchParams.get`, `await request.json()`, Nest `@Query()` / `@Body()` / `@Param()` / `@Headers()` parameters, Elysia `{ query, body, params }` | `fetch`, `$fetch`, axios, got, ky, needle, superagent, undici, node `http` / `https` | `dns.lookup`, `dns.resolve*`, `dns.promises.*` |
+| PHP | `$request->input` / `query` / `get` / `post` / `json` / `all` / `route` / `header` / `cookie`, `request('k')`, `$_GET` / `$_POST` / `$_REQUEST` / `$_COOKIE`, route parameters of controller actions | Laravel `Http::`, Guzzle clients, `curl_init` / `CURLOPT_URL`, `file_get_contents`, `fopen` | `gethostbyname`, `dns_get_record` |
+| Python | Django `request.GET` / `POST` / `data` / `query_params` / `headers` / `META`, Flask `request.args` / `form` / `json` / `values` / `headers`, FastAPI / Starlette handler parameters, Django URL kwargs | requests, httpx, aiohttp (module calls and sessions / clients), `urllib` `urlopen` | `socket.gethostbyname`, `socket.getaddrinfo` |
+
+Each use is recorded as `url_from_input = {source, key, part, via, checked}`: `source` is `query`, `body`, `param`,
+`header`, `path` or `cookie`; `key` is the input name (`*` when the whole container is used); `part` is what the input
+controls; `via` is `direct` (same function) or `helper` (one level: a handler passes the value to a function whose URL
+uses that parameter, found through the `CALLS` edge); `checked` is true when a comparison with a constant allow-list
+(`in ALLOWED_HOSTS`, `ALLOWED.has(u.host)`, `in_array($host, self::ALLOWED)`) precedes the call. Only names are stored,
+never a value from a request.
+
+| `part` | meaning | reported |
+|---|---|---|
+| `url` | the whole URL, or `new URL(x)` / `urljoin(base, x)` (an absolute `x` replaces the host) | yes |
+| `host` | the host in `https://${x}/...` or a DNS lookup name | yes |
+| `path`, `query` | input after a fixed host (`https://api.example/${id}`, `...?q=` + x) | no, recorded only |
+| any, with `checked` | an allow-list check precedes the call | no, recorded only |
+
+The fact sits on the `HTTP_CALLS` / `CONNECTS_TO` edge of the call when the call has one (`cg api-calls` and
+`cg external` print `url from input (query.url, url)`; `host checked` and `via helper` are added when they apply). A call
+with no edge keeps the fact on the enclosing function, as an `insecure_transport` fact of kind `ssrf` or `dns-input`.
+The finding has `confidence` `resolved` for a direct flow and `heuristic` through a helper, and its entry points are the
+routes that reach the function. A DNS lookup of input is an `ssrf` finding with the detail "DNS lookup of request input"
+at medium severity (it resolves a chosen name but sends no request body). `--finding ssrf`, `--fail-on ssrf`,
+`surface.ignore`, SARIF and the MCP tool need no special handling. Test files and test callers are skipped and counted
+(`tests_skipped`).
+
+```
+$ cg surface --db out/graph.db --finding ssrf
+== ssrf (3) - Outbound request to a host chosen by request input ==
+  dns
+    MEDIUM [resolved] function:shop.views.mirror
+      DNS lookup of request input (query.host)
+      at shop/views.py:36
+      reached from http_route(1)
+  http
+    HIGH [heuristic] function:shop.feeds.pull_feed
+      the whole outbound URL comes from request input (body.feed) via helper, passed by shop.views.import_feed
+      at shop/feeds.py:5
+      reached from http_route(1)
+    HIGH [resolved] function:shop.views.cover
+      the whole outbound URL comes from request input (query.url)
+      at shop/views.py:14
+      reached from http_route(1)
+
+$ cg external --db out/graph.db
+external:https:covers.bookstore.test:443  [exact]
+    <- function:src/app.ts#coverByIsbn @ src/app.ts:15  (http)  [url from input (param.isbn, path)]
+```
 
 ### Insecure gRPC (`plaintext`, protocol `grpc`)
 
@@ -221,5 +281,5 @@ appears in any table.
 
 ## Not detected yet
 
-SSRF candidates (outbound URLs built from request input) and the validation numbers are not produced by this version
-([Known limitations](limitations.md#attack-surface)). New detectors add a finding type; the shape above does not change.
+Numeric validation limits are not produced by this version ([Known limitations](limitations.md#attack-surface)). New
+detectors add a finding type; the shape above does not change.

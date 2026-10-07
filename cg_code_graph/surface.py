@@ -66,6 +66,10 @@ FINDINGS: dict[str, dict] = {
                     "help": "A local IPC surface accepts messages from callers it should not trust: a postMessage with "
                             "target origin '*', a world-writable Unix socket, an extension open to any web page or "
                             "extension, or an Electron window with Node integration or isolation switched off."},
+    "ssrf": {"severity": "high", "direction": "outbound", "title": "Outbound request to a host chosen by request input",
+             "help": "The host or the whole URL of an outbound HTTP call (or a DNS lookup) comes from request input, so a "
+                     "caller can aim the server at internal addresses. Compare the host with a fixed allow-list before "
+                     "the call; path- and query-only input on a fixed host is recorded but not reported."},
 }
 _PRODUCERS: dict[str, list[callable]] = {}
 LOOPBACK = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal", ""}
@@ -558,6 +562,61 @@ def _tls_off(ctx: Ctx, strict: bool = False) -> list[dict]:
 def _grpc_plaintext(ctx: Ctx, strict: bool = False) -> list[dict]:
     """Insecure gRPC channels and ports (a second producer under `plaintext`; `unix:` and loopback targets are not hits)."""
     out = [_fact_finding(ctx, "plaintext", row, f, "grpc") for row, f in _transport_facts(ctx) if f["kind"] == "grpc-plaintext"]
+    return _dedupe(out)
+
+
+# ------------------------------------------------------------------ outbound URLs from request input (#47 part 2b)
+def _ssrf_facts(ctx: Ctx) -> list[tuple[dict, dict, dict, str | None]]:
+    """(node row, fact, url_from_input, system id) from the function-level `ssrf` / `dns-input` facts and from the
+    `url_from_input` attr of HTTP_CALLS / CONNECTS_TO edges, both recorded at index time (cg_code_graph/ssrf_input.py)."""
+    def load():
+        out, seen = [], set()
+        for row, f in _transport_facts(ctx):
+            if f["kind"] in ("ssrf", "dns-input") and f.get("url_from_input"):
+                out.append((row, f, f["url_from_input"], None))
+        for e in ctx.st.q("SELECT src, dst, file, line, attrs FROM edges WHERE kind IN ('HTTP_CALLS', 'CONNECTS_TO') "
+                          "AND attrs LIKE '%url_from_input%' ORDER BY kind DESC, src, line"):
+            u = json.loads(e["attrs"] or "{}").get("url_from_input")
+            if not u or (e["src"], e["file"], e["line"]) in seen:
+                continue
+            seen.add((e["src"], e["file"], e["line"]))
+            n = ctx.st.node(e["src"])
+            if n is None:
+                continue
+            row = {"id": e["src"], "file": n["file"] or e["file"], "attrs": json.loads(n["attrs"] or "{}")}
+            fact = {"kind": "ssrf", "line": e["line"], "lib": None, "confidence": "resolved" if u.get("via") == "direct" else "heuristic"}
+            out.append((row, fact, u, e["dst"]))
+        return out
+    return ctx.cached("ssrf_facts", load)
+
+
+@producer("ssrf")
+def _ssrf(ctx: Ctx, strict: bool = False) -> list[dict]:
+    """Request input that picks the host (or the whole URL) of an outbound call, or the name of a DNS lookup. Path- and
+    query-only input and allow-listed hosts are recorded on the graph and not reported. A DNS lookup of input is an `ssrf`
+    finding at medium severity (it reveals or resolves internal names, but no request body is sent)."""
+    out = []
+    for row, f, u, sysid in _ssrf_facts(ctx):
+        dns = f["kind"] == "dns-input"
+        if u.get("checked") or (not dns and u.get("part") not in ("host", "url")):
+            continue
+        via = u.get("via") == "helper"
+        caller = u.get("caller")
+        what = "DNS lookup of request input" if dns else ("the whole outbound URL comes from request input" if u["part"] == "url"
+                                        else f"outbound URL {u['part']} comes from request input")
+        detail = f"{what} ({u['source']}.{u['key']})" + (f" via helper, passed by {caller.split(':', 1)[-1]}" if via and caller else
+                                                          " via helper" if via else "")
+        proto = "dns" if dns else (("http" if sysid.startswith("http:") else "https" if sysid.startswith("external:https") else None)
+                                   if sysid else "http")
+        see = (f"cg external '{sysid}'" if sysid and sysid.startswith("external:") else
+               "cg api-calls" if sysid else None)
+        fact = {**f, "detail": detail, "confidence": "heuristic" if via else f.get("confidence") or "resolved"}
+        entry = [caller] if caller else [row["id"]]
+        fnd = _fact_finding(ctx, "ssrf", row, fact, proto, see=see, entry_ids=entry,
+                            variant=f"{f['kind']}:{u['source']}.{u['key']}")
+        if dns:
+            fnd["severity"] = "medium"
+        out.append(fnd)
     return _dedupe(out)
 
 

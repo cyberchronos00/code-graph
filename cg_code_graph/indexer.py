@@ -326,6 +326,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     from .insecure_transport import apply as apply_insecure_transport
     if (itst := apply_insecure_transport(project, builder)):
         stats["insecure_transport"] = itst
+    # outbound URLs built from request input (SSRF candidates) and DNS lookups of input (#47 part 2b)
+    from .ssrf_input import apply as apply_ssrf_input
+    if (ssst := apply_ssrf_input(project, builder)):
+        stats["ssrf_input"] = ssst
     # XPC services and Darwin notifications (#38 part 3)
     from .apple_ipc import apply as apply_apple_ipc
     if (apst := apply_apple_ipc(project, builder)):
