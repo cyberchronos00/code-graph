@@ -6,11 +6,11 @@
 
 For you and your AI agent (CLI + MCP). No LLM in the graph.
 
-[![PyPI](https://img.shields.io/pypi/v/cg-code-graph)](https://pypi.org/project/cg-code-graph/) [![Downloads](https://img.shields.io/pepy/dt/cg-code-graph)](https://pepy.tech/project/cg-code-graph) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)](https://pypi.org/project/cg-code-graph/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE) [![Docs](https://img.shields.io/badge/docs-code--graph-93b600)](https://code-graph.cyberchronos00.workers.dev/)
+[![PyPI](https://img.shields.io/pypi/v/cg-code-graph)](https://pypi.org/project/cg-code-graph/) [![Downloads](https://img.shields.io/pepy/dt/cg-code-graph)](https://pepy.tech/project/cg-code-graph) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)](https://pypi.org/project/cg-code-graph/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/cyberchronos00/code-graph/blob/main/LICENSE) [![Docs](https://img.shields.io/badge/docs-code--graph-93b600)](https://code-graph.cyberchronos00.workers.dev/)
 
-[Docs](https://code-graph.cyberchronos00.workers.dev/) · [Quick start](https://code-graph.cyberchronos00.workers.dev/docs/quickstart) · [CLI](https://code-graph.cyberchronos00.workers.dev/docs/cli) · [MCP](https://code-graph.cyberchronos00.workers.dev/docs/mcp) · [Changelog](CHANGELOG.md)
+[Docs](https://code-graph.cyberchronos00.workers.dev/) · [Quick start](https://code-graph.cyberchronos00.workers.dev/docs/quickstart) · [CLI](https://code-graph.cyberchronos00.workers.dev/docs/cli) · [MCP](https://code-graph.cyberchronos00.workers.dev/docs/mcp) · [Changelog](https://github.com/cyberchronos00/code-graph/blob/main/CHANGELOG.md)
 
-[![cg visual view: the graph around the warehouse connection, a selected node with its evidence paths and source, then the planned-change overlay for the preorders plan](docs/media/cg-view-preview.gif)](docs/media/cg-view-demo.mp4)
+[![cg visual view: the graph around the warehouse connection, a selected node with its evidence paths and source, then the planned-change overlay for the preorders plan](https://raw.githubusercontent.com/cyberchronos00/code-graph/main/docs/media/cg-view-preview.gif)](https://github.com/cyberchronos00/code-graph/blob/main/docs/media/cg-view-demo.mp4)
 
 </div>
 
@@ -40,7 +40,7 @@ dependents: 18 nodes  (code: 6, entry points: 9, other: 3)
           -READS_TABLE[resolved @ catalog/tasks.py:14]-> table:store_books
 ```
 
-[![Terminal demo: cg indexes the bundled Laravel and Nuxt sample apps, links them, then runs reaches, path, impact and plan check](docs/media/cg-terminal-demo.gif)](docs/media/cg-terminal-demo.mp4)
+[![Terminal demo: cg indexes the bundled Laravel and Nuxt sample apps, links them, then runs reaches, path, impact and plan check](https://raw.githubusercontent.com/cyberchronos00/code-graph/main/docs/media/cg-terminal-demo.gif)](https://github.com/cyberchronos00/code-graph/blob/main/docs/media/cg-terminal-demo.mp4)
 
 ## Supported languages
 
@@ -70,6 +70,6 @@ Go and others: import a SCIP index with `cg index --scip FILE`. Run `cg doctor` 
 
 [Install](https://code-graph.cyberchronos00.workers.dev/docs/install) · [Quick start](https://code-graph.cyberchronos00.workers.dev/docs/quickstart) · [CLI](https://code-graph.cyberchronos00.workers.dev/docs/cli) · [MCP](https://code-graph.cyberchronos00.workers.dev/docs/mcp) · [Configuration](https://code-graph.cyberchronos00.workers.dev/docs/configuration) · [Architecture](https://code-graph.cyberchronos00.workers.dev/docs/architecture) · [Limitations](https://code-graph.cyberchronos00.workers.dev/docs/limitations)
 
-[Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · MIT [License](LICENSE)
+[Changelog](https://github.com/cyberchronos00/code-graph/blob/main/CHANGELOG.md) · [Contributing](https://github.com/cyberchronos00/code-graph/blob/main/CONTRIBUTING.md) · [Security](https://github.com/cyberchronos00/code-graph/blob/main/SECURITY.md) · MIT [License](https://github.com/cyberchronos00/code-graph/blob/main/LICENSE)
 
-More recordings: [docs/media](docs/media).
+More recordings: [docs/media](https://github.com/cyberchronos00/code-graph/tree/main/docs/media).
