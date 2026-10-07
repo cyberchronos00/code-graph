@@ -70,7 +70,10 @@ Sample: `examples/bookstore-react-router`.
 Detect: `express`, `koa`, `@koa/router`, `fastify`, `hono`, `elysia`. Router values are followed
 across `import` / `require`, `module.exports` and factories. A parameter typed
 `FastifyInstance` / `Router` / `Hono`, or an untyped parameter that receives a literal path,
-counts. `elysia` is its own framework label and uses this router layer.
+counts. A plugin RPC registration `router.post("github.webhooks", handler)` (a dotted literal with no
+leading slash, not an HTTP path) is `POST /github.webhooks` at `heuristic` with `attrs.plugin_rpc`,
+including when `router` is an untyped parameter. `router.post("/orders")` and `router.post("/acme.events")`
+stay HTTP routes and do not gain `plugin_rpc`. `elysia` is its own framework label and uses this router layer.
 
 | feature | graph |
 |---|---|

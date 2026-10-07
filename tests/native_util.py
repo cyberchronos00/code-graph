@@ -3,6 +3,7 @@ import contextlib
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -29,8 +30,31 @@ def have_tree_sitter() -> bool:
 TS_SKIP = "tree-sitter grammars not installed: pip install -r requirements.txt (tree-sitter, tree-sitter-rust/-c/-cpp)"
 
 
+def _exits_ok(tool: str, args: tuple[str, ...]) -> tuple[bool, str]:
+    """(exited 0, combined output). A rustup proxy with no component or no default toolchain exits non-zero."""
+    try:
+        r = subprocess.run([tool, *args], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, ""
+    return r.returncode == 0, ((r.stdout or "") + "\n" + (r.stderr or "")).strip()
+
+
 def rust_analyzer():
-    return runner.find_tool("CG_RUST_ANALYZER", ["rust-analyzer"], [Path.home() / ".cargo" / "bin"])
+    """Path to a rust-analyzer that can run, or None.
+
+    A binary on PATH is not enough: `rust-analyzer --version` must exit 0, and when rustup is installed it must
+    report a default toolchain. An empty rustup proxy exits 1 and the Rust plugin stays on the heuristic layer.
+    """
+    tool = runner.find_tool("CG_RUST_ANALYZER", ["rust-analyzer"], [Path.home() / ".cargo" / "bin"])
+    if not tool or not _exits_ok(tool, ("--version",))[0]:
+        return None
+    rustup = shutil.which("rustup")
+    if rustup:
+        ok, text = _exits_ok(rustup, ("show", "active-toolchain"))
+        low = text.lower()
+        if not ok or "no default toolchain" in low or "no active toolchain" in low:
+            return None
+    return tool
 
 
 def scip_clang():

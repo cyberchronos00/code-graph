@@ -1,4 +1,4 @@
-"""Webhook receivers (#37 part 1): routes called by a third party, their signature checks and the events they handle.
+"""Webhook receivers (#37, #152 part A): routes called by a third party, their signature checks and the events they handle.
 
 For every route, the handler (and the functions it calls or dispatches to, two levels deep, plus its middleware
 functions) is scanned:
@@ -93,6 +93,355 @@ EVENT_LIT = re.compile(r"[A-Za-z][\w.:/ -]{0,79}")
 GENERIC_EVENT_VARS = {"event", "evt", "payload", "body", "data", "webhook", "notification", "webhookEvent",
                       "webhook_event", "stripeEvent", "stripe_event", "msg", "message"}
 TYPE_KEYS = ("type", "event", "event_type", "eventType", "object_kind")
+# a resolved constant value that names a signature header (`Saleor-Signature`, `X-Hub-Signature-256`, `signature`)
+_SIG_NAME = re.compile(r"(?i)^(?:x-)?[\w-]*(?:signature|hmac)[\w-]*$")
+# `const NAME = "..."`, `public const NAME`, `const val NAME`, `static readonly NAME`, `pub const NAME: &str`
+_CONST_DEF = re.compile(
+    r"""(?m)^[ \t]*(?:export[ \t]+|pub(?:\([^)\n]*\))?[ \t]+)?"""
+    r"""(?:(?:public|private|protected|static|final|readonly|const|val|String)[ \t]+)+"""
+    r"""(?P<name>[A-Za-z_]\w*)[ \t]*(?::[^=\n]+)?=[ \t]*"""
+    r"""(?P<q>['"])(?P<val>[^'"\n]{1,120})(?P=q)""")
+_PY_CONST_DEF = re.compile(
+    r"""(?m)^(?P<name>[A-Z][A-Z0-9_]{2,})[ \t]*=[ \t]*(?P<q>['"])(?P<val>[^'"\n]{1,120})(?P=q)""")
+# A coercion keeps the event string. A further field (`eventName.length`, `event.status`) is not the event.
+_TAIL = r"(?:\s*\.\s*(?:as_str|to_string|toString|trim)\s*(?:\(\s*\))?){0,2}"
+CASHIER_PARENT = "Cashier\\Http\\Controllers\\WebhookController"
+_DEFAULT_VALIDATOR = "SignatureValidator\\DefaultSignatureValidator"
+# Published Stripe event types. Cashier's method is `handle` + StudlyCase of the type with `.` replaced by `_`,
+# so this map is the reverse. Dots and underscores are not distinct in the method name; no two published types share one.
+_STRIPE_EVENTS = """
+account.application.authorized
+account.application.deauthorized
+account.external_account.created
+account.external_account.deleted
+account.external_account.updated
+account.updated
+application_fee.created
+application_fee.refund.updated
+application_fee.refunded
+apps.install.created
+apps.install.deleted
+apps.install.updated
+balance.available
+balance_settings.updated
+billing.alert.triggered
+billing.credit_balance_transaction.created
+billing.credit_grant.created
+billing.credit_grant.updated
+billing.meter.created
+billing.meter.deactivated
+billing.meter.reactivated
+billing.meter.updated
+billing_portal.configuration.created
+billing_portal.configuration.updated
+billing_portal.session.created
+capability.updated
+cash_balance.funds_available
+charge.captured
+charge.dispute.closed
+charge.dispute.created
+charge.dispute.funds_reinstated
+charge.dispute.funds_withdrawn
+charge.dispute.updated
+charge.expired
+charge.failed
+charge.pending
+charge.refund.updated
+charge.refunded
+charge.succeeded
+charge.updated
+checkout.session.async_payment_failed
+checkout.session.async_payment_succeeded
+checkout.session.completed
+checkout.session.expired
+climate.order.canceled
+climate.order.created
+climate.order.delayed
+climate.order.delivered
+climate.order.product_substituted
+climate.product.created
+climate.product.pricing_updated
+coupon.created
+coupon.deleted
+coupon.updated
+credit_note.created
+credit_note.updated
+credit_note.voided
+customer.created
+customer.deleted
+customer.discount.created
+customer.discount.deleted
+customer.discount.updated
+customer.source.created
+customer.source.deleted
+customer.source.expiring
+customer.source.updated
+customer.subscription.created
+customer.subscription.deleted
+customer.subscription.paused
+customer.subscription.pending_update_applied
+customer.subscription.pending_update_expired
+customer.subscription.resumed
+customer.subscription.trial_will_end
+customer.subscription.updated
+customer.tax_id.created
+customer.tax_id.deleted
+customer.tax_id.updated
+customer.updated
+customer_cash_balance_transaction.created
+entitlements.active_entitlement_summary.updated
+file.created
+financial_connections.account.account_numbers_updated
+financial_connections.account.created
+financial_connections.account.deactivated
+financial_connections.account.disconnected
+financial_connections.account.expected_deactivation_date_updated
+financial_connections.account.reactivated
+financial_connections.account.refreshed_balance
+financial_connections.account.refreshed_ownership
+financial_connections.account.refreshed_transactions
+financial_connections.account.supported_payment_method_types_updated
+financial_connections.account.upcoming_account_number_expiry
+financial_connections.account.upcoming_deactivation
+financial_connections.authorization.expected_deactivation_date_updated
+financial_connections.authorization.upcoming_deactivation
+identity.verification_session.canceled
+identity.verification_session.created
+identity.verification_session.processing
+identity.verification_session.redacted
+identity.verification_session.requires_input
+identity.verification_session.verified
+invoice.created
+invoice.deleted
+invoice.finalization_failed
+invoice.finalized
+invoice.marked_uncollectible
+invoice.overdue
+invoice.overpaid
+invoice.paid
+invoice.payment_action_required
+invoice.payment_attempt_required
+invoice.payment_failed
+invoice.payment_succeeded
+invoice.sent
+invoice.upcoming
+invoice.updated
+invoice.voided
+invoice.will_be_due
+invoice_payment.paid
+invoiceitem.created
+invoiceitem.deleted
+issuing_authorization.created
+issuing_authorization.request
+issuing_authorization.updated
+issuing_card.created
+issuing_card.updated
+issuing_cardholder.created
+issuing_cardholder.updated
+issuing_dispute.closed
+issuing_dispute.created
+issuing_dispute.funds_reinstated
+issuing_dispute.funds_rescinded
+issuing_dispute.submitted
+issuing_dispute.updated
+issuing_personalization_design.activated
+issuing_personalization_design.deactivated
+issuing_personalization_design.rejected
+issuing_personalization_design.updated
+issuing_token.created
+issuing_token.updated
+issuing_transaction.created
+issuing_transaction.purchase_details_receipt_updated
+issuing_transaction.updated
+mandate.updated
+payment_intent.amount_capturable_updated
+payment_intent.canceled
+payment_intent.created
+payment_intent.partially_funded
+payment_intent.payment_failed
+payment_intent.processing
+payment_intent.requires_action
+payment_intent.succeeded
+payment_link.created
+payment_link.updated
+payment_method.attached
+payment_method.automatically_updated
+payment_method.detached
+payment_method.updated
+payout.canceled
+payout.created
+payout.failed
+payout.paid
+payout.reconciliation_completed
+payout.updated
+person.created
+person.deleted
+person.updated
+plan.created
+plan.deleted
+plan.updated
+price.created
+price.deleted
+price.updated
+product.created
+product.deleted
+product.updated
+promotion_code.created
+promotion_code.updated
+quote.accepted
+quote.canceled
+quote.created
+quote.finalized
+radar.early_fraud_warning.created
+radar.early_fraud_warning.updated
+refund.created
+refund.failed
+refund.updated
+reporting.report_run.failed
+reporting.report_run.succeeded
+reporting.report_type.updated
+reserve.hold.created
+reserve.hold.updated
+reserve.plan.created
+reserve.plan.disabled
+reserve.plan.expired
+reserve.plan.updated
+reserve.release.created
+review.closed
+review.opened
+setup_intent.canceled
+setup_intent.created
+setup_intent.requires_action
+setup_intent.setup_failed
+setup_intent.succeeded
+sigma.scheduled_query_run.created
+source.canceled
+source.chargeable
+source.failed
+source.mandate_notification
+source.refund_attributes_required
+source.transaction.created
+source.transaction.updated
+subscription_schedule.aborted
+subscription_schedule.canceled
+subscription_schedule.completed
+subscription_schedule.created
+subscription_schedule.expiring
+subscription_schedule.released
+subscription_schedule.updated
+tax.settings.updated
+tax_rate.created
+tax_rate.updated
+terminal.reader.action_failed
+terminal.reader.action_succeeded
+terminal.reader.action_updated
+test_helpers.test_clock.advancing
+test_helpers.test_clock.created
+test_helpers.test_clock.deleted
+test_helpers.test_clock.internal_failure
+test_helpers.test_clock.ready
+topup.canceled
+topup.created
+topup.failed
+topup.reversed
+topup.succeeded
+transfer.created
+transfer.reversed
+transfer.updated
+treasury.credit_reversal.created
+treasury.credit_reversal.posted
+treasury.debit_reversal.completed
+treasury.debit_reversal.created
+treasury.debit_reversal.initial_credit_granted
+treasury.financial_account.closed
+treasury.financial_account.created
+treasury.financial_account.features_status_updated
+treasury.inbound_transfer.canceled
+treasury.inbound_transfer.created
+treasury.inbound_transfer.failed
+treasury.inbound_transfer.succeeded
+treasury.outbound_payment.canceled
+treasury.outbound_payment.created
+treasury.outbound_payment.expected_arrival_date_updated
+treasury.outbound_payment.failed
+treasury.outbound_payment.posted
+treasury.outbound_payment.returned
+treasury.outbound_payment.tracking_details_updated
+treasury.outbound_transfer.canceled
+treasury.outbound_transfer.created
+treasury.outbound_transfer.expected_arrival_date_updated
+treasury.outbound_transfer.failed
+treasury.outbound_transfer.posted
+treasury.outbound_transfer.returned
+treasury.outbound_transfer.tracking_details_updated
+treasury.received_credit.created
+treasury.received_credit.failed
+treasury.received_credit.succeeded
+treasury.received_debit.created
+""".split()
+
+
+def _studly_event(event: str) -> str:
+    parts = [p for p in event.replace(".", "_").split("_") if p]
+    return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+_CASHIER_BY_METHOD = None
+_CONST_REF = re.compile(
+    r"(?<![.\w$\\])(?:(?P<qual>\\?(?:self|static|this|[A-Za-z_][\w\\]*))\s*(?:::|\.))?(?P<name>[A-Z][A-Z0-9_]{2,})\b")
+_CONST_WRITE = re.compile(
+    r"(?<![.\w$\\])(?:(?P<qual>\\?(?:self|static|this|[A-Za-z_][\w\\]*))\s*(?:::|\.))?"
+    r"(?P<name>[A-Z][A-Z0-9_]{2,})\s*(?P<op>\]\s*=(?!=)|\]\s*:|=>|:)")
+_SIG_LIT_WRITE = re.compile(r"""['"]((?:x[-_])?[\w-]*(?:signature|hmac)[\w-]*)['"]\s*(:|=>|,|\]\s*=(?!=))""", re.I)
+_PHP_USE = re.compile(r"(?m)^\s*use\s+(?:const\s+)?\\?([^;]+);")
+_TS_IMPORT = re.compile(r"""(?m)^[ \t]*import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]""")
+_HAS_CONST = re.compile(r"[A-Z][A-Z0-9_]{2,}")
+
+
+def _cashier_map():
+    global _CASHIER_BY_METHOD
+    if _CASHIER_BY_METHOD is None:
+        _CASHIER_BY_METHOD = {_studly_event(e): e for e in _STRIPE_EVENTS}
+    return _CASHIER_BY_METHOD
+WC_JOB = "WebhookClient\\Jobs\\ProcessWebhookJob"
+WC_PROFILE = "WebhookProfile\\WebhookProfile"
+
+
+def norm_header(value: str) -> str | None:
+    """Lower-case header name when it is a known provider header or a signature / hmac header."""
+    v = (value or "").strip()
+    if not v or len(v) > 80 or any(c in v for c in "\n\r{}[]"):
+        return None
+    if v.lower().startswith("http_"):
+        v = v[5:]
+    key = v.lower().replace("_", "-")
+    if key in HEADERS or _SIG_NAME.fullmatch(key):
+        return key
+    return None
+
+
+def cashier_event(name: str) -> str | None:
+    """`handle<Studly>` back to a Stripe event type.
+
+    Cashier dispatches `handle` + `Str::studly(str_replace('.', '_', $type))`, so
+    `customer.subscription.created` and `invoice.payment_action_required` both become Studly words
+    (`handleCustomerSubscriptionCreated`, `handleInvoicePaymentActionRequired`). `.` and `_` leave no
+    trace in the method name. A published Stripe type is restored exactly. A method that matches none
+    is the Studly words joined with `.`; that form is ambiguous with an unpublished name that used
+    underscores. `handleWebhook` is the dispatcher, not an event.
+    """
+    if not name or not name.startswith("handle") or name == "handleWebhook":
+        return None
+    rest = name[6:]
+    if not rest or not rest[0].isupper():
+        return None
+    known = _cashier_map().get(rest)
+    if known:
+        return known
+    parts = re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*", rest)
+    if not parts:
+        return None
+    return ".".join(p.lower() for p in parts)
 
 
 def _block(src, i, hi):
@@ -166,6 +515,86 @@ def _arms(src, lo, hi):
     return out
 
 
+def _skip_ws(src, i, hi):
+    """Advance past a string or comment starting at i; 0 when src[i] is neither."""
+    c = src[i] if i < hi else ""
+    if c in "'\"":
+        k = i + 1
+        while k < hi and src[k] != c:
+            k += 2 if src[k] == "\\" else 1
+        return k + 1
+    if c == "/" and src.startswith("//", i):
+        j = src.find("\n", i)
+        return hi if j < 0 else j
+    if c == "/" and src.startswith("/*", i):
+        j = src.find("*/", i)
+        return hi if j < 0 else j + 2
+    return 0
+
+
+def _arm_end(src, j, hi):
+    """End of a when/match arm that does not open with `{`: the next label, or a depth-0 comma."""
+    depth, i = 0, j
+    while i < hi:
+        nxt = _skip_ws(src, i, hi)
+        if nxt:
+            i = nxt
+            continue
+        c = src[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif depth == 0 and c == ",":
+            return i + 1
+        elif depth == 0 and c == "\n":
+            rest = src[i + 1:hi].lstrip(" \t")
+            if rest.startswith(("\"", "'", "else", "_", "default", "}")):
+                return i + 1
+        i += 1
+    return hi
+
+
+def _dispatch_arms(src, body, end, arrow):
+    """(literal, literal pos, arrow pos, arm end) for Kotlin `when` (`->`) or Rust `match` (`=>`) arms.
+
+    Labels are string literals at depth 0 or 1 (`"push"`, `Some("push")`, `"a", "b"`, `"a" | "b"`).
+    `else` / `_` arms are skipped.
+    """
+    depth, i, lits = 0, body, []
+    while i < end:
+        nxt = _skip_ws(src, i, end)
+        if nxt:
+            if depth <= 1 and src[i] in "'\"":
+                k = i + 1
+                while k < end and src[k] != src[i]:
+                    k += 2 if src[k] == "\\" else 1
+                lits.append((src[i + 1:k], i))
+            i = nxt
+            continue
+        c = src[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif depth == 0 and src.startswith(arrow, i) and not src.startswith(">=", i):
+            j = i + len(arrow)
+            while j < end and src[j] in " \t":
+                j += 1
+            if j < end and src[j] == "{":
+                b_end = _block(src, j, end)
+            else:
+                b_end = _arm_end(src, j, end)
+            for lit, pos in lits:
+                yield lit, pos, i, b_end
+            lits = []
+            i = b_end
+            continue
+        i += 1
+
+
 class Webhooks(BrokerScan):
     def __init__(self, project, b, sock=None):
         super().__init__(project, b, sock)
@@ -176,6 +605,8 @@ class Webhooks(BrokerScan):
         self.is_test_node = is_test_node
         self.out = defaultdict(list)
         self.callees = defaultdict(list)          # fn -> [(dst, kind, line, confidence)]
+        self._index_constants()
+        self.bind_webhook_client()
         handlers = defaultdict(list)
         mw = defaultdict(list)
         callers = defaultdict(set)
@@ -243,8 +674,365 @@ class Webhooks(BrokerScan):
             return "github", "@octokit/webhooks verify"
         return None
 
+    # ------------------------------------------------------------ constants and framework receivers
+    def _index_constants(self):
+        """Class and module constants whose value is a signature header, plus explicit imports of those names.
+
+        A use resolves in the same class (including an ancestor) or the same module, or through an import
+        (`use`, `use const`, `import { NAME }`). A name that is only defined somewhere else stays unknown.
+        """
+        self.class_const = defaultdict(dict)
+        self.extends = defaultdict(list)
+        for e in self.b.edges.values():
+            if e.kind != "EXTENDS" or ":" not in e.src or ":" not in e.dst:
+                continue
+            self.extends[e.src.split(":", 1)[1]].append(e.dst.split(":", 1)[1])
+        for n in self.b.nodes.values():
+            if n.kind != "constant" or not n.fqn or "::" not in n.fqn or not n.file or not n.line:
+                continue
+            src = self.s.text(n.file) or ""
+            lines = src.splitlines()
+            if not 1 <= n.line <= len(lines):
+                continue
+            chunk = "\n".join(lines[n.line - 1:min(len(lines), n.line + 2)])
+            m = re.search(r"""=\s*(['"])(?P<val>[^'"\n]{1,120})\1""", chunk)
+            hdr = norm_header(m.group("val")) if m else None
+            if not hdr:
+                continue
+            fqcn, name = n.fqn.rsplit("::", 1)
+            self.class_const[fqcn][name] = hdr
+        owned = defaultdict(set)
+        for fq, mp in self.class_const.items():
+            node = self.b.nodes.get(f"class:{fq}")
+            if node and node.file:
+                owned[str(node.file)].update(mp)
+        self.module_const = {}
+        self.imported_header = {}
+        self.imported_class = {}
+        for f in sorted(self.s.files):
+            if not str(f).endswith(CODE_EXT):
+                continue
+            src = self.s.text(f) or ""
+            found = {}
+            for rx in (_CONST_DEF, _PY_CONST_DEF):
+                for m in rx.finditer(src):
+                    if m.group("name") in owned.get(str(f), ()):
+                        continue
+                    hdr = norm_header(m.group("val"))
+                    if hdr:
+                        found[m.group("name")] = hdr
+            if found:
+                self.module_const[str(f)] = found
+        for f in sorted(self.s.files):
+            if not str(f).endswith(CODE_EXT):
+                continue
+            self._index_imports(str(f), self.s.text(f) or "")
+
+    def _header_on_class(self, fqcn, name):
+        seen = set()
+        stack = [fqcn]
+        while stack:
+            c = stack.pop()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            hit = self.class_const.get(c, {}).get(name)
+            if hit:
+                return hit
+            stack.extend(self.extends.get(c, ()))
+        return None
+
+    def _resolve_module(self, file, spec):
+        if not spec.startswith("."):
+            return None
+        parts = str(file).rsplit("/", 1)[0].split("/") if "/" in str(file) else []
+        if parts == [""]:
+            parts = []
+        for p in spec.split("/"):
+            if p in ("", "."):
+                continue
+            if p == "..":
+                if parts:
+                    parts.pop()
+                continue
+            parts.append(p)
+        stem = "/".join(parts)
+        files = {str(f) for f in self.s.files}
+        for ext in (".ts", ".tsx", ".mts", ".js", ".mjs", ".cjs", ".py", ".kt", ".rs", ".php"):
+            cand = stem + ext
+            if cand in files:
+                return cand
+        return None
+
+    def _index_imports(self, file, src):
+        headers, classes = {}, {}
+        for m in _PHP_USE.finditer(src):
+            clause = m.group(1).strip()
+            if clause.startswith("function "):
+                continue
+            alias = None
+            if re.search(r"\sas\s", clause):
+                clause, alias = re.split(r"\s+as\s+", clause, maxsplit=1)
+                alias = alias.strip()
+            clause = clause.strip().lstrip("\\")
+            if "::" in clause:
+                fq, name = clause.split("::", 1)
+                hdr = self._header_on_class(fq, name)
+                if hdr:
+                    headers[alias or name] = hdr
+            else:
+                classes[alias or clause.split("\\")[-1]] = clause
+        for m in _TS_IMPORT.finditer(src):
+            target = self._resolve_module(file, m.group(2))
+            mods = self.module_const.get(target) or {}
+            for part in m.group(1).split(","):
+                part = part.strip()
+                if not part or part.startswith("type "):
+                    continue
+                if " as " in part:
+                    orig, local = [x.strip() for x in part.split(" as ", 1)]
+                else:
+                    orig = local = part.split(":")[0].strip()
+                if orig in mods:
+                    headers[local] = mods[orig]
+        self.imported_header[file] = headers
+        self.imported_class[file] = classes
+
+    def resolve_header(self, file, name, qual, class_fqcn):
+        """Header for this constant use, or None when the name is not in scope."""
+        file = str(file)
+        qual = (qual or "").strip()
+        if qual in ("self", "static", "this", "$this"):
+            return self._header_on_class(class_fqcn, name) if class_fqcn else None
+        if qual:
+            fq = qual.lstrip("\\")
+            if fq not in self.class_const and f"class:{fq}" not in self.b.nodes:
+                fq = (self.imported_class.get(file) or {}).get(qual.lstrip("\\"))
+            if not fq:
+                return None
+            return self._header_on_class(fq, name)
+        if name in (self.module_const.get(file) or {}):
+            return self.module_const[file][name]
+        return (self.imported_header.get(file) or {}).get(name)
+
+    def header_consts(self, file, src, lo, hi, class_fqcn=None):
+        """(header, file:line) for a constant in scope used in this span whose value is a signature header."""
+        if not _HAS_CONST.search(src, lo, hi):
+            return
+        seen = set()
+        for m in _CONST_REF.finditer(src, lo, hi):
+            if self.s.masked(file, m.start()):
+                continue
+            hdr = self.resolve_header(file, m.group("name"), m.group("qual"), class_fqcn)
+            if not hdr or hdr in seen:
+                continue
+            seen.add(hdr)
+            yield hdr, f"{file}:{self.s.line_of(file, m.start())}"
+
+    def signature_write(self, file, text, base, class_fqcn=None):
+        """(offset in text, header name) of a signature header written here, including one named by a constant in scope."""
+        found = []
+        for m in _SIG_LIT_WRITE.finditer(text):
+            if self._write_ok(file, text, base, m.start(), m.group(1), m.group(2)):
+                found.append((m.start(), m.group(1)))
+        for m in _CONST_WRITE.finditer(text):
+            hdr = self.resolve_header(file, m.group("name"), m.group("qual"), class_fqcn)
+            if hdr and self._write_ok(file, text, base, m.start(), hdr, m.group("op")):
+                found.append((m.start(), hdr))
+        return min(found) if found else None
+
+    def _write_ok(self, file, text, base, start, name, op):
+        if self.s.masked(file, base + start):
+            return False
+        before = text[max(0, start - 16):start]
+        if re.search(r"(?:\bget|\bheader|getHeader|\bheaders\s*\[)\s*\(?\s*$", before) and not str(op).startswith("]"):
+            return False
+        if "-" not in name and not re.search(r"header", text[max(0, start - 300):start], re.I):
+            return False
+        return True
+
+    def _parents(self):
+        if getattr(self, "_parent_map", None) is None:
+            mp = defaultdict(list)
+            for e in self.b.edges.values():
+                if e.kind in ("EXTENDS", "IMPLEMENTS"):
+                    mp[e.src].append(e.dst)
+            self._parent_map = mp
+        return self._parent_map
+
+    def _is_a(self, class_id, suffix) -> bool:
+        seen = set()
+        stack = [class_id]
+        while stack:
+            c = stack.pop()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            node = self.b.nodes.get(c)
+            label = ((node.fqn or node.name) if node else "") or c
+            if str(label).endswith(suffix) or str(c).endswith(suffix):
+                return True
+            stack.extend(self._parents().get(c, ()))
+        return False
+
+    def _class_of(self, nid):
+        if not nid or not str(nid).startswith("method:") or "::" not in nid:
+            return None
+        return "class:" + nid[len("method:"):].rsplit("::", 1)[0]
+
+    def _method(self, fqcn, name):
+        if not fqcn or not name:
+            return None
+        fqcn = fqcn.strip("\\")
+        nid = f"method:{fqcn}::{name}"
+        if nid in self.b.nodes:
+            return nid
+        low = name.lower()
+        prefix = f"method:{fqcn}::"
+        for n in self.b.nodes.values():
+            if n.id.startswith(prefix) and (n.name or "").lower() == low:
+                return n.id
+        return None
+
+    def _subtypes(self, suffix):
+        out = []
+        for n in self.b.nodes.values():
+            if n.kind == "class" and self._is_a(n.id, suffix) and not str(n.fqn or "").endswith(suffix):
+                out.append(n.id)
+        return out
+
+    def cashier_methods(self, hs, rn):
+        """(method id, event, file, line) for Cashier `handle<Event>` methods behind this route."""
+        classes = set()
+        for h in hs or []:
+            cid = self._class_of(h)
+            if cid and self._is_a(cid, CASHIER_PARENT):
+                classes.add(cid)
+        ctrl = (rn.attrs or {}).get("controller") if rn is not None else None
+        if ctrl:
+            cid = f"class:{ctrl}"
+            if cid in self.b.nodes and self._is_a(cid, CASHIER_PARENT):
+                classes.add(cid)
+        out = []
+        for cid in classes:
+            fq = cid.split(":", 1)[1]
+            prefix = f"method:{fq}::"
+            for n in self.b.nodes.values():
+                if n.kind == "method" and n.id.startswith(prefix):
+                    ev = cashier_event(n.name or "")
+                    if ev:
+                        out.append((n.id, ev, n.file, n.line))
+        return out
+
+    def _secret_present(self, expr: str | None) -> bool:
+        if not expr:
+            return False
+        e = expr.strip().rstrip(",").strip()
+        if e in ("null", "false", "''", '""'):
+            return False
+        if re.fullmatch(r"""['"]\s*['"]""", e):
+            return False
+        return True
+
+    def _default_validator(self, name: str | None) -> bool:
+        if not name:
+            return False
+        return name.replace("/", "\\").rstrip("\\").endswith(_DEFAULT_VALIDATOR)
+
+    def _class_checks(self, fqcn: str | None) -> bool:
+        """True when a project class's own body computes or compares a signature."""
+        if not fqcn:
+            return False
+        fqcn = fqcn.strip("\\")
+        node = self.b.nodes.get(f"class:{fqcn}")
+        if node is None:
+            for n in self.b.nodes.values():
+                if n.kind == "class" and str(n.fqn or "").endswith(fqcn):
+                    node = n
+                    break
+        if node is None or not node.file or not node.line:
+            return False
+        src = self.s.text(node.file) or ""
+        lo = self.s.off(node.file, node.line)
+        end = node.end_line or node.line
+        lines = self.s.lines[node.file] if node.file in self.s.lines else []
+        hi = self.s.off(node.file, end + 1) if end < len(lines) else len(src)
+        chunk = src[lo:hi]
+        return bool(HMAC_RX.search(chunk) or CT_RX.search(chunk))
+
+    def wc_profiles(self):
+        """spatie/laravel-webhook-client configs: name, header, job, profile, and whether the validator counts."""
+        out = []
+        for f in sorted(self.s.files):
+            if not str(f).endswith("webhook-client.php"):
+                continue
+            src = self.s.text(f) or ""
+            for m in re.finditer(r"""['"](?:process_webhook_job|name)['"]\s*=>""", src):
+                lo = src.rfind("[", max(0, m.start() - 1200), m.start())
+                hi = src.find("]", m.end(), min(len(src), m.end() + 1200))
+                if lo < 0 or hi < 0:
+                    continue
+                w = src[lo:hi]
+                name = re.search(r"""['"]name['"]\s*=>\s*['"]([^'"]+)['"]""", w)
+                if not name:
+                    continue
+                if any(p["name"] == name.group(1) for p in out):
+                    continue
+                job = re.search(r"""['"]process_webhook_job['"]\s*=>\s*\\?([A-Za-z_\\]+)::class""", w)
+                header = re.search(r"""['"]signature_header_name['"]\s*=>\s*['"]([^'"]+)['"]""", w)
+                profile = re.search(r"""['"]webhook_profile['"]\s*=>\s*\\?([A-Za-z_\\]+)::class""", w)
+                validator = re.search(r"""['"]signature_validator['"]\s*=>\s*\\?([A-Za-z_\\]+)::class""", w)
+                secret = re.search(r"""['"]signing_secret['"]\s*=>\s*([^,\n]+)""", w)
+                vname = validator.group(1).strip("\\") if validator else None
+                has_secret = self._secret_present(secret.group(1) if secret else None)
+                verified, how = False, None
+                if vname is None and not has_secret:
+                    verified = False
+                elif vname is None or self._default_validator(vname):
+                    if has_secret:
+                        verified, how = True, "spatie/laravel-webhook-client"
+                elif self._class_checks(vname):
+                    verified, how = True, "spatie/laravel-webhook-client custom validator"
+                out.append({
+                    "name": name.group(1),
+                    "header": header.group(1) if header else None,
+                    "job": job.group(1).strip("\\") if job else None,
+                    "profile": profile.group(1).strip("\\") if profile else None,
+                    "verified": verified,
+                    "how": how,
+                })
+        return out
+
+    def bind_webhook_client(self):
+        """Point Route::webhooks routes at the configured ProcessWebhookJob and webhook profile.
+
+        A config name that is not in `config/webhook-client.php` is left unbound.
+        """
+        by_name = {p["name"]: p for p in self.wc_profiles()}
+        self.wc_by_name = by_name
+        for rid, n in list(self.b.nodes.items()):
+            if n.kind != "route" or (n.attrs or {}).get("webhook_framework") != "laravel-webhook-client":
+                continue
+            raw = (n.attrs or {}).get("webhook_client") or "default"
+            spec = by_name.get(raw) if isinstance(raw, str) else None
+            if spec is None:
+                continue
+            if spec.get("header"):
+                n.attrs["webhook_header"] = spec["header"]
+            targets = []
+            j = self._method(spec.get("job") or "", "handle")
+            p = self._method(spec.get("profile") or "", "shouldProcess")
+            targets += [t for t in (j, p) if t]
+            for t in dict.fromkeys(targets):
+                self.b.add_edge(rid, t, "ROUTES_TO", n.file, n.line, HEURISTIC, how="webhook-client profile")
+
     # ------------------------------------------------------------ receivers
     def route(self, rid, rn, hs, mws):
+        extra = [mid for mid, _ev, _f, _ln in self.cashier_methods(hs, rn)]
+        for mid in extra:
+            if mid not in hs:
+                self.b.add_edge(rid, mid, "ROUTES_TO", rn.file, rn.line, HEURISTIC, how="cashier webhook")
+        hs = list(dict.fromkeys(list(hs) + extra))
         fns = self.tree(list(hs) + list(mws))
         headers, sig_hdrs, verified = {}, [], None
         hm = ct = None
@@ -264,6 +1052,13 @@ class Webhooks(BrokerScan):
                     headers.setdefault(m.group(1).lower().replace("_", "-"), f"{file}:{self.s.line_of(file, m.start())}")
             for m in (SIG_HDR_RX.finditer(src, lo, hi) if own else ()):
                 sig_hdrs.append(m.group(1).lower())
+            if own:
+                cid = self._class_of(f)
+                for hval, loc in self.header_consts(file, src, lo, hi, cid.split(":", 1)[1] if cid else None):
+                    if hval in HEADERS:
+                        headers.setdefault(hval, loc)
+                    else:
+                        sig_hdrs.append(hval)
             for rx, prov, how, hint in VERIFY:
                 if verified:
                     break
@@ -290,6 +1085,20 @@ class Webhooks(BrokerScan):
                 names = [x for x in (rn.attrs or {}).get("middleware") or [] if isinstance(x, str) and MW_RX.search(x)]
                 if names and (provs or sig_hdrs or re.search(r"(?i)hook", rn.id)):
                     verified = (provider or "webhook", f"middleware {names[0]}", f"{rn.file}:{rn.line}")
+        fw = (rn.attrs or {}).get("webhook_framework")
+        if (fw == "laravel-cashier" or extra) and verified is None:
+            verified = ("stripe", "Laravel Cashier", f"{rn.file}:{rn.line}")
+        if fw == "laravel-webhook-client" and verified is None:
+            raw = (rn.attrs or {}).get("webhook_client") or "default"
+            spec = (getattr(self, "wc_by_name", None) or {}).get(raw) if isinstance(raw, str) else None
+            if spec and spec.get("verified"):
+                hdr = norm_header(spec.get("header") or "") or "signature"
+                prov0 = HEADERS.get(hdr, (None,))[0]
+                verified = (prov0 or "webhook", spec["how"], f"{rn.file}:{rn.line}")
+                if hdr in HEADERS:
+                    headers.setdefault(hdr, verified[2])
+                else:
+                    sig_hdrs.append(hdr)
         if verified is None and not provs:
             return
         prov = verified[0] if verified else provider
@@ -299,6 +1108,8 @@ class Webhooks(BrokerScan):
             nm = PROVIDER_NAMES.search(rn.id) or next((m for m in (PROVIDER_NAMES.search(h) for h in hs) if m), None)
             if nm:
                 prov = nm.group(1).lower().replace("_", "")
+        if verified and verified[1] == "Laravel Cashier":
+            prov = "stripe"
         wh = {"provider": prov, "verified": bool(verified)}
         if verified:
             wh.update(how=verified[1], check=verified[2])
@@ -313,6 +1124,15 @@ class Webhooks(BrokerScan):
             self.miss("webhook_unverified", rid)
         rn.attrs["webhook"] = wh
         events = self.events(rid, prov, fns, bodies, headers, verified)
+        if verified and verified[1] == "Laravel Cashier":
+            guards = [f"webhook signature ({verified[1]})"]
+            for mid, ev, file, line in self.cashier_methods(hs, rn):
+                if not file or not line:
+                    continue
+                pos = self.s.off(file, line)
+                self.recv(rid, prov, ev, mid, file, pos, pos, pos, HEURISTIC, guards)
+                self.flush_branches(mid)
+                events.add(ev)
         if events:
             wh["events"] = sorted(events)
 
@@ -403,6 +1223,19 @@ class Webhooks(BrokerScan):
                 for a_lo, arrow, a_hi in _arms(src, body, end):
                     for lm in re.finditer(r"""(['"])((?:(?!\1)[^\\\n])+)\1""", src[a_lo:arrow]):
                         yield lm.group(2), a_lo + lm.start(), arrow, a_hi, var(m)
+        # Kotlin `when (event.type) { "push" -> ... }` and Rust `match event_name { "push" => ... }`
+        for kind, arrow in (("when", "->"), ("match", "=>")):
+            if kind == "when":
+                rx = rf"\bwhen\s*\(\s*(?:{subj}){_TAIL}\s*\)\s*\{{"
+            else:
+                rx = rf"\bmatch\s+(?:{subj}){_TAIL}\s*\{{"
+            for m in re.finditer(rx, src[lo:hi]):
+                body = lo + m.end()
+                if self.s.masked(file, lo + m.start()):
+                    continue
+                end = _block(src, body - 1, hi) - 1
+                for lit, pos, arrow_at, b_hi in _dispatch_arms(src, body, end, arrow):
+                    yield lit, pos, arrow_at, b_hi, var(m)
         if py:
             for m in re.finditer(rf"^[ \t]*match\s+(?:{subj})\s*:", src[lo:hi], re.M):
                 s0 = lo + m.start()
@@ -507,13 +1340,8 @@ class Webhooks(BrokerScan):
                                     "WebhookCall::create")
             if not HTTP_OUT.search(text):
                 continue
-            hdr = next((m for m in re.finditer(r"""['"]((?:x[-_])?[\w-]*(?:signature|hmac)[\w-]*)['"]\s*(:|=>|,|\]\s*=(?!=))""", text, re.I)
-                        if not self.s.masked(file, lo + m.start())
-                        and not (re.search(r"(?:\bget|\bheader|getHeader|\bheaders\s*\[)\s*\(?\s*$", text[max(0, m.start() - 16):m.start()])
-                                 and not m.group(2).startswith("]"))     # `headers['X-Sig'] = ..` writes
-                        # a bare `signature` key is a header only inside a headers block (not a form field)
-                        and ("-" in m.group(1) or re.search(r"header", text[max(0, m.start() - 300):m.start()], re.I))),
-                       None)                           # a header written, not read (`request.headers.get('X-Sig', '')`)
+            cid = self._class_of(nid)
+            hdr = self.signature_write(file, text, lo, cid.split(":", 1)[1] if cid else None)
             if hdr is None:
                 continue
             signed = HMAC_RX.search(text) or SIGN_CALL.search(text) or any(
@@ -523,7 +1351,7 @@ class Webhooks(BrokerScan):
             self.st["webhook_signed_senders"] += 1
             ev = re.search(r"""(?:\b|['"])(?:triggerEvent|eventType|event_type|event)['"]?\s*(?::|=>?)\s*""" + q, text)
             if ev and EVENT_LIT.fullmatch(ev.group(2)):
-                self.send_event(nid, file, lo + hdr.start(), ev.group(2), "http", f"signed POST ({hdr.group(1)})")
+                self.send_event(nid, file, lo + hdr[0], ev.group(2), "http", f"signed POST ({hdr[1]})")
                 continue
             # the event is a parameter: the callers' literal arguments name it
             params = [x[0] for x in self.s.params(file, nid)] if hasattr(self.s, "params") else []
@@ -548,11 +1376,11 @@ class Webhooks(BrokerScan):
                         if idx < len(a):
                             val, conf = self.value(cn.file, cm.start(), a[idx])
                             if val and "{" not in val and EVENT_LIT.fullmatch(val):
-                                self.send_event(c, cn.file, cm.start(), val, "http", f"signed POST ({hdr.group(1)})", via=nid,
+                                self.send_event(c, cn.file, cm.start(), val, "http", f"signed POST ({hdr[1]})", via=nid,
                                                 conf=conf)
                                 got = True
             if not got:
-                self.send_event(nid, file, lo + hdr.start(), None, "http", f"signed POST ({hdr.group(1)})")
+                self.send_event(nid, file, lo + hdr[0], None, "http", f"signed POST ({hdr[1]})")
 
     def send_event(self, src, file, pos, event, lib, how, via=None, conf=None):
         from .protocols import protocol_send

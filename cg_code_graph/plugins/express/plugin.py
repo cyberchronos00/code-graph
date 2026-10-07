@@ -481,7 +481,7 @@ class ExpressPlugin(FrameworkPlugin):
         if not handler_nodes:
             attrs["handler_unresolved"] = True
         counted = False
-        literal = any(p == "" or p.startswith(("/", "*")) for p in paths if "{" not in p[:1])
+        literal = any(p == "" or p.startswith(("/", "*")) or self._plugin_rpc(p) for p in paths if "{" not in p[:1])
         for k, kp in keys:
             fw, kind = self.kinds.get(k, ("?", "name"))
             if kind == "name" and not handler_nodes:
@@ -502,15 +502,30 @@ class ExpressPlugin(FrameworkPlugin):
                     if any("{" in s and not re.fullmatch(r"\{\w+\*?\??\}", s) for s in uri.split("/") if s) or "{regex}" in uri:
                         conf = "heuristic"
                     ra = {**attrs, "router": (self.I.get(k) or {}).get("name") or c.get("recv_text"), "router_framework": fw}
+                    rpc = self._plugin_rpc(p)
                     if not mounted:
                         ra["unmounted"] = True
                         st["routes_unmounted"] += 1
                     for method in methods:
-                        add_route(b, method, uri, handler_nodes, c["file"], c["line"], fw if fw != "?" else "express", conf, ra, pmw + mw + guards)
+                        prior = b.nodes.get(f"route:{method} {uri}")
+                        if rpc and prior is not None and not prior.attrs.get("plugin_rpc"):
+                            continue
+                        route_attrs = {**ra, "plugin_rpc": True} if rpc else ra
+                        add_route(b, method, uri, handler_nodes, c["file"], c["line"], fw if fw != "?" else "express", conf, route_attrs, pmw + mw + guards)
+                        if not rpc and str(p).startswith("/"):
+                            node = b.nodes.get(f"route:{method} {uri}")
+                            if node is not None and node.attrs.get("plugin_rpc"):
+                                node.attrs.pop("plugin_rpc", None)
                         st["routes"] += 1
                         if not handler_nodes and not counted:
                             st["routes_unresolved_handler"] += 1   # once per route call that produced routes
                             counted = True
+
+    def _plugin_rpc(self, path: str) -> bool:
+        """Plugin RPC: `router.post("github.webhooks", handler)`. A leading slash is an HTTP path, even with a dot."""
+        if not path or path[:1] in "/.*":
+            return False
+        return bool(re.fullmatch(r"[A-Za-z_][\w]*(\.[\w]+)+", path))
 
     # ------------------------------------------------------------ Elysia
     def _fw(self, k) -> str:

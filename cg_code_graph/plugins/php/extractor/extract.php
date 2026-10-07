@@ -372,10 +372,9 @@ function classLike(Stmt\ClassLike $cl, Ctx $c, \PhpParser\NameContext $nc, strin
             if ($s->name->toString() === '__construct') {
                 foreach ($f['params'] as $p) if ($p['promoted']) $props[] = ['name' => $p['name'], 'types' => $p['types'], 'static' => false, 'default' => null, 'line' => $p['line'], 'doc' => null, 'promoted' => true];
             }
-            $attrNames = [];
-            foreach ($s->attrGroups as $ag) foreach ($ag->attrs as $at) $attrNames[] = ltrim($at->name->toString(), '\\');
+            $attrArgs = attrArgs($s->attrGroups);
             $methods[] = ['name' => $s->name->toString(), 'static' => $s->isStatic(), 'abstract' => $s->isAbstract() || $cl instanceof Stmt\Interface_,
-                'attributes' => $attrNames,
+                'attributes' => array_map(fn($a) => $a['name'], $attrArgs), 'attribute_args' => $attrArgs,
                 'visibility' => $s->isPublic() ? 'public' : ($s->isProtected() ? 'protected' : 'private'),
                 'line' => $s->getStartLine(), 'end_line' => $s->getEndLine(), 'doc' => $md] + $f;
         }
@@ -383,7 +382,26 @@ function classLike(Stmt\ClassLike $cl, Ctx $c, \PhpParser\NameContext $nc, strin
     foreach ($docProps as $dp) $props[] = $dp + ['static' => false, 'default' => null, 'line' => $cl->getStartLine(), 'doc' => null];
     $abstract = $cl instanceof Stmt\Class_ ? $cl->isAbstract() : false;
     return ['kind' => $kind, 'fqcn' => $fq, 'extends' => $extends, 'implements' => $impl, 'traits' => $traits, 'abstract' => $abstract,
-        'line' => $cl->getStartLine(), 'end_line' => $cl->getEndLine(), 'doc' => $cdoc, 'props' => $props, 'consts' => $consts, 'cases' => $cases, 'methods' => $methods];
+        'line' => $cl->getStartLine(), 'end_line' => $cl->getEndLine(), 'doc' => $cdoc, 'props' => $props, 'consts' => $consts, 'cases' => $cases,
+        'attributes' => attrArgs($cl->attrGroups), 'methods' => $methods];
+}
+
+/** PHP 8 attributes with literal arguments (route attributes, and any other attribute the framework layer reads). */
+function attrArgs(array $groups): array {
+    $out = [];
+    foreach ($groups as $ag) {
+        foreach ($ag->attrs as $at) {
+            $args = [];
+            $named = new \stdClass();
+            foreach ($at->args as $arg) {
+                $v = literal($arg->value);
+                if ($arg->name !== null) $named->{$arg->name->toString()} = $v;
+                else $args[] = $v;
+            }
+            $out[] = ['name' => ltrim($at->name->toString(), '\\'), 'args' => $args, 'named' => $named, 'line' => $at->getStartLine()];
+        }
+    }
+    return $out;
 }
 
 /** Collect class-likes anywhere in the tree (incl. anonymous classes in `return new class ...`). */
@@ -711,6 +729,12 @@ function routeWalk(array $stmts, array $ctx, Ctx $c): array {
                     $a0 = $a1;
                 }
                 if ($a0 instanceof Node\Arg && ($a0->value instanceof Expr\Closure)) $groupBody = $a0->value->stmts;
+            }
+            elseif ($lm === 'webhooks') {
+                // spatie/laravel-webhook-client: Route::webhooks('payments/hooks', 'payments')
+                $uri = strList($args[0] ?? null)[0] ?? '?';
+                $wname = strList($args[1] ?? null)[0] ?? 'default';
+                $route = ['methods' => ['POST'], 'uri' => $uri, 'action' => null, 'line' => $line, 'webhook_client' => $wname];
             }
             elseif (in_array($lm, $verbs, true)) {
                 $methods = $lm === 'match' ? strList($args[0] ?? null) : [strtoupper($lm)];

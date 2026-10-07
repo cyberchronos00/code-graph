@@ -96,6 +96,74 @@ def classconst(d) -> str | None:
     return d.get("class") if d and d.get("k") == "classconst" else None
 
 
+_ROUTE_ATTR_VERBS = {
+    "get": "GET", "post": "POST", "put": "PUT", "patch": "PATCH", "delete": "DELETE",
+    "options": "OPTIONS", "head": "HEAD", "any": "ANY",
+}
+
+
+def _attr_short(name: str) -> str:
+    return (name or "").replace("/", "\\").split("\\")[-1]
+
+
+def _as_str_list(v) -> list[str]:
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, list):
+        return [x for x in v if isinstance(x, str)]
+    if isinstance(v, dict):
+        return [x for x in v.values() if isinstance(x, str)]
+    return []
+
+
+def _attr_prefixes(attrs) -> list[str]:
+    out = []
+    for a in attrs or []:
+        if _attr_short(a.get("name") or "") != "Prefix":
+            continue
+        named = a.get("named") or {}
+        v = named.get("prefix") if isinstance(named, dict) and "prefix" in named else (a.get("args") or [None])[0]
+        if isinstance(v, str) and v.strip("/"):
+            out.append(v.strip("/"))
+    return out
+
+
+def _attr_middleware(attrs) -> list[str]:
+    out = []
+    for a in attrs or []:
+        if _attr_short(a.get("name") or "") != "Middleware":
+            continue
+        named = a.get("named") or {}
+        if isinstance(named, dict) and "middleware" in named:
+            out += _as_str_list(named.get("middleware"))
+        elif a.get("args"):
+            out += _as_str_list(a["args"][0])
+    return out
+
+
+def _route_attr(a: dict):
+    """(methods, uri, name, middleware) for a spatie/laravel-route-attributes verb, else None."""
+    short = _attr_short(a.get("name") or "")
+    args = list(a.get("args") or [])
+    named = a.get("named") if isinstance(a.get("named"), dict) else {}
+    if short == "Route":
+        method = named.get("method") if "method" in named else (args[0] if args else None)
+        uri = named.get("uri") if "uri" in named else (args[1] if len(args) > 1 else None)
+        methods = [m.upper() for m in _as_str_list(method)]
+    elif short.lower() in _ROUTE_ATTR_VERBS:
+        methods = [_ROUTE_ATTR_VERBS[short.lower()]]
+        uri = named.get("uri") if "uri" in named else (args[0] if args else None)
+    else:
+        return None
+    if not isinstance(uri, str) or not uri.strip():
+        return None
+    name = named.get("name") if isinstance(named.get("name"), str) else None
+    if name is None and short != "Route" and len(args) > 1 and isinstance(args[1], str):
+        name = args[1]
+    mw = _as_str_list(named.get("middleware")) if "middleware" in named else (_as_str_list(args[2]) if len(args) > 2 else [])
+    return methods, uri.strip(), name, mw
+
+
 class LaravelPlugin(FrameworkPlugin):
     name = "laravel"
     language = "php"
@@ -829,6 +897,9 @@ class LaravelPlugin(FrameworkPlugin):
                         self.stats["route_middleware_unresolved"] = self.stats.get("route_middleware_unresolved", 0) + 1
                     attrs = {"name": rt.get("name") or None, "middleware": mws if rt.get("middleware") is not None else None,
                              "uri": rt["full_uri"], "method": verb.upper()}
+                    if rt.get("webhook_client"):
+                        attrs["webhook_client"] = rt["webhook_client"]
+                        attrs["webhook_framework"] = "laravel-webhook-client"
                     if rt.get("scoped"):
                         attrs["scoped"] = True
                     fields = rt.get("binding_fields")
@@ -845,8 +916,11 @@ class LaravelPlugin(FrameworkPlugin):
                             b.add_edge(rid, meth.id, "ROUTES_TO", f, rt["line"], EXACT)
                             # controller module for grouping
                             b.nodes[rid].module = module_of(c.file)
-                        else:
+                        elif not self._cashier_route(c, rid, f, rt["line"]):
                             self.stats["routes_unresolved_action"] += 1
+                        if self._is_cashier(c):
+                            b.nodes[rid].attrs["webhook_framework"] = "laravel-cashier"
+                            b.nodes[rid].attrs["controller"] = c.fqcn
                         igs = for_action(prog, act.get("class"), act.get("method"))
                         if igs:
                             b.nodes[rid].attrs["inline_guards"] = igs
@@ -858,7 +932,95 @@ class LaravelPlugin(FrameworkPlugin):
                             h = prog.find_method(cls, "handle")
                             if h:
                                 b.add_edge(rid, h.id, "USES_MIDDLEWARE", f, rt["line"], RESOLVED, alias=alias)
+        n += self._attribute_routes(aliases)
         self.stats["routes"] = n
+
+    def _is_cashier(self, c) -> bool:
+        if c is None:
+            return False
+        return any(a.endswith("Cashier\\Http\\Controllers\\WebhookController") for a in self.prog.ancestors(c.fqcn))
+
+    def _cashier_route(self, c, rid, f, line) -> bool:
+        """Route points at Cashier's inherited handleWebhook: the handle<Event> methods are the handlers."""
+        if not self._is_cashier(c):
+            return False
+        from ...webhooks import cashier_event
+        linked = False
+        for m in c.methods.values():
+            if cashier_event(m.name):
+                self.b.add_edge(rid, m.id, "ROUTES_TO", f, line, HEURISTIC, how="cashier webhook")
+                linked = True
+        return linked
+
+    def _attribute_routes(self, aliases) -> int:
+        """spatie/laravel-route-attributes: #[Get]/#[Post]/... plus class Prefix and Middleware."""
+        from ..php.inline_guards import for_action
+        b, prog = self.b, self.prog
+        n = 0
+        linked = {(e.src, e.dst) for e in b.edges.values() if e.kind == "ROUTES_TO"}
+        for c in prog.classes.values():
+            if c.fqcn in prog.test_classes:
+                continue
+            class_prefix = _attr_prefixes(c.attributes)
+            class_mw = _attr_middleware(c.attributes)
+            for m in c.methods.values():
+                method_prefix = _attr_prefixes(m.attribute_args)
+                method_mw = _attr_middleware(m.attribute_args)
+                for a in m.attribute_args or []:
+                    spec = _route_attr(a)
+                    if not spec:
+                        continue
+                    methods, uri, name, mw = spec
+                    parts = [p for p in class_prefix + method_prefix + [uri.strip("/")] if p]
+                    full = "/" + "/".join(parts)
+                    mws = []
+                    for item in class_mw + method_mw + mw:
+                        if item not in mws:
+                            mws.append(item)
+                    line = a.get("line") or m.line
+                    igs = for_action(prog, c.fqcn, m.name)
+                    for verb in methods:
+                        key = f"{verb} {full}"
+                        nid = f"route:{key}"
+                        if nid in b.nodes:
+                            node = b.nodes[nid]
+                            prev = [x for x in (node.attrs.get("middleware") or []) if isinstance(x, str)]
+                            merged = list(prev)
+                            for item in mws:
+                                if item not in merged:
+                                    merged.append(item)
+                            if merged:
+                                node.attrs["middleware"] = merged
+                            if name and not node.attrs.get("name"):
+                                node.attrs["name"] = name
+                            node.attrs.setdefault("framework", "laravel-route-attributes")
+                            if igs and not node.attrs.get("inline_guards"):
+                                node.attrs["inline_guards"] = igs
+                                self.stats["inline_guards"] += len(igs)
+                            if (nid, m.id) not in linked:
+                                b.add_edge(nid, m.id, "ROUTES_TO", c.file, line, EXACT)
+                                linked.add((nid, m.id))
+                            rid = nid
+                        else:
+                            attrs = {"name": name, "middleware": mws, "uri": full, "method": verb,
+                                     "framework": "laravel-route-attributes"}
+                            if igs:
+                                attrs["inline_guards"] = igs
+                                self.stats["inline_guards"] += len(igs)
+                            rid = b.add_node("route", key, name=key, file=c.file, line=line, module=module_of(c.file),
+                                             lang="php", entry_kind="http_route", attrs=attrs)
+                            b.add_edge(rid, m.id, "ROUTES_TO", c.file, line, EXACT)
+                            linked.add((rid, m.id))
+                            n += 1
+                        for item in mws:
+                            alias = item.split(":")[0]
+                            cls = aliases.get(alias) or (item if prog.cls(item) else None)
+                            if cls and prog.cls(cls):
+                                h = prog.find_method(cls, "handle")
+                                if h:
+                                    b.add_edge(rid, h.id, "USES_MIDDLEWARE", c.file, line, RESOLVED, alias=alias)
+        self.stats["route_attribute_routes"] = n
+        return n
 
     def _commands_out(self):
         b, prog = self.b, self.prog

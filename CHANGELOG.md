@@ -11,6 +11,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
 ### Added
 
 - Laravel inline guards on `cg routes`: `authorize`, `Gate`, permission checks, a FormRequest `authorize()`, controller middleware, and shared-secret compares are listed as `inline:` and count for `--unguarded`. `--unguarded --strict` keeps route-level guards only. See [docs/php.md](docs/php.md#inline-guards).
+- Webhook receivers (#152 part A): Laravel Cashier `handle<Event>` methods and spatie/laravel-webhook-client profiles / `ProcessWebhookJob` classes; Kotlin `when` and Rust `match` event dispatch; a signature header named by a class or module constant; spatie/laravel-route-attributes `#[Get]` / `#[Post]` (with prefix and middleware) and plugin `router.post("github.webhooks")` registrations. Stored subscription event names, subscriber-URL pairing, `REGISTERS_CALLBACK`, and driver-resolved payment gateways are planned. See [docs/protocols.md](docs/protocols.md#webhook-verification).
 
 ### Fixed
 

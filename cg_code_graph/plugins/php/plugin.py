@@ -79,6 +79,7 @@ class PhpFunc:
     returns_nullable: bool = False
     dead: dict = field(default_factory=dict)   # fact index -> guard evidence, per gate scenario (see gating.py)
     attributes: list = field(default_factory=list)   # PHP 8 attribute names on a method (e.g. PHPUnit\Framework\Attributes\Test)
+    attribute_args: list = field(default_factory=list)  # [{name, args, named, line}] literal attribute arguments
 
 
 @dataclass
@@ -97,6 +98,7 @@ class PhpClass:
     consts: list
     methods: dict  # lower name -> PhpFunc
     cases: list = field(default_factory=list)    # PHP 8.1 enum cases (#84)
+    attributes: list = field(default_factory=list)  # PHP 8 attributes on the class, with literal arguments
 
 
 class ResolveCtx:
@@ -155,13 +157,14 @@ class PhpProgram:
                 pc = PhpClass(fqcn=c["fqcn"], kind=c["kind"], file=f, line=c["line"], end_line=c["end_line"], doc=c.get("doc"),
                               extends=c["extends"], implements=c["implements"], traits=c["traits"], abstract=c.get("abstract", False),
                               props={p["name"]: p for p in c["props"]}, consts=c["consts"], methods={},
-                              cases=c.get("cases") or [])
+                              cases=c.get("cases") or [], attributes=c.get("attributes") or [])
                 for m in c["methods"]:
                     fn = PhpFunc(id=f"method:{pc.fqcn}::{m['name']}", name=m["name"], cls=pc.fqcn, file=f, line=m["line"],
                                  end_line=m["end_line"], doc=m.get("doc"), params=m["params"], returns=m["returns"], facts=m["facts"],
                                  static=m["static"], abstract=m["abstract"], visibility=m["visibility"],
                                  skel=m.get("skel") or [], returns_nullable=m.get("returns_nullable", False))
                     fn.attributes = m.get("attributes") or []
+                    fn.attribute_args = m.get("attribute_args") or []
                     pc.methods[m["name"].lower()] = fn
                     funcs.append(fn)
                 if in_test:

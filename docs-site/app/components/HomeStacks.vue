@@ -2,7 +2,7 @@
 const stacks = [
   {
     title: 'PHP',
-    detail: 'Laravel',
+    detail: 'Laravel (routes, route attributes, middleware, queues, broadcasting, outbound HTTP)',
     icons: [
       { name: 'i-simple-icons-php', label: 'PHP' },
       { name: 'i-simple-icons-laravel', label: 'Laravel' }

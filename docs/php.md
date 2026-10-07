@@ -70,3 +70,16 @@ not an application call.
 
 Symfony HttpClient, `curl_*` and `file_get_contents` are not client endpoints. A host known only at run time is
 kept with `origin_kind` `unknown` and is not matched by host.
+
+## Route attributes
+
+spatie/laravel-route-attributes on a controller are routes, with the same `route:<METHOD> <uri>` nodes as
+`routes/*.php`. `#[Prefix('api')]` and `#[Middleware('api')]` on the class combine with `#[Prefix]` /
+`#[Middleware]` on the method. `#[Get]` / `#[Post]` / `#[Put]` / `#[Patch]` / `#[Delete]` / `#[Options]` /
+`#[Head]` / `#[Any]` / `#[Route]` supply the path, and `name` / `middleware` arguments are the route name and
+extra middleware. The same method and path in `routes/*.php` stays one route. Inline guards on the action
+apply here too.
+`Route::webhooks('payments/hooks', 'payments')` is `POST /payments/hooks` for spatie/laravel-webhook-client
+when that name is in `config/webhook-client.php`. A controller that extends Cashier's webhook controller, or
+a subclass of one, receives one event per `handle<Event>` method
+([Webhook verification](protocols.md#webhook-verification)).

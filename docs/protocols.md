@@ -128,6 +128,21 @@ of calls, and its middleware.
 are never `no_sender`. A signed POST from this repo is a sender of
 `endpoint:webhook:<this project>:<event>`.
 
+Framework conventions (#152):
+
+| convention | receiver |
+|---|---|
+| Laravel Cashier | a controller that extends `Laravel\Cashier\Http\Controllers\WebhookController`, or a subclass of one. `handleCustomerSubscriptionCreated` receives `customer.subscription.created`; `handleInvoicePaymentActionRequired` receives `invoice.payment_action_required` (`heuristic`). The route is verified because Cashier checks the signature before those methods. A class that does not extend that controller is not a Cashier receiver |
+| spatie/laravel-webhook-client | `Route::webhooks('payments/hooks', 'payments')` plus the matching `name` in `config/webhook-client.php`. The job's `handle` and the profile's `shouldProcess` receive the route. Verified when `signing_secret` is set and `signature_validator` is omitted or is `DefaultSignatureValidator`. A custom validator is verified only when that class checks a signature, and the guard is labeled `custom validator`. No validator and no secret stays unverified. A config name that is not in the file is left unbound |
+| spatie/laravel-route-attributes | `#[Prefix]` / `#[Middleware]` on the class combine with the same attributes on the method. `#[Get]` / `#[Post]` / `#[Put]` / `#[Patch]` / `#[Delete]` / `#[Any]` / `#[Route]` are Laravel routes and merge with `routes/*.php` when the method and path already exist. Inline guards apply. See [PHP](php.md#route-attributes) |
+| plugin RPC | `router.post("github.webhooks", handler)` (a dotted literal with no leading slash) is `POST /github.webhooks`. `router.post("/path")` and `router.post("/acme.events")` stay ordinary HTTP routes. See [TypeScript frameworks](ts-frameworks.md#express-koa-fastify-hono-elysia) |
+| Kotlin `when` / Rust `match` | same event literals as `switch` / PHP `match` (`"push" ->`, `"a", "b" ->`, `Some("push") =>`, `"a" \| "b" =>`) when the subject is an event header or event field (`headers["X-GitHub-Event"]`, `event["type"]`, including `.as_str()`). A `when` / `match` on another string is not an event |
+| signature constant | a class or module constant whose value is a signature header counts in that class or module, or where it is imported (`self::NAME`, `\App\Billing\Notifier::NAME`, `import { NAME }`). An unresolved name is not a header |
+
+Cashier builds the method as `handle` plus StudlyCase of the event type after `.` is replaced with `_`. The method name does not record which separator was used. Published Stripe event types are matched back, so `invoice.payment_action_required` is not read as `invoice.payment.action.required`. A `handle<Studly>` method that matches no published type is the Studly words joined with `.`, which can hide underscores.
+
+Still planned: event names held in a stored subscription (`webhook.event_type` read from a row), pairing a sender to a receiver through a subscriber URL, a `REGISTERS_CALLBACK` edge when the app builds its own callback URL and sends it to an external party, and payment-gateway webhooks dispatched through a driver chosen at run time.
+
 ## Protocol index
 
 | protocol | id | matcher | example | not covered |
@@ -135,7 +150,7 @@ are never `no_sender`. A signed POST from this repo is a sender of
 | socketio | `endpoint:socketio:<ns>#<event>` | template | `sio.emit('order:created')` ↔ `@sio.on` / `socket.on` (Py, JS, Nest gateway, Dart, Kotlin, Swift, Rust) | `connect` / `disconnect`; `.svelte` / `.vue`; rooms as endpoints |
 | ws | `route:WS <path>`, client `http:WS <path>` | path | `new WebSocketServer({path})` / Ktor `webSocket` ↔ `new WebSocket(url)` | message names inside the socket; Python and Rust clients; `noServer` path only when the upgrade handler names it |
 | sse | HTTP route, `stream: sse` | path | `text/event-stream` or `@Sse()` ↔ `new EventSource(url)` | SSE `event:` names |
-| webhook | `endpoint:webhook:<provider>:<event>` | exact; hmac/svix scheme is heuristic | `event.type === 'invoice.paid'` receives; svix `eventType` or a signed POST sends | Cashier, stored `webhook.event_type`, Kotlin `when`, Rust `match` |
+| webhook | `endpoint:webhook:<provider>:<event>` | exact; hmac/svix scheme is heuristic | `event.type === 'invoice.paid'` receives; svix `eventType` or a signed POST sends | stored `webhook.event_type`, subscriber-URL pairing, `REGISTERS_CALLBACK`, driver-resolved gateways |
 | worker | `<script>`, `<script>:out`, `service-worker` | exact | `new Worker('./w.ts')` ↔ `self.onmessage` | worker message types, `MessageChannel` |
 | broadcastchannel | `<name>` | exact | `new BroadcastChannel(name).postMessage` | |
 | postmessage | `<type>` or `*` | glob | `postMessage({type})` ↔ `event.data.type ===` | `targetOrigin` is a guard when the handler reads `event.origin` |
