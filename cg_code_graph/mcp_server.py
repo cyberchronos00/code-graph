@@ -58,7 +58,7 @@ class _State(dict):
 
 
 STATE = _State({"db": str(ROOT / "out" / "graph.db"), "root": None, "gates": None, "plans": None,
-                "lock": threading.Lock(), "multi": False, "registry": None, "pool": None,
+                "lock": threading.Lock(), "multi": False, "registry": None,
                 "graph_entry": None, "graph_name": None, "graph_arg": False})
 _MCP_ROOTS: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("cg_mcp_roots", default=None)
 
@@ -552,6 +552,12 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
     pf, pline = _platform(st, platform)
     r = Q.impact(st, method, min_conf=min_confidence, platform=pf)
     if not r["targets"]:
+        dropped = (r.get("platform") or {}).get("targets_not_built") or []
+        if pf and dropped:
+            msg = f"{method} is not built for {pf}: nothing calls it there"
+            if Q.divergence_lists(st, pf, dropped):
+                msg += f"; platform_divergence(target='{pf}') lists references to it that would not build"
+            return "\n".join(pline + [msg])
         return f"no method matches {method!r}; try search() with part of the name"
     _scope(list(r["targets"]) + [c["id"] for c in r["callers"]])
     if pf and set(r["platform"]["targets_not_built"]) == set(r["targets"]):
@@ -562,7 +568,11 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
     if r["overrides"] or r["overridden_by"]:   # the relation, apart from the callers
         _EXTRA.set({"overrides": {k: [{"id": x["id"], "fqn": x["fqn"], "of": x["of"], "edge": x["edge"]} for x in r[k]]
                                   for k in ("overrides", "overridden_by")}})
-    out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", *Q.override_lines(r),
+    via_default = [f"via default argument: {short(d['src'])} @ {at((d['file'] or '?') + ':' + str(d['line']))}"
+                   for d in (r.get("default_arguments") or [])]
+    dropped = (r.get("platform") or {}).get("targets_not_built") or []
+    dropped_line = [f"not built for {pf}: {', '.join(short(t) for t in dropped[:6])}"] if pf and dropped else []
+    out = pline + dropped_line + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", *via_default, *Q.override_lines(r),
                    *([Q.connections_line(r["connections"])] if r.get("connections") else []),
                    f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
     if not r["callers"] and not r["entry_points"]:
@@ -1676,7 +1686,7 @@ def expose_graph_argument() -> None:
 def configure(*, dbs: list[str] | None = None, db_dir: str | None = None, graphs: str | None = None,
               default: str | None = None, single_db: str | None = None) -> None:
     """Install the registry this process will serve. ``single_db`` keeps one-graph behaviour."""
-    from .mcp_graphs import ConnectionPool, GraphError, build_registry
+    from .mcp_graphs import GraphError, build_registry
     if single_db is not None:
         STATE["multi"] = False
         STATE["registry"] = None
@@ -1688,7 +1698,6 @@ def configure(*, dbs: list[str] | None = None, db_dir: str | None = None, graphs
                          default=default, read_config=bool(graphs))
     STATE["multi"] = True
     STATE["registry"] = reg
-    STATE["pool"] = ConnectionPool()
     STATE["db"] = str(Path(reg.entries[0].db).resolve())
     expose_graph_argument()
 
@@ -1724,7 +1733,7 @@ def _install_roots_hook() -> None:
 
 
 def main(argv=None):
-    from .mcp_graphs import ConnectionPool, GraphError, build_registry, default_graphs_path
+    from .mcp_graphs import GraphError, build_registry, default_graphs_path
     ap = argparse.ArgumentParser(prog="cg-mcp")
     ap.add_argument("--db", action="append", default=None,
                     help="graph database (repeatable). NAME=PATH sets the name. A single --db stays one graph")
@@ -1760,7 +1769,6 @@ def main(argv=None):
             raise SystemExit(2) from ex
         STATE["multi"] = True
         STATE["registry"] = reg
-        STATE["pool"] = ConnectionPool()
         STATE["db"] = str(Path(reg.entries[0].db).resolve())
         expose_graph_argument()
     if a.tools:
