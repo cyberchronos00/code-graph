@@ -1,0 +1,1 @@
+{ "name": "recipe-site", "private": true, "type": "module", "dependencies": { "nuxt": "^4.0.0" } }

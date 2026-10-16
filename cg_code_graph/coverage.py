@@ -344,6 +344,9 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
             elif not e["files_complete"] and lang == "typescript" and e.get("unmapped"):
                 e["hint"] = ("files outside the source dirs and test trees were not read: list the directories that hold "
                              "source in .cg.yaml `include` (or a tsconfig.json `include`) and re-index")
+                if (nx := _nuxt_dirs(root)):
+                    # Nuxt: name the dirs that were read, so a layer or module dir outside them is explained (#214)
+                    e["hint"] = f"Nuxt project: the source dirs read are the srcDir plus server/ and shared/ ({nx}); " + e["hint"]
         se = (rep or {}).get("syntax_errors")
         if isinstance(se, list) and se and status not in ("skipped", "not_indexed"):
             # files parsed with syntax errors (#73): error spans and the declarations lost there
@@ -432,6 +435,16 @@ def _ts_not_run(root, with_php: bool) -> tuple[str, str]:
     else:
         hint = "add a tsconfig.json (or jsconfig.json) at the root naming the source files, or index the directory that holds one"
     return reason, hint
+
+
+def _nuxt_dirs(root) -> str | None:
+    """'app/, server/, shared/' for a Nuxt project (the dirs the Nuxt plugin reads), else None."""
+    from .plugins.nuxt.plugin import _CFG_NAMES, find_src_dir, side_dirs
+    r = Path(root)
+    if not any((r / n).exists() for n in _CFG_NAMES):
+        return None
+    src = find_src_dir(r)
+    return ", ".join(["the project root" if src == "." else f"{src}/", *(f"{d}/" for d in side_dirs(r, src))])
 
 
 def _python_unmapped_hint(st: dict) -> str:

@@ -87,6 +87,33 @@ _SCAN_EXTS = ("mts", "cts", "ts", "tsx", "mjs", "cjs", "js", "jsx")
 _CFG_NAMES = ("nuxt.config.ts", "nuxt.config.mts", "nuxt.config.js", "nuxt.config.mjs", "nuxt.config.cjs")
 # kept out of the generated tsconfig: build output, native shells, static assets (cg_code_graph/presets/nuxt.yaml)
 EXCLUDE = sorted(presets.skip_dirs("nuxt"))
+# Nuxt source dirs outside the srcDir: server/ (Nitro: api, routes, middleware, plugins, utils) and the Nuxt 4 shared/
+# dir sit at the root next to app/ (#214)
+SIDE_DIRS = ("server", "shared")
+_SIDE_EXT = re.compile(r"\.(ts|tsx|mts|cts)$")
+_SIDE_SKIP = re.compile(r"\.(test|spec)\.[cm]?[jt]sx?$|\.d\.ts$")
+
+
+def side_dirs(root: Path, src_dir: str) -> list[str]:
+    """Root-level server/ and shared/ of a Nuxt project whose srcDir is not the root (with a root srcDir they are
+    already inside it; Nuxt 3's src/server sits inside a src/ srcDir)."""
+    if src_dir in ("", "."):
+        return []
+    return [d for d in SIDE_DIRS if (root / d).is_dir()]
+
+
+def side_files(root: Path, dirs: list[str]) -> list[str]:
+    """TypeScript files under the side dirs (tests and declarations excluded): roots of a prepared run, whose
+    .nuxt/tsconfig.app.json leaves server/ to Nitro's own tsconfig."""
+    out = []
+    for d in dirs:
+        for f in sorted((root / d).rglob("*")):
+            rel = f.relative_to(root)
+            if any(p in COMMON_SKIP or p in EXCLUDE or p.startswith(".") for p in rel.parts[:-1]):
+                continue
+            if f.is_file() and _SIDE_EXT.search(f.name) and not _SIDE_SKIP.search(f.name):
+                out.append(rel.as_posix())
+    return out
 
 
 def _exports(f: Path, _seen: set | None = None) -> list[tuple[str, str]]:
@@ -861,10 +888,14 @@ class NuxtPlugin(FrameworkPlugin):
                   f"components{'' if (root / 'node_modules').is_dir() else ', no node_modules so Vue/Nuxt built-ins stay unresolved'}",
                   file=sys.stderr)
         cfg["kinds"] = kind_rules(self.src_dir)
-        cfg["src_dirs"] = [self.src_dir]
+        # server/ and shared/ are source dirs too (#214); a prepared run lists their files as roots
+        self.side_dirs = side_dirs(root, self.src_dir)
+        cfg["src_dirs"] = [self.src_dir] + self.side_dirs
+        if tsc and self.side_dirs:
+            cfg["extra_files"] = list(dict.fromkeys([*(cfg.get("extra_files") or []), *side_files(root, self.side_dirs)]))
 
     def contribute(self, project: Project, builder: GraphBuilder, ctx) -> dict:
-        st = {"prepared": self.prepared, "src_dir": self.src_dir, "pages": 0, "layouts": 0, "ui_global": 0,
+        st = {"prepared": self.prepared, "src_dir": self.src_dir, "side_dirs": getattr(self, "side_dirs", []), "pages": 0, "layouts": 0, "ui_global": 0,
               "i18n_keys_used": 0, "i18n_keys_defined": 0}
         if self.generated:
             st["generated_types"] = self.generated

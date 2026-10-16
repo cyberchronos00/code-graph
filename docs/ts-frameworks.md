@@ -139,6 +139,16 @@ and routes carry `base`.
 | markdown pages | `.md` / `.mdx` / `.html` under `pages/` → page. Frontmatter (`---` YAML or `+++` TOML) `layout` → RENDERS. Root-relative Markdown links → NAVIGATES_TO. MDX imports, `<X />` and calls of imported functions |
 | collections | `content.config.ts` / legacy `content/config.ts` → `table` nodes with `attrs.collection`, loader, base and entries. `getCollection` / `getEntry` / `getEntries` (imported from `astro:content`) → READS_TABLE from the calling function or page; `render` → READS_TABLE when the file reads one collection. `reference()` → HAS_RELATION |
 
+## Nuxt
+
+Detect: `nuxt.config.{ts,js,mjs}`. Source dirs are the srcDir (literal `srcDir` in `nuxt.config`, else `app/` in the
+Nuxt 4 layout, `src/`, or the project root) plus the root-level `server/` (Nitro: `api/`, `routes/`, `middleware/`,
+`plugins/`, `utils/`) and `shared/` (Nuxt 4) when the srcDir is not the root. With a root srcDir (the Nuxt 3 default)
+`server/` is already inside it. Files in `server/` and `shared/` are indexed as TypeScript modules with their calls;
+Nitro route handlers are not yet `route:` nodes. Without `.nuxt/` (no `npx nuxi prepare`), cg generates stand-ins for
+the auto-imports and global components. Another directory (a local layer, a module) is read when it is listed in
+`.cg.yaml` `include`.
+
 ## Stored fields
 
 `field:<file>#<Class>.<name>` (`property: stored`) for a non-static class property whose
