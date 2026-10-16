@@ -11,6 +11,7 @@ commands, output and the graph schema; such changes are listed under **Changed**
 ### Changed
 
 - MCP per-graph `tools` (written by `cg install --migrate`) apply to calls. The process lists one set: `--tools` / `CG_MCP_TOOLS` when set, otherwise the union of the graphs' allowlists. A tool omitted from the resolved graph's allowlist returns `tool <name> is not allowed for graph <name>`. A shorter allowlist on one graph does not drop tools the other graphs allow (#200).
+- MCP graph resolution, when several graphs match a path or the working directory and none is a root superset of the others: if exactly one match's roots are only the repo that contains the path, that graph is selected; otherwise the configured default is used when it is one of the matches; otherwise the choice list is unchanged. A shared `backend` directory with `backend` plus `appA+backend` and `appB+backend` selects `backend` (#200).
 
 ## [0.22.0] - 2026-10-16
 
