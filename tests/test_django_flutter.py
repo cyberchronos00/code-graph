@@ -174,7 +174,10 @@ def test_dart_primary_constructors_parse(tmp_path):
 @needs_dart
 def test_link_matches_routes_and_reports_unmatched():
     s = build(True)["link"]
-    assert s["stats"]["call_sites"] == 7 and s["stats"]["call_sites_matched"] == 6
+    # 6 call sites match a route; the 4 in repository methods nothing calls are not live (#180)
+    assert s["stats"]["call_sites"] == 7 and s["stats"]["call_sites_matched"] == 2
+    assert sum(1 for r in s["results"] if r.get("no_live_caller")) == 4
+    assert sum(len(r["calls"]) for r in s["results"] if r["matched"]) == 6
     un = [r["endpoint"] for r in s["results"] if not r["matched"]]
     assert un == ["http:GET {env:API_URL}/api/books/{bookId}/reviews"]
     m = dict(q("combined", "SELECT src, dst FROM edges WHERE kind='MATCHES_ROUTE'"))
