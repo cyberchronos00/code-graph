@@ -68,7 +68,7 @@ def git_head(root: Path) -> str | None:
 
 
 def _valid_name(name: str) -> bool:
-    return bool(name) and all(c.isalnum() or c in "_.-" for c in name)
+    return bool(name) and all(c.isalnum() or c in "_.-+" for c in name)   # `app+api`: a combined graph
 
 
 def parse_db_arg(text: str) -> tuple[str, Path]:

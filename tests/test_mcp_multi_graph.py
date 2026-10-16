@@ -342,3 +342,8 @@ def test_shared_backend_picks_its_own_graph(mcp, tmp_path, monkeypatch):
     monkeypatch.chdir(shared)
     assert mcp.stats().startswith("graph right\n")
 
+
+
+def test_db_arg_name_may_name_a_combined_graph(tmp_path):
+    from cg_code_graph.mcp_graphs import parse_db_arg
+    assert parse_db_arg(f"web+api={tmp_path / 'w.db'}") == ("web+api", tmp_path / "w.db")
