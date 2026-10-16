@@ -412,6 +412,13 @@ def _resolve_direct_one(st: GraphStore, spec: str) -> list[str]:
         return [r["id"] for r in rows]
     if st.q("SELECT 1 FROM nodes WHERE id=? LIMIT 1", (spec,)):  # an exact node id (e.g. method:App\X::y or repo:class:Order)
         return [spec]
+    # `Name@N` / `Name@N@line`: the short form impact, callers and search print for a platform variant
+    # (no kind prefix). The variant is the node whose id ends in `:<spec>`.
+    if ":" not in spec and re.fullmatch(r".+@\d+(?:@\d+)?", spec):
+        rows = st.q("SELECT id FROM nodes WHERE id LIKE ? ESCAPE '\\'", ("%:" + _like(spec),))
+        hit = [r["id"] for r in rows if r["id"].endswith(":" + spec)]
+        if hit:
+            return hit
     if ":" in spec:
         repo, rest = spec.split(":", 1)
         if rest and repo in _linked_repos(st):
