@@ -481,8 +481,10 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
         return f"no method matches {method!r}; try search() with part of the name"
     _scope(list(r["targets"]) + [c["id"] for c in r["callers"]])
     if pf and set(r["platform"]["targets_not_built"]) == set(r["targets"]):
-        return "\n".join(pline + [f"{method} is not built for {pf}: nothing calls it there; platform_divergence(target='{pf}') "
-                                   f"lists references to it that would not build"])
+        msg = f"{method} is not built for {pf}: nothing calls it there"
+        if Q.divergence_lists(st, pf, r["targets"]):
+            msg += f"; platform_divergence(target='{pf}') lists references to it that would not build"
+        return "\n".join(pline + [msg])
     if r["overrides"] or r["overridden_by"]:   # the relation, apart from the callers
         _EXTRA.set({"overrides": {k: [{"id": x["id"], "fqn": x["fqn"], "of": x["of"], "edge": x["edge"]} for x in r[k]]
                                   for k in ("overrides", "overridden_by")}})
