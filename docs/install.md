@@ -84,6 +84,18 @@ cg doctor
 
 It lists the tools it found, whether extractor dependencies are installed, and for each language whether indexing is exact or heuristic. Pass a project path to check that project. The MCP `doctor` tool prints the same report.
 
+### One MCP server for many graphs
+
+`cg install --host cursor` registers one project graph. When several repos would each add their own `cg-*` server, register them once and run a single `cg-mcp`:
+
+```console
+cg install --global --registry --host cursor
+cg install --global --migrate --host cursor          # dry run
+cg install --global --migrate --apply --host cursor  # write ~/.config/cg/graphs.toml and the host config
+```
+
+`--registry` writes one `cg` entry with no `--db`. The server reads `~/.config/cg/graphs.toml` (`CG_GRAPHS` overrides the path). `--migrate` folds existing per-repo `cg-*` entries into that file. It prints the plan and writes nothing until `--apply`, which also saves a `.bak` of each config it changes. Details: [MCP server](mcp.md).
+
 ### JavaScript runtime
 
 TypeScript / JavaScript indexing needs Node.js 20+ or Bun (tested with Bun 1.4.2).

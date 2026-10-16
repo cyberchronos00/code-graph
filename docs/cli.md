@@ -317,16 +317,20 @@ The first selected file in the table order (`AGENTS.md`, else `CLAUDE.md`, else 
 |---|---|
 | `--host H` | `cursor`, `claude`, `claude-desktop`, `vscode`, `windsurf`, `codex`, `gemini`, `zed`, or `all`. Repeatable. Default: hosts already detected for the scope |
 | `--project` | project config (default) |
-| `--global` | user config. Requires `--db` (a global entry serves one graph) |
+| `--global` | user config. Requires `--db` (a global entry serves one graph), unless `--registry` |
 | `--dir ROOT` | project root (default `.`) |
-| `--db DB` | graph file. Project default: `<dir>/out/graph.db` |
+| `--db DB` | graph file. Project default: `<dir>/out/graph.db`. Not used with `--registry` |
+| `--registry` | one global `cg` entry and no `--db`; the server reads the graph registry |
+| `--migrate` | fold per-repo `cg-*` entries into the registry. Dry run unless `--apply` |
+| `--apply` | with `--migrate`, write the registry and the host config (a `.bak` of each) |
+| `--graphs FILE` | registry path for `--migrate` (default `~/.config/cg/graphs.toml`) |
 | `--tools LIST` | allowlist stored as `--tools` ([Choosing tools](mcp.md#choosing-tools)) |
 | `--portable` | `command` `cg-mcp` and `--db out/graph.db`, for a file committed to git |
 | `--uninstall` | remove, on `cg install` |
 | `--dry-run` | print the diff and write nothing |
 | `--yes` | skip the prompt |
 
-Exit 0 on success or when nothing changes. Exit 2 on invalid JSON or TOML (the file is left untouched), a refused host, `--global` without `--db`, or when no host is detected. Exit 1 when the prompt is declined.
+Exit 0 on success or when nothing changes. Exit 2 on invalid JSON or TOML (the file is left untouched), a refused host, `--global` without `--db` and without `--registry`, or when no host is detected. Exit 1 when the prompt is declined. `--migrate` without `--apply` only prints the plan.
 
 `cg uninstall` takes the same flags. See [Install into a host](mcp.md#install-into-a-host).
 
