@@ -897,8 +897,8 @@ def migrate_host(text: str, *, kind: str, path_keys: list[str], host: str, tools
     if server_tools is None and len(distinct) == 1:
         server_tools = next(iter(distinct))
     elif server_tools is None and len(distinct) > 1:
-        for row in rows:
-            row.setdefault("warn", "per-graph tool allowlists differ; stored on each graph, not as one --tools")
+        # one warning for the host, not one per graph
+        rows[0].setdefault("warn", "per-graph tool allowlists differ; stored on each graph, not as one --tools")
     new = text
     if kind == "toml":
         for key in keys:
