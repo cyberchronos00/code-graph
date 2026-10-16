@@ -1348,7 +1348,8 @@ def api_calls(filter: str = "all", max_items: int = 60) -> str:
     a `*` glob (`GET /v1/*/orders*`, `*/staff/*`, `*useOrders*`) on the endpoint, its path, route, controller,
     caller or call-site file. `route:VERB /path` is an exact route match (verb case-insensitive; `:id`, `{id}` and
     `{order}` match one param segment). `route:POST /payments/*` or `route:* /payments` widens it. An unknown
-    route returns `no such route` and the nearest routes."""
+    route returns `no such route` and the nearest routes. A call site with no entry point is marked
+    `(no live caller)` and `filter='dead'` lists matched endpoints with no live call site."""
     st = _st()
     miss = Q.route_failure(st, filter)
     if miss:
