@@ -20,6 +20,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- `node`, `impact` and `callers` accept the `Name@N` and `Name@N@line` variant id they print, with no kind prefix (#203).
+
 - `cg impact` (CLI and MCP, with and without paths) appends the file basename, or the shortest unique suffix, when two entries in one group share a display name (#207).
 
 - `cg install` / `config_path` no longer builds a `Path` for a Windows host on POSIX under Python 3.11 (`NotImplementedError: cannot instantiate 'WindowsPath'`).
