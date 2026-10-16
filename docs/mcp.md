@@ -44,7 +44,7 @@ db = "/abs/workspace.db"
 roots = ["/abs/web", "/abs/api"]
 ```
 
-The `graphs` tool lists name, roots, languages, indexed commit and freshness (`fresh`, `stale` or `unknown`). It is part of `--tools core`. Every other tool takes an optional `graph` name. Omit it and the server resolves, in order: a path in the call, then MCP roots (`roots/list`) or the working directory, then the configured default. If more than one graph still matches, the reply lists the choices and does not guess. Replies from a multi-graph server start with `graph <name>` and the structured result includes `graph`. Databases open on first use and stay in a small LRU, so registered graphs that nobody queries are not opened.
+The `graphs` tool lists name, roots, languages, indexed commit and freshness (`fresh`, `stale` or `unknown`). It is part of `--tools core`. Every other tool takes an optional `graph` name. Omit it and the server resolves, in order: a path in the call, then MCP roots (`roots/list`) or the working directory, then the configured default. If more than one graph still matches, the reply lists the choices and does not guess. Replies from a multi-graph server start with `graph <name>` and the structured result includes `graph`. Each call opens only the database it resolved, so registered graphs that nobody queries are not opened.
 
 `cg install --global --registry` writes one `cg` entry with no `--db`, which reads that registry. `cg install --migrate` prints how existing per-repo `cg-*` entries would fold into the registry; `--apply` writes the registry and the host config and keeps a `.bak` of each file it changes.
 

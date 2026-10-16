@@ -210,3 +210,22 @@ def test_db_dir_and_repeatable_db(mcp, tmp_path, monkeypatch):
     again.configure(dbs=[f"one={folder / 'one.db'}", f"two={folder / 'two.db'}"])
     monkeypatch.chdir(roots[1])
     assert again.stats().startswith("graph two\n")
+
+
+def test_concurrent_calls_keep_their_own_graph(mcp, tmp_path, monkeypatch):
+    """Sync tools run in worker threads: a call must neither see another call's graph nor reuse its connection."""
+    from concurrent.futures import ThreadPoolExecutor
+    dbs = []
+    for i in range(4):
+        root = tmp_path / f"r{i}"
+        db = tmp_path / f"g{i}.db"
+        _db(db, f"project{i}x", root)
+        dbs.append(f"g{i}={db}")
+    monkeypatch.chdir(tmp_path)
+    mcp.configure(dbs=dbs)
+    jobs = [i % 4 for i in range(64)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outs = list(pool.map(lambda i: (i, mcp.stats(graph=f"g{i}")), jobs))
+    for i, text in outs:
+        assert text.startswith(f"graph g{i}\n"), text[:200]
+        assert f"project{i}x" in text and not any(f"project{j}x" in text for j in range(4) if j != i), text[:200]

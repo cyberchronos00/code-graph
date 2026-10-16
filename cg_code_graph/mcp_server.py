@@ -36,9 +36,30 @@ from .core.env import get as cg_env
 from . import query as Q
 
 ROOT = Path(__file__).resolve().parents[1]
-STATE = {"db": str(ROOT / "out" / "graph.db"), "root": None, "gates": None, "plans": None,
-         "lock": threading.Lock(), "multi": False, "registry": None, "pool": None,
-         "graph_entry": None, "graph_name": None, "graph_arg": False}
+# The graph a multi-graph tool call resolved: db / graph_entry / graph_name for this call only. Sync tools run in
+# worker threads, possibly at the same time, so the choice must not live in the shared STATE dict.
+_CALL: contextvars.ContextVar[dict | None] = contextvars.ContextVar("cg_mcp_call_graph", default=None)
+
+
+class _State(dict):
+    """Process state; the per-call graph keys read through _CALL first."""
+
+    def __getitem__(self, key):
+        call = _CALL.get()
+        if call is not None and key in call:
+            return call[key]
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        call = _CALL.get()
+        if call is not None and key in call:
+            return call[key]
+        return super().get(key, default)
+
+
+STATE = _State({"db": str(ROOT / "out" / "graph.db"), "root": None, "gates": None, "plans": None,
+                "lock": threading.Lock(), "multi": False, "registry": None, "pool": None,
+                "graph_entry": None, "graph_name": None, "graph_arg": False})
 _MCP_ROOTS: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("cg_mcp_roots", default=None)
 
 server = MCPServer(
@@ -258,6 +279,14 @@ def _call_paths(fn, args, kwargs) -> list[str]:
 
 def _run(fn, args, kwargs) -> tuple[str, dict]:
     """Run a tool: text reply (repo-relative paths, coverage notes) + its completeness object."""
+    token = _CALL.set(None)
+    try:
+        return _run_call(fn, args, kwargs)
+    finally:
+        _CALL.reset(token)
+
+
+def _run_call(fn, args, kwargs) -> tuple[str, dict]:
     from .coverage import answer_note
     from .mcp_graphs import GraphError, resolve as resolve_graph
     from .plans import PlanError
@@ -271,9 +300,7 @@ def _run(fn, args, kwargs) -> tuple[str, dict]:
                                   cwd=Path.cwd(), mcp_roots=_MCP_ROOTS.get())
         except GraphError as ex:
             return str(ex), {"complete": False, "recorded": False, "languages": {}}
-        STATE["graph_entry"] = entry
-        STATE["graph_name"] = entry.name
-        STATE["db"] = str(Path(entry.db).resolve())
+        _CALL.set({"graph_entry": entry, "graph_name": entry.name, "db": str(Path(entry.db).resolve())})
         named = entry.name
     token, ptoken, xtoken = _SCOPE.set(None), _PF.set(None), _EXTRA.set(None)
     try:
@@ -356,10 +383,7 @@ def named_from(txt: str) -> str | None:
 
 
 def _st() -> GraphStore:
-    entry = STATE.get("graph_entry") if STATE.get("multi") else None
-    pool = STATE.get("pool")
-    if entry is not None and pool is not None:
-        return pool.get(entry)
+    # One store per call, as in single-graph mode: a sqlite connection may not cross worker threads.
     return GraphStore(STATE["db"])
 
 
@@ -1677,7 +1701,7 @@ def _install_roots_hook() -> None:
     async def _call(ctx, params):
         paths: list[str] = []
         try:
-            caps = getattr(ctx.session, "client_capabilities", None)
+            caps = getattr(ctx.session, "client_capabilities", None) if STATE.get("multi") else None
             if caps is not None and getattr(caps, "roots", None) is not None:
                 import warnings
                 with warnings.catch_warnings():
