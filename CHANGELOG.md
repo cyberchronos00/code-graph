@@ -8,6 +8,19 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-10-16
+
+### Changed
+
+- `cg install` (project scope) also writes a short "use cg first" rule for agents: a `<!-- cg:start --> ... <!-- cg:end -->` section in `AGENTS.md` and `.cursor/rules/cg.mdc` with `alwaysApply: true`. The rule says to use `search`, `impact` / `reaches` and `snippet` before grep or opening whole files, and `graphs` when unsure which graph. A re-run replaces only the marked section and keeps the rest of the file. An existing `cg.mdc` without front matter gets the header added once. `cg uninstall` removes the section and deletes a file that held nothing else. `--no-rules` skips it, and `--global` never writes it (#215).
+- cg-mcp's `initialize` instructions are now short and directive (under 600 characters): use cg before grep or opening files, `search` / `impact` / `reaches` / `snippet` / `explore`, `graphs` when unsure, and normal search only for what cg reports as not covered. The previous long reference text is the resource `cg://guide`. Each core tool's description opens with when to use it, and `node` lists the common spec forms.
+
+### Fixed
+
+- Nuxt: the root-level `server/` (Nitro `api/`, `routes/`, `middleware/`, `plugins/`, `utils/`) and `shared/` directories are source dirs next to the srcDir, so their TypeScript files are indexed instead of reported as unmapped in a Nuxt 4 `app/` layout or a Nuxt 3 project with a non-root `srcDir`. This also applies after `nuxi prepare`, whose app tsconfig leaves `server/` out. The Nuxt stats list them as `side_dirs`, and the coverage hint for an unmapped file in a Nuxt project names the dirs that were read (#214).
+- `cg link` no longer reports a call as `external (other origin)` because its base name is a config path such as `{runtimeConfig.SERVER_API_URL}`, `runtimeConfig.public.apiBase` or `VITE_API_BASE_URL`: `server`, `backend`, `public`, `runtime`, `config` and framework prefixes are generic, and camelCase and `_` separate words like `-`, so `ORDERS_API_URL` names an `orders-api` repo. An origin that matched a linked server for another call from the same client is not treated as external (#185).
+- Tests: the Nuxt sample's relink expects 3/6 live call sites, since `placeOrder` has no live caller (#180).
+
 ## [0.23.0] - 2026-10-16
 
 ### Changed
@@ -1653,7 +1666,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.1...HEAD
+[0.23.1]: https://github.com/cyberchronos00/code-graph/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/cyberchronos00/code-graph/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/cyberchronos00/code-graph/compare/v0.21.2...v0.22.0
 [0.21.2]: https://github.com/cyberchronos00/code-graph/compare/v0.21.1...v0.21.2

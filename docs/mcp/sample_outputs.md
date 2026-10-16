@@ -4,9 +4,9 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 
 ## tools/list
 
-- `reaches`: Reverse transitive dependents of one or more targets (union), e.g.
-- `impact`: Reverse callers of a method (Class::method, short or FQN) up to entry points, with the shortest call path
-- `callers`: Direct callers of a function / method / class (one level: CALLS, INSTANTIATES, dispatch and framework edges
+- `reaches`: Use before changing a column, table, connection, env key or symbol: everything that depends on it.
+- `impact`: Use before editing a function: what a change to it affects. Reverse callers of a method (Class::method, short or FQN) up to entry points, with the shortest call path
+- `callers`: Use to see who calls X right now. Direct callers of a function / method / class (one level: CALLS, INSTANTIATES, dispatch and framework edges
 - `siblings`: Code parallel to a symbol that often needs the same change: classes sharing its parent/interface/trait,
 - `resolutions`: Every place a concept (e.g. 'timezone', 'locale') is resolved, deterministically: assignment/return sites
 - `roundtrip`: Heuristic (#88): does a stored property `Type.prop` round-trip through a lossy transform? Each write site with
@@ -21,17 +21,17 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `llm_tools`: LLM tools and MCP primitives (#66): tools offered to a model (OpenAI / Anthropic schema literals, LangChain @tool /
 - `tests_covering`: Tests that exercise a symbol, route or table. DIRECT: the test code itself calls / instantiates it or sends an
 - `affected`: Tests and entry points a change reaches. files are whole repo-relative paths; base is a git
-- `node`: Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
-- `snippet`: Source of one symbol: a `path:start-end` header then the body with line numbers. Resolves a
-- `search`: Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
+- `node`: Use to inspect a symbol without reading its file. Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
+- `snippet`: Use instead of opening a whole file. Source of one symbol: a `path:start-end` header then the body with line numbers. Resolves a
+- `search`: Use first to find a symbol instead of grep. Finds nodes by name / FQN substring (case-insensitive), optionally filtered by kind
 - `explore`: Start here for a broad question ("how does X work") or a spec you have not pinned down.
-- `routes`: Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
+- `routes`: Use for route, auth and middleware questions. Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
 - `doctor`: What this cg installation can index: versions of cg and the tools it uses, whether the Node / PHP / Dart
-- `coverage`: Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
+- `coverage`: Use when cg finds nothing or you need to know if a file is indexed. Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
 - `starters`: Starter queries derived from this graph, each with the tool call to run: the write route without an auth guard
 - `stats`: Index metadata and node/edge counts by kind.
-- `downstream`: Forward dependencies of a node: what it ends up calling/reading. On a combined graph a frontend page goes
-- `path`: Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
+- `downstream`: Use to see what X ends up calling or reading (page -> routes -> tables). Forward dependencies of a node. On a combined graph a frontend page goes
+- `path`: Use to answer "how does A reach B". Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
 - `platforms`: Platform-specific code in this graph: the targets (declared in .cg.yaml platforms.targets, or detected from
 - `platform_divergence`: Where per-platform implementations diverge: VARIANTS (a symbol implemented per platform, by platform files,
 - `api_calls`: Frontend HTTP calls (method + path template) with call sites, request keys and the matched backend
@@ -40,7 +40,8 @@ Server: `code-graph`, DB: combined graph of `examples/bookstore-api` + `examples
 - `plan_validate`: Schema check + does every referenced existing node resolve in the graph (unresolved / ambiguous specs with
 - `plan_check`: Deterministic check of a plan against the real graph. Default reply: a compact summary (counts per section and
 - `plan_baseline`: Fingerprint (sha1 of source lines) every modified target of a plan before implementing it, so
-- `index`: Re-index after editing (static analysis only: never boots the app or touches a database).
+- `index`: Use after editing so later answers see the change. Re-index (static analysis only: never boots the app or touches a database).
+- `graphs`: Use when unsure which graph a question belongs to. Lists the graphs this server can query: name, repo roots, languages, indexed commit and freshness.
 
 ## `stats {}`  (1337 chars)
 
