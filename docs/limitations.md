@@ -24,6 +24,15 @@ One scenario per index ([gate scenarios](configuration.md#gate-scenarios)).
 - Middleware that aborts when a flag is off is not a gate.
 - An edge is gated only when the gated function itself makes the reference.
 
+## Runtime behaviour
+
+cg describes the indexed code. It does not model what a process does at run time. An empty answer is not "this never happens".
+
+- Exception propagation and the HTTP status an exception becomes are out of scope. The graph has no throw / catch edges. Whether an uncaught exception is a 500, a logged warning or a retry depends on the framework handler and the environment. The static substitute is the route and its guards: `cg routes` and [inline guards](php.md#inline-guards). Framework error bodies (validation 422, auth 401, 500 pages) stay absent; see [Link, payload, and guards](#link-payload-and-guards).
+- Whether a scheduler, a queue worker or cron is running is out of scope. Scheduled and queued work is only what the code declares (`schedule` nodes, entry kind `scheduled` or `queue_job`). `cg writers` and `cg reaches` list `entries:` on each writer. See [Readers and writers specs](cli.md#readers-and-writers-specs).
+- Environment-specific config values are out of scope. cg reads declared keys and defaults (`.env.example`, `env()` defaults), not the values a deploy injects. `cg downstream` and `config:` / `env:` specs are the static substitute ([configuration](configuration.md)).
+- Data-dependent branches beyond the indexed gate scenario are out of scope. One scenario per index decides which edges are dead; a value that arrives only at run time stays live. See [Gate scenarios](#gate-scenarios).
+
 ## Index and answers
 
 - A missing toolchain degrades that language: `skipped`, or `heuristic` when the exact indexer is absent. The rest of the index still runs.
