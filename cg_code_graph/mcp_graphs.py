@@ -2,14 +2,13 @@
 
 Entries come from a config file (``~/.config/cg/graphs.toml``, or ``CG_GRAPHS``),
 repeatable ``--db`` / ``--db NAME=PATH``, and ``--db-dir``. A combined graph is one
-entry with several repo roots. Connections open lazily and stay in a small LRU.
+entry with several repo roots. Each call opens its own connection.
 """
 from __future__ import annotations
 
 import os
 import subprocess
 import tomllib
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +25,7 @@ class GraphEntry:
     db: Path
     roots: list[Path] = field(default_factory=list)
     default: bool = False
+    tools: str | None = None
 
     def label(self) -> str:
         roots = ", ".join(str(r) for r in self.roots) or "(no roots)"
@@ -139,7 +139,9 @@ def _entry_from_mapping(name: str, body: dict, default_name: str | None) -> Grap
     if not roots:
         roots = roots_from_db(db)
     is_default = bool(body.get("default")) or name == default_name
-    return GraphEntry(name=name, db=db, roots=roots, default=is_default)
+    tools = body.get("tools")
+    return GraphEntry(name=name, db=db, roots=roots, default=is_default,
+                      tools=str(tools) if isinstance(tools, str) and tools else None)
 
 
 def load_toml(path: Path) -> tuple[list[GraphEntry], str | None]:
@@ -246,6 +248,8 @@ def save_toml(path: Path, entries: list[GraphEntry], default: str | None = None)
         lines.append(f"db = {_toml_str(str(entry.db))}")
         roots = ", ".join(_toml_str(str(r)) for r in entry.roots)
         lines.append(f"roots = [{roots}]")
+        if entry.tools:
+            lines.append(f"tools = {_toml_str(entry.tools)}")
         lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
@@ -291,9 +295,32 @@ def _choice_error(entries: list[GraphEntry]) -> GraphError:
     return GraphError("ambiguous graph: pass graph= one of: " + listed)
 
 
+def _root_set(entry: GraphEntry) -> set[Path]:
+    out = set()
+    for root in entry.roots:
+        try:
+            out.add(root.expanduser().resolve())
+        except OSError:
+            out.add(root)
+    return out
+
+
+def _superset(hits: list[GraphEntry]) -> GraphEntry | None:
+    """When one match's roots contain every other match's roots, that graph is the combined one."""
+    if len(hits) < 2:
+        return None
+    sets = [(e, _root_set(e)) for e in hits]
+    strict = []
+    for entry, roots in sets:
+        if roots and all(other <= roots for other_entry, other in sets) and any(
+                other < roots for other_entry, other in sets if other_entry is not entry):
+            strict.append(entry)
+    return strict[0] if len(strict) == 1 else None
+
+
 def resolve(registry: Registry, *, graph: str | None, paths: list[str],
             cwd: Path | None = None, mcp_roots: list[str] | None = None) -> GraphEntry:
-    """Pick a graph. Never guess when more than one entry matches."""
+    """Pick a graph. Several matches stay an error unless one graph's roots contain the others."""
     by = registry.by_name()
     if graph:
         if graph not in by:
@@ -303,6 +330,9 @@ def resolve(registry: Registry, *, graph: str | None, paths: list[str],
     if len(path_hits) == 1:
         return path_hits[0]
     if len(path_hits) > 1:
+        chosen = _superset(path_hits)
+        if chosen is not None:
+            return chosen
         raise _choice_error(path_hits)
     places: list[str] = []
     if mcp_roots:
@@ -312,44 +342,15 @@ def resolve(registry: Registry, *, graph: str | None, paths: list[str],
     if len(loc_hits) == 1:
         return loc_hits[0]
     if len(loc_hits) > 1:
+        chosen = _superset(loc_hits)
+        if chosen is not None:
+            return chosen
         raise _choice_error(loc_hits)
     if registry.default and registry.default in by:
         return by[registry.default]
     if len(registry.entries) == 1:
         return registry.entries[0]
     raise _choice_error(registry.entries)
-
-
-class ConnectionPool:
-    """Small LRU of open graph connections. Unused graphs are not opened."""
-
-    def __init__(self, cap: int = 4):
-        self.cap = cap
-        self._open: OrderedDict[str, GraphStore] = OrderedDict()
-
-    def get(self, entry: GraphEntry) -> GraphStore:
-        key = str(entry.db.resolve()) if entry.db.exists() else str(entry.db)
-        got = self._open.get(key)
-        if got is not None:
-            self._open.move_to_end(key)
-            return got
-        store = GraphStore(entry.db)
-        self._open[key] = store
-        while len(self._open) > self.cap:
-            _, old = self._open.popitem(last=False)
-            try:
-                old.db.close()
-            except Exception:
-                pass
-        return store
-
-    def close(self) -> None:
-        for store in self._open.values():
-            try:
-                store.db.close()
-            except Exception:
-                pass
-        self._open.clear()
 
 
 def _languages(meta: dict) -> list[str]:
