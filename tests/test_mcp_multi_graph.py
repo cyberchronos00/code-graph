@@ -280,3 +280,30 @@ def test_concurrent_calls_keep_their_own_graph(mcp, tmp_path, monkeypatch):
     for i, text in outs:
         assert text.startswith(f"graph g{i}\n"), text[:200]
         assert f"project{i}x" in text and not any(f"project{j}x" in text for j in range(4) if j != i), text[:200]
+
+
+def test_per_graph_tools_do_not_shrink_the_other_graph(mcp, tmp_path, monkeypatch):
+    import asyncio
+    backend = tmp_path / "backend"
+    web = tmp_path / "web"
+    bdb, wdb = tmp_path / "backend.db", tmp_path / "web.db"
+    _db(bdb, "backend", backend)
+    _db(wdb, "web", web)
+    reg = tmp_path / "graphs.toml"
+    reg.write_text(
+        f'[[graphs]]\nname = "backend"\ndb = "{bdb}"\nroots = ["{backend}"]\ntools = "stats"\n\n'
+        f'[[graphs]]\nname = "web"\ndb = "{wdb}"\nroots = ["{web}"]\ntools = "coverage"\n',
+        encoding="utf-8")
+    before = {t.name for t in asyncio.run(mcp.server.list_tools())}
+    mcp.configure(graphs=str(reg))
+    listed = {t.name for t in asyncio.run(mcp.server.list_tools())}
+    assert listed == {"stats", "coverage"}
+    assert "impact" in before and "impact" not in listed
+    monkeypatch.chdir(backend)
+    assert mcp.stats().startswith("graph backend\n")
+    denied = mcp.coverage()
+    assert denied == "tool coverage is not allowed for graph backend"
+    monkeypatch.chdir(web)
+    assert "tool stats is not allowed for graph web" == mcp.stats()
+    assert mcp.coverage().startswith("graph web\n")
+
