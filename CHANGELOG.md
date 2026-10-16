@@ -20,6 +20,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- `cg impact` (CLI and MCP, with and without paths) appends the file basename, or the shortest unique suffix, when two entries in one group share a display name (#207).
+
 - `cg install` / `config_path` no longer builds a `Path` for a Windows host on POSIX under Python 3.11 (`NotImplementedError: cannot instantiate 'WindowsPath'`).
 
 ## [0.21.1] - 2026-10-07

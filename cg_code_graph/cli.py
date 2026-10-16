@@ -75,6 +75,20 @@ def _add_install_parser(sub, uninstall: bool):
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
 
 
+def _impact_labels(rows: list[dict], name_of, group_of) -> list[str]:
+    """Display names for one impact listing. Same-name rows in one group gain a file suffix."""
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for i, row in enumerate(rows):
+        groups[group_of(row)].append(i)
+    labels = [name_of(row) for row in rows]
+    for idxs in groups.values():
+        named = Q.disambiguated([labels[i] for i in idxs], [rows[i].get("file") for i in idxs])
+        for i, lab in zip(idxs, named):
+            labels[i] = lab
+    return labels
+
+
 def main(argv=None):
     from . import __version__
     ap = argparse.ArgumentParser(prog="cg")
@@ -676,13 +690,15 @@ def main(argv=None):
         if not res["callers"] and not res["entry_points"]:
             print(Q.explain_no_callers(st, a.spec, res["targets"], a.min_confidence)); return
         print(f"callers (transitive): {len(res['callers'])}")
-        for c in res["callers"]:
+        caller_names = _impact_labels(res["callers"], lambda c: c.get("fqn") or c["id"], lambda c: c.get("module") or c.get("kind"))
+        for c, nm in zip(res["callers"], caller_names):
             loc = f"  @ {c['file']}:{c['line']}" if Q.NATIVE_FILE_RE.search(c.get("file") or "") else ""
-            print(f"  d={c['depth']} [{c['module'] or c['kind']}] {c['fqn']}{loc}{Q.caller_label(c)}")
+            print(f"  d={c['depth']} [{c['module'] or c['kind']}] {nm}{loc}{Q.caller_label(c)}")
         print(f"entry points: {len(res['entry_points'])}")
-        for e in res["entry_points"]:
+        entry_names = _impact_labels(res["entry_points"], lambda e: e["name"], lambda e: e.get("entry_kind"))
+        for e, nm0 in zip(res["entry_points"], entry_names):
             native = Q.NATIVE_FILE_RE.search(e.get("file") or "")
-            nm = f"{e.get('fqn') or e['name']}  @ {e['file']}:{e['line']}" if native else e["name"]
+            nm = f"{e.get('fqn') or e['name']}  @ {e['file']}:{e['line']}" if native else nm0
             print(f"  {e['entry_kind']:16} {nm}  conf={e['path_confidence']}{Q.CANDIDATE_LABEL if e.get('candidate') else ''}"
                   f"{Q.generated_label(e)}{Q.platform_label(e)}")
             if not a.no_paths:

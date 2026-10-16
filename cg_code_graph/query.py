@@ -1176,6 +1176,34 @@ CANDIDATE_NOTE = ("(candidate): through a call whose receiver type is unknown, b
                   "selector; it may reach a same-name sibling instead")
 
 
+def disambiguated(names: list[str], files: list[str | None]) -> list[str]:
+    """When two entries in one group share a display name, append the file basename, or the shortest unique
+    path suffix when the basenames also collide."""
+    groups: dict[str, list[int]] = defaultdict(list)
+    for i, n in enumerate(names):
+        groups[n].append(i)
+    out = list(names)
+    for idxs in groups.values():
+        if len(idxs) < 2:
+            continue
+        suffixes = _unique_suffixes([files[i] or "" for i in idxs])
+        for i, s in zip(idxs, suffixes):
+            if s:
+                out[i] = f"{out[i]} ({s})"
+    return out
+
+
+def _unique_suffixes(files: list[str]) -> list[str]:
+    parts = [tuple(p for p in f.replace("\\", "/").split("/") if p) for f in files]
+    limit = max((len(p) for p in parts), default=1)
+    depth = 1
+    while True:
+        labels = ["/".join(p[-depth:]) if p else "" for p in parts]
+        if len(labels) == len(set(labels)) or depth >= limit:
+            return labels
+        depth += 1
+
+
 def caller_label(c: dict) -> str:
     """'' for a call; '  (ref: collection)' when the caller holds a reference to the function instead of calling it;
     '  (didSet)' when the call sits in that accessor of a property; plus the generated-file label of a caller in a generated file."""
