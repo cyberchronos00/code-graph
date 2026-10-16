@@ -466,7 +466,8 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
 
 
 @tool
-def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, platform: str | None = None) -> str:
+def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, platform: str | None = None,
+           paths: bool = True) -> str:
     """Reverse callers of a method (Class::method, short or FQN) up to entry points, with the shortest call path
     from each entry point.
     platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
@@ -496,11 +497,25 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
     n = 0
     for k in sorted(byk):
         out.append(f"\n## {k} ({len(byk[k])})")
-        for e in byk[k]:
+        labels = Q.disambiguated([_ename(e) for e in byk[k]], [e.get("file") for e in byk[k]])
+        for e, lab in zip(byk[k], labels):
             if n >= max_items:
                 break
             n += 1
-            out.append(f"  {_ename(e)}{Q.CANDIDATE_LABEL if e.get('candidate') else ''}{Q.platform_label(e)}  {fmt_path(e['path'])}")
+            hop = f"  {fmt_path(e['path'])}" if paths else ""
+            out.append(f"  {lab}{Q.CANDIDATE_LABEL if e.get('candidate') else ''}{Q.platform_label(e)}{hop}")
+    bymod = defaultdict(list)
+    for c in r["callers"]:
+        bymod[c.get("module") or "?"].append(c)
+    dup_lines = []
+    for mod in sorted(bymod):
+        cs = bymod[mod]
+        names = [c.get("fqn") or short(c["id"]) for c in cs]
+        labs = Q.disambiguated(names, [c.get("file") for c in cs])
+        if labs != names:
+            dup_lines.append(f"[{mod}] " + ", ".join(labs))
+    if dup_lines:
+        out.append("same name in one module: " + "; ".join(dup_lines))
     mods = defaultdict(int)
     for c in r["callers"]:
         mods[c.get("module") or "?"] += 1
