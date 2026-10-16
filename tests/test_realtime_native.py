@@ -18,8 +18,11 @@ FX = ROOT / "tests" / "sio_native_fixture"
 
 
 def _require_toolchain(cmd: str) -> None:
+    if cmd == "dart":
+        from cg_code_graph.plugins.dart.plugin import find_dart
+        cmd = find_dart() or "dart"   # $DART or a user-directory SDK, as the extractor finds it
     if shutil.which(cmd) is None:
-        pytest.skip(f"{cmd} not found")
+        pytest.skip(f"{Path(cmd).name} not found")
     try:
         r = subprocess.run([cmd, "--version"], capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired) as ex:
@@ -30,8 +33,8 @@ def _require_toolchain(cmd: str) -> None:
 
 @pytest.fixture(scope="module")
 def db(tmp_path_factory):
-    for cmd in ("dart", "swift", "cargo"):
-        _require_toolchain(cmd)
+    # only the Dart extractor needs a toolchain here; Swift and Rust run on tree-sitter (heuristic mode)
+    _require_toolchain("dart")
     p = tmp_path_factory.mktemp("sion") / "x.db"
     st = index_project(FX, p, "sio-native")
     assert st["realtime_native"]["socketio_receivers"] == 10 and st["realtime_native"]["socketio_sends"] == 11
