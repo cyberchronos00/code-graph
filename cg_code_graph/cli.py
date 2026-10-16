@@ -73,6 +73,13 @@ def _add_install_parser(sub, uninstall: bool):
     p.add_argument("--uninstall", action="store_true", help="remove the entry instead of writing it")
     p.add_argument("--dry-run", action="store_true", help="print the exact changes and write nothing")
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    if not uninstall:
+        p.add_argument("--registry", action="store_true",
+                       help="global single entry: cg-mcp with no --db; graphs come from the registry")
+        p.add_argument("--migrate", action="store_true",
+                       help="fold per-repo cg-* host entries into the graph registry (dry run unless --apply)")
+        p.add_argument("--apply", action="store_true", help="with --migrate, write the registry and the host config")
+        p.add_argument("--graphs", help="registry file for --migrate (default: ~/.config/cg/graphs.toml)")
 
 
 def _impact_labels(rows: list[dict], name_of, group_of) -> list[str]:
@@ -506,9 +513,14 @@ def main(argv=None):
                       mcp_file=a.mcp_file, dry_run=a.dry_run, assume_yes=a.yes)
     if a.cmd in ("install", "uninstall"):
         from .mcp_install import run as run_install
+        registry = bool(getattr(a, "registry", False))
+        migrate = bool(getattr(a, "migrate", False))
+        if (registry or migrate) and not a.project:
+            a.glob = True
         return run_install(a.host, scope="global" if a.glob else "project", root=a.dir, db=a.db,
                            tools=a.tools, portable=a.portable, remove=a.cmd == "uninstall" or a.uninstall,
-                           dry_run=a.dry_run, assume_yes=a.yes)
+                           dry_run=a.dry_run, assume_yes=a.yes, registry=registry, migrate=migrate,
+                           apply=bool(getattr(a, "apply", False)), graphs=getattr(a, "graphs", None))
     if a.cmd == "hooks":
         from . import hooks as HK
         return HK.run(a.action, root=a.dir, db=a.db, dry_run=a.dry_run, assume_yes=a.yes)

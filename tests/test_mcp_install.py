@@ -377,7 +377,7 @@ def test_tool_allowlist(capsys):
     before = [t.name for t in asyncio.run(M.server.list_tools())]
     assert "explore" in before and "affected" in before
     core = {"explore", "search", "node", "snippet", "impact", "reaches", "callers", "routes",
-            "downstream", "path", "coverage", "index"}
+            "downstream", "path", "coverage", "index", "graphs"}
     try:
         assert M.apply_tool_allowlist("core") == [n for n in before if n in core]
         assert {t.name for t in asyncio.run(M.server.list_tools())} == core

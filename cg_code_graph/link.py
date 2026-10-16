@@ -497,10 +497,23 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
     for name, path, _role in repos:
         got = for_graph(GraphStore(path))
         cov.update({name: next(iter(got.values()))} if len(got) == 1 else got)
+    commits = {}
+    for name, path, _role in repos:
+        try:
+            member_st = GraphStore(path)
+            try:
+                member = member_st.meta()
+            finally:
+                member_st.db.close()
+        except Exception:
+            member = {}
+        if member.get("commit"):
+            commits[name] = member["commit"]
     store.set_meta(project="+".join(names), stats=stats, repos=names, coverage=cov,
                    sources={name: str(Path(path).resolve()) for name, path, _role in repos},
                    repo_roles={name: role for name, _path, role in repos}, link_clients=clients, link_allow=allow,
-                   indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()))
+                   indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+                   **({"commit": commits} if commits else {}))
     db.close()
     return {"stats": stats, "results": results, "payload_issues": issues, "uncalled_routes": uncalled,
             "webhook_subscriptions": subscriptions, "external_callbacks": callbacks}

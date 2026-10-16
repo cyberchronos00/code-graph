@@ -1,0 +1,212 @@
+"""One cg-mcp server, many graphs (issue #200)."""
+import importlib
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from cg_code_graph.core.store import GraphStore
+
+
+@pytest.fixture
+def mcp():
+    from cg_code_graph import mcp_server as M
+    yield M
+    importlib.reload(M)
+
+
+def _db(path: Path, project: str, root: Path, commit: str | None = None, languages=None) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    st = GraphStore.create(path)
+    meta = {"project": project, "root": str(root), "languages": languages or ["python"], "stats": {}}
+    if commit:
+        meta["commit"] = commit
+    st.set_meta(**meta)
+    st.db.close()
+
+
+def _git(repo: Path, *args):
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                          capture_output=True, text=True, timeout=20)
+
+
+def test_single_db_has_no_graph_field(mcp, tmp_path, monkeypatch):
+    root = tmp_path / "only"
+    db = tmp_path / "only.db"
+    _db(db, "only", root)
+    monkeypatch.chdir(root)
+    mcp.configure(single_db=str(db))
+    import asyncio
+    tools = {t.name: t for t in asyncio.run(mcp.server.list_tools())}
+    assert "graph" not in (tools["stats"].input_schema.get("properties") or {})
+    text = mcp.stats()
+    assert "only" in text and not text.startswith("graph ")
+    assert "graph" not in mcp.stats.structured()
+
+
+def test_ten_graphs_one_tool_set_and_resolution(mcp, tmp_path, monkeypatch):
+    import asyncio
+    entries = []
+    for i in range(10):
+        root = tmp_path / f"repo{i}"
+        db = tmp_path / f"g{i}.db"
+        _db(db, f"proj{i}", root, commit=f"{i:040x}", languages=["python"] if i % 2 == 0 else ["php"])
+        (root / "src").mkdir()
+        (root / "src" / "a.py").write_text(f"def f{i}():\n    return {i}\n", encoding="utf-8")
+        entries.append((f"g{i}", db, root))
+    reg = tmp_path / "graphs.toml"
+    lines = ["default = \"g3\"", ""]
+    for name, db, root in entries:
+        lines += ["[[graphs]]", f'name = "{name}"', f'db = "{db}"', f'roots = ["{root}"]', ""]
+    reg.write_text("\n".join(lines), encoding="utf-8")
+    before = [t.name for t in asyncio.run(mcp.server.list_tools())]
+    mcp.configure(graphs=str(reg))
+    names = [t.name for t in asyncio.run(mcp.server.list_tools())]
+    assert len(names) == len(set(names)) == len(before)
+    assert "graphs" in names
+    props = {t.name: t for t in asyncio.run(mcp.server.list_tools())}["stats"].input_schema["properties"]
+    assert "graph" in props
+    listed = mcp.graphs()
+    for name, _dbp, _root in entries:
+        assert name in listed
+    assert "languages: python" in listed and "languages: php" in listed
+    assert "freshness:" in listed and "commit:" in listed
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(entries[1][2])
+    assert mcp.stats().startswith("graph g1\n")
+    assert mcp.stats.structured()["graph"] == "g1"
+
+    monkeypatch.chdir(outside)
+    via_path = mcp.coverage(path=str(entries[4][2] / "src" / "a.py"))
+    assert via_path.startswith("graph g4\n")
+
+    token = mcp._MCP_ROOTS.set([str(entries[6][2])])
+    try:
+        assert mcp.stats().startswith("graph g6\n")
+    finally:
+        mcp._MCP_ROOTS.reset(token)
+
+    assert mcp.stats().startswith("graph g3\n")  # configured default, cwd matches nothing
+
+    for name, _dbp, root in entries:
+        assert mcp.stats(graph=name).startswith(f"graph {name}\n")
+        assert f"proj{name[1:]}" in mcp.stats(graph=name)
+    assert mcp.stats(graph="g0").startswith("graph g0\n")
+    assert "unknown graph 'nope'" in mcp.stats(graph="nope")
+
+    shared = tmp_path / "shared"
+    left, right = tmp_path / "left.db", tmp_path / "right.db"
+    _db(left, "left", shared)
+    _db(right, "right", shared)
+    overlap = tmp_path / "overlap.toml"
+    overlap.write_text(
+        f'[[graphs]]\nname = "left"\ndb = "{left}"\nroots = ["{shared}"]\n\n'
+        f'[[graphs]]\nname = "right"\ndb = "{right}"\nroots = ["{shared}"]\n',
+        encoding="utf-8")
+    mcp.configure(graphs=str(overlap))
+    monkeypatch.chdir(shared)
+    err = mcp.stats()
+    assert err.startswith("ambiguous graph:")
+    assert "left" in err and "right" in err
+
+    kept = mcp.apply_tool_allowlist("core")
+    assert "graphs" in kept and "attack_surface" not in kept
+
+
+def test_freshness_follows_head(mcp, tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True, text=True)
+    (repo / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+    assert _git(repo, "add", "a.py").returncode == 0
+    assert _git(repo, "commit", "-m", "init").returncode == 0
+    head = _git(repo, "rev-parse", "HEAD")
+    assert head.returncode == 0
+    db = tmp_path / "g.db"
+    _db(db, "repo", repo, commit=head.stdout.strip())
+    reg = tmp_path / "graphs.toml"
+    reg.write_text(f'default = "repo"\n\n[[graphs]]\nname = "repo"\ndb = "{db}"\nroots = ["{repo}"]\n', encoding="utf-8")
+    mcp.configure(graphs=str(reg))
+    assert "freshness: fresh" in mcp.graphs()
+    (repo / "a.py").write_text("def a():\n    return 2\n", encoding="utf-8")
+    assert _git(repo, "add", "a.py").returncode == 0
+    assert _git(repo, "commit", "-m", "edit").returncode == 0
+    assert "freshness: stale" in mcp.graphs()
+
+
+def test_migrate_dry_run_and_apply(tmp_path, monkeypatch, capsys):
+    from cg_code_graph.cli import main
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    alpha, beta = tmp_path / "alpha", tmp_path / "beta"
+    db_a, db_b = tmp_path / "alpha.db", tmp_path / "beta.db"
+    _db(db_a, "alpha", alpha)
+    _db(db_b, "beta", beta)
+    cursor = home / ".cursor" / "mcp.json"
+    cursor.parent.mkdir(parents=True)
+    cursor.write_text(json.dumps({"mcpServers": {
+        "cg-alpha": {"type": "stdio", "command": "cg-mcp", "args": ["--db", str(db_a), "--root", str(alpha)]},
+        "cg-beta": {"type": "stdio", "command": "cg-mcp", "args": ["--db", str(db_b), "--root", str(beta)]},
+        "other": {"command": "keep", "args": []},
+    }}), encoding="utf-8")
+    graphs = tmp_path / "graphs.toml"
+    rc = main(["install", "--host", "cursor", "--migrate", "--graphs", str(graphs)])
+    out = capsys.readouterr().out
+    assert rc == 0 and "dry run" in out and "alpha" in out and "beta" in out
+    assert not graphs.exists()
+    assert "cg-alpha" in cursor.read_text()
+    rc = main(["install", "--host", "cursor", "--migrate", "--apply", "--graphs", str(graphs)])
+    out = capsys.readouterr().out
+    assert rc == 0 and "wrote" in out
+    assert graphs.is_file() and (cursor.with_name("mcp.json.bak")).is_file()
+    data = json.loads(cursor.read_text())
+    assert "cg-alpha" not in data["mcpServers"] and "cg-beta" not in data["mcpServers"]
+    assert data["mcpServers"]["other"]["command"] == "keep"
+    args = data["mcpServers"]["cg"]["args"]
+    assert "--db" not in args and "--root" not in args
+    body = graphs.read_text()
+    assert 'name = "alpha"' in body and 'name = "beta"' in body and str(alpha) in body
+
+
+def test_registry_install_omits_db(tmp_path, monkeypatch, capsys):
+    from cg_code_graph.cli import main
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    rc = main(["install", "--host", "cursor", "--registry", "--yes"])
+    assert rc == 0
+    data = json.loads((home / ".cursor" / "mcp.json").read_text())
+    assert "--db" not in data["mcpServers"]["cg"]["args"]
+    assert "--root" not in data["mcpServers"]["cg"]["args"]
+
+
+def test_db_dir_and_repeatable_db(mcp, tmp_path, monkeypatch):
+    folder = tmp_path / "dbs"
+    folder.mkdir()
+    roots = []
+    for name in ("one", "two"):
+        root = tmp_path / name
+        _db(folder / f"{name}.db", name, root)
+        roots.append(root)
+    monkeypatch.chdir(roots[0])
+    mcp.configure(db_dir=str(folder))
+    assert mcp.stats().startswith("graph one\n")
+    mcp2_db = tmp_path / "extra.db"
+    _db(mcp2_db, "extra", tmp_path / "extra")
+    # a second configure replaces the registry
+    importlib.reload(mcp)
+    from cg_code_graph import mcp_server as again
+    again.configure(dbs=[f"one={folder / 'one.db'}", f"two={folder / 'two.db'}"])
+    monkeypatch.chdir(roots[1])
+    assert again.stats().startswith("graph two\n")

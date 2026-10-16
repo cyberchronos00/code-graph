@@ -223,8 +223,12 @@ def location_label(host: str, scope: str, root: Path) -> str:
     return "~/" + rel.as_posix() + "/"
 
 
-def build_entry(host: str, scope: str, root: Path, db: Path | None, tools: str | None, portable: bool) -> dict:
-    if portable:
+def build_entry(host: str, scope: str, root: Path, db: Path | None, tools: str | None, portable: bool,
+                registry: bool = False) -> dict:
+    if registry:
+        cmd = server_command()
+        command, args = cmd[0], list(cmd[1:])
+    elif portable:
         command, args = "cg-mcp", ["--db", "out/graph.db"]
     else:
         cmd = server_command()
@@ -663,11 +667,11 @@ def _kind(host: str) -> str:
 
 
 def iter_plans(hosts: list[str], *, scope: str, root: Path, db: Path | None, tools: str | None,
-               portable: bool, remove: bool) -> list[dict]:
+               portable: bool, remove: bool, registry: bool = False) -> list[dict]:
     plans = []
     for host in hosts:
         if host == "claude" and scope == "global":
-            plans.append(_claude_plan(root, db, tools, portable, remove))
+            plans.append(_claude_plan(root, db, tools, portable, remove, registry=registry))
             continue
         try:
             path = config_path(host, scope, root)
@@ -677,7 +681,7 @@ def iter_plans(hosts: list[str], *, scope: str, root: Path, db: Path | None, too
             continue
         entry = None
         if not remove:
-            entry = build_entry(host, scope, root, db, tools, portable)
+            entry = build_entry(host, scope, root, db, tools, portable, registry=registry)
         # Codex stores the entry under [mcp_servers.cg], not the JSON key mcpServers.
         keys = ["mcp_servers"] if host == "codex" else [container_key(host, scope)]
         plan = plan_file(path, kind=_kind(host), path_keys=keys, entry=entry,
@@ -692,10 +696,10 @@ def _claude_user_file() -> Path:
     return _home() / ".claude.json"
 
 
-def _claude_entry(remove: bool, root: Path, db, tools, portable):
+def _claude_entry(remove: bool, root: Path, db, tools, portable, registry: bool = False):
     if remove:
         return None
-    return build_entry("claude", "global", root, db, tools, portable)
+    return build_entry("claude", "global", root, db, tools, portable, registry=registry)
 
 
 def _read_claude_cg():
@@ -712,8 +716,8 @@ def _read_claude_cg():
     return None, True
 
 
-def _claude_plan(root, db, tools, portable, remove) -> dict:
-    entry = _claude_entry(remove, root, db, tools, portable)
+def _claude_plan(root, db, tools, portable, remove, registry: bool = False) -> dict:
+    entry = _claude_entry(remove, root, db, tools, portable, registry=registry)
     current, present = _read_claude_cg()
     path = str(_claude_user_file())
     base = {"path": path, "kind": "mcp", "action": "noop", "old": "", "new": "",
@@ -804,11 +808,169 @@ def _run_claude(plan: dict, dry_run: bool, out) -> str | None:
     return None
 
 
+def _per_repo_key(key: str) -> bool:
+    return key.startswith("cg-") or key.startswith("cg_")
+
+
+def _arg_value(args, flag: str) -> str | None:
+    if not isinstance(args, (list, tuple)):
+        return None
+    for i, item in enumerate(args):
+        if item == flag and i + 1 < len(args):
+            return str(args[i + 1])
+    return None
+
+
+def _graph_name(key: str, db: str) -> str:
+    if key.startswith("cg-") or key.startswith("cg_"):
+        return key[3:]
+    stem = Path(db).stem
+    return stem or key
+
+
+def migrate_host(text: str, *, kind: str, path_keys: list[str], host: str, tools: str | None) -> tuple[str, list, str | None]:
+    """Fold per-repo ``cg-*`` entries into registry rows and one ``cg`` server entry.
+
+    Returns the rewritten config text, graph rows ``{name, db, roots}``, and an error.
+    """
+    from .mcp_graphs import roots_from_db
+    try:
+        data = _parse(text, kind)
+    except Exception as ex:  # noqa: BLE001
+        return text, [], f"invalid {kind}: {ex}"
+    container = data
+    for key in path_keys:
+        if not isinstance(container, dict):
+            return text, [], f"missing {'.'.join(path_keys)}"
+        container = container.get(key) or {}
+    if not isinstance(container, dict):
+        return text, [], "server table is not an object"
+    rows = []
+    keys = []
+    for key, entry in container.items():
+        if not _per_repo_key(str(key)) or not is_ours(entry):
+            continue
+        db = _arg_value(entry.get("args"), "--db")
+        if not db:
+            continue
+        root = _arg_value(entry.get("args"), "--root")
+        roots = [root] if root else [str(p) for p in roots_from_db(Path(db))]
+        rows.append({"name": _graph_name(str(key), db), "db": str(Path(db).expanduser()), "roots": roots})
+        keys.append(str(key))
+    if not rows:
+        return text, [], None
+    new = text
+    if kind == "toml":
+        for key in keys:
+            new = remove_table(new, "mcp_servers." + key)
+        try:
+            new = set_cg(new, build_entry(host, "global", Path("."), None, tools, False, registry=True))
+        except Exception as ex:  # noqa: BLE001
+            return text, rows, str(ex)
+        return new, rows, None
+    for key in keys:
+        new = remove_member(new, path_keys, key)
+    entry = build_entry(host, "global", Path("."), None, tools, False, registry=True)
+    try:
+        new = set_member(new, path_keys, "cg", entry)
+    except Exception as ex:  # noqa: BLE001
+        return text, rows, str(ex)
+    return new, rows, None
+
+
+def run_migrate(hosts: list[str] | None, *, scope: str, root: str, tools: str | None, graphs: str | None,
+                apply: bool, out=print) -> int:
+    """Dry-run unless ``apply``. Writes the registry and host config, keeping a backup."""
+    import shutil
+    from .mcp_graphs import GraphEntry, default_graphs_path, load_toml, save_toml
+    rootp = Path(root).resolve()
+    if not hosts:
+        hosts = detected_hosts(scope, rootp)
+        if not hosts:
+            out("no MCP host detected; pass --host " + " | ".join((*HOSTS, "all")))
+            return 2
+    expanded: list[str] = []
+    for host in hosts:
+        if host == "all":
+            for name in HOSTS:
+                if name not in expanded:
+                    expanded.append(name)
+        elif host not in expanded:
+            expanded.append(host)
+    dest = Path(graphs).expanduser() if graphs else default_graphs_path()
+    collected: list[GraphEntry] = []
+    plans = []
+    for host in expanded:
+        if host == "claude" and scope == "global":
+            out(f"skip {host}: user scope is managed by the claude CLI")
+            continue
+        try:
+            path = config_path(host, scope, rootp)
+        except InstallError as ex:
+            out(str(ex))
+            return 2
+        if not path.is_file():
+            out(f"{host}: no config at {path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        kind = _kind(host)
+        path_keys = [] if kind == "toml" else [container_key(host, scope)]
+        new, rows, err = migrate_host(text, kind=kind, path_keys=path_keys, host=host, tools=tools)
+        if err:
+            out(f"{host}: {err}")
+            return 2
+        if not rows:
+            out(f"{host}: no per-repo cg-* entries")
+            continue
+        for row in rows:
+            out(f"registry + {row['name']} db={row['db']} roots={', '.join(row['roots']) or '(from the graph)'}")
+            collected.append(GraphEntry(row["name"], Path(row["db"]), [Path(r) for r in row["roots"] if r]))
+        out(f"{host}: replace {', '.join('cg-' + r['name'] if not r['name'].startswith('cg') else r['name'] for r in rows)} "
+            f"with one cg entry in {path}")
+        plans.append((path, new))
+    if not collected:
+        out("nothing to migrate")
+        return 0
+    existing: list[GraphEntry] = []
+    file_default = None
+    if dest.is_file():
+        try:
+            existing, file_default = load_toml(dest)
+        except Exception as ex:  # noqa: BLE001
+            out(f"cannot read {dest}: {ex}")
+            return 2
+    by = {e.name: e for e in existing}
+    for entry in collected:
+        by[entry.name] = entry
+    merged = list(by.values())
+    out(f"registry file: {dest} ({len(merged)} graph(s))")
+    if not apply:
+        out("(dry run: nothing written)")
+        return 0
+    if dest.exists():
+        backup = dest.with_name(dest.name + ".bak")
+        shutil.copy2(dest, backup)
+        out(f"backup {backup}")
+    save_toml(dest, merged, file_default)
+    out(f"wrote {dest}")
+    for path, new in plans:
+        backup = path.with_name(path.name + ".bak")
+        shutil.copy2(path, backup)
+        path.write_text(new, encoding="utf-8")
+        out(f"backup {backup}")
+        out(f"wrote {path}")
+    return 0
+
+
 def run(hosts: list[str] | None, *, scope: str, root: str = ".", db: str | None = None,
         tools: str | None = None, portable: bool = False, remove: bool = False,
-        dry_run: bool = False, assume_yes: bool = False, input_fn=input, out=print) -> int:
+        dry_run: bool = False, assume_yes: bool = False, input_fn=input, out=print,
+        registry: bool = False, migrate: bool = False, apply: bool = False,
+        graphs: str | None = None) -> int:
+    if migrate:
+        return run_migrate(hosts, scope=scope, root=root, tools=tools, graphs=graphs, apply=apply and not dry_run, out=out)
     rootp = Path(root).resolve()
-    if scope == "global" and not db and not remove:
+    if scope == "global" and not db and not remove and not registry:
         out("a global entry serves one graph; pass --db (or use --project)")
         return 2
     if not hosts:
@@ -826,10 +988,11 @@ def run(hosts: list[str] | None, *, scope: str, root: str = ".", db: str | None 
                     expanded.append(name)
         elif h not in expanded:
             expanded.append(h)
-    dbp = Path(db).expanduser().resolve() if db else (rootp / "out" / "graph.db")
+    dbp = None if registry else (Path(db).expanduser().resolve() if db else (rootp / "out" / "graph.db"))
     if scope == "global" and remove and not db:
         dbp = None
-    plans = iter_plans(expanded, scope=scope, root=rootp, db=dbp, tools=tools, portable=portable, remove=remove)
+    plans = iter_plans(expanded, scope=scope, root=rootp, db=dbp, tools=tools, portable=portable, remove=remove,
+                       registry=registry)
     if not portable and not remove and uses_module_fallback():
         out(_FALLBACK_NOTE)
     for plan in plans:
