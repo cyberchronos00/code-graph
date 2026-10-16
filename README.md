@@ -66,7 +66,7 @@ Go and others: import a SCIP index with `cg index --scip FILE`. Run `cg doctor` 
 - Across repos: `cg link` matches client HTTP calls (frontends and Laravel / Guzzle backends) to server routes, and checks request keys (Laravel FormRequest, Elysia schemas, Nuxt / TypeScript bodies).
 - Route guards: `cg routes --writes --unguarded` lists routes that write with no auth guard. Laravel checks inside the action count as inline guards unless `--strict`.
 - Security views: `cg surface` lists the inbound / outbound attack surface and findings (hardcoded credentials, plaintext protocols, unverified webhooks, unguarded handlers, listeners on all interfaces, disabled TLS / SSH verification, plaintext gRPC, exposed IPC, outbound URLs built from request input) as text, JSON or SARIF, with `--fail-on` for CI.
-- MCP server (`cg-mcp`) so agents query the graph instead of grepping.
+- MCP server (`cg-mcp`) so agents query the graph instead of grepping. One server can serve many graphs (`graphs` plus an optional `graph` argument); a single `--db` stays one graph. See [MCP](https://code-graph.cyberchronos00.workers.dev/docs/mcp).
 - Visual view (`cg serve`) and plan checks (`cg plan check`) for planned changes.
 
 ## Docs

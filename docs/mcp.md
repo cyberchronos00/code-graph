@@ -28,6 +28,26 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 
 `--db` defaults to `out/graph.db`. `--root` is the project root for a single-repo DB (the `index` tool). `--plans` defaults to `plans.dir` in `.cg.yaml`, else `<repo>/plans`. Flags: `cg-mcp -h`.
 
+One `cg-mcp` process can serve many graphs. Repeat `--db` (`NAME=PATH` or a path), pass `--db-dir` (every `*.db` in that directory), or point at a registry file. The file is `~/.config/cg/graphs.toml` unless `CG_GRAPHS` or `--graphs` sets another path. Each entry has a name, a database path and one or more repo roots, so a combined graph (`cg link`) is one entry. With no `--db` on the command line, a registry file at the default path is loaded on its own. A single `--db` stays the one-graph server: replies have no `graph` field and tools do not gain a `graph` argument.
+
+```toml
+default = "shop"
+
+[[graphs]]
+name = "shop"
+db = "/abs/shop.db"
+roots = ["/abs/shop"]
+
+[[graphs]]
+name = "workspace"
+db = "/abs/workspace.db"
+roots = ["/abs/web", "/abs/api"]
+```
+
+The `graphs` tool lists name, roots, languages, indexed commit and freshness (`fresh`, `stale` or `unknown`). It is part of `--tools core`. Every other tool takes an optional `graph` name. Omit it and the server resolves, in order: a path in the call, then MCP roots (`roots/list`) or the working directory, then the configured default. If more than one graph still matches, the reply lists the choices and does not guess. Replies from a multi-graph server start with `graph <name>` and the structured result includes `graph`. Databases open on first use and stay in a small LRU, so registered graphs that nobody queries are not opened.
+
+`cg install --global --registry` writes one `cg` entry with no `--db`, which reads that registry. `cg install --migrate` prints how existing per-repo `cg-*` entries would fold into the registry; `--apply` writes the registry and the host config and keeps a `.bak` of each file it changes.
+
 ## Tools
 
 | tool | what it returns |
@@ -64,6 +84,7 @@ cg-mcp --db out/graph.db --gates examples/bookstore.gates.json --plans examples/
 | `platforms` / `platform_divergence` | build targets, and variants that leave one uncovered |
 | `starters` | starter queries that resolve to nodes in this graph |
 | `stats` | node and edge counts |
+| `graphs` | registered graphs: name, roots, languages, indexed commit, freshness |
 
 Argument lists match the CLI (`cg <cmd> -h`). `reaches`, `impact`, `downstream`, `path`, `routes` and `search` take `platform` (`windows`, `linux`, `macos`, `ios`, `android`, `web`). Rust and C / C++ specs: [Rust, C and C++ query specs](native.md#query-specs). On a combined graph, `repo:Class.method` selects one repo ([workspace linking](cli.md#workspace)). `index` with no arguments re-indexes every linked repo (two or more) and rebuilds the one combined link; `repo` or `root` narrows it. A root that matches nothing, an unknown repo, or a result with 0 nodes is refused and the current graph stays. `explore` ends with the fine-grained calls to make next ([CLI reference](cli.md#explore)).
 
@@ -89,7 +110,7 @@ When the working tree has changed since this graph was built, tool replies add o
 
 Two known edges: a file that was already `{}` or `{"mcpServers": {}}` is deleted or collapsed by uninstall, and a TOML file without a final newline gains one.
 
-The command is the absolute `cg-mcp` next to the Python that is running `cg` (so a venv, pipx or uv tool wins over an older `cg-mcp` on `PATH`), and `--db` is the absolute graph path. Project scope also passes `--root`. `--portable` writes the relative entry below instead, for a config committed to git. `--global` without `--db` exits 2: a global entry serves one graph.
+The command is the absolute `cg-mcp` next to the Python that is running `cg` (so a venv, pipx or uv tool wins over an older `cg-mcp` on `PATH`), and `--db` is the absolute graph path. Project scope also passes `--root`. `--portable` writes the relative entry below instead, for a config committed to git. `--global` without `--db` exits 2: a global entry serves one graph. `--global --registry` is the exception: one `cg` entry and no `--db`, for a server that reads the graph registry. `--migrate` (dry run; `--apply` writes) folds per-repo `cg-*` entries into that registry.
 
 ```json
 {"mcpServers": {"cg": {
@@ -120,7 +141,7 @@ Without `--host`, cg acts on hosts it can see (the config file or its directory,
 
 `CG_MCP_TOOLS` and `cg-mcp --tools` choose which tools are listed. Unset or empty means all of them. Items are separated by commas or spaces:
 
-- `core` is `explore`, `search`, `node`, `snippet`, `impact`, `reaches`, `callers`, `routes`, `downstream`, `path`, `coverage`, `index`
+- `core` is `explore`, `search`, `node`, `snippet`, `impact`, `reaches`, `callers`, `routes`, `downstream`, `path`, `coverage`, `index`, `graphs`
 - a name or an `fnmatch` glob (`plan_*`) adds tools
 - a leading `-` removes them (`all,-plan_*`)
 
