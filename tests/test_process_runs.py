@@ -1,6 +1,9 @@
 """Tests that run the project's programs in a subprocess, outside Python (issue #60)."""
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -185,7 +188,21 @@ def test_node_child_process_and_execa(tmp_path):
     assert "script_without_node" not in st.stats["process_runs"], st.stats["process_runs"]
 
 
+def _require_dart() -> None:
+    from cg_code_graph.plugins.dart.plugin import find_dart
+    dart = find_dart()
+    if not dart:
+        pytest.skip("dart SDK not found")
+    try:
+        r = subprocess.run([dart, "--version"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        pytest.skip(f"dart SDK unusable: {ex}")
+    if r.returncode != 0:
+        pytest.skip("dart SDK unusable: " + (r.stderr or r.stdout or "exit")[:200])
+
+
 def test_dart_process_run(tmp_path):
+    _require_dart()
     st = build(tmp_path, "dart", DART)
     got = via_sub(st)
     assert {d for v in got.values() for d, _h in v} == {"function:bin/tool.dart#main"}, got
@@ -245,6 +262,7 @@ def test_laravel_artisan_from_tests(tmp_path):
 
 
 def test_dart_script_from_a_local_variable(tmp_path):
+    _require_dart()
     files = dict(DART)
     files["test/snap_test.dart"] = '''
         import 'dart:io';

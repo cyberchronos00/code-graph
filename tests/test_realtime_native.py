@@ -2,7 +2,9 @@
 rust_socketio, Dart socket_io_client, socket.io-client-java, socket.io-client-swift; Ktor / Vapor / axum WebSocket
 routes; Ktor, OkHttp and URLSession WebSocket clients; Rust route uri attrs."""
 import json
+import shutil
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,8 +17,21 @@ from cg_code_graph.indexer import index_project  # noqa: E402
 FX = ROOT / "tests" / "sio_native_fixture"
 
 
+def _require_toolchain(cmd: str) -> None:
+    if shutil.which(cmd) is None:
+        pytest.skip(f"{cmd} not found")
+    try:
+        r = subprocess.run([cmd, "--version"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        pytest.skip(f"{cmd} unusable: {ex}")
+    if r.returncode != 0:
+        pytest.skip(f"{cmd} unusable: " + (r.stderr or r.stdout or "exit")[:200])
+
+
 @pytest.fixture(scope="module")
 def db(tmp_path_factory):
+    for cmd in ("dart", "swift", "cargo"):
+        _require_toolchain(cmd)
     p = tmp_path_factory.mktemp("sion") / "x.db"
     st = index_project(FX, p, "sio-native")
     assert st["realtime_native"]["socketio_receivers"] == 10 and st["realtime_native"]["socketio_sends"] == 11
