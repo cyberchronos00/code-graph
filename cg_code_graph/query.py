@@ -1183,6 +1183,30 @@ CANDIDATE_NOTE = ("(candidate): through a call whose receiver type is unknown, b
                   "selector; it may reach a same-name sibling instead")
 
 
+def divergence_lists(st: GraphStore, platform: str, target_ids: list[str]) -> bool:
+    """True when `platforms divergence --target` has a row for one of these nodes."""
+    from .platforms import divergence
+    d = divergence(st, target=platform)
+    want = set(target_ids)
+    names = set()
+    for tid in target_ids:
+        n = st.node(tid)
+        if n and n["fqn"]:
+            names.add(n["fqn"])
+        if ":" in tid:
+            names.add(tid.split(":", 1)[1])
+    for v in d.get("variants") or []:
+        if v.get("name") in names or any(m.get("id") in want for m in v.get("members") or []):
+            return True
+    for m in (d.get("missing_callee") or []) + (d.get("missing_callee_tests") or []):
+        if m.get("to") in want or m.get("to") in names:
+            return True
+    for a in d.get("api_surface") or []:
+        if a.get("symbol") in names:
+            return True
+    return False
+
+
 def disambiguated(names: list[str], files: list[str | None]) -> list[str]:
     """When two entries in one group share a display name, append the file basename, or the shortest unique
     path suffix when the basenames also collide."""

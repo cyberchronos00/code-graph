@@ -681,8 +681,10 @@ def main(argv=None):
         if not res["targets"]:
             print(f"no method matches {a.spec!r}; try `search` with part of the name"); return
         if a.platform and res["targets"] and set(res["platform"]["targets_not_built"]) == set(res["targets"]):
-            print(f"{a.spec} is not built for {a.platform}: nothing calls it there (`cg platforms divergence --target "
-                  f"{a.platform}` lists references to it that would not build)"); return
+            msg = f"{a.spec} is not built for {a.platform}: nothing calls it there"
+            if Q.divergence_lists(st, a.platform, res["targets"]):
+                msg += (f" (`cg platforms divergence --target {a.platform}` lists references to it that would not build)")
+            print(msg); return
         for line in Q.override_lines(res):
             print(line)
         if res.get("connections"):
