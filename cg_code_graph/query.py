@@ -470,8 +470,14 @@ def _resolve_direct_one(st: GraphStore, spec: str) -> list[str]:
         rows = st.q("""SELECT id FROM nodes WHERE lang IN ('ts','python','dart')
                        AND kind IN ('function','composable','store','method','class','type')
                        AND (name=? OR name LIKE ?)""", (spec, "%." + spec))
-        if rows:
-            return [r["id"] for r in rows]
+        extra = []
+        if "." not in spec:
+            # a bare name is not one language: Swift / Kotlin methods, static methods, `#if` variants and
+            # computed properties (`var currentGamut`) share the short name with a TypeScript function (#206)
+            extra = st.q("""SELECT id FROM nodes WHERE lang IN ('swift','kotlin','java','objc')
+                            AND kind IN ('function','method') AND name=? ORDER BY lang, file, line""", (spec,))
+        if rows or extra:
+            return list(dict.fromkeys([r["id"] for r in rows] + [r["id"] for r in extra]))
     spec = spec.lstrip("\\")
     if "::" in spec:
         rows = st.q("SELECT id FROM nodes WHERE kind='method' AND (fqn=? OR fqn LIKE ?)", (spec, "%\\" + spec))
@@ -609,7 +615,8 @@ def reverse_closure(st: GraphStore, targets: list[str], kinds=None, min_conf="he
         SELECT id, 0 FROM t_targets
         UNION
         SELECT e.src, r.depth + 1 FROM edges e JOIN r ON e.dst = r.id
-        WHERE (e.kind IN ({kq}) {inst}) AND e.conf_rank >= ? AND r.depth < ? AND (e.gate IS NULL OR e.gate != ?) {pclause}
+        WHERE (e.kind IN ({kq}) {inst}) AND e.conf_rank >= ? AND r.depth < ? AND (e.gate IS NULL OR e.gate != ?)
+              AND instr(coalesce(e.attrs, ''), '"default_arg"') = 0 {pclause}
     )
     SELECT id, MIN(depth) AS depth FROM r GROUP BY id"""
     skip = _SKIP_EDGES.get()
@@ -636,6 +643,8 @@ def shortest_paths(st: GraphStore, depth: dict[str, int], kinds=None, min_conf="
         q = ",".join("?" * len(chunk))
         for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate,attrs FROM edges WHERE src IN ({q})", chunk):
             if e["conf_rank"] < CONFIDENCE_RANK[min_conf] or (px and e["id"] in px) or (skip and e["id"] in skip):
+                continue
+            if e["attrs"] and '"default_arg"' in e["attrs"]:
                 continue
             if e["kind"] not in kinds and not (seed_inst and e["kind"] == "INSTANTIATES" and depth.get(e["dst"]) == 0):
                 continue
@@ -1417,8 +1426,28 @@ def _table_columns(st: GraphStore, targets: list) -> list:
     return [c for c in dict.fromkeys(out) if c not in targets]
 
 
+def _default_arguments(st: GraphStore, targets: list[str]) -> list[dict]:
+    """CALLS recorded from a default-argument expression. They are not walked as callers (#208)."""
+    if not targets:
+        return []
+    out = []
+    for i in range(0, len(targets), 400):
+        chunk = targets[i:i + 400]
+        q = ",".join("?" * len(chunk))
+        for r in st.q(f"""SELECT src, dst, file, line, attrs FROM edges WHERE dst IN ({q}) AND kind='CALLS'
+                          AND instr(coalesce(attrs, ''), '"default_arg"') > 0 ORDER BY file, line""", chunk):
+            out.append({"src": r["src"], "dst": r["dst"], "file": r["file"], "line": r["line"],
+                        "param": (json.loads(r["attrs"] or "{}").get("default_arg"))})
+    return out
+
+
 def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> dict:
     targets = resolve_targets(st, spec)
+    not_built: list[str] = []
+    if platform:
+        not_built = _not_built(st, targets, platform)
+        built = [t for t in targets if t not in set(not_built)]
+        targets = built
     kinds = CALL_LIKE + DATA_USE if any(t.startswith(DATA_TARGET) for t in targets) else CALL_LIKE
     si = _has_class_target(targets)
     rel = override_relations(st, targets, min_conf)
@@ -1471,13 +1500,16 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
         callers.append(c)
     out = {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
            "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or "")), **rel}
+    defaults = _default_arguments(st, targets)
+    if defaults:
+        out["default_arguments"] = defaults
     conns = impact_connections(st, targets)
     if conns:
         out["connections"] = conns
     if platform:
         from .platforms import filter_info
         out["platform"] = filter_info(st, platform)
-        out["platform"]["targets_not_built"] = _not_built(st, targets, platform)
+        out["platform"]["targets_not_built"] = not_built
     return out
 
 
@@ -1713,12 +1745,15 @@ def siblings(st: GraphStore, spec: str, limit=40) -> dict:
             for r in st.q(f"SELECT src, dst FROM edges WHERE dst IN ({q}) AND kind IN ({kq}) AND src != ?", (*mine, *res_kinds, main)):
                 agg[r["src"]].add(r["dst"])
             res["shared_resources"] = sorted(({"node": k, "shared": sorted(v)} for k, v in agg.items()), key=lambda x: -len(x["shared"]))[:limit]
-        callees = {r["dst"] for r in st.q("SELECT DISTINCT dst FROM edges WHERE src=? AND kind='CALLS' AND dst LIKE 'method:%'", (main,))}
+        callees = {r["dst"] for r in st.q(
+            "SELECT DISTINCT dst FROM edges WHERE src=? AND kind='CALLS' AND dst LIKE 'method:%' "
+            "AND instr(coalesce(attrs, ''), '\"default_arg\"') = 0", (main,))}
         callees = {c for c in callees if not c.startswith(f"method:{cls_fqn}::")}
         if callees:
             q = ",".join("?" * len(callees))
             agg = defaultdict(set)
-            for r in st.q(f"SELECT src, dst FROM edges WHERE dst IN ({q}) AND kind='CALLS' AND src != ?", (*callees, main)):
+            for r in st.q(f"SELECT src, dst FROM edges WHERE dst IN ({q}) AND kind='CALLS' AND src != ? "
+                          f"AND instr(coalesce(attrs, ''), '\"default_arg\"') = 0", (*callees, main)):
                 agg[r["src"]].add(r["dst"])
             res["co_callers"] = sorted(({"node": k, "shared_callees": sorted(v), "jaccard": round(len(v) / len(callees | v), 2)}
                                         for k, v in agg.items()), key=lambda x: (-len(x["shared_callees"]), x["node"]))[:limit]

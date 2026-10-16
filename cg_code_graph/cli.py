@@ -687,16 +687,19 @@ def main(argv=None):
         if res.get("platform"):
             from .platforms import render_filter
             print(render_filter(res["platform"]))
-            if res["platform"].get("targets_not_built"):
-                print(f"not built for {a.platform}: {', '.join(res['platform']['targets_not_built'][:6])}")
+            dropped = res["platform"].get("targets_not_built") or []
+            if dropped and res["targets"]:
+                print(f"not built for {a.platform}: {', '.join(dropped[:6])}")
+            if dropped and not res["targets"]:
+                msg = f"{a.spec} is not built for {a.platform}: nothing calls it there"
+                if Q.divergence_lists(st, a.platform, dropped):
+                    msg += (f" (`cg platforms divergence --target {a.platform}` lists references to it that would not build)")
+                print(msg); return
         print(f"targets: {res['targets'][:5]}")
         if not res["targets"]:
             print(f"no method matches {a.spec!r}; try `search` with part of the name"); return
-        if a.platform and res["targets"] and set(res["platform"]["targets_not_built"]) == set(res["targets"]):
-            msg = f"{a.spec} is not built for {a.platform}: nothing calls it there"
-            if Q.divergence_lists(st, a.platform, res["targets"]):
-                msg += (f" (`cg platforms divergence --target {a.platform}` lists references to it that would not build)")
-            print(msg); return
+        for d in res.get("default_arguments") or []:
+            print(f"via default argument: {d['src']} @ {d['file']}:{d['line']}")
         for line in Q.override_lines(res):
             print(line)
         if res.get("connections"):
