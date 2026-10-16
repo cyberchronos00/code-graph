@@ -486,6 +486,9 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
     if pf and res["platform"].get("targets_not_built"):
         pline.append(f"not built for {pf}: {', '.join(short(t) for t in res['platform']['targets_not_built'][:6])}")
     if missing and len(missing) == len(res["targets"]):
+        route_lines = [Q.route_failure(st, s)["text"] for s in missing if Q.route_failure(st, s)]
+        if route_lines and len(route_lines) == len(missing):
+            return "\n".join(route_lines)
         return "\n".join(pline + [f"targets: {tl}"]) + f"\nno node matches {', '.join(map(repr, missing))}; try search() with part of the name (spec forms are listed in the server instructions)"
     if not items and connection:
         return "\n".join(pline + [f"targets: {tl}", f"no dependents recorded for {', '.join(res['targets'])} on connection {connection!r} "
@@ -563,6 +566,9 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
             if Q.divergence_lists(st, pf, dropped):
                 msg += f"; platform_divergence(target='{pf}') lists references to it that would not build"
             return "\n".join(pline + [msg])
+        miss = Q.route_failure(st, method)
+        if miss:
+            return miss["text"]
         return f"no method matches {method!r}; try search() with part of the name"
     _scope(list(r["targets"]) + [c["id"] for c in r["callers"]])
     if pf and set(r["platform"]["targets_not_built"]) == set(r["targets"]):
@@ -1001,7 +1007,11 @@ def tests_covering(target: str, min_confidence: str = "heuristic", paths: bool =
     classes, exclude_roots symbols; through_roots=true keeps them). UI / snapshot / screenshot tests (XCUITest,
     Compose UI / Espresso, Playwright / Cypress, *UITests / androidTest folders) are listed apart, or left out
     with unit_only=true. The summary line counts what was left out and why."""
-    res = Q.tests_covering(_st(), target, min_conf=min_confidence, near_depth=max_depth or None, unit_only=unit_only,
+    st = _st()
+    miss = Q.route_failure(st, target)
+    if miss:
+        return miss["text"]
+    res = Q.tests_covering(st, target, min_conf=min_confidence, near_depth=max_depth or None, unit_only=unit_only,
                            exclude_roots=exclude_roots, through_roots=through_roots)
     _scope(res.get("targets") or [])
     return Q.render_tests_covering(res, show_paths=paths)
@@ -1244,6 +1254,9 @@ def downstream(target: str, max_per_kind: int = 25, paths: bool = True, min_conf
     pf, pline = _platform(st, platform)
     r = Q.downstream(st, target, min_conf=min_confidence, platform=pf)
     if not r["targets"]:
+        miss = Q.route_failure(st, target)
+        if miss:
+            return miss["text"]
         return f"no node matches {target!r}; try search()"
     out = pline + [f"targets: {', '.join(short(t) for t in r['targets'][:4])} | reached {r['reached']} nodes | gate={r.get('gate')}"]
     if not r["sinks"]:
@@ -1333,8 +1346,13 @@ def api_calls(filter: str = "all", max_items: int = 60) -> str:
     """Frontend HTTP calls (method + path template) with call sites, request keys and the matched backend
     route + controller (combined graph). filter: all | unmatched | any substring (endpoint, route, caller, file) |
     a `*` glob (`GET /v1/*/orders*`, `*/staff/*`, `*useOrders*`) on the endpoint, its path, route, controller,
-    caller or call-site file."""
+    caller or call-site file. `route:VERB /path` is an exact route match (verb case-insensitive; `:id`, `{id}` and
+    `{order}` match one param segment). `route:POST /payments/*` or `route:* /payments` widens it. An unknown
+    route returns `no such route` and the nearest routes."""
     st = _st()
+    miss = Q.route_failure(st, filter)
+    if miss:
+        return miss["text"]
     rows = Q.api_calls(st, filter)
     gaps = defaultdict(list)
     for g in Q.forwarding_gaps(st):

@@ -68,7 +68,7 @@ A registry entry may set `tools` (written by `cg install --migrate` from that ho
 | `writers` / `readers` | writers or readers of a table, a column (`table.column`, `column:table.column`) or a stored property (`Type.prop`, `Class::$prop`); the same specs, groups and errors as `cg writers` / `cg readers` ([spec forms](cli.md#readers-and-writers-specs)); `connection` keeps one database connection |
 | `roundtrip` | heuristic: a lossy write of `Type.prop` read back into UI state |
 | `lint_async_state` | heuristic async-state lints |
-| `api_calls` | client HTTP calls, request keys and the matched route |
+| `api_calls` | client HTTP calls, request keys and the matched route. `route:VERB /path` matches that route only (exact; `*` or `route:*` widens). An unknown route returns `no such route` and the nearest routes |
 | `channels` | broadcast channels ([Channels and tests](channels-and-tests.md)) |
 | `bridges` | web / native bridge endpoints ([Web / native bridges](bridges.md)) |
 | `protocol_links` | protocol endpoints and their checks ([Protocol links](protocols.md)) |

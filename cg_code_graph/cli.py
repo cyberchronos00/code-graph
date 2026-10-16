@@ -636,6 +636,8 @@ def main(argv=None):
         print(json.dumps(res, indent=1, default=str) if a.json else render_protocols(res, max_items=a.max_items))
         return
     if a.cmd == "tests":
+        if _unknown_route(st, a.spec, a.json):
+            return
         res = Q.tests_covering(st, a.spec, min_conf=a.min_confidence, near_depth=a.max_depth or None,
                                unit_only=a.unit_only, exclude_roots=a.exclude_root, through_roots=a.through_roots)
         res["completeness"] = _completeness(st, res.get("targets"))
@@ -674,12 +676,17 @@ def main(argv=None):
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_search(res))
         return
     if a.cmd == "reaches":
+        for spec in a.specs:
+            if _unknown_route(st, spec, a.json):
+                return
         res = Q.reaches(st, a.specs, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate,
                         platform=a.platform, connection=a.connection)
         res["completeness"] = _completeness(st, [x for t in res["targets"].values() for x in t] + [i["id"] for i in res["items"]])
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_reaches(res, show_paths=not a.no_paths))
         _note(res["completeness"], a.json)
     elif a.cmd == "impact":
+        if _unknown_route(st, a.spec, a.json):
+            return
         res = Q.impact(st, a.spec, min_conf=a.min_confidence, platform=a.platform)
         if a.json:
             res["completeness"] = _completeness(st, list(res["targets"]) + [c["id"] for c in res["callers"]])
@@ -755,6 +762,8 @@ def main(argv=None):
         res = Q.siblings(st, a.spec)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_siblings(st, a.spec, res))
     elif a.cmd == "node":
+        if _unknown_route(st, a.spec, a.json):
+            return
         ids = list(dict.fromkeys(Q.resolve_targets(st, a.spec)))[:20]
         docs = [node_doc(st, nid) for nid in ids]
         if a.json:
@@ -774,10 +783,14 @@ def main(argv=None):
         if not p:
             raise SystemExit(1)  # scripts can tell "no path" apart from a path
     elif a.cmd == "downstream":
+        if _unknown_route(st, a.spec, a.json):
+            return
         res = Q.downstream(st, a.spec, min_conf=a.min_confidence, max_depth=a.max_depth, gate=None if a.gate == "none" else a.gate,
                            platform=a.platform)
         print(json.dumps(res, indent=1, default=str) if a.json else Q.render_downstream(res, show_paths=not a.no_paths))
     elif a.cmd == "api-calls":
+        if _unknown_route(st, a.spec, a.json):
+            return
         rows = Q.api_calls(st, a.spec)
         print(json.dumps(rows, indent=1, default=str) if a.json else Q.render_api_calls(rows))
         if not a.json:
@@ -788,6 +801,17 @@ def main(argv=None):
     elif a.cmd == "stats":
         doc = stats_doc(st)
         print(json.dumps(doc, indent=1, default=str) if a.json else render_stats(st, doc))
+
+def _unknown_route(st, spec: str, as_json: bool) -> bool:
+    miss = Q.route_failure(st, spec)
+    if not miss:
+        return False
+    if as_json:
+        print(json.dumps({"error": miss["error"], "spec": miss["spec"], "suggestions": miss["suggestions"]}))
+    else:
+        print(miss["text"])
+    raise SystemExit(1)
+
 
 def node_doc(st, nid: str) -> dict:
     """One node with its attrs parsed and its outgoing / incoming edges (`cg node --json`, #75)."""
