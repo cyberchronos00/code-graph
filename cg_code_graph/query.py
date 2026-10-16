@@ -6,6 +6,7 @@ import functools
 import json
 import os
 import re
+from pathlib import Path
 import time
 from collections import defaultdict
 
@@ -2281,6 +2282,19 @@ def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
                                 "url": a.get("url"), "via_helper": a.get("via_helper"), "body_keys": a.get("body_keys"),
                                 "query_keys": a.get("query_keys"), "tls_verify": a.get("tls_verify"),
                                 "url_from_input": a.get("url_from_input")})
+    live_kinds = defaultdict(list)
+    for r in st.q("SELECT node_id, entry_kind FROM node_entry WHERE entry_kind != 'test'"):
+        live_kinds[r["node_id"]].append(r["entry_kind"])
+    gaps = _unindexed_gap(st)
+    for sites in calls.values():
+        for site in sites:
+            kinds = live_kinds.get(site["caller"]) or []
+            exported = not kinds and _caller_exported(st, site["caller"])
+            site["entry_kinds"] = ["exported"] if exported else kinds
+            site["live"] = bool(kinds) or exported
+            if not site["live"]:
+                site["live_note"] = (f"no live caller found; {gaps} files not indexed" if gaps
+                                     else "no live caller")
     routes = defaultdict(list)
     for e in st.q("SELECT src, dst, confidence, attrs FROM edges WHERE kind='MATCHES_ROUTE'"):
         ctl = [r["dst"] for r in st.q("SELECT dst FROM edges WHERE src=? AND kind='ROUTES_TO'", (e["dst"],))]
@@ -2288,10 +2302,14 @@ def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
                                  "uri_variant": json.loads(e["attrs"] or "{}").get("uri_variant")})
     out = []
     for nid, n in eps.items():
-        row = {"endpoint": nid, "attrs": json.loads(n["attrs"] or "{}"), "calls": calls.get(nid, []), "routes": routes.get(nid, [])}
+        sites = calls.get(nid, [])
+        row = {"endpoint": nid, "attrs": json.loads(n["attrs"] or "{}"), "calls": sites, "routes": routes.get(nid, [])}
+        row["live"] = any(c.get("live", True) for c in sites) if sites else False
         if flt == "unmatched" and row["routes"]:
             continue
-        if flt not in ("all", "unmatched") and not _api_row_matches(flt, row, n["name"], st):
+        if flt == "dead" and (not row["routes"] or row["live"]):
+            continue
+        if flt not in ("all", "unmatched", "dead") and not _api_row_matches(flt, row, n["name"], st):
             continue
         out.append(row)
     return sorted(out, key=lambda r: r["endpoint"])
@@ -2317,8 +2335,66 @@ def _api_row_matches(flt: str, row: dict, name: str | None, st: GraphStore | Non
     return any(rx.match(f or "") for f in fields)
 
 
+def _unindexed_gap(st: GraphStore) -> int:
+    """TypeScript files left out of the index, plus unresolved Vue navigation, when that could hide a caller."""
+    meta = st.meta() or {}
+    stats = meta.get("stats") if isinstance(meta.get("stats"), dict) else {}
+    cov = (stats or {}).get("coverage") or meta.get("coverage") or {}
+    n = 0
+    if isinstance(cov, dict):
+        for lang in cov.get("languages") or []:
+            if isinstance(lang, dict) and lang.get("language") in ("typescript", "javascript"):
+                n += int(lang.get("unmapped") or 0) + int(lang.get("not_indexed") or 0)
+    spots = (stats or {}).get("blind_spots") or meta.get("blind_spots") or []
+    if isinstance(spots, list):
+        for spot in spots:
+            if isinstance(spot, dict) and spot.get("id") == "vue_unresolved_navigation":
+                n += int(spot.get("count") or len(spot.get("hits") or []) or 1)
+    return n
+
+
+def _caller_exported(st: GraphStore, caller: str) -> bool:
+    """True when the caller lives in a file named by package.json main or exports."""
+    node = st.node(caller)
+    if not node or not node["file"]:
+        return False
+    root = (st.meta() or {}).get("root")
+    rel = Path(node["file"])
+    start = (Path(root) / rel) if root and not rel.is_absolute() else rel
+    cur = start.parent
+    for _ in range(6):
+        pkg = cur / "package.json"
+        if pkg.is_file():
+            try:
+                data = json.loads(pkg.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return False
+            names: list[str] = []
+            if isinstance(data.get("main"), str):
+                names.append(data["main"])
+            exp = data.get("exports")
+            if isinstance(exp, str):
+                names.append(exp)
+            elif isinstance(exp, dict):
+                for value in exp.values():
+                    if isinstance(value, str):
+                        names.append(value)
+                    elif isinstance(value, dict):
+                        names += [v for v in value.values() if isinstance(v, str)]
+            return any(Path(name).name == start.name for name in names)
+        if cur == cur.parent:
+            break
+        cur = cur.parent
+    return False
+
+
 def render_api_calls(rows: list[dict], max_calls=4) -> str:
-    out = [f"{len(rows)} client endpoints ({sum(1 for r in rows if r['routes'])} matched)"]
+    matched = sum(1 for r in rows if r["routes"])
+    dead = sum(1 for r in rows if r["routes"] and not r.get("live", True))
+    head = f"{len(rows)} client endpoints ({matched} matched"
+    if dead:
+        head += f", {dead} with no live caller"
+    out = [head + ")"]
     for r in rows:
         a = r.get("attrs") or {}
         tag = "  (called from tests only)" if a.get("test_only") else ""
@@ -2337,7 +2413,12 @@ def render_api_calls(rows: list[dict], max_calls=4) -> str:
             h = f" via {c['via_helper']['fn']}" if c.get("via_helper") else ""
             off = "  [tls verify off]" if c.get("tls_verify") is False else ""
             off += f"  [{url_input_marker(c['url_from_input'])}]" if c.get("url_from_input") else ""
-            out.append(f"   <- {c['caller']} @ {c['at']} [{c['confidence']}]{h}{off}")
+            note = ""
+            if c.get("entry_kinds") == ["exported"]:
+                note = "  (exported)"
+            elif c.get("live") is False:
+                note = "  (" + c.get("live_note", "no live caller") + ")"
+            out.append(f"   <- {c['caller']} @ {c['at']} [{c['confidence']}]{h}{off}{note}")
             bk = _key_names(c.get("body_keys"))
             qk = _key_names(c.get("query_keys"))
             if bk:

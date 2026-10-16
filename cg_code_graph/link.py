@@ -137,8 +137,15 @@ def known_origin_text(attrs: dict) -> str | None:
     return None
 
 
-def repos_for_origin(text: str, servers: list[str]) -> list[str]:
-    """Server names that appear as a word in the origin (env key or host)."""
+_GENERIC_ORIGIN = {"env", "base", "url", "api", "app", "http", "https", "host", "origin", "endpoint", "service", "internal"}
+
+
+def repos_for_origin(text: str, servers: list[str]) -> list[str] | None:
+    """Server names named by the origin.
+
+    ``None`` when the origin is a generic API base (``API_BASE_URL``) and does not name a repo:
+    matching stays as it was. ``[]`` when it names a service that is not one of ``servers``.
+    """
     low = text.lower()
     hits = []
     for name in servers:
@@ -147,7 +154,12 @@ def repos_for_origin(text: str, servers: list[str]) -> list[str]:
             continue
         if re.search(rf"(^|[^a-z0-9]){re.escape(token)}([^a-z0-9]|$)", low):
             hits.append(name)
-    return hits
+    if hits:
+        return hits
+    tokens = [t for t in re.findall(r"[a-z][a-z0-9]+", low) if t not in _GENERIC_ORIGIN]
+    if not tokens:
+        return None
+    return []
 
 
 def match_endpoint(method: str, path: str, routes: list[dict], origin_kind: str = "api", origin: str | None = None,
@@ -426,7 +438,9 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
         origin_text = known_origin_text(a)
         if origin_text:
             owners = repos_for_origin(origin_text, targets)
-            if len(owners) == 1:
+            if owners is None:
+                pass
+            elif len(owners) == 1:
                 pool = [rt for rt in pool if rt["server"] == owners[0]]
             elif not owners:
                 res = {"matched": [], "path": a.get("path"), "reason": "external (other origin)",
@@ -494,13 +508,20 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
     for sc in scen[:1]:
         db.executemany("INSERT INTO node_entry_live VALUES (?,?,?,?,?)", [(sc, *r) for r in tag_entries_rows(nodes, edges, prop, skip_gate=sc)])
     db.commit()
+    # call sites whose wrapper no entry point reaches are matched, but not live
+    live_ids = {r[0] for r in db.execute("SELECT DISTINCT node_id FROM node_entry WHERE entry_kind != 'test'")}
+    for r in results:
+        for c in r["calls"]:
+            c["live"] = c.get("src") in live_ids
+        if r["matched"] and r["calls"] and not any(c.get("live") for c in r["calls"]):
+            r["no_live_caller"] = True
     # ---- stats: per call site and per distinct endpoint
     n_ep = len(results)
     m_ep = sum(1 for r in results if r["matched"])
     site_match = {}
     for r in results:
         for c in r["calls"]:
-            site_match[c["at"]] = site_match.get(c["at"], False) or bool(r["matched"])
+            site_match[c["at"]] = site_match.get(c["at"], False) or (bool(r["matched"]) and c.get("live", True))
     sites = list(site_match)
     m_sites = sum(1 for v in site_match.values() if v)
     conf_ct = defaultdict(int)
@@ -522,7 +543,7 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
             for r in eps:
                 hit = any(rmap[m["route"]]["server"] == server for m in r["matched"])
                 for c in r["calls"]:
-                    sm[c["at"]] = sm.get(c["at"], False) or hit
+                    sm[c["at"]] = sm.get(c["at"], False) or (hit and c.get("live", True))
             pair_stats.append({"client": client, "server": server, "endpoints": len(eps),
                                "endpoints_matched": sum(1 for r in eps if any(rmap[m["route"]]["server"] == server for m in r["matched"])),
                                "call_sites": len(sm), "call_sites_matched": sum(1 for v in sm.values() if v)})
@@ -713,6 +734,11 @@ def write_match_report(res: dict, out_prefix: str) -> None:
         at = ", ".join(sorted({c["at"] for c in r["calls"]})[:3])
         extra = f" closest={r['closest']}" if r.get("closest") else (f" near={r['near']}" if r.get("near") else "")
         L.append(f"- `{r['endpoint']}` - {r['reason']}{extra} - at {at}")
+    dead = [r for r in res["results"] if r.get("no_live_caller")]
+    if dead:
+        L += ["", "## Matched, no live caller", ""]
+        for r in dead:
+            L.append(f"- `{r['endpoint']}` — matched, no live caller")
     L += ["", "## Ambiguous / heuristic matches", ""]
     for r in res["results"]:
         if r["matched"] and (len(r["matched"]) > 1 or any(m["confidence"] == "heuristic" for m in r["matched"])):
