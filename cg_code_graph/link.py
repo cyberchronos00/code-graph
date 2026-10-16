@@ -101,18 +101,53 @@ def _method_ok(cm: str, rm: str) -> bool:
     return cm in rms or "ANY" in rms or (cm == "HEAD" and "GET" in rms)
 
 
+_BASE_SEG = re.compile(r"^(api|v\d+)$", re.I)
+
+
 def suffix_candidates(path: str, routes: list[dict]):
-    """Origin unknown: align the client path with the END of route URIs (prefix assumed to be the base)."""
+    """Align the client path with the end of a route only when the dropped prefix is a base path (`api`, `v1`)."""
     cs = _segs(path)
     out = []
     for r in routes:
         us = _segs(r["uri"])
         if len(us) <= len(cs):
             continue
+        dropped = us[:len(us) - len(cs)]
+        if any(not _BASE_SEG.match(seg) for seg in dropped):
+            continue
         ok, info = match_path("/" + "/".join(cs), "/" + "/".join(us[len(us) - len(cs):]))
         if ok and info["lit"] > 0:
             out.append((r, "suffix", info))
     return out
+
+
+def known_origin_text(attrs: dict) -> str | None:
+    """Env placeholder or literal base URL, when the client recorded one."""
+    kind = attrs.get("origin_kind")
+    origin = attrs.get("origin") or ""
+    base = attrs.get("base") or {}
+    if not isinstance(base, dict):
+        base = {}
+    parts = [origin, base.get("placeholder") or "", base.get("value") or ""]
+    text = " ".join(p for p in parts if isinstance(p, str) and p)
+    if kind == "env" or (isinstance(origin, str) and origin.startswith("{env.")):
+        return text or None
+    if kind == "other" or "://" in text:
+        return text or None
+    return None
+
+
+def repos_for_origin(text: str, servers: list[str]) -> list[str]:
+    """Server names that appear as a word in the origin (env key or host)."""
+    low = text.lower()
+    hits = []
+    for name in servers:
+        token = name.lower()
+        if len(token) < 3:
+            continue
+        if re.search(rf"(^|[^a-z0-9]){re.escape(token)}([^a-z0-9]|$)", low):
+            hits.append(name)
+    return hits
 
 
 def match_endpoint(method: str, path: str, routes: list[dict], origin_kind: str = "api", origin: str | None = None,
@@ -388,6 +423,17 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
         targets = [s for s in server_names if (s != client or folded_self) and (client not in allow or s in allow[client])]
         pool = [rt for s in targets for rt in by_server[s]]
         bp = base_path((a.get("base") or {}).get("value") or "") if a.get("base") else None
+        origin_text = known_origin_text(a)
+        if origin_text:
+            owners = repos_for_origin(origin_text, targets)
+            if len(owners) == 1:
+                pool = [rt for rt in pool if rt["server"] == owners[0]]
+            elif not owners:
+                res = {"matched": [], "path": a.get("path"), "reason": "external (other origin)",
+                       "endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, []),
+                       "_client": client, "_servers": targets}
+                results.append(res)
+                continue
         res = match_endpoint(a["method"], a["path"], pool, a.get("origin_kind", "api"), a.get("origin"), base_prefix=bp or None)
         res.update({"endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, []),
                     "_client": client, "_servers": targets})
