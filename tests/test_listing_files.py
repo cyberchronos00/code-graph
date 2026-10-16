@@ -36,3 +36,10 @@ def test_mcp_configs_and_plugin_manifests_agree():
         assert not rel.startswith(("/", "..")) and (ROOT / rel).is_file()
     png = (ROOT / "assets/logo.png").read_bytes()
     assert png[:8] == b"\x89PNG\r\n\x1a\n" and png[16:24] == (512).to_bytes(4, "big") * 2
+
+
+def test_listing_versions_match_the_package():
+    from cg_code_graph import __version__
+    server = _json("server.json")
+    assert server["version"] == server["packages"][0]["version"] == __version__
+    assert _json(".cursor-plugin/plugin.json")["version"] == __version__

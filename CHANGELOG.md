@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-10-16
+
 ### Added
 
 - Laravel: column writes through mass assignment (#177). `$book->update($request->validated())`, `Book::create($data)`, `fill` / `forceFill`, `updateOrCreate`, relation `create`, `new Model($data)` + `save()` and query-builder `->update($data)` now record `WRITES_COLUMN` (`resolved`) for the keys of the request array: FormRequest `rules()` top-level keys or the inline `validate([...])` keys, narrowed by `only` / `except`, followed through locals, parameters, `array_merge` and `[...$request->validated()]`, then filtered by the model's `$fillable` and `$guarded` (a validated key that `$fillable` drops gets no edge; `forceFill` / `forceCreate` and builder writes skip the filter). `$request->all()` / `input()` use the `$fillable` keys at `heuristic`. The edge has `attrs.via` and `attrs.keys_from`, and `cg node` prints them. `cg routes --reaches books.age_rating` and `cg writers books.age_rating` now list the PUT route that writes the column. The bookstore sample gained `age_rating` and `reviewer_note`.
@@ -1621,7 +1623,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.21.1...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.21.2...HEAD
+[0.21.2]: https://github.com/cyberchronos00/code-graph/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/cyberchronos00/code-graph/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/cyberchronos00/code-graph/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/cyberchronos00/code-graph/compare/v0.19.1...v0.20.0
