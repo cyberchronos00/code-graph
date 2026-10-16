@@ -46,6 +46,8 @@ roots = ["/abs/web", "/abs/api"]
 
 The `graphs` tool lists name, roots, languages, indexed commit and freshness (`fresh`, `stale` or `unknown`). It is part of `--tools core`. Every other tool takes an optional `graph` name. Omit it and the server resolves, in order: a path in the call, then MCP roots (`roots/list`) or the working directory, then the configured default. If more than one graph still matches, the reply lists the choices and does not guess. Replies from a multi-graph server start with `graph <name>` and the structured result includes `graph`. Each call opens only the database it resolved, so registered graphs that nobody queries are not opened.
 
+A registry entry may set `tools` (written by `cg install --migrate` from that host's `--tools` or `CG_MCP_TOOLS`). The process still lists one tool set: the server's `--tools` when it is set, otherwise the union of those allowlists. A graph with no `tools` value keeps every listed tool. A call that resolves to a graph whose allowlist omits the tool returns `tool <name> is not allowed for graph <name>` and does not run. One graph's shorter allowlist does not remove tools from the other graphs.
+
 `cg install --global --registry` writes one `cg` entry with no `--db`, which reads that registry. `cg install --migrate` prints how existing per-repo `cg-*` entries would fold into the registry; `--apply` writes the registry and the host config and keeps a `.bak` of each file it changes.
 
 ## Tools
@@ -145,7 +147,7 @@ Without `--host`, cg acts on hosts it can see (the config file or its directory,
 - a name or an `fnmatch` glob (`plan_*`) adds tools
 - a leading `-` removes them (`all,-plan_*`)
 
-An unknown name is ignored after one warning. If the selection is empty, `cg-mcp` exits 2. Codex `enabled_tools` and Gemini `includeTools` can filter again on the host side. `cg install --tools LIST` stores the same list in the host entry.
+An unknown name is ignored after one warning. If the selection is empty, `cg-mcp` exits 2. Codex `enabled_tools` and Gemini `includeTools` can filter again on the host side. `cg install --tools LIST` stores the same list in the host entry. Per-graph `tools` in the registry narrows calls for that graph only; the listed set stays the union (or this server-wide list, when it is set).
 
 ## Suggested agent instructions
 

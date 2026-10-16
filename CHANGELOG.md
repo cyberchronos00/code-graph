@@ -8,6 +8,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Changed
+
+- MCP per-graph `tools` (written by `cg install --migrate`) apply to calls. The process lists one set: `--tools` / `CG_MCP_TOOLS` when set, otherwise the union of the graphs' allowlists. A tool omitted from the resolved graph's allowlist returns `tool <name> is not allowed for graph <name>`. A shorter allowlist on one graph does not drop tools the other graphs allow (#200).
+
 ## [0.22.0] - 2026-10-16
 
 ### Added

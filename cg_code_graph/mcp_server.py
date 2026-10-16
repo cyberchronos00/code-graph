@@ -302,6 +302,11 @@ def _run_call(fn, args, kwargs) -> tuple[str, dict]:
             return str(ex), {"complete": False, "recorded": False, "languages": {}}
         _CALL.set({"graph_entry": entry, "graph_name": entry.name, "db": str(Path(entry.db).resolve())})
         named = entry.name
+        if entry.tools and str(entry.tools).strip():
+            allowed = set(selected_tool_names(entry.tools, warn=False))
+            if fn.__name__ not in allowed:
+                return (f"tool {fn.__name__} is not allowed for graph {entry.name}",
+                        {"complete": False, "recorded": False, "languages": {}})
     token, ptoken, xtoken = _SCOPE.set(None), _PF.set(None), _EXTRA.set(None)
     try:
         try:
@@ -315,7 +320,7 @@ def _run_call(fn, args, kwargs) -> tuple[str, dict]:
         _SCOPE.reset(token)
         _PF.reset(ptoken)
         _EXTRA.reset(xtoken)
-    if named and isinstance(txt, str) and not txt.startswith(("ambiguous graph:", "unknown graph ")):
+    if named and isinstance(txt, str) and not txt.startswith(("ambiguous graph:", "unknown graph ", "tool ")):
         txt = f"graph {named}\n" + txt
     comp = _completeness(scope)
     if pf:
@@ -1618,12 +1623,12 @@ def _tool_names() -> list[str]:
     return [t.name for t in server._tool_manager.list_tools()]
 
 
-def apply_tool_allowlist(spec: str) -> list[str]:
-    """Keep only the tools selected by spec and return their names.
+def selected_tool_names(spec: str, *, warn: bool = True) -> list[str]:
+    """Names selected by a tool spec, in server order. Does not change the listed set.
 
     Items are comma- or space-separated. `all` is every tool, `core` is the reading set,
     a name or fnmatch glob adds tools, and a leading `-` removes them (`all,-plan_*`).
-    Unknown names are warned once on stderr and ignored. An empty selection exits 2.
+    Unknown names are warned once on stderr and ignored.
     """
     import fnmatch
     names = _tool_names()
@@ -1652,16 +1657,50 @@ def apply_tool_allowlist(spec: str) -> list[str]:
             selected -= matched
         else:
             selected |= matched
-    if unknown:
+    if warn and unknown:
         print("cg-mcp: CG_MCP_TOOLS: unknown name(s): " + ", ".join(unknown), file=sys.stderr)
-    kept = [n for n in names if n in selected]
+    return [n for n in names if n in selected]
+
+
+def registry_tool_spec(registry) -> str | None:
+    """Union of per-graph allowlists. ``None`` means at least one graph lists every tool."""
+    specs = [e.tools for e in registry.entries if e.tools and str(e.tools).strip()]
+    if len(specs) != len(registry.entries):
+        return None
+    names: list[str] = []
+    seen: set[str] = set()
+    for spec in specs:
+        for name in selected_tool_names(spec, warn=False):
+            if name not in seen:
+                seen.add(name)
+                names.append(name)
+    return ",".join(names) if names else None
+
+
+def apply_tool_allowlist(spec: str) -> list[str]:
+    """Keep only the tools selected by spec and return their names.
+
+    An empty selection exits 2.
+    """
+    kept = selected_tool_names(spec)
     if not kept:
         print("cg-mcp: CG_MCP_TOOLS selects no tools", file=sys.stderr)
         raise SystemExit(2)
-    for name in names:
+    selected = set(kept)
+    for name in _tool_names():
         if name not in selected:
             server.remove_tool(name)
     return kept
+
+
+def apply_registry_tools(registry, server_tools: str | None = None) -> list[str] | None:
+    """List one fixed set: ``server_tools`` when given, otherwise the union of per-graph allowlists."""
+    if server_tools:
+        return apply_tool_allowlist(server_tools)
+    spec = registry_tool_spec(registry)
+    if spec is None:
+        return None
+    return apply_tool_allowlist(spec)
 
 
 def expose_graph_argument() -> None:
@@ -1700,6 +1739,8 @@ def configure(*, dbs: list[str] | None = None, db_dir: str | None = None, graphs
     STATE["registry"] = reg
     STATE["db"] = str(Path(reg.entries[0].db).resolve())
     expose_graph_argument()
+    if not STATE.get("server_tools"):
+        apply_registry_tools(reg)
 
 
 def _install_roots_hook() -> None:
@@ -1771,8 +1812,11 @@ def main(argv=None):
         STATE["registry"] = reg
         STATE["db"] = str(Path(reg.entries[0].db).resolve())
         expose_graph_argument()
+    STATE["server_tools"] = a.tools or None
     if a.tools:
         apply_tool_allowlist(a.tools)
+    elif STATE.get("multi"):
+        apply_registry_tools(STATE["registry"])
     server.run("stdio")
 
 
