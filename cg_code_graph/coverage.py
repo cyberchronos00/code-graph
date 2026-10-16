@@ -233,7 +233,18 @@ def file_completeness(discovered: list[str], report: dict) -> dict:
     for b in BUCKETS:
         res[b] = len(out[b])
     res["paths"] = {b: v[:MAX_PATHS] for b, v in out.items() if v}
+    if out["excluded"]:
+        res["exclude_reasons"] = {f: _exclude_reason(f) for f in out["excluded"]}
     return res
+
+
+def _exclude_reason(path: str) -> str:
+    """Why a discovered file was left out of the graph: tool config, a test file, or a `.cg.yaml` exclude."""
+    if _TOOL_FILE.search(path):
+        return "tool config"
+    if _TEST_NAME.search(path):
+        return "test file"
+    return ".cg.yaml exclude"
 
 
 def missing_files(e: dict) -> int:
@@ -308,6 +319,8 @@ def compute(root: str | Path, plugins: dict, scip_imported: bool = False, report
         status, reason = _status(lang, st)
         e = {"language": lang, "files": n, "status": status,
              "by_ext": {x: files[x] for x in exts if files[x]}}
+        if lang == "typescript" and not any(x in e["by_ext"] for x in (".ts", ".tsx", ".mts", ".cts")):
+            e["label"] = "javascript"
         if reason:
             e["reason"] = reason
         if status in ("skipped", "heuristic", "not_indexed"):
@@ -495,16 +508,22 @@ def blind_spots(cov: dict | None) -> list[dict]:
     return list((cov or {}).get("blind_spots") or [])
 
 
+def _shown_lang(e: dict) -> str:
+    """Display name. A TypeScript-plugin entry with no .ts/.tsx/.mts/.cts files reads as javascript; JSON keeps `language`."""
+    return e.get("label") or e["language"]
+
+
 def _entry_text(e: dict) -> str:
     """'php 18 exact' / 'python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped' /
-    'swift 101 heuristic, 8 parsed with syntax errors'."""
+    'javascript 12 discovered, 2 indexed (exact parser): 9 unmapped, 1 excluded'."""
     pe = e.get("parsed_with_errors")
     errs = f", {pe} parsed with syntax errors" if pe else ""
+    name = _shown_lang(e)
     if e.get("files_complete") is False:
-        parts = [f"{e[b]} {BUCKET_SHORT[b]}" for b in ("parse_failed", "skipped_oversize", "unmapped") if e.get(b)]
-        return (f"{e['language']} {e['files']} discovered, {e['indexed']} indexed ({e['status'].replace('_', ' ')} parser)"
+        parts = [f"{e[b]} {BUCKET_SHORT[b]}" for b in BUCKETS if e.get(b)]
+        return (f"{name} {e['files']} discovered, {e['indexed']} indexed ({e['status'].replace('_', ' ')} parser)"
                 + (": " + ", ".join(parts) if parts else "") + errs)
-    return f"{e['language']} {e['files']} {e['status'].replace('_', ' ')}{errs}"
+    return f"{name} {e['files']} {e['status'].replace('_', ' ')}{errs}"
 
 
 def realtime_unresolved_lines(e: dict, indent: str = "  ") -> list[str]:
@@ -579,11 +598,16 @@ def _paths_lines(e: dict, all_files: bool, indent: str = "    ") -> list[str]:
     out = []
     for b in BUCKETS:
         ps = (e.get("paths") or {}).get(b) or []
-        if not ps or (b == "excluded" and not all_files):
+        if not ps:
             continue
         show = ps if all_files else ps[:SHOW_PATHS]
         more = e.get(b, len(ps)) - len(show)
-        out.append(f"{indent}{BUCKET_SHORT[b]}: " + ", ".join(show) + (f" … +{more} more (--all-files)" if more > 0 else ""))
+        if b == "excluded":
+            reasons = e.get("exclude_reasons") or {}
+            body = ", ".join(f"{p} ({reasons.get(p) or _exclude_reason(p)})" for p in show)
+        else:
+            body = ", ".join(show)
+        out.append(f"{indent}{BUCKET_SHORT[b]}: " + body + (f" … +{more} more (--all-files)" if more > 0 else ""))
     return out
 
 
@@ -720,11 +744,12 @@ def render(covs: dict[str, dict | None], all_files: bool = False) -> str:
         for e in gaps(cov):
             any_gap = True
             exts = ", ".join(f"{k} {v}" for k, v in sorted(e["by_ext"].items()))
+            shown = _shown_lang(e)
             if e.get("files_complete") is False:
                 parts = [f"{e[b]} {BUCKET_SHORT[b]}" for b in BUCKETS if e.get(b)]
-                line = f"  {e['language']}: {e['files']} files ({exts}) {e['indexed']} indexed, " + ", ".join(parts)
+                line = f"  {shown}: {e['files']} files ({exts}) {e['indexed']} indexed, " + ", ".join(parts)
             else:
-                line = f"  {e['language']}: {e['files']} files ({exts}) {e['status'].replace('_', ' ')}"
+                line = f"  {shown}: {e['files']} files ({exts}) {e['status'].replace('_', ' ')}"
             if e.get("reason"):
                 line += f": {e['reason']}"
             out.append(line)
@@ -795,7 +820,7 @@ def note(covs: dict[str, dict | None]) -> str:
         for e in gaps(c):
             what = (f"{e['indexed']} of {e['files']} files indexed" if e.get("files_complete") is False
                     else f"{e['files']} files, {e['status'].replace('_', ' ')}")
-            bad.append(f"{e['language']} ({what}{', ' + r if len(covs) > 1 else ''})")
+            bad.append(f"{_shown_lang(e)} ({what}{', ' + r if len(covs) > 1 else ''})")
     bs = [b for c in covs.values() for b in blind_spots(c)]
     bs_txt = f"; blind spots: {_bs_count(bs)} (see coverage)" if bs else ""
     nerr = sum(e.get("syntax_error_files", 0) for c in covs.values() for e in (c or {}).get("languages", []))
@@ -956,6 +981,18 @@ def completeness_for(store, node_ids=None, categories=("route", "handler"), whol
                         categories=categories, ids=set(node_ids), files=sc["files"], **kw)
 
 
+def _unsupported_text(uns: dict) -> str:
+    """`unsupported: sh 3`. A single-repo DB drops a `shop/sh` prefix; a combined graph keeps `api/sh`."""
+    keys = list(uns)
+    prefixes = {k.partition("/")[0] for k in keys if "/" in k}
+    drop = len(prefixes) <= 1
+    parts = []
+    for k, v in sorted(uns.items()):
+        label = k.partition("/")[2] if drop and "/" in k else k
+        parts.append(f"{label} {v}")
+    return "unsupported: " + ", ".join(parts)
+
+
 def possibly_more(comp: dict) -> str:
     """'1 unmodelled route registration, 2 Python files not indexed' for an incomplete answer, '' when complete."""
     if comp.get("complete"):
@@ -990,7 +1027,7 @@ def possibly_more(comp: dict) -> str:
         parts.append(f"{len(se)} file{'s' if len(se) != 1 else ''} with syntax errors ({x['file']}{pos}"
                      + (f" +{len(se) - 1}" if len(se) > 1 else "") + ")")
     if comp.get("unsupported"):
-        parts.append("unsupported: " + ", ".join(f"{k} {v}" for k, v in sorted(comp["unsupported"].items())))
+        parts.append(_unsupported_text(comp["unsupported"]))
     if comp.get("recorded") is False:
         parts.append("coverage not recorded")
     return ", ".join(parts)

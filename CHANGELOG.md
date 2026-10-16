@@ -20,6 +20,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- `cg coverage` prints every non-zero bucket, `excluded` included, so `indexed` plus the buckets equals `discovered`. `--details` names why each excluded file was left out (`tool config`, `test file`, `.cg.yaml exclude`). A TypeScript-plugin entry with no `.ts` / `.tsx` / `.mts` / `.cts` files is labelled `javascript` (JSON keeps `language` and adds `label`). The query coverage note drops the repo prefix on a single-repo DB (`sh 3 unsupported`) (#192).
+
 - `node`, `impact` and `callers` accept the `Name@N` and `Name@N@line` variant id they print, with no kind prefix (#203).
 
 - `cg impact` (CLI and MCP, with and without paths) appends the file basename, or the shortest unique suffix, when two entries in one group share a display name (#207).
