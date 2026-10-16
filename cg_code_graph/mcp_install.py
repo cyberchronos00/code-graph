@@ -828,10 +828,37 @@ def _graph_name(key: str, db: str) -> str:
     return stem or key
 
 
-def migrate_host(text: str, *, kind: str, path_keys: list[str], host: str, tools: str | None) -> tuple[str, list, str | None]:
-    """Fold per-repo ``cg-*`` entries into registry rows and one ``cg`` server entry.
+def _entry_tools(entry) -> tuple[str | None, str | None]:
+    """``--tools`` or env ``CG_MCP_TOOLS``. A warning when both are set and differ."""
+    flagged = _arg_value(entry.get("args"), "--tools")
+    env = entry.get("env") if isinstance(entry, dict) else None
+    from_env = None
+    if isinstance(env, dict) and env.get("CG_MCP_TOOLS") not in (None, ""):
+        raw = env.get("CG_MCP_TOOLS")
+        if isinstance(raw, str):
+            from_env = raw
+        else:
+            return flagged, "CG_MCP_TOOLS is not a string; left it off the graph"
+    if flagged and from_env and flagged != from_env:
+        return flagged, "both --tools and CG_MCP_TOOLS are set; kept --tools"
+    return flagged or from_env, None
 
-    Returns the rewritten config text, graph rows ``{name, db, roots}``, and an error.
+
+def _abs_db(db: str, base: Path | None) -> str:
+    path = Path(db).expanduser()
+    if not path.is_absolute():
+        path = (base or Path.cwd()) / path
+    return str(path.resolve())
+
+
+def migrate_host(text: str, *, kind: str, path_keys: list[str], host: str, tools: str | None,
+                 base: Path | None = None) -> tuple[str, list, str | None]:
+    """Fold per-repo ``cg-*`` entries, and a plain ``cg`` entry that has its own ``--db``, into registry rows
+    and one ``cg`` server entry.
+
+    Returns the rewritten config text, graph rows ``{name, db, roots, tools}``, and an error.
+    Per-entry ``--tools`` / ``CG_MCP_TOOLS`` is stored on the row. When those allowlists differ, the server
+    entry does not take one ``--tools`` (a warning is printed by ``run_migrate``).
     """
     from .mcp_graphs import roots_from_db
     try:
@@ -848,34 +875,59 @@ def migrate_host(text: str, *, kind: str, path_keys: list[str], host: str, tools
     rows = []
     keys = []
     for key, entry in container.items():
-        if not _per_repo_key(str(key)) or not is_ours(entry):
+        if not is_ours(entry):
             continue
         db = _arg_value(entry.get("args"), "--db")
-        if not db:
+        fold = _per_repo_key(str(key)) or (str(key) == "cg" and bool(db))
+        if not fold or not db:
             continue
         root = _arg_value(entry.get("args"), "--root")
-        roots = [root] if root else [str(p) for p in roots_from_db(Path(db))]
-        rows.append({"name": _graph_name(str(key), db), "db": str(Path(db).expanduser()), "roots": roots})
+        abs_db = _abs_db(db, base)
+        roots = [root] if root else [str(p) for p in roots_from_db(Path(abs_db))]
+        chosen, warn = _entry_tools(entry)
+        row = {"name": _graph_name(str(key), abs_db), "db": abs_db, "roots": roots, "tools": chosen}
+        if warn:
+            row["warn"] = warn
+        rows.append(row)
         keys.append(str(key))
     if not rows:
         return text, [], None
+    distinct = {r.get("tools") for r in rows if r.get("tools")}
+    server_tools = tools
+    if server_tools is None and len(distinct) == 1:
+        server_tools = next(iter(distinct))
+    elif server_tools is None and len(distinct) > 1:
+        for row in rows:
+            row.setdefault("warn", "per-graph tool allowlists differ; stored on each graph, not as one --tools")
     new = text
     if kind == "toml":
         for key in keys:
             new = remove_table(new, "mcp_servers." + key)
         try:
-            new = set_cg(new, build_entry(host, "global", Path("."), None, tools, False, registry=True))
+            new = set_cg(new, build_entry(host, "global", Path("."), None, server_tools, False, registry=True))
         except Exception as ex:  # noqa: BLE001
             return text, rows, str(ex)
         return new, rows, None
     for key in keys:
         new = remove_member(new, path_keys, key)
-    entry = build_entry(host, "global", Path("."), None, tools, False, registry=True)
+    entry = build_entry(host, "global", Path("."), None, server_tools, False, registry=True)
     try:
         new = set_member(new, path_keys, "cg", entry)
     except Exception as ex:  # noqa: BLE001
         return text, rows, str(ex)
     return new, rows, None
+
+
+def _timestamped_bak(path: Path) -> Path:
+    """``name.YYYYMMDDTHHMMSSZ.bak``, with a numeric suffix if that file already exists."""
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    cand = path.with_name(f"{path.name}.{stamp}.bak")
+    n = 0
+    while cand.exists():
+        n += 1
+        cand = path.with_name(f"{path.name}.{stamp}-{n}.bak")
+    return cand
 
 
 def run_migrate(hosts: list[str] | None, *, scope: str, root: str, tools: str | None, graphs: str | None,
@@ -915,7 +967,8 @@ def run_migrate(hosts: list[str] | None, *, scope: str, root: str, tools: str | 
         text = path.read_text(encoding="utf-8")
         kind = _kind(host)
         path_keys = [] if kind == "toml" else [container_key(host, scope)]
-        new, rows, err = migrate_host(text, kind=kind, path_keys=path_keys, host=host, tools=tools)
+        new, rows, err = migrate_host(text, kind=kind, path_keys=path_keys, host=host, tools=tools,
+                                      base=path.parent)
         if err:
             out(f"{host}: {err}")
             return 2
@@ -923,8 +976,12 @@ def run_migrate(hosts: list[str] | None, *, scope: str, root: str, tools: str | 
             out(f"{host}: no per-repo cg-* entries")
             continue
         for row in rows:
-            out(f"registry + {row['name']} db={row['db']} roots={', '.join(row['roots']) or '(from the graph)'}")
-            collected.append(GraphEntry(row["name"], Path(row["db"]), [Path(r) for r in row["roots"] if r]))
+            if row.get("warn"):
+                out(f"warning: {row['name']}: {row['warn']}")
+            tools_note = f" tools={row['tools']}" if row.get("tools") else ""
+            out(f"registry + {row['name']} db={row['db']} roots={', '.join(row['roots']) or '(from the graph)'}{tools_note}")
+            collected.append(GraphEntry(row["name"], Path(row["db"]), [Path(r) for r in row["roots"] if r],
+                                        tools=row.get("tools")))
         out(f"{host}: replace {', '.join('cg-' + r['name'] if not r['name'].startswith('cg') else r['name'] for r in rows)} "
             f"with one cg entry in {path}")
         plans.append((path, new))
@@ -948,13 +1005,13 @@ def run_migrate(hosts: list[str] | None, *, scope: str, root: str, tools: str | 
         out("(dry run: nothing written)")
         return 0
     if dest.exists():
-        backup = dest.with_name(dest.name + ".bak")
+        backup = _timestamped_bak(dest)
         shutil.copy2(dest, backup)
         out(f"backup {backup}")
     save_toml(dest, merged, file_default)
     out(f"wrote {dest}")
     for path, new in plans:
-        backup = path.with_name(path.name + ".bak")
+        backup = _timestamped_bak(path)
         shutil.copy2(path, backup)
         path.write_text(new, encoding="utf-8")
         out(f"backup {backup}")

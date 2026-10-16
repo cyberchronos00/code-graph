@@ -113,6 +113,20 @@ def test_ten_graphs_one_tool_set_and_resolution(mcp, tmp_path, monkeypatch):
     assert err.startswith("ambiguous graph:")
     assert "left" in err and "right" in err
 
+    wide = tmp_path / "wide.db"
+    _db(wide, "wide", shared)
+    # a second root so the combined graph's roots are a superset of `left`
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    combo = tmp_path / "combo.toml"
+    combo.write_text(
+        f'[[graphs]]\nname = "left"\ndb = "{left}"\nroots = ["{shared}"]\n\n'
+        f'[[graphs]]\nname = "wide"\ndb = "{wide}"\nroots = ["{shared}", "{extra}"]\n',
+        encoding="utf-8")
+    mcp.configure(graphs=str(combo))
+    monkeypatch.chdir(shared)
+    assert mcp.stats().startswith("graph wide\n")
+
     kept = mcp.apply_tool_allowlist("core")
     assert "graphs" in kept and "attack_surface" not in kept
 
@@ -167,7 +181,7 @@ def test_migrate_dry_run_and_apply(tmp_path, monkeypatch, capsys):
     rc = main(["install", "--host", "cursor", "--migrate", "--apply", "--graphs", str(graphs)])
     out = capsys.readouterr().out
     assert rc == 0 and "wrote" in out
-    assert graphs.is_file() and (cursor.with_name("mcp.json.bak")).is_file()
+    assert graphs.is_file() and list(cursor.parent.glob("mcp.json.*.bak"))
     data = json.loads(cursor.read_text())
     assert "cg-alpha" not in data["mcpServers"] and "cg-beta" not in data["mcpServers"]
     assert data["mcpServers"]["other"]["command"] == "keep"
@@ -175,6 +189,43 @@ def test_migrate_dry_run_and_apply(tmp_path, monkeypatch, capsys):
     assert "--db" not in args and "--root" not in args
     body = graphs.read_text()
     assert 'name = "alpha"' in body and 'name = "beta"' in body and str(alpha) in body
+
+
+def test_migrate_keeps_tools_relative_db_and_plain_cg(tmp_path, monkeypatch, capsys):
+    from cg_code_graph.cli import main
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    repo = tmp_path / "repo"
+    db = tmp_path / "repo.db"
+    _db(db, "repo", repo)
+    cursor = home / ".cursor" / "mcp.json"
+    cursor.parent.mkdir(parents=True)
+    cursor.write_text(json.dumps({"mcpServers": {
+        "cg": {"command": "cg-mcp", "args": ["--db", "repo.db", "--root", str(repo), "--tools", "core"],
+               "env": {"CG_MCP_TOOLS": "core"}},
+        "cg-other": {"command": "cg-mcp", "args": ["--db", str(db), "--tools", "impact"],
+                     "env": {"CG_MCP_TOOLS": "search"}},
+    }}), encoding="utf-8")
+    # relative --db is resolved from the config directory, so place the db beside mcp.json too
+    placed = cursor.parent / "repo.db"
+    placed.write_bytes(db.read_bytes())
+    graphs = tmp_path / "graphs.toml"
+    graphs.write_text('default = "kept"\n\n[[graphs]]\nname = "kept"\ndb = "/tmp/kept.db"\nroots = []\n', encoding="utf-8")
+    rc = main(["install", "--host", "cursor", "--migrate", "--apply", "--graphs", str(graphs)])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert "warning:" in out
+    assert list(graphs.parent.glob("graphs.toml.*.bak"))
+    body = graphs.read_text()
+    assert 'name = "kept"' in body
+    assert 'name = "repo"' in body and str(placed.resolve()) in body
+    assert 'tools = "core"' in body
+    assert 'tools = "impact"' in body
+    data = json.loads(cursor.read_text())
+    assert "--db" not in data["mcpServers"]["cg"]["args"]
 
 
 def test_registry_install_omits_db(tmp_path, monkeypatch, capsys):

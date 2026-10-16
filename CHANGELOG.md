@@ -8,6 +8,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Fixed
+
+- SwiftUI `NAVIGATES_TO` evidence is the line that constructs the destination (`LabelSheet(...)`, `NavigationLink(destination:)`, or the view inside `.sheet` / `navigationDestination`), including when that call sits in a modifier chain (#210).
+- An empty-tuple parameter type (`coordinator: ()`) is left as written. tree-sitter-swift 0.7.3 parses it; the empty-tuple value rewrite was turning it into `0` and flagging the file (#205).
+- A Swift default-argument expression (`gamut: Gamut = Prefs.currentGamut`) is a `CALLS` edge with `default_arg`. `impact` lists it as "via default argument" and does not walk it, and `siblings` ignores it, so callers that pass the argument no longer inflate the callee (#208).
+- `platforms divergence --kind variants` records each "used at" site with the platforms that build that site. With `--target`, only sites built for that target are listed (CLI, MCP and JSON) (#211).
+- `impact --platform` drops targets that are not built for that platform from `targets` (CLI, MCP and JSON) and does not walk them. Their edges are not counted as other incoming edges. When every match is dropped, the reply says the spec is not built for that platform (#202).
+- A bare name in `impact`, `callers` and `node` matches every language that has it, including a Swift method, static method, `#if` variant and computed property. Completeness follows those targets (#206).
+- When several registered graphs match a path or the working directory and one graph's roots contain the others, that graph is selected. Otherwise the choice list is unchanged. `cg install --migrate` stores each entry's `--tools` or `CG_MCP_TOOLS` on the graph (and warns when one server allowlist cannot represent them), folds a plain `cg` entry that has its own `--db`, resolves a relative `--db` to an absolute path, and writes timestamped `.bak` files. The unused connection pool is gone; each call still opens its own store (#200).
+
 ### Added
 
 - MCP: one `cg-mcp` process can serve many graphs (#200). Graphs come from repeatable `--db` (`NAME=PATH` or a path), `--db-dir`, and a registry file (`~/.config/cg/graphs.toml`, or `CG_GRAPHS` / `--graphs`). Each entry has a name, a database path and repo root(s), including a combined graph. The `graphs` tool (included in `--tools core`) lists name, roots, languages, indexed commit and freshness. Other tools take an optional `graph` argument; when it is omitted the server resolves from a path in the call, then MCP roots (`roots/list`) or the working directory, then the configured default, and returns the choices when more than one graph matches. Replies name their graph. Each call opens its own connection, so unused graphs are never opened. A single `--db` is unchanged: no `graph` field and no new argument. `cg install --global --registry` writes that one entry. `cg install --migrate` folds per-repo `cg-*` host entries into the registry (dry run; `--apply` writes and keeps a `.bak`).
