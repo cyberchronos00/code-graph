@@ -407,6 +407,8 @@ def _resolve_direct(st: GraphStore, spec: str) -> list[str]:
 
 
 def _resolve_direct_one(st: GraphStore, spec: str) -> list[str]:
+    if spec.startswith("route:"):
+        return match_route_spec(st, spec)
     if spec.startswith("page:/"):
         rows = st.q("SELECT id FROM nodes WHERE kind='page' AND json_extract(attrs,'$.route')=?", (spec[5:],))
         return [r["id"] for r in rows]
@@ -500,6 +502,146 @@ def _resolve_direct_one(st: GraphStore, spec: str) -> list[str]:
 
 FILE_NAME_RE = re.compile(r"(?P<file>[^#:]+\.(?:vue|ts|tsx|mts|cts|js|jsx|mjs|cjs|svelte))#(?P<name>[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:~\d+)?)")
 FILE_NAME_KINDS = ("function", "method", "class", "composable", "store", "type", "interface", "enum")
+
+
+_PARAM_SEG = re.compile(r"^(?::[^/]+|\{[^{}/]+\})$")
+
+
+def _route_body(spec: str) -> str | None:
+    if not spec.startswith("route:"):
+        return None
+    return spec[len("route:"):].strip()
+
+
+def _split_verb_path(text: str) -> tuple[str, str]:
+    verb, _, path = text.strip().partition(" ")
+    return verb, path
+
+
+def _norm_segs(path: str) -> list[str]:
+    body = path.strip()
+    if body.startswith("/"):
+        body = body[1:]
+    if not body:
+        return []
+    return ["{}" if _PARAM_SEG.match(seg) else seg for seg in body.split("/")]
+
+
+def _route_rows(st: GraphStore) -> list[str]:
+    return [r["id"] for r in st.q("SELECT id FROM nodes WHERE kind='route' ORDER BY id")]
+
+
+def _route_verb_path(nid: str) -> tuple[str, str]:
+    body = nid[len("route:"):] if nid.startswith("route:") else nid
+    return _split_verb_path(body)
+
+
+def match_route_spec(st: GraphStore, spec: str) -> list[str]:
+    """Route ids for ``route:VERB /path``.
+
+    The verb is case-insensitive; ``*`` as the verb is every verb. A ``{param}`` or ``:param``
+    segment matches any param segment. ``*`` in the path is a glob that spans segments.
+    """
+    body = _route_body(spec)
+    if body is None:
+        return []
+    verb, path = _split_verb_path(body)
+    ids = _route_rows(st)
+    if "*" in path:
+        pieces = []
+        for part in path.split("*"):
+            bits = []
+            for seg in part.split("/"):
+                if _PARAM_SEG.match(seg):
+                    bits.append("(?:\\{[^}/]+\\}|:[^/]+)")
+                else:
+                    bits.append(re.escape(seg))
+            pieces.append("/".join(bits))
+        rx = re.compile("^" + ".*".join(pieces) + "$")
+        want_v = None if verb == "*" else verb.upper()
+        out = []
+        for nid in ids:
+            got_v, got_p = _route_verb_path(nid)
+            if want_v and got_v.upper() != want_v:
+                continue
+            if rx.match(got_p):
+                out.append(nid)
+        return out
+    want_v = None if verb == "*" else verb.upper()
+    want = _norm_segs(path)
+    out = []
+    for nid in ids:
+        got_v, got_p = _route_verb_path(nid)
+        if want_v and got_v.upper() != want_v:
+            continue
+        if _norm_segs(got_p) == want:
+            out.append(nid)
+    return out
+
+
+def _edit_distance(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(cur[-1] + 1, prev[j] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def route_failure(st: GraphStore, spec: str) -> dict | None:
+    """Unknown ``route:`` spec: message, nearest routes, and the JSON error object. None when it matches."""
+    body = _route_body(spec)
+    if body is None or match_route_spec(st, spec):
+        return None
+    verb, path = _split_verb_path(body)
+    shown = f"{verb.upper() if verb != '*' else '*'} {path}".strip()
+    ids = _route_rows(st)
+    want = _norm_segs(path.split("*", 1)[0].rstrip("/"))
+
+    def score(nid: str) -> tuple:
+        got_v, got_p = _route_verb_path(nid)
+        same = 0 if verb == "*" or got_v.upper() == verb.upper() else 1
+        got = _norm_segs(got_p)
+        lead = 0
+        for x, y in zip(want, got):
+            if x == y:
+                lead += 1
+            else:
+                break
+        return (same, -lead, _edit_distance("/".join(want), "/".join(got)), nid)
+
+    nearest = [nid for nid in sorted(ids, key=score)[:5]]
+    labels = [f"{v} {p}".strip() for v, p in (_route_verb_path(n) for n in nearest)]
+    below = []
+    if "*" not in path:
+        stem = path.rstrip("/")
+        for nid in ids:
+            got_v, got_p = _route_verb_path(nid)
+            if verb != "*" and got_v.upper() != verb.upper():
+                continue
+            if got_p.startswith(stem) and got_p != path:
+                below.append(nid)
+    lines = [f"no such route: {shown}"]
+    if labels:
+        lines.append("nearest: " + ", ".join(labels))
+    glob = None
+    if below:
+        glob = f"route:{verb if verb != '*' else '*'} {path.rstrip('/')}/*"
+        lines.append(f"(for every route below a path: {glob!r})")
+    return {
+        "error": "no_such_route",
+        "spec": spec,
+        "suggestions": labels,
+        "text": "\n".join(lines),
+        "glob": glob,
+    }
 
 
 def _like(s: str) -> str:
@@ -2149,13 +2291,16 @@ def api_calls(st: GraphStore, flt: str = "all") -> list[dict]:
         row = {"endpoint": nid, "attrs": json.loads(n["attrs"] or "{}"), "calls": calls.get(nid, []), "routes": routes.get(nid, [])}
         if flt == "unmatched" and row["routes"]:
             continue
-        if flt not in ("all", "unmatched") and not _api_row_matches(flt, row, n["name"]):
+        if flt not in ("all", "unmatched") and not _api_row_matches(flt, row, n["name"], st):
             continue
         out.append(row)
     return sorted(out, key=lambda r: r["endpoint"])
 
 
-def _api_row_matches(flt: str, row: dict, name: str | None) -> bool:
+def _api_row_matches(flt: str, row: dict, name: str | None, st: GraphStore | None = None) -> bool:
+    if flt.startswith("route:"):
+        allowed = set(match_route_spec(st, flt)) if st is not None else set()
+        return any(m["route"] in allowed for m in row["routes"])
     if "*" not in flt:
         return flt in json.dumps(row) or flt in (name or "")
     rx = re.compile("^" + ".*".join(re.escape(x) for x in flt.strip().split("*")) + "$", re.I)
