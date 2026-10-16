@@ -120,7 +120,7 @@ def test_mcp_tools_on_combined_and_reindex_repo():
         assert "orders" in M.downstream("page:/")
         assert "UNMATCHED" in M.api_calls("unmatched")
         out = M.index(repo="bookstore-web")  # re-index the frontend's own DB, then relink
-        assert out.startswith("re-indexed bookstore-web") and "4/6 call sites matched" in out
+        assert out.startswith("re-indexed bookstore-web") and "3/6 call sites matched" in out  # placeOrder has no live caller (#180)
     finally:
         M.STATE.clear(); M.STATE.update(old)
 

@@ -137,7 +137,10 @@ def known_origin_text(attrs: dict) -> str | None:
     return None
 
 
-_GENERIC_ORIGIN = {"env", "base", "url", "api", "app", "http", "https", "host", "origin", "endpoint", "service", "internal"}
+_GENERIC_ORIGIN = {"env", "base", "url", "uri", "api", "app", "http", "https", "host", "origin", "endpoint", "service",
+                   "internal", "server", "backend", "public", "private", "remote", "domain", "root", "prefix", "path",
+                   "address", "addr", "runtime", "config", "runtimeconfig", "process", "import", "meta", "window",
+                   "location", "nuxt", "next", "vite", "react", "expo", "vue", "localhost", "www", "com"}
 
 
 def repos_for_origin(text: str, servers: list[str]) -> list[str] | None:
@@ -146,17 +149,20 @@ def repos_for_origin(text: str, servers: list[str]) -> list[str] | None:
     ``None`` when the origin is a generic API base (``API_BASE_URL``) and does not name a repo:
     matching stays as it was. ``[]`` when it names a service that is not one of ``servers``.
     """
-    low = text.lower()
+    # camelCase splits (runtimeConfig.public.apiBase -> runtime config public api base); `-`, `_` and `.` all separate,
+    # so ORDERS_API_URL names an orders-api repo
+    split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text).lower()
+    norm = "-" + "-".join(re.findall(r"[a-z0-9]+", split)) + "-"
     hits = []
     for name in servers:
-        token = name.lower()
+        token = "-".join(re.findall(r"[a-z0-9]+", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name).lower()))
         if len(token) < 3:
             continue
-        if re.search(rf"(^|[^a-z0-9]){re.escape(token)}([^a-z0-9]|$)", low):
+        if f"-{token}-" in norm:
             hits.append(name)
     if hits:
         return hits
-    tokens = [t for t in re.findall(r"[a-z][a-z0-9]+", low) if t not in _GENERIC_ORIGIN]
+    tokens = [t for t in re.findall(r"[a-z][a-z0-9]+", split) if t not in _GENERIC_ORIGIN]
     if not tokens:
         return None
     return []
@@ -431,6 +437,7 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
         by_server[rt["server"]].append(rt)
     results = []
     new_edges = []
+    matched_origins: set[tuple[str, str]] = set()
     for client, ep_id, a, _test in http_rows:
         targets = [s for s in server_names if (s != client or folded_self) and (client not in allow or s in allow[client])]
         pool = [rt for s in targets for rt in by_server[s]]
@@ -443,7 +450,11 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
         if origin_text and owners == [] and not res.get("matched") and a.get("origin_kind") != "other":
             reason = res.get("reason") or ""
             if reason.startswith(("no backend route", "not a backend URL")) or "suffix" in reason:
+                res["_reason_before_external"] = reason
+                res["_origin_text"] = origin_text
                 res["reason"] = "external (other origin)"
+        elif origin_text and res.get("matched"):
+            matched_origins.add((client, origin_text))
         res.update({"endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, []),
                     "_client": client, "_servers": targets})
         results.append(res)
@@ -452,6 +463,12 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
             rr = rmap[m["route"]]
             new_edges.append((ep_id, m["route"], "MATCHES_ROUTE", rr["file"], rr["line"], m["confidence"], CONFIDENCE_RANK[m["confidence"]],
                               json.dumps({"client_path": a["path"], "uri_variant": m["uri_variant"], "segments": m["segments"]}), None))
+    for res in results:
+        # an origin whose other calls from this client matched a linked server is that backend, not an external one
+        before = res.pop("_reason_before_external", None)
+        if before is not None and (res["_client"], res.pop("_origin_text")) in matched_origins:
+            res["reason"] = before
+        res.pop("_origin_text", None)
     db.executemany("INSERT INTO edges(src,dst,kind,file,line,confidence,conf_rank,attrs,gate) VALUES (?,?,?,?,?,?,?,?,?)", new_edges)
     db.commit()
     subscriptions = pair_subscriber_urls(db, routes, server_names, allow, folded_self)
