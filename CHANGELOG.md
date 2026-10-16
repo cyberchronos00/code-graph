@@ -8,6 +8,20 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.2] - 2026-10-17
+
+### Added
+
+- Nuxt: Nitro server routes. Each file under `server/api/` becomes `route:<METHOD> /api/<path>` and each file under `server/routes/` becomes `route:<METHOD> /<path>` (root `server/` and Nuxt 3 `<srcDir>/server`), entry `http_route`, `framework: nuxt`. The method comes from the file suffix (`plants.get.ts` → `GET /api/plants`, `plants/[id].put.ts` → `PUT /api/plants/{id}`), no suffix is `ANY`, `index` is the directory, `[...slug]` is `{slug*}`, and `(group)` directories and `.dev` / `.prod` suffixes are dropped. The route `ROUTES_TO` its default-export handler (`defineEventHandler`, `defineCachedEventHandler`, a plain function). `server/middleware/*` handlers are `USES_MIDDLEWARE` targets of every Nitro route, and `server/plugins/*` handlers are entry `main`; both carry `attrs.nitro`. Same-origin `$fetch` / `useFetch` / `useLazyFetch` / `ofetch` calls with a literal or template path get `MATCHES_ROUTE` to the route, so `impact`, `reaches`, `routes` and `api-calls` cross from a page or composable to the server handler. The most specific route wins over a catch-all, and a route whose handler calls `proxyRequest` / `sendProxy` (`attrs.proxy`) is not a link target. The Nuxt stats have a `nitro` block (#216).
+- `cg doctor` says when a newer cg release is on PyPI: one request with a 2 s timeout, cached for a day in the user cache (`update-check.json`), silent when offline. `cg --version` repeats the notice from that cache and never connects. Indexing, queries and the MCP server never check. `CG_NO_UPDATE_CHECK=1` turns it off; it is also off under CI and in tests (#98, part).
+
+### Changed
+
+- Nuxt i18n keys have a source location: `i18n:<key>` sits at the key's line in the default locale's file (`i18n.defaultLocale` in `nuxt.config`, else the first locale found), and `attrs.definitions` lists `{locale, file, line}` for every locale file and SFC `<i18n>` block. `attrs.missing_locales` names the locales without a key the default locale has, and `attrs.uses` counts the uses. `cg search` prints `file:line (N locales, M uses)` and `missing: …`, and `cg node` prints the definitions. Locale files are read from `i18n.langDir` (under `i18n/`, the srcDir or the root) as well as the old dirs, `.yaml` / `.yml` files are read, `i18n.locales[].file` names a file's locale, and a file keyed by locale codes such as `es` or `pt-BR` defines each locale instead of being flattened as `es.orders.cancel` (#182).
+- `USES_I18N` propagates: the components and pages using a key are its dependents in `reaches` and its callers in `impact` (with entry points), and `downstream` from a page lists the keys it shows (#182).
+- TypeScript test trees: a nested `playwright/` or `cypress/` directory anywhere (`help/playwright/`), and a nested `e2e/` outside the source dirs, are test roots like the top-level ones. Their specs are `test` nodes and their helper modules are test code that `search` finds, instead of being reported as unmapped or excluded (#156).
+- `cg snippet` (and the MCP `snippet` tool): an ambiguous name or a miss ends with a `cg search <name>` hint; `--json` has it as `hint` (#156).
+
 ## [0.23.1] - 2026-10-16
 
 ### Changed
