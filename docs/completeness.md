@@ -25,6 +25,10 @@ also carries a `completeness` object.
 [source roots](python.md), a `pkg.py` next to a `pkg/` package, a `.rs` file outside every
 crate, or a `.ts` / `.js` file outside the TS source dirs, `bin` scripts and test trees (hint:
 `.cg.yaml` `include`). Tool configs, `.d.ts` and fixtures inside those dirs are `excluded`.
+The one-line summary prints every non-zero bucket, so `indexed` plus the buckets equals
+`discovered`. `--details` gives the reason on each excluded file (`tool config`, `test file`,
+`.cg.yaml exclude`). A TypeScript-plugin entry with no `.ts` / `.tsx` / `.mts` / `.cts` files
+is labelled `javascript`; the JSON keeps the plugin key `typescript` and adds `label`.
 
 Generated, copied and vendored files are not `discovered`. They are
 `generated: N files excluded`. See [Generated files](generated.md). Parser mode (`exact`,
@@ -32,7 +36,7 @@ Generated, copied and vendored files are not `discovered`. They are
 
 ```console
 $ cg coverage --db out/proj.db
-coverage proj: not fully covered: python 4 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped
+coverage proj: not fully covered: python 5 discovered, 2 indexed (exact parser): 1 parse failed, 1 unmapped, 1 excluded
   python: parse failed: app/bad.py
     unmapped: my-scripts/run.py
     fix: list their roots under python.source_roots in.cg.yaml
