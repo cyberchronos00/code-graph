@@ -988,10 +988,13 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
     out = {"variants": [], "api_surface": [], "missing_callee": [], "missing_callee_tests": []}
     explicit = getattr(builder, "explicit_variant_imports", None) or set()
     importers = defaultdict(set)
+    call_uses = defaultdict(list)        # callee -> (file:line, caller id)
     ext_refs = defaultdict(set)          # node -> files referring to it
     for e in builder.edges.values():
         if e.kind in ("IMPORTS", "CALLS", "REFERENCES_FN") and e.file:
             importers[e.dst].add(f"{e.file}:{e.line}")
+        if e.kind in ("CALLS", "REFERENCES_FN") and e.file:
+            call_uses[e.dst].append((f"{e.file}:{e.line}", e.src))
         if e.kind not in ("CONTAINS", "DEFINES") and e.file:
             ext_refs[e.dst].add(e.file)
 
@@ -1048,12 +1051,22 @@ def divergence_findings(builder, groups: list[dict], nvals: dict, targets: list[
             continue                       # same targets: overloads / repeated declarations, not platform variants
         covered = {p for i in ids for p in KNOWN if _avail(nvals.get(i), p)}
         n0 = builder.nodes[ids[0]]
+        seen_use = set()
+        used_rows = []
+        for i in ids:
+            for loc, src in call_uses.get(i, ()):
+                if loc in seen_use:
+                    continue
+                seen_use.add(loc)
+                sv = nvals.get(src)
+                used_rows.append({"at": loc, "platforms": [p for p in shown if _avail(sv, p)]})
+        used_rows.sort(key=lambda r: r["at"])
         out["variants"].append({"kind": "per-platform definitions", "name": base.split(":", 1)[1] if "::*::" in base else (n0.fqn or n0.name),
                                 "members": [{"id": i, "file": builder.nodes[i].file, "line": builder.nodes[i].line,
                                              "platforms": [p for p in shown if _avail(nvals.get(i), p)],
                                              "condition": builder.nodes[i].attrs.get("platform_expr")} for i in ids],
                                 "covered": [p for p in KNOWN if p in covered and p in tset], "missing": [p for p in tset if p not in covered],
-                                "used_at": sorted(importers.get(ids[0], ()))[:5]})
+                                "used_at": used_rows[:8]})
     # references on a target where the callee does not exist (a reference to any variant counts for the group)
     gslot = {}
     gmembers = {g["name"]: g["members"] for g in groups}
@@ -1291,7 +1304,16 @@ def divergence(st, kind: str | None = None, target: str | None = None) -> dict:
     s = summary(st)
     d = dict(s.get("divergence") or {})
     if target:
-        d["variants"] = [v for v in d.get("variants", []) if target in v.get("missing", [])]
+        kept = []
+        for v in d.get("variants", []):
+            if target not in v.get("missing", []):
+                continue
+            v = dict(v)
+            ua = v.get("used_at") or []
+            if ua and isinstance(ua[0], dict):
+                v["used_at"] = [u for u in ua if target in (u.get("platforms") or [])]
+            kept.append(v)
+        d["variants"] = kept
         d["api_surface"] = [v for v in d.get("api_surface", []) if target in v.get("missing_on", [])]
         d["missing_callee"] = [v for v in d.get("missing_callee", []) if target in v.get("missing_on", [])]
         if "missing_callee_tests" in d:
@@ -1316,7 +1338,14 @@ def render_divergence(res: dict, limit: int = 40) -> str:
             loc = m.get("file", "") + (f":{m['line']}" if m.get("line") else "")
             out.append(f"      {loc}  {', '.join(m['platforms']) or 'no known target'}  ({m.get('condition') or '-'})")
         if v.get("used_at"):
-            out.append(f"      used at: {', '.join(v['used_at'][:3])}")
+            shown_at = []
+            for u in v["used_at"][:3]:
+                if isinstance(u, dict):
+                    plats = ", ".join(u.get("platforms") or []) or "no known target"
+                    shown_at.append(f"{u.get('at')} [{plats}]")
+                else:
+                    shown_at.append(str(u))
+            out.append(f"      used at: {', '.join(shown_at)}")
     api = res.get("api_surface") or []
     if api:
         out.append(f"\n== API SURFACE DIFFERS (a variant lacks a symbol its siblings define): {len(api)}")
