@@ -63,7 +63,11 @@ const INDEX_TESTS = cfg.index_tests !== false
 const TEST_FILE_RE = /\.(test|spec|e2e-spec|e2e|cy)\.(t|j)sx?$/
 const TEST_DIR_RE = /(^|\/)(__tests__|e2e|tests?|cypress|playwright)\//
 const TEST_ROOTS = ['e2e', 'test', 'tests', 'cypress', 'playwright', 'src/test', 'src/tests', 'src/e2e']
-const isTestRel = r => TEST_FILE_RE.test(r) || /(^|\/)__tests__\//.test(r) || TEST_ROOTS.some(d => r.startsWith(d + '/'))
+// nested test trees (#156): a `playwright/` or `cypress/` directory below the top level (help/playwright/), and a nested
+// `e2e/` outside the source dirs, are test roots like the top-level ones (filled once the source dirs are known)
+const NESTED_TEST_NAMES = new Set(['playwright', 'cypress', 'e2e'])
+const nestedTestRoots = []
+const isTestRel = r => TEST_FILE_RE.test(r) || /(^|\/)__tests__\//.test(r) || TEST_ROOTS.some(d => r.startsWith(d + '/')) || nestedTestRoots.some(d => r.startsWith(d + '/'))
 
 // ---------- file kinds (from the framework plugin: [[prefix, kind], ...]) ----------
 function fileKind(r) {
@@ -270,9 +274,25 @@ function walkTests(d, all, forced = false) {
     else if (SRC_EXT.test(e.name) && (e.isFile() || (e.isSymbolicLink() && !skippedLinks.includes(rel(p)) && fileEntry(e, p))) && !e.name.endsWith('.d.ts') && (all || isTestRel(rel(p)))) testFiles.add(p)
   }
 }
+function findNestedTestRoots(d, depth) {
+  if (depth > 6) return
+  let ents = []
+  try { ents = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+  for (const e of ents) {
+    if (!e.isDirectory()) continue
+    const p = path.join(d, e.name), r = rel(p)
+    if (skipDir(e.name, r, TEST_SKIP_NAMES, false) || excludedRel(r + '/') || TEST_ROOTS.includes(r)) continue
+    if (depth > 0 && NESTED_TEST_NAMES.has(e.name) && (e.name !== 'e2e' || !srcDirs.some(s => p === s || p.startsWith(s + path.sep)))) {
+      nestedTestRoots.push(r)
+      continue
+    }
+    findNestedTestRoots(p, depth + 1)
+  }
+}
 if (INDEX_TESTS) {
+  findNestedTestRoots(ROOT, 0)
   for (const d of srcDirs) walkTests(d, false)
-  for (const d of TEST_ROOTS) { const p = path.resolve(ROOT, d); if (fs.existsSync(p) && fs.statSync(p).isDirectory()) walkTests(p, true) }
+  for (const d of [...TEST_ROOTS, ...nestedTestRoots]) { const p = path.resolve(ROOT, d); if (fs.existsSync(p) && fs.statSync(p).isDirectory()) walkTests(p, true) }
 }
 // scripts the tests run in a subprocess (`spawnSync('node', [path.join(__dirname, '..', 'tools', 'gen.js')])`,
 // `execSync('node tools/gen.js')`) outside every source dir are source files too, so the subprocess link
@@ -3728,6 +3748,6 @@ fs.writeFileSync(cfg.out, JSON.stringify({ nodes, edges, api_calls: apiCalls, i1
   // for `cg coverage` (#106): the files analysed, and the roots they come from (source dirs, source files, test trees);
   // a discovered file outside every root was never read, so it is not indexed rather than exact
   seen_files: [...new Set(sourceFiles.map(sf => rel(realFile(sf))))].sort(),
-  roots: [...srcDirs.map(d => rel(d) + '/'), ...[...srcFiles].map(rel), ...TEST_ROOTS.map(d => d + '/')].filter(r => r && r !== '/' && !r.startsWith('..')),
+  roots: [...srcDirs.map(d => rel(d) + '/'), ...[...srcFiles].map(rel), ...TEST_ROOTS.map(d => d + '/'), ...nestedTestRoots.map(d => d + '/')].filter(r => r && r !== '/' && !r.startsWith('..')),
   stats }))
 console.log(JSON.stringify(stats))

@@ -377,7 +377,7 @@ structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php"
 ## `downstream {'target': 'page:/reports/:id', 'max_per_kind': 10}`  (570 chars)
 
 ```
-targets: page:app/pages/reports/[id].vue | reached 33 nodes | gate=new_inventory
+targets: page:app/pages/reports/[id].vue | reached 35 nodes | gate=new_inventory
 tables touched (2): orders, stores
 
 ## route (2)

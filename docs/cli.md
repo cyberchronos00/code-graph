@@ -8,7 +8,7 @@
 |---|---|---|
 | `index ROOT --db DB` | Build the graph. Stats JSON on stdout; coverage on stderr. `--name`, `--gates`, `--scip` (repeatable). Missing toolchain skips that language. Invalid `.cg.yaml` exits 2. | [configuration](configuration.md#project-file) |
 | `detect ROOT` | Languages and frameworks under ROOT, no index. | `cg detect -h` |
-| `doctor [ROOT]` | Versions, extractors, and exact / heuristic / unavailable per language. ROOT limits this to the project. `--scip FILE` checks an index (repeatable). A module that fails to import exits 1. | [install](install.md) |
+| `doctor [ROOT]` | Versions, extractors, and exact / heuristic / unavailable per language. ROOT limits this to the project. `--scip FILE` checks an index (repeatable). A module that fails to import exits 1. Says when a newer release is on PyPI (one request with a 2 s timeout, cached for a day; silent offline; off with `CG_NO_UPDATE_CHECK=1` and under CI). `cg --version` repeats that notice from the cache and never connects. | [install](install.md) |
 | `setup [LANG]...` | Install TypeScript / PHP / Dart extractors now (`--quiet`). Default: every language whose toolchain is present. | [install](install.md) |
 | `setup --prune` | Remove extractor installs this cg does not use. `--dry-run` lists them. A held lock is kept. | [clean](#clean) |
 | `config show\|validate [ROOT]` | Effective config and where each value comes from, or check `.cg.yaml` (exit 2 if invalid). Same flags as `index`, `routes`, and `serve` (`--no-apps` included). | [configuration](configuration.md#project-file) |
@@ -21,7 +21,7 @@
 | `path SRC DST` | One shortest evidence chain. No path: reason on stdout, exit 1. | [answer shape](#answer-shape) |
 | `routes` | Guards, what the route reaches, and frontend callers on a linked graph. | [routes and guards](#routes-and-guards) |
 | `search NAME` | Nodes by name or FQN substring, plus middleware / guard / auth names. `--kind`, `--limit`. | `cg search -h` |
-| `snippet SPEC` | Source from the index: `path:start-end`, then numbered lines. `--context`, `--max-lines` (default 200). Ambiguous name lists candidates and exits nonzero. | [specs](#query-targets-specs) |
+| `snippet SPEC` | Source from the index: `path:start-end`, then numbered lines. `--context`, `--max-lines` (default 200). Ambiguous name lists candidates and exits nonzero; that reply and a miss end with a `cg search <name>` hint (the MCP `snippet` tool says the same). | [specs](#query-targets-specs) |
 | `explore QUERY` | Question or spec → source, entry points, call paths, blast radius in one answer. `--budget`, `--json`. | [explore](#explore) |
 | `node SPEC` | Location, fqn, platforms, attrs, and edges (one site, with a count). | `cg node -h` |
 | `stats` | Project, languages, coverage line, node and edge counts. | `cg stats -h` |

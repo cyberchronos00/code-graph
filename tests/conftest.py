@@ -6,3 +6,4 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 os.environ["TZ"] = "UTC"  # timestamps in generated sample outputs do not depend on the machine's zone
 time.tzset()
+os.environ.setdefault("CG_NO_UPDATE_CHECK", "1")  # no PyPI newer-release check from tests (tests/test_update_check.py mocks it)

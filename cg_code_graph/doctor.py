@@ -407,12 +407,25 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         "legacy_cache": cache.legacy_report(),
         **({"hooks_outdated": _outdated_hooks(rootp)} if rootp is not None else {}),
         "update": "uv tool upgrade cg-code-graph  |  pipx upgrade cg-code-graph  |  install.sh --update",
+        "latest": _latest(),
         **({"scip": [scip_health(x) for x in scip]} if scip else {}),
     }
 
 
+def _latest() -> dict:
+    """Newer-release check (#98): PyPI at most once a day, cached; never fails or blocks for long."""
+    from .update_check import check
+    try:
+        return check()
+    except Exception:
+        return {"current": __version__, "latest": None, "newer": False, "source": "none", "disabled": None}
+
+
 def render(r: dict) -> str:
     out = [f"cg {r['cg']}  (Python {r['python']}, {r['os']}; {r['package']}{', checkout' if r['checkout'] else ''})"]
+    from .update_check import notice
+    if (n := notice(r.get("latest") or {})):
+        out.append(f"newer release: {n}")
     out.append("tools:")
     for k, v in r["tools"].items():
         out.append(f"  {k:<14} {v['version'] or 'not found'}" + (f"  ({v['path']})" if v["path"] else "")

@@ -1,0 +1,9 @@
+{
+  "orders": {
+    "title": "Orders",
+    "cancel": "Cancel order"
+  },
+  "nav": {
+    "home": "Home"
+  }
+}

@@ -144,10 +144,17 @@ and routes carry `base`.
 Detect: `nuxt.config.{ts,js,mjs}`. Source dirs are the srcDir (literal `srcDir` in `nuxt.config`, else `app/` in the
 Nuxt 4 layout, `src/`, or the project root) plus the root-level `server/` (Nitro: `api/`, `routes/`, `middleware/`,
 `plugins/`, `utils/`) and `shared/` (Nuxt 4) when the srcDir is not the root. With a root srcDir (the Nuxt 3 default)
-`server/` is already inside it. Files in `server/` and `shared/` are indexed as TypeScript modules with their calls;
-Nitro route handlers are not yet `route:` nodes. Without `.nuxt/` (no `npx nuxi prepare`), cg generates stand-ins for
-the auto-imports and global components. Another directory (a local layer, a module) is read when it is listed in
-`.cg.yaml` `include`.
+`server/` is already inside it. Files in `server/` and `shared/` are indexed as TypeScript modules with their calls.
+Without `.nuxt/` (no `npx nuxi prepare`), cg generates stand-ins for the auto-imports and global components. Another
+directory (a local layer, a module) is read when it is listed in `.cg.yaml` `include`.
+
+| area | what is extracted |
+|---|---|
+| pages | `pages/**/*.vue` → `page` with the route path (`/shelves/:id`), entry `ui_page`; `app.vue`, layouts, global middleware and plugins are `ui_global`; `USES_LAYOUT` from `definePageMeta({ layout })` |
+| Nitro routes | each file under `server/api/` → `route:<METHOD> /api/<path>`, under `server/routes/` → `route:<METHOD> /<path>` (no `/api` prefix), entry `http_route`, `framework: nuxt`. The method comes from the file suffix (`plants.get.ts` → `GET`, `plants/[id].put.ts` → `PUT /api/plants/{id}`); no suffix is `ANY`. `index` is the directory path, `[id]` is `{id}`, `[...slug]` is `{slug*}`, `(group)` directories and `.dev` / `.prod` suffixes are dropped. `ROUTES_TO` the default-export handler (`defineEventHandler`, `defineCachedEventHandler`, a plain function) |
+| Nitro middleware / plugins | `server/middleware/*` handlers are `USES_MIDDLEWARE` targets of every Nitro route (`nitro:<name>`); `server/plugins/*` handlers are entry `main`. Both have `attrs.nitro` (`middleware`, `plugin`); they are not routes |
+| frontend → server | same-origin `$fetch`, `useFetch`, `useLazyFetch` and `ofetch` calls with a literal or template path (`/api/plants/${id}`) get `MATCHES_ROUTE` to the matching Nitro route, so `impact`, `reaches` and `api-calls` cross from a page or composable to the handler. The most specific route wins over a catch-all. A route whose handler calls `proxyRequest` / `sendProxy` has `attrs.proxy` and is not a link target. Calls with a configured base URL (`runtimeConfig.public.apiBase`) stay for `cg link` |
+| i18n | `$t('key')`, `t('key')` → `i18n:<key>` with `USES_I18N` from the component or page (propagating, so `reaches` / `impact` on a key list the pages showing it). The node's `file:line` is the key in the default locale's file (`i18n.defaultLocale`, else the first locale found); `attrs.definitions` lists `{locale, file, line}` for every locale file and SFC `<i18n>` block, `attrs.missing_locales` the locales without the key, `attrs.uses` the number of uses. Locale files are `.json`, `.yaml` and `.yml` under `i18n/<langDir>`, `<srcDir>/<langDir>`, `<langDir>` (`i18n.langDir`, default `locales`) and `app/locales`; `i18n.locales[].file` names a file's locale, else its name (`pt-BR.yaml`). A file keyed by locale codes (`{"es": {...}, "pt-BR": {...}}`) defines each locale |
 
 ## Stored fields
 
@@ -181,6 +188,9 @@ carries `branch` and `branch_line`.
   `meta`, `links`, `headers`, `shouldRevalidate` and `ErrorBoundary` are not nodes. Generated
   `+types` and Vite options other than a literal `appDirectory` are not read. A component that
   forwards `to` through props is not a link. TanStack Router and Expo Router are separate.
+- Nitro: `defineEventHandler({ handler })` object form and handlers re-exported from another file fall back to the
+  module node (`attrs.handler_unresolved`). Route rules (`routeRules`), `nitro.handlers` registered in `nuxt.config`
+  and `server/api` dirs of layers are not read. i18n keys built at run time (`` $t(`status.${s}`) ``) are not nodes.
 - Express middleware order is known inside one file. Dynamic `require(path)` is not followed.
 - Untyped JavaScript resolves when the checker can see the object literal or the CommonJS
   export.

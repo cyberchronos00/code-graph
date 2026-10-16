@@ -44,6 +44,14 @@ def resolve_targets(st: GraphStore, spec: str) -> list[str]:
 
 
 
+def _search_hint(spec: str, ambiguous: bool = False) -> str:
+    """One line pointing at `cg search` (the MCP `search` tool) for a snippet spec that matched several nodes or none (#156)."""
+    q = spec if re.fullmatch(r"[\w.:#/$-]+", spec or "") else repr(spec)
+    if ambiguous:
+        return f"run `cg search {q}` (MCP: search) to see the matches with file:line, then snippet one id or FQN"
+    return f"try `cg search {q}` (MCP: search) with part of the name, then snippet a listed id or FQN"
+
+
 def snippet(st: GraphStore, spec: str, context: int = 0, max_lines: int = 200) -> dict:
     """Source of one symbol, read from disk via the node file / line / end_line. Returns a dict
     whose "status" is one of: ok (id, kind, file, start, end, shown_start, shown_end,
@@ -52,14 +60,15 @@ def snippet(st: GraphStore, spec: str, context: int = 0, max_lines: int = 200) -
     disk, with the paths tried). context adds lines around the span; max_lines caps the body."""
     ids = list(dict.fromkeys(resolve_targets(st, spec)))
     if not ids:
-        return {"status": "none", "spec": spec}
+        return {"status": "none", "spec": spec, "hint": _search_hint(spec)}
     if len(ids) > 1:
         cands = []
         for nid in ids[:20]:
             n = st.node(nid)
             cands.append({"id": nid, "kind": n["kind"] if n else "?",
                           "file": n["file"] if n else None, "line": n["line"] if n else None})
-        return {"status": "ambiguous", "spec": spec, "count": len(ids), "candidates": cands}
+        return {"status": "ambiguous", "spec": spec, "count": len(ids), "candidates": cands,
+                "hint": _search_hint(spec, ambiguous=True)}
     nid = ids[0]
     n = st.node(nid)
     if not n or not n["file"] or not n["line"]:
@@ -95,7 +104,7 @@ def render_snippet(res: dict) -> str:
     error line for a non-ok status."""
     status = res.get("status")
     if status == "none":
-        return f"no node matches {res['spec']!r}; try `search` with part of the name"
+        return f"no node matches {res['spec']!r}; {res.get('hint') or _search_hint(res['spec'])}"
     if status == "no_source":
         return f"{res['id']}: no source location recorded (nothing to show)"
     if status == "missing":
@@ -106,6 +115,7 @@ def render_snippet(res: dict) -> str:
         for c in res["candidates"]:
             loc = f"{c['file']}:{c['line']}" if c.get("file") else "(no source location)"
             out.append(f"  {c['id']}  [{c['kind']}]  {loc}")
+        out.append(res.get("hint") or _search_hint(res["spec"], ambiguous=True))
         return "\n".join(out)
     lines = res["lines"]
     out = [f"{res['file']}:{res['start']}-{res['end']}"]
@@ -1301,6 +1311,13 @@ def with_generated(row: dict) -> dict:
     """A node row without its raw attrs, plus `generated` (the reason) for a node from a generated / copied / vendored
     file (indexed with --include-generated)."""
     raw = row.pop("attrs", None)
+    if raw and row.get("kind") == "i18n":
+        try:
+            a = json.loads(raw) or {}
+        except ValueError:
+            a = {}
+        row["i18n"] = {"locales": len({d.get("locale") or d.get("file") for d in a.get("definitions") or []}),
+                       "uses": a.get("uses") or 0, "missing_locales": a.get("missing_locales") or []}
     if raw and ('"platforms"' in raw or '"available"' in raw):
         from .platforms import node_platforms
         row.update(node_platforms(raw))
@@ -1592,10 +1609,12 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
         built = [t for t in targets if t not in set(not_built)]
         targets = built
     kinds = CALL_LIKE + DATA_USE if any(t.startswith(DATA_TARGET) for t in targets) else CALL_LIKE
+    if any(t.startswith("i18n:") for t in targets):
+        kinds = kinds + ["USES_I18N"]   # the components / pages showing a translation key are its callers (#182)
     si = _has_class_target(targets)
     rel = override_relations(st, targets, min_conf)
     below = override_seeds(st, spec, targets, min_conf)
-    cols = _table_columns(st, targets) if kinds is not CALL_LIKE else []
+    cols = _table_columns(st, targets) if any(t.startswith(DATA_TARGET) for t in targets) else []
     seeds = targets + cols + below
     depth = reverse_closure(st, seeds, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform)
     own = reverse_closure(st, targets + cols, kinds=kinds, min_conf=min_conf, seed_inst=si, platform=platform) if below else depth
@@ -2517,6 +2536,18 @@ def search(st: GraphStore, name: str, kind: str | None = None, limit: int = 20, 
     return out
 
 
+def _i18n_label(r: dict) -> str:
+    """`  (2 locales, 1 use)` for an i18n key row of search (#182)."""
+    a = r.get("i18n")
+    if not a:
+        return ""
+    locs, uses = a.get("locales") or 0, a.get("uses") or 0
+    out = f"  ({locs} locale{'s' if locs != 1 else ''}, {uses} use{'s' if uses != 1 else ''})"
+    if a.get("missing_locales"):
+        out += f"  missing: {', '.join(a['missing_locales'])}"
+    return out
+
+
 def render_search(res: dict, limit_routes: int = 8) -> str:
     out = []
     if res.get("platform"):
@@ -2526,7 +2557,7 @@ def render_search(res: dict, limit_routes: int = 8) -> str:
             out.append(f"{res['platform']['matches_not_built']} matching symbols are not built for {res['platform']['platform']} "
                        f"(search without platform lists them)")
     for r in res["nodes"]:
-        out.append(f"{r['kind']:10} {r['id']}  {r['file'] or '?'}:{r['line']}{platform_label(r)}")
+        out.append(f"{r['kind']:10} {r['id']}  {r['file'] or '?'}:{r['line']}{platform_label(r)}{_i18n_label(r)}")
     if res["guards"]:
         if out:
             out.append("")

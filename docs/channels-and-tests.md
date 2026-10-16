@@ -105,7 +105,7 @@ entry tagging. An app a TypeScript test builds for itself (`express()` inside `*
 | language | what counts |
 |---|---|
 | PHP | PHPUnit `test_*`, `@test`, `#[Test]`; Pest `it()` / `test()` with `describe()` prefixes; under `tests/` |
-| TS / JS | Vitest, Jest (`*.test.*`, `*.spec.*`, `__tests__/`), Playwright, Cypress |
+| TS / JS | Vitest, Jest (`*.test.*`, `*.spec.*`, `__tests__/`), Playwright, Cypress. Test trees: top-level `e2e/`, `test/`, `tests/`, `cypress/`, `playwright/` (and under `src/`), plus a nested `playwright/` or `cypress/` anywhere (`help/playwright/`) and a nested `e2e/` outside the source dirs; their helper modules are test code too |
 | Python | pytest `test_*` and `Test*` methods (inherited too); unittest / Django / DRF `test*` methods. Files: `test_*.py`, `*_test.py`, Django `tests.py`, `conftest.py`, `tests/` / `test/`, `testpaths`, `pytest_plugins`. `python_files` / `python_classes` / `python_functions` / `testpaths` come from `pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg` |
 | Swift | Swift Testing `@Test` (one node per declaration, `(parameterized)` when it has arguments); XCTest `test*` instance methods on an `XCTestCase` subclass. Files under `Tests/`, `*Tests/`, `*UITests/`, `*Tests.swift`, or any file that imports `XCTest` or `Testing` |
 | Kotlin | `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`, `@TestTemplate` in `src/test`, `src/androidTest`, `*Test` source sets, `*Test.kt`. Framework from imports: `junit5`, `junit4`, `kotlin-test`, `testng`, `kotest` |

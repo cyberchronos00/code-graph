@@ -146,6 +146,7 @@ Starter cards are built in this order: `serve --presets FILE` or `viz.presets`; 
 |---|---|
 | `CG_MCP_TOOLS=LIST` | tools `cg-mcp` lists: `core`, names, globs, `-name`. Unset or empty means all ([Choosing tools](mcp.md#choosing-tools)) |
 | `CG_NO_CACHE=1` | disable the TS, Dart and native SCIP caches (keyed by file content) |
+| `CG_NO_UPDATE_CHECK=1` | `cg doctor` does not ask PyPI for a newer release and `cg --version` does not show the cached notice ([CLI reference](cli.md)); also off when `CI` is set |
 | `CG_NO_HOOKS=1` | git hooks installed by `cg hooks` do nothing for that command ([CLI reference](cli.md#hooks)) |
 | `CG_NO_STALE_CHECK=1` | MCP tool replies skip the staleness `index note:` ([MCP server](mcp.md#staleness)) |
 | `CG_CACHE=DIR` | cache root (else `%LOCALAPPDATA%\cg` on Windows, `$XDG_CACHE_HOME/cg`, `~/.cache/cg`). `cg clean` empties it ([clean](cli.md#clean)) |

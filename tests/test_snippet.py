@@ -82,13 +82,16 @@ def test_snippet_ambiguous_lists_candidates(tmp_path):
     assert "name one" in Q.render_snippet(res)
     r = cg("helper", "--db", db)
     assert r.returncode == 1 and "nodes match 'helper'" in r.stdout
+    # #156: the ambiguous reply points at search (CLI and the MCP tool share render_snippet)
+    assert "`cg search helper`" in r.stdout and "(MCP: search)" in r.stdout
+    assert "cg search helper" in res["hint"]
 
 
 def test_snippet_none_and_cli_ok(tmp_path):
     st, db = build(tmp_path)
     assert Q.snippet(st, "Nope")["status"] == "none"
     r = cg("Nope", "--db", db)
-    assert r.returncode == 1 and "no node matches" in r.stdout
+    assert r.returncode == 1 and "no node matches" in r.stdout and "`cg search Nope`" in r.stdout
     r2 = cg("Circle", "--db", db)
     assert r2.returncode == 0
     import re

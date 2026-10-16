@@ -56,7 +56,7 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     "HTTP_CALLS": (True, "client code calls an HTTP endpoint (method + path template)"),
     "MATCHES_ROUTE": (True, "client endpoint matched to a backend route (cross-repo link)"),
     "USES_LAYOUT": (False, "page uses layout"),
-    "USES_I18N": (False, "code/template uses i18n key"),
+    "USES_I18N": (True, "code/template uses i18n key (propagating: a key's users are its dependents in reaches / impact, #182)"),
     "REFERENCES_TYPE": (False, "code references a type/interface"),
     # value facts
     "READS_SETTING": (True, "code reads a JSON settings key (getSetting('a.b', default))"),

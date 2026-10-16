@@ -11,7 +11,9 @@ register_hooks: finds the source dir (nuxt.config `srcDir`, else `app/` (Nuxt 4)
   say which one was used (`prepared`: nuxi | generated).
 contribute: file-based routing (route path per page), entry points (pages = ui_page; app.vue,
   layouts, global middleware, plugins = ui_global), USES_LAYOUT, i18n keys (USES_I18N; defining
-  locale files).
+  locale files), Nitro server routes (server/api/** -> `route:<METHOD> /api/...`, server/routes/** without the
+  prefix; ROUTES_TO the default-export handler, USES_MIDDLEWARE every server/middleware handler, MATCHES_ROUTE
+  from same-origin $fetch / useFetch / useLazyFetch calls of the app) (#216).
 """
 from __future__ import annotations
 
@@ -851,6 +853,229 @@ def generate_types(root: Path, src_dir: str) -> tuple[Path, dict]:
                "import_scan": plan["scan"], "import_global": plan["global"], "auto_import": plan["auto_import"]}
 
 
+# Nitro file-based routing (https://nitro.build/guide/routing): <name>[.<method>][.<env>].<ext>
+NITRO_METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "connect", "trace")
+_NITRO_EXT = re.compile(r"\.(ts|mts|cts|js|mjs|cjs)$")
+_NITRO_SKIP = re.compile(r"\.(test|spec)\.[cm]?[jt]s$|\.d\.ts$")
+_PROXY_CALL = re.compile(r"\b(proxyRequest|sendProxy)\s*\(")
+
+
+def nitro_route(rel: str, prefix: str = "") -> tuple[str, str] | None:
+    """Path of a file inside server/api or server/routes -> (METHOD, uri), or None for a non-route file.
+
+    `plants/[id].get.ts` with prefix `/api` -> (GET, /api/plants/{id}); no method suffix -> ANY; `index` is the
+    directory; `[...slug]` -> {slug*}, `[...]` -> {_*}; `(group)` directories are dropped; `.dev` / `.prod` /
+    `.prerender` env suffixes are ignored."""
+    if not _NITRO_EXT.search(rel) or _NITRO_SKIP.search(rel):
+        return None
+    parts = [p for p in _NITRO_EXT.sub("", rel).split("/") if p]
+    if not parts:
+        return None
+    last = parts[-1]
+    last = re.sub(r"\.(dev|prod|prerender)$", "", last)
+    method = "ANY"
+    m = re.match(r"^(.+)\.(%s)$" % "|".join(NITRO_METHODS), last)
+    if m:
+        last, method = m.group(1), m.group(2).upper()
+    parts[-1] = last
+    segs = []
+    for i, s in enumerate(parts):
+        if re.fullmatch(r"\(.*\)", s):
+            continue
+        if s == "index" and i == len(parts) - 1:
+            continue
+        if s == "[...]":
+            segs.append("{_*}")
+            continue
+        mm = re.fullmatch(r"\[\.\.\.(\w+)\]", s)
+        if mm:
+            segs.append("{%s*}" % mm.group(1))
+            continue
+        segs.append(re.sub(r"\[(\w+)\]", r"{\1}", s))
+    return method, "/" + "/".join(s.strip("/") for s in [prefix.strip("/")] + segs if s.strip("/"))
+
+
+def server_dirs(root: Path, src_dir: str) -> list[str]:
+    """Nitro server dirs of a Nuxt project: the root server/ (Nuxt 4 serverDir) and <srcDir>/server (Nuxt 3)."""
+    cands = ["server"] + ([] if src_dir in ("", ".") else [f"{src_dir.strip('/')}/server"])
+    return [d for d in dict.fromkeys(cands) if (root / d).is_dir()]
+
+
+# ------------------------------------------------------------ i18n locale files (#182)
+# a top-level key shaped like a locale code: en, pt-BR, zh_Hant, es-419
+LOCALE_RE = re.compile(r"^[a-z]{2,3}(?:[-_](?:[A-Z]{2}|[A-Z][a-z]{3}|\d{3}))*$")
+_KNOWN_LOCALES = {"en", "ar", "ku", "fr", "de"}
+LOCALE_EXTS = (".json", ".yaml", ".yml")
+
+
+def json_key_lines(text: str) -> dict[str, int]:
+    """Dotted key path -> line of the key, for the objects of a JSON document (keys inside arrays are skipped,
+    as flatten() treats arrays as values)."""
+    out: dict[str, int] = {}
+    stack: list[list] = []   # [type, current key, expecting a key]
+    pending = None
+    i, n, line = 0, len(text), 1
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line += 1
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            raw = text[i:j + 1]
+            if stack and stack[-1][0] == "obj" and stack[-1][2]:
+                try:
+                    pending = (json.loads(raw), line)
+                except ValueError:
+                    pending = (raw.strip('"'), line)
+            line += raw.count("\n")
+            i = j + 1
+            continue
+        elif c == ":" and pending is not None and stack and stack[-1][0] == "obj":
+            stack[-1][1], stack[-1][2] = pending[0], False
+            if all(f[0] == "obj" for f in stack):
+                out.setdefault(".".join(str(f[1]) for f in stack), pending[1])
+            pending = None
+        elif c == "{":
+            stack.append(["obj", None, True])
+        elif c == "[":
+            stack.append(["arr", None, False])
+        elif c in "}]":
+            if stack:
+                stack.pop()
+        elif c == "," and stack and stack[-1][0] == "obj":
+            stack[-1][2] = True
+        i += 1
+    return out
+
+
+def yaml_key_lines(text: str) -> dict[str, int]:
+    import yaml
+    out: dict[str, int] = {}
+
+    def walk(node, prefix):
+        if isinstance(node, yaml.MappingNode):
+            for k, v in node.value:
+                key = f"{prefix}.{k.value}" if prefix else str(k.value)
+                out.setdefault(key, k.start_mark.line + 1)
+                walk(v, key)
+    try:
+        walk(yaml.compose(text), "")
+    except Exception:
+        pass
+    return out
+
+
+def load_locale_file(f: Path) -> tuple[object, dict[str, int]]:
+    """(data, key path -> line) of a JSON / YAML locale file; (None, {}) when it does not parse."""
+    try:
+        text = f.read_text(errors="replace")
+        if f.suffix == ".json":
+            return json.loads(text), json_key_lines(text)
+        import yaml
+        return yaml.safe_load(text), yaml_key_lines(text)
+    except Exception:
+        return None, {}
+
+
+def nuxt_i18n_config(root: Path) -> dict:
+    """Literal slice of nuxt.config `i18n`: defaultLocale, langDir, locale codes and their files."""
+    cfg = _config_path(root)
+    if not cfg:
+        return {}
+    try:
+        obj = _find_config_object(cfg.read_text(errors="replace"))
+    except Exception:
+        return {}
+    i18n = obj.get("i18n") if isinstance(obj.get("i18n"), dict) else {}
+    codes, files = [], {}
+    for loc in i18n.get("locales") or [] if isinstance(i18n.get("locales"), list) else []:
+        if isinstance(loc, str):
+            codes.append(loc)
+        elif isinstance(loc, dict) and isinstance(loc.get("code"), str):
+            codes.append(loc["code"])
+            fs = [loc["file"]] if isinstance(loc.get("file"), str) else []
+            fs += [x for x in loc.get("files") or [] if isinstance(x, str)] if isinstance(loc.get("files"), list) else []
+            fs += [x["path"] for x in loc.get("files") or [] if isinstance(x, dict) and isinstance(x.get("path"), str)] \
+                if isinstance(loc.get("files"), list) else []
+            for x in fs:
+                files[x.lstrip("./")] = loc["code"]
+    return {"default_locale": i18n.get("defaultLocale") if isinstance(i18n.get("defaultLocale"), str) else None,
+            "lang_dir": i18n.get("langDir") if isinstance(i18n.get("langDir"), str) else None,
+            "locales": codes, "files": files}
+
+
+def locale_dirs(root: Path, src_dir: str, lang_dir: str | None) -> list[str]:
+    dirs = ["i18n/locales", f"{src_dir}/locales" if src_dir not in ("", ".") else "locales", "app/locales", "locales"]
+    if lang_dir:
+        ld = lang_dir.strip().lstrip("./").rstrip("/")
+        dirs = [f"i18n/{ld}", (f"{src_dir}/{ld}" if src_dir not in ("", ".") else ld), ld] + dirs
+    return [d for d in dict.fromkeys(dirs) if d and (root / d).is_dir()]
+
+
+def _sfc_key_lines(text: str, keys: list[str]) -> dict[str, int]:
+    """Line of each key's last segment inside the SFC's <i18n> block (the block's line when it is not found)."""
+    m = re.search(r"<i18n\b[^>]*>", text)
+    if not m:
+        return {}
+    base = text.count("\n", 0, m.start()) + 1
+    body = text[m.end():]
+    end = body.find("</i18n>")
+    body = body if end < 0 else body[:end]
+    out = {}
+    for k in keys:
+        last = k.split(".")[-1]
+        km = re.search(r"[\"']?%s[\"']?\s*:" % re.escape(last), body)
+        out[k] = base + (body.count("\n", 0, km.start()) if km else 0)
+    return out
+
+
+def i18n_definitions(root: Path, src_dir: str, sfc_i18n: dict) -> tuple[dict, list[str], str | None]:
+    """key -> [{locale, file, line}], the project's locales, and the default locale (nuxt.config defaultLocale, else
+    the first locale found). A file keyed by locale codes ({"en": {...}, "pt-BR": {...}}) defines every locale."""
+    cfg = nuxt_i18n_config(root)
+    configured = set(cfg.get("locales") or [])
+    defs: dict[str, list[dict]] = {}
+    seen_locales: list[str] = []
+
+    def add(key, locale, rel, line):
+        defs.setdefault(key, []).append({"locale": locale, "file": rel, "line": line or 1})
+        if locale and locale not in seen_locales:
+            seen_locales.append(locale)
+
+    for d in locale_dirs(root, src_dir, cfg.get("lang_dir")):
+        for f in sorted(p for p in (root / d).glob("*") if p.suffix in LOCALE_EXTS and p.is_file()):
+            data, lines = load_locale_file(f)
+            if not isinstance(data, dict) or not data:
+                continue
+            rel = f.relative_to(root).as_posix()
+            top = list(data)
+            stem_locale = f.stem if (LOCALE_RE.match(f.stem) or f.stem in configured) else None
+            keyed = all(isinstance(data[k], dict) and isinstance(k, str) for k in top) and (
+                set(top) <= (configured or _KNOWN_LOCALES) or set(top) <= _KNOWN_LOCALES
+                or (stem_locale is None and all(LOCALE_RE.match(k) for k in top)))
+            if keyed:
+                for loc in top:
+                    for k in flatten(data[loc]):
+                        add(k, loc, rel, lines.get(f"{loc}.{k}"))
+            else:
+                loc = cfg.get("files", {}).get(f.name) or cfg.get("files", {}).get(rel) or stem_locale
+                for k in flatten(data):
+                    add(k, loc, rel, lines.get(k))
+    for f, keys in sfc_i18n.items():
+        try:
+            text = (root / f).read_text(errors="replace")
+        except OSError:
+            text = ""
+        kl = _sfc_key_lines(text, keys)
+        for k in keys:
+            add(k, None, f, kl.get(k, 1))
+    default = cfg.get("default_locale") or (seen_locales[0] if seen_locales else None)
+    locales = list(dict.fromkeys([*configured, *seen_locales]))
+    return defs, locales, default
+
+
 def flatten(d, prefix=""):
     if isinstance(d, dict):
         for k, v in d.items():
@@ -928,27 +1153,119 @@ class NuxtPlugin(FrameworkPlugin):
             if lay in layouts:
                 builder.add_edge(n.id, layouts[lay], "USES_LAYOUT", file=n.file, line=1,
                                  confidence="exact" if n.file in meta and meta[n.file].get("layout") else "resolved")
-        # i18n: keys used in code/templates, and where they are defined
-        defined = {}
-        for d in dict.fromkeys(("i18n/locales", f"{self.src_dir}/locales", "app/locales", "locales")):
-            for f in sorted((project.root / d).glob("*.json")) if (project.root / d).exists() else []:
-                try:
-                    data = json.loads(f.read_text())
-                except Exception:
-                    continue
-                locs = {"en", "ar", "ku", "fr", "de"}
-                if isinstance(data, dict) and set(data) and set(data) <= locs:
-                    data = next(iter(data.values()))
-                for k in flatten(data):
-                    defined.setdefault(k, []).append(str(f.relative_to(project.root)))
-        for f, keys in (ctx.facts.get("sfc_i18n") or {}).items():
-            for k in keys:
-                defined.setdefault(k, []).append(f)
+        # i18n: keys used in code/templates, and where they are defined (#182)
+        defs, locales, default = i18n_definitions(project.root, self.src_dir, ctx.facts.get("sfc_i18n") or {})
+        used: dict[str, int] = {}
         for u in ctx.facts.get("i18n") or []:
-            nid = builder.add_node("i18n", u["key"], u["key"], lang="ts", attrs={"defined_in": defined.get(u["key"], [])})
+            used[u["key"]] = used.get(u["key"], 0) + 1
+        for u in ctx.facts.get("i18n") or []:
+            key = u["key"]
+            ds = defs.get(key) or []
+            home = next((d for d in ds if default and d["locale"] == default), ds[0] if ds else None)
+            attrs = {"defined_in": list(dict.fromkeys(d["file"] for d in ds)), "definitions": ds, "uses": used[key]}
+            have = {d["locale"] for d in ds if d["locale"]}
+            if default and default in have:
+                missing = sorted(set(locales) - have)
+                if missing:
+                    attrs["missing_locales"] = missing
+            nid = builder.add_node("i18n", key, key, lang="ts", file=home["file"] if home else None,
+                                   line=home["line"] if home else None, attrs=attrs)
             builder.add_edge(u["src"], nid, "USES_I18N", file=u["file"], line=u["line"],
-                             confidence="exact" if u["key"] in defined else "heuristic")
+                             confidence="exact" if key in defs else "heuristic")
+        defined = defs
+        st["i18n_locales"] = sorted(locales)
+        st["i18n_default_locale"] = default
         st["i18n_keys_used"] = len({u["key"] for u in ctx.facts.get("i18n") or []})
+        st["nitro"] = self._nitro(project, builder)
         st["i18n_keys_defined"] = len(defined)
         st["i18n_used_but_undefined"] = len({u["key"] for u in ctx.facts.get("i18n") or []} - set(defined))
         return st
+
+    # ------------------------------------------------------------ Nitro server routes (#216)
+    def _nitro(self, project: Project, b: GraphBuilder) -> dict:
+        from ..tsweb.common import add_route
+        st = {"routes": 0, "middleware": 0, "plugins": 0, "proxy_routes": 0, "linked_calls": 0}
+        dirs = server_dirs(project.root, self.src_dir)
+        if not dirs:
+            return st
+        files = sorted({n.file for n in b.nodes.values() if n.lang == "ts" and n.kind == "module" and n.file})
+
+        def handler(f: str) -> tuple[str | None, str]:
+            for nid in (f"function:{f}#default", f"function:{f}#handler"):
+                if b.has(nid):
+                    return nid, "exact"
+            return (f"module:{f}", "resolved") if b.has(f"module:{f}") else (None, "heuristic")
+
+        def label(f: str, kind: str):
+            for nid in (f"module:{f}", handler(f)[0]):
+                if nid and b.has(nid):
+                    b.nodes[nid].attrs["nitro"] = kind
+
+        middleware, routes = [], []
+        for d in dirs:
+            for f in files:
+                if not f.startswith(d + "/"):
+                    continue
+                rest = f[len(d) + 1:]
+                top, _, inner = rest.partition("/")
+                if top == "middleware" and inner and nitro_route(inner) is not None:
+                    h, _c = handler(f)
+                    if h:
+                        label(f, "middleware")
+                        middleware.append((h, f"nitro:{_NITRO_EXT.sub('', inner)}", "resolved"))
+                        st["middleware"] += 1
+                elif top == "plugins" and inner and nitro_route(inner) is not None:
+                    h, _c = handler(f)
+                    if h:
+                        label(f, "plugin")
+                        b.nodes[h].entry_kind = b.nodes[h].entry_kind or "main"
+                        st["plugins"] += 1
+                elif top in ("api", "routes") and inner:
+                    r = nitro_route(inner, "/api" if top == "api" else "")
+                    if r:
+                        routes.append((f, top, r))
+        for f, top, (method, uri) in routes:
+            h, conf = handler(f)
+            line = (b.nodes[h].line or 1) if h else 1
+            attrs = {"file_route": True, "nitro_dir": top, "method_from": "file suffix" if method != "ANY" else "any"}
+            try:
+                src = (project.root / f).read_text(errors="replace")
+            except OSError:
+                src = ""
+            if _PROXY_CALL.search(src):
+                attrs["proxy"] = True
+                st["proxy_routes"] += 1
+            if not h or h.startswith("module:"):
+                attrs["handler_unresolved"] = True
+            add_route(b, method, uri, [h] if h else [], f, line, "nuxt", conf, attrs, middleware)
+            label(f, "route")
+            st["routes"] += 1
+        st["linked_calls"] = self._link_nitro(b)
+        return st
+
+    def _link_nitro(self, b: GraphBuilder) -> int:
+        """Same-origin client calls of this app (relative URLs: `$fetch('/api/x')`, `useFetch`) -> its Nitro routes.
+        Proxy routes (proxyRequest / sendProxy) forward elsewhere and are not link targets."""
+        from ...link import match_endpoint
+        routes = []
+        for n in b.nodes.values():
+            a = n.attrs
+            if n.kind == "route" and a.get("framework") == "nuxt" and a.get("uri") and not a.get("proxy"):
+                routes.append({"id": n.id, "uri": a["uri"], "method": a["method"], "uris": [("as-declared", a["uri"])],
+                               "file": n.file, "line": n.line})
+        if not routes:
+            return 0
+        rmap = {r["id"]: r for r in routes}
+        linked = 0
+        for n in list(b.nodes.values()):
+            a = n.attrs
+            if n.kind != "http" or n.lang != "ts" or a.get("origin_kind") != "same-origin":
+                continue
+            res = match_endpoint(a.get("method", "GET"), a.get("path", ""), routes, "api", None)
+            for m in res["matched"]:
+                r = rmap[m["route"]]
+                b.add_edge(n.id, m["route"], "MATCHES_ROUTE", file=r["file"], line=r["line"], confidence=m["confidence"],
+                           client_path=a.get("path"), uri_variant=m["uri_variant"], segments=m["segments"], in_repo=True)
+            if res["matched"]:
+                linked += 1
+        return linked

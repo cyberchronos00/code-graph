@@ -100,9 +100,24 @@ def _impact_labels(rows: list[dict], name_of, group_of) -> list[str]:
     return labels
 
 
+def _version_text(version: str) -> str:
+    """`cg X.Y.Z`, plus a second line when the cached newer-release check (written by `cg doctor`) knows of a newer
+    release. Reads the cache only: never connects (#98)."""
+    try:
+        from .update_check import check, notice
+        n = notice(check(version, network=False))
+    except Exception:
+        n = None
+    return f"cg {version}" + (f"\n{n}" if n else "")
+
+
 def main(argv=None):
     from . import __version__
     ap = argparse.ArgumentParser(prog="cg")
+    args_in = sys.argv[1:] if argv is None else list(argv)
+    if args_in[:1] == ["--version"]:
+        print(_version_text(__version__))   # printed here: argparse's version action re-wraps a second line
+        return 0
     ap.add_argument("--version", action="version", version=f"cg {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("index", help="detect languages / frameworks under ROOT and build the graph DB (stats JSON on stdout, coverage on stderr)"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
@@ -862,6 +877,11 @@ def render_node(d: dict) -> str:
         unk = at.get("platform_unknown") or []
         ps = ", ".join(p + ("?" if p in unk else "") for p in at["platforms"]) or "none of the targets"
         out.append(f"  platforms: {ps}" + (f"  ({at['platform_expr']})" if at.get("platform_expr") else ""))
+    if n.get("kind") == "i18n" and at.get("definitions"):
+        out.append("  definitions: " + ", ".join(f"{x.get('locale') or '-'} {x['file']}:{x['line']}" for x in at["definitions"]))
+        if at.get("missing_locales"):
+            out.append("  missing locales: " + ", ".join(at["missing_locales"]))
+        at = {k: v for k, v in at.items() if k not in ("definitions", "defined_in", "missing_locales")}
     rest = {k: v for k, v in at.items() if k not in ("platforms", "platform_unknown", "platform_expr", "platform_at", "platforms_other")}
     if rest:
         out.append("  attrs: " + ", ".join(f"{k}={v if isinstance(v, str) else json.dumps(v, default=str, ensure_ascii=False)}"
