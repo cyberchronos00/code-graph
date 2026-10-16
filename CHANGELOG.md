@@ -20,6 +20,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ### Fixed
 
+- Docs: runtime behaviour (exception status, whether a scheduler runs, environment config, data-dependent branches) is out of scope, with the nearest static substitute; `writers` / `reaches` say to check `entries:` for `scheduled` / `queue_job` (#183).
+
 - `cg impact --platform` prints the `cg platforms divergence --target` hint only when divergence for that target has a row for one of the impact targets (#211).
 
 - `cg path` (CLI and MCP) walks the same edge kinds `impact` uses for entry points, including `ROUTES_TO` and `NAVIGATES_TO` (#209).

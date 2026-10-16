@@ -155,7 +155,7 @@ table-level writes of books (columns not recorded):
 2 write edges, 2 writers
 ```
 
-The table-level group omits a function that already has a column write to that table. Entry kinds are listed per site. `--json` is the flat list of rows; each row has `target_kind` (`table`, `column` or `property`) and `group` (`table`, `column`, `table_level`, `mentions`, `property`). The MCP tools `writers` and `readers` take the same specs and print the same groups.
+The table-level group omits a function that already has a column write to that table. Entry kinds are listed per site (`entries: http_route`, `scheduled`, `queue_job`, `artisan_command`, ...). To answer "does anything write this table in the background?", check `entries:` for `scheduled` or `queue_job`. No such entry means the indexed code declares no scheduled or queued writer, not that none runs in production (whether a scheduler or worker is running is [out of scope](limitations.md#runtime-behaviour)). `--json` is the flat list of rows; each row has `target_kind` (`table`, `column` or `property`) and `group` (`table`, `column`, `table_level`, `mentions`, `property`). The MCP tools `writers` and `readers` take the same specs and print the same groups. `cg reaches` prints the same `entries:` on each writer.
 
 ## Database connections
 
