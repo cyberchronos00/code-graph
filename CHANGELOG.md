@@ -8,19 +8,24 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-16
+
+### Added
+
+- MCP: one `cg-mcp` process can serve many graphs (#200). Graphs come from repeatable `--db` (`NAME=PATH` or a path), `--db-dir`, and a registry file (`~/.config/cg/graphs.toml`, or `CG_GRAPHS` / `--graphs`). Each entry has a name, a database path and repo root(s), including a combined graph. The `graphs` tool (included in `--tools core`) lists name, roots, languages, indexed commit and freshness. Other tools take an optional `graph` argument; when it is omitted the server resolves from a path in the call, then MCP roots (`roots/list`) or the working directory, then the configured default, and returns the choices when more than one graph matches. Replies name their graph. Each call opens its own connection, so unused graphs are never opened. A single `--db` is unchanged: no `graph` field and no new argument. `cg install --global --registry` writes that one entry. `cg install --migrate` folds per-repo `cg-*` host entries into the registry (dry run; `--apply` writes and keeps a `.bak`). Follow-ups: When several registered graphs match a path or the working directory and one graph's roots contain the others, that graph is selected. Otherwise the choice list is unchanged. `cg install --migrate` stores each entry's `--tools` or `CG_MCP_TOOLS` on the graph (and warns when one server allowlist cannot represent them), folds a plain `cg` entry that has its own `--db`, resolves a relative `--db` to an absolute path, and writes timestamped `.bak` files. The unused connection pool is gone; each call still opens its own store.
+
+### Changed
+
+- `platforms divergence --kind variants` JSON: for per-platform definitions, each `used_at` item is now an object `{"at": "file:line", "platforms": [...]}` instead of a `"file:line"` string, and only call / function-reference sites are listed (imports are not). Per-file variant groups keep strings. Scripts that read `used_at` should accept both shapes (#211).
+- `impact --platform X` no longer lists targets that are not built for X in `targets`; they move to `platform.targets_not_built` (CLI, MCP and JSON), are not walked and their edges are not counted as other incoming edges. When every match is dropped, the reply says the spec is not built for that platform (#202).
+- A bare name in `impact`, `callers` and `node` now matches Swift, Kotlin, Java and ObjC functions and methods of that name as well as TypeScript, Python and Dart ones, so a common method name can return more targets than before; qualify it (`Type.method`) to narrow. Swift static methods, `#if` variants and computed properties are included, and completeness follows those targets (#206).
+- Swift calls made from a parameter default are `CALLS` edges with `default_arg`; `impact` lists them as "via default argument" instead of walking them as callers, and `siblings` ignores them, so callers that pass the argument no longer inflate the callee (#208).
+
 ### Fixed
 
 - SwiftUI `NAVIGATES_TO` evidence is the line that constructs the destination (`LabelSheet(...)`, `NavigationLink(destination:)`, or the view inside `.sheet` / `navigationDestination`), including when that call sits in a modifier chain (#210).
 - An empty-tuple parameter type (`coordinator: ()`) is left as written. tree-sitter-swift 0.7.3 parses it; the empty-tuple value rewrite was turning it into `0` and flagging the file (#205).
-- A Swift default-argument expression (`gamut: Gamut = Prefs.currentGamut`) is a `CALLS` edge with `default_arg`. `impact` lists it as "via default argument" and does not walk it, and `siblings` ignores it, so callers that pass the argument no longer inflate the callee (#208).
 - `platforms divergence --kind variants` records each "used at" site with the platforms that build that site. With `--target`, only sites built for that target are listed (CLI, MCP and JSON) (#211).
-- `impact --platform` drops targets that are not built for that platform from `targets` (CLI, MCP and JSON) and does not walk them. Their edges are not counted as other incoming edges. When every match is dropped, the reply says the spec is not built for that platform (#202).
-- A bare name in `impact`, `callers` and `node` matches every language that has it, including a Swift method, static method, `#if` variant and computed property. Completeness follows those targets (#206).
-- When several registered graphs match a path or the working directory and one graph's roots contain the others, that graph is selected. Otherwise the choice list is unchanged. `cg install --migrate` stores each entry's `--tools` or `CG_MCP_TOOLS` on the graph (and warns when one server allowlist cannot represent them), folds a plain `cg` entry that has its own `--db`, resolves a relative `--db` to an absolute path, and writes timestamped `.bak` files. The unused connection pool is gone; each call still opens its own store (#200).
-
-### Added
-
-- MCP: one `cg-mcp` process can serve many graphs (#200). Graphs come from repeatable `--db` (`NAME=PATH` or a path), `--db-dir`, and a registry file (`~/.config/cg/graphs.toml`, or `CG_GRAPHS` / `--graphs`). Each entry has a name, a database path and repo root(s), including a combined graph. The `graphs` tool (included in `--tools core`) lists name, roots, languages, indexed commit and freshness. Other tools take an optional `graph` argument; when it is omitted the server resolves from a path in the call, then MCP roots (`roots/list`) or the working directory, then the configured default, and returns the choices when more than one graph matches. Replies name their graph. Each call opens its own connection, so unused graphs are never opened. A single `--db` is unchanged: no `graph` field and no new argument. `cg install --global --registry` writes that one entry. `cg install --migrate` folds per-repo `cg-*` host entries into the registry (dry run; `--apply` writes and keeps a `.bak`).
 
 ## [0.21.2] - 2026-10-16
 
@@ -1637,7 +1642,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.21.2...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/cyberchronos00/code-graph/compare/v0.21.2...v0.22.0
 [0.21.2]: https://github.com/cyberchronos00/code-graph/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/cyberchronos00/code-graph/compare/v0.21.0...v0.21.1
 [0.21.0]: https://github.com/cyberchronos00/code-graph/compare/v0.20.0...v0.21.0
