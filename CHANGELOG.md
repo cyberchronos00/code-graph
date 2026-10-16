@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-16
+
 ### Changed
 
 - MCP per-graph `tools` (written by `cg install --migrate`) apply to calls. The process lists one set: `--tools` / `CG_MCP_TOOLS` when set, otherwise the union of the graphs' allowlists. A tool omitted from the resolved graph's allowlist returns `tool <name> is not allowed for graph <name>`. A shorter allowlist on one graph does not drop tools the other graphs allow (#200).
@@ -1651,7 +1653,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/cyberchronos00/code-graph/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/cyberchronos00/code-graph/compare/v0.21.2...v0.22.0
 [0.21.2]: https://github.com/cyberchronos00/code-graph/compare/v0.21.1...v0.21.2
 [0.21.1]: https://github.com/cyberchronos00/code-graph/compare/v0.21.0...v0.21.1
