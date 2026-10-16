@@ -310,9 +310,16 @@ CAST_COALESCE = re.compile(rb"(?<![\w.])as[?!]?[ \t]+(?:[\w.]+(?:<[^<>\n]*>)?|\[
 
 
 def _empty_tuple(m, src: bytes) -> bytes:
-    """`0 ` for a `()` value; unchanged inside generic arguments (`Tagged<((), email: ()), String>` is a type)."""
+    """`0 ` for a `()` value; unchanged inside generic arguments (`Tagged<((), email: ()), String>` is a type)
+    and unchanged for an empty-tuple parameter type (`coordinator: ()`, #205). tree-sitter-swift 0.7.3 parses
+    that type; rewriting it to `0` is what flags the file. A ternary else (`cond ? x : ()`) is still a value."""
     pre = src[src.rfind(b"\n", 0, m.start()) + 1:m.start()].replace(b"->", b"")
     if pre.count(b"<") > pre.count(b">") or b"typealias" in pre:
+        return m.group(0)
+    j = m.start()
+    while j > 0 and src[j - 1:j] in b" \t":
+        j -= 1
+    if j > 0 and src[j - 1:j] == b":" and b"?" not in pre[:pre.rfind(b":")]:
         return m.group(0)
     return m.group(1) + b"0 "
 
@@ -1345,7 +1352,8 @@ class SwiftPlugin(LanguagePlugin):
                 self.prop_refs.append((owner, nm, "\\" + root, c.start_point[0] + 1, sf, decl, "keypath"))
             return
         recv = re.sub(r"^\s*[!\-~&]+", "", self.t(target))
-        self.prop_refs.append((owner, nm, recv, c.start_point[0] + 1, sf, decl, "binding" if proj else self._is_write(c)))
+        self.prop_refs.append((owner, nm, recv, c.start_point[0] + 1, sf, decl, "binding" if proj else self._is_write(c),
+                               self._default_param(c)))
 
     def _prop_bare(self, c, sf: SFile, owner: str, decl: Decl | None):
         """`summary` inside a member of the type that declares it (an implicit `self.summary`)."""
@@ -1368,6 +1376,29 @@ class SwiftPlugin(LanguagePlugin):
         if decl is None or decl.kind == "class" or self._bound(c, nm) or self._shadowed(decl, nm, sf, line):
             return
         self.prop_refs.append((owner, nm, None, line, sf, decl, "binding" if proj else self._is_write(c)))
+
+    def _default_param(self, node) -> str | None:
+        """External label when `node` sits in a parameter default (`gamut: Gamut = Prefs.currentGamut`), else None.
+        Those calls are not unconditional (#208)."""
+        fn = node
+        while fn is not None and fn.type not in ("function_declaration", "init_declaration", "protocol_function_declaration"):
+            if fn.type in ("class_declaration", "source_file"):
+                return None
+            fn = fn.parent
+        if fn is None:
+            return None
+        kids = list(fn.children)
+        for i, k in enumerate(kids):
+            if k.type != "=" or i + 1 >= len(kids):
+                continue
+            expr = kids[i + 1]
+            if expr.start_byte <= node.start_byte and node.end_byte <= expr.end_byte:
+                prev = next((x for x in reversed(kids[:i]) if x.type == "parameter"), None)
+                if prev is None:
+                    return None
+                names = [self.t(y) for y in prev.children if y.type == "simple_identifier"]
+                return names[0] if names else "_"
+        return None
 
     def _bound(self, c, nm: str) -> bool:
         """A parameter of an enclosing function, initializer, subscript or closure is named `nm`."""
@@ -1467,7 +1498,7 @@ class SwiftPlugin(LanguagePlugin):
                     if m and m.group(2) not in ("init", "self"):
                         self.value_navs.append((owner, m.group(1), m.group(2),
                                                 "NavigationLink(value:)" if name == "NavigationLink" else f"{name}(...)",
-                                                sf.rel, line))
+                                                sf.rel, v.start_point[0] + 1))
         if name == "navigationDestination" and lam is not None:
             ty = next((re.match(r"\s*([A-Z][\w.]*)\s*\.\s*self\s*$", self.t(v)) for lab, v in al
                        if lab == "for" and v is not None), None)
@@ -1518,7 +1549,8 @@ class SwiftPlugin(LanguagePlugin):
             if br:
                 self.branch_of[(owner, line, name)] = br
                 self.branch_at[(sf.rel, line, name)] = br
-        self.calls.append((owner, name, recv, line, sf, decl, tuple(lab or "_" for lab, _v in al), lam is not None))
+        self.calls.append((owner, name, recv, line, sf, decl, tuple(lab or "_" for lab, _v in al), lam is not None,
+                           self._default_param(c)))
         return False
 
     def _branch(self, c) -> dict:
@@ -1646,7 +1678,8 @@ class SwiftPlugin(LanguagePlugin):
     def _nav_target(self, v, owner, sf, line, how):
         m = re.match(r"\s*(?:\w+\s*\.\s*)?([A-Z]\w*)\s*\(", self.t(v))
         if m:
-            self.navs.append((owner, m.group(1), how, sf.rel, line))
+            # the construction, not the start of a modifier chain or `var body` (#210)
+            self.navs.append((owner, m.group(1), how, sf.rel, getattr(v, "start_point", (line - 1,))[0] + 1))
 
     def _view_names(self, stm) -> list[str]:
         out = []
@@ -1657,7 +1690,7 @@ class SwiftPlugin(LanguagePlugin):
                 node = node.children[0]
             m = re.match(r"\s*([A-Z]\w*)\s*\(", self.t(node))
             if m and m.group(1) not in CONTAINER_VIEWS:
-                out.append(m.group(1))
+                out.append((m.group(1), node.start_point[0] + 1))
         return out
 
     def _destinations(self, lam, tname: str, owner, sf, line):
@@ -1680,13 +1713,13 @@ class SwiftPlugin(LanguagePlugin):
                 if not cases and not any(x.type == "default_keyword" or self.t(x) == "default" for x in e.children):
                     continue
                 views = self._view_names(next((x for x in e.children if x.type == "statements"), None))
-                for v in views:
+                for v, vline in views:
                     for cs in cases or [None]:
-                        self.dest_map[tname][cs].append((v, sf.rel, line))
-                    self.navs.append((owner, v, ".navigationDestination(for:)", sf.rel, line))
+                        self.dest_map[tname][cs].append((v, sf.rel, vline))
+                    self.navs.append((owner, v, ".navigationDestination(for:)", sf.rel, vline))
                     self.st["navigation_destinations"] += 1
-        for v in self._view_names(stm):              # no switch: one view for every value
-            self.dest_map[tname][None].append((v, sf.rel, line))
+        for v, vline in self._view_names(stm):              # no switch: one view for every value
+            self.dest_map[tname][None].append((v, sf.rel, vline))
 
     def _lambda_views(self, lam, owner, sf, line, how, page_only=False):
         stm = next((x for x in lam.children if x.type == "statements"), None)
@@ -1697,7 +1730,7 @@ class SwiftPlugin(LanguagePlugin):
                 node = node.children[0]          # View(...).tabItem { } -> View(...)
             m = re.match(r"\s*([A-Z]\w*)\s*\(", self.t(node))
             if m and m.group(1) not in CONTAINER_VIEWS:
-                self.navs.append((owner, m.group(1), how, sf.rel, line, page_only))
+                self.navs.append((owner, m.group(1), how, sf.rel, node.start_point[0] + 1, page_only))
 
     # ---- URLSession
     def _url_text(self, v) -> str | None:
@@ -2089,7 +2122,9 @@ class SwiftPlugin(LanguagePlugin):
         return self._qext
 
     def _resolve_calls(self):
-        for owner, name, recv, line, sf, decl, labels, trailing in self.calls:
+        for rec in self.calls:
+            owner, name, recv, line, sf, decl, labels, trailing = rec[:8]
+            default_arg = rec[8] if len(rec) > 8 else None
             self._how = self._recv = None
             self._at = (sf, line)
             targets = [t for t in self._targets(name, recv, decl, labels, trailing) if self._sees(t, True)]
@@ -2117,6 +2152,8 @@ class SwiftPlugin(LanguagePlugin):
                     for m in hit:
                         self.b.add_edge(owner, m.id, "CALLS", sf.rel, line, HEURISTIC)
                 else:
+                    if default_arg:
+                        how = {**how, "default_arg": default_arg}
                     self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, **how, **self._accessor_attr(decl, line))
                     if how:
                         self.st["calls_by_name_only" if self._how == "name" else "call_candidate_edges"] += 1
@@ -2184,7 +2221,9 @@ class SwiftPlugin(LanguagePlugin):
     def _resolve_props(self):
         """CALLS edges for reads of computed / lazy properties and writes of computed / observed ones (`property`:
         `read` | `write`); a read of a stored property with observers runs no code of it."""
-        for owner, name, recv, line, sf, decl, write in self.prop_refs:
+        for rec in self.prop_refs:
+            owner, name, recv, line, sf, decl, write = rec[:7]
+            default_arg = rec[7] if len(rec) > 7 else None
             if name not in self.prop_names or write == "keypath":
                 self._field_ref(owner, name, recv, line, sf, decl, write)
                 continue
@@ -2200,6 +2239,8 @@ class SwiftPlugin(LanguagePlugin):
             for t in targets[:MAX_CANDIDATES]:
                 if t.id == owner or ("observed" in t.modifiers and not write) or ("lazy" in t.modifiers and write is True):
                     continue
+                if default_arg:
+                    how = {**how, "default_arg": default_arg}
                 self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, property="write" if write else "read",
                                 **how, **self._accessor_attr(decl, line))
                 done = True
