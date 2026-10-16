@@ -1995,7 +1995,9 @@ def path_between(st: GraphStore, src_spec: str, dst_spec: str, min_conf="heurist
 
 def _bfs_path(st: GraphStore, srcs: list[str], dsts: set[str], min_conf: str, max_depth: int,
               platform: str | None = None) -> list[dict]:
-    kset, rank = set(PROPAGATING), CONFIDENCE_RANK[min_conf]
+    # impact walks CALL_LIKE for entry points, including NAVIGATES_TO / LISTENS_FOR, which are not
+    # propagating. path uses that set as well so an entry impact lists has a forward path.
+    kset, rank = set(PROPAGATING) | set(CALL_LIKE), CONFIDENCE_RANK[min_conf]
     px = _px(st, platform)
     prev, seen, frontier = {}, set(srcs), list(srcs)
     for _ in range(max_depth):
