@@ -436,19 +436,14 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
         pool = [rt for s in targets for rt in by_server[s]]
         bp = base_path((a.get("base") or {}).get("value") or "") if a.get("base") else None
         origin_text = known_origin_text(a)
-        if origin_text:
-            owners = repos_for_origin(origin_text, targets)
-            if owners is None:
-                pass
-            elif len(owners) == 1:
-                pool = [rt for rt in pool if rt["server"] == owners[0]]
-            elif not owners:
-                res = {"matched": [], "path": a.get("path"), "reason": "external (other origin)",
-                       "endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, []),
-                       "_client": client, "_servers": targets}
-                results.append(res)
-                continue
+        owners = repos_for_origin(origin_text, targets) if origin_text else None
+        if owners is not None and len(owners) == 1:
+            pool = [rt for rt in pool if rt["server"] == owners[0]]
         res = match_endpoint(a["method"], a["path"], pool, a.get("origin_kind", "api"), a.get("origin"), base_prefix=bp or None)
+        if origin_text and owners == [] and not res.get("matched") and a.get("origin_kind") != "other":
+            reason = res.get("reason") or ""
+            if reason.startswith(("no backend route", "not a backend URL")) or "suffix" in reason:
+                res["reason"] = "external (other origin)"
         res.update({"endpoint": ep_id, "method": a["method"], "calls": calls_by_ep.get(ep_id, []),
                     "_client": client, "_servers": targets})
         results.append(res)

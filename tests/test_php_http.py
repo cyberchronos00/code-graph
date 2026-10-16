@@ -191,7 +191,8 @@ def test_bookstore_links_payments_service(tmp_path):
     res = link_many(
         [("api", str(tmp_path / "api.db"), "both"), ("payments", str(tmp_path / "payments.db"), "both")],
         str(tmp_path / "ws.db"))
-    assert res["stats"]["call_sites_matched"] == res["stats"]["call_sites"] == 3
+    assert res["stats"]["call_sites"] == 3
+    assert res["stats"]["call_sites_matched"] == 1  # cancelPayment and createRefund have no live caller
     kinds = {(i["kind"], i.get("key")) for i in res["payload_issues"]}
     assert ("request_missing_required", "order_id") in kinds
     assert ("request_unknown_field", "note") in kinds
