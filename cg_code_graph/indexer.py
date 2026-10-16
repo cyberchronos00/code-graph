@@ -28,6 +28,19 @@ from .plugins.flutter.plugin import FlutterPlugin
 from .plugins.nest.plugin import NestPlugin
 from .plugins.nextjs.plugin import NextPlugin
 from .plugins.express.plugin import ExpressPlugin
+import subprocess
+
+
+def _git_head(root) -> str | None:
+    """Commit indexed for this root, when it is a git work tree."""
+    try:
+        proc = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return (proc.stdout or "").strip() or None
 from .plugins.astro.plugin import AstroPlugin
 from .plugins.kotlin.plugin import KotlinPlugin
 from .plugins.java.plugin import JavaPlugin
@@ -464,6 +477,9 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     stats["nodes"] = len(builder.nodes)
     stats["edges"] = len(builder.edges)
     stats["index_seconds"] = round(time.time() - t0, 2)
-    store.set_meta(project=project.name, root=str(project.root), stats=stats, indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()))
+    head = _git_head(project.root)
+    extra = {"commit": head} if head else {}
+    store.set_meta(project=project.name, root=str(project.root), stats=stats,
+                   indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()), **extra)
     store.db.close()
     return stats
