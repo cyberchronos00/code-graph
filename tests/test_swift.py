@@ -3,6 +3,7 @@ Alamofire endpoints, SwiftUI / UIKit navigation pages, entry points, `#if os(...
 SwiftUI sample linked to the Django sample (examples/bookstore-ios)."""
 import json
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -85,6 +86,16 @@ def test_uikit_navigation_tests_and_entries():
 
 
 def test_coverage_reports_swift_heuristic():
+    from cg_code_graph.plugins.swift.exact import find_swift
+    swift = find_swift()
+    if not swift:
+        pytest.skip("swift toolchain not found")
+    try:
+        r = subprocess.run([swift, "--version"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        pytest.skip(f"swift toolchain unusable: {ex}")
+    if r.returncode != 0:
+        pytest.skip("swift toolchain unusable: " + (r.stderr or r.stdout or "exit")[:200])
     db("fix")
     cov = [c for c in _S["fix_stats"]["coverage"]["languages"] if c["language"] == "swift"][0]
     assert cov["status"] == "heuristic" and "Xcode" in cov["reason"] and cov["files"] == 4

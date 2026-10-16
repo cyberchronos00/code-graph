@@ -2,6 +2,7 @@
 function, and the entry's SendPort.send / Isolate.exit back to the spawner's port listener (`<entry>:out`)."""
 import json
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,8 +16,22 @@ FX = ROOT / "tests" / "isolate_fixture"
 W = "lib/worker.dart"
 
 
+def _require_dart() -> None:
+    from cg_code_graph.plugins.dart.plugin import find_dart
+    dart = find_dart()
+    if not dart:
+        pytest.skip("dart SDK not found")
+    try:
+        r = subprocess.run([dart, "--version"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        pytest.skip(f"dart SDK unusable: {ex}")
+    if r.returncode != 0:
+        pytest.skip("dart SDK unusable: " + (r.stderr or r.stdout or "exit")[:200])
+
+
 @pytest.fixture(scope="module")
 def db(tmp_path_factory):
+    _require_dart()
     d = tmp_path_factory.mktemp("iso") / "i.db"
     st = index_project(FX, d, "isolates")
     con = sqlite3.connect(d)
