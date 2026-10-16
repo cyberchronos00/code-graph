@@ -307,3 +307,38 @@ def test_per_graph_tools_do_not_shrink_the_other_graph(mcp, tmp_path, monkeypatc
     assert "tool stats is not allowed for graph web" == mcp.stats()
     assert mcp.coverage().startswith("graph web\n")
 
+
+def test_shared_backend_picks_its_own_graph(mcp, tmp_path, monkeypatch):
+    backend = tmp_path / "backend"
+    app_a = tmp_path / "appA"
+    app_b = tmp_path / "appB"
+    bdb = tmp_path / "backend.db"
+    adb = tmp_path / "appa.db"
+    bdb2 = tmp_path / "appb.db"
+    _db(bdb, "backend", backend)
+    _db(adb, "appa", app_a)
+    _db(bdb2, "appb", app_b)
+    reg = tmp_path / "graphs.toml"
+    reg.write_text(
+        f'[[graphs]]\nname = "backend"\ndb = "{bdb}"\nroots = ["{backend}"]\n\n'
+        f'[[graphs]]\nname = "appa"\ndb = "{adb}"\nroots = ["{app_a}", "{backend}"]\n\n'
+        f'[[graphs]]\nname = "appb"\ndb = "{bdb2}"\nroots = ["{app_b}", "{backend}"]\n',
+        encoding="utf-8")
+    mcp.configure(graphs=str(reg))
+    monkeypatch.chdir(backend)
+    assert mcp.stats().startswith("graph backend\n")
+
+    left, right = tmp_path / "left.db", tmp_path / "right.db"
+    shared = tmp_path / "shared"
+    _db(left, "left", shared)
+    _db(right, "right", shared)
+    overlap = tmp_path / "overlap.toml"
+    overlap.write_text(
+        f'default = "right"\n'
+        f'[[graphs]]\nname = "left"\ndb = "{left}"\nroots = ["{shared}"]\n\n'
+        f'[[graphs]]\nname = "right"\ndb = "{right}"\nroots = ["{shared}"]\n',
+        encoding="utf-8")
+    mcp.configure(graphs=str(overlap))
+    monkeypatch.chdir(shared)
+    assert mcp.stats().startswith("graph right\n")
+

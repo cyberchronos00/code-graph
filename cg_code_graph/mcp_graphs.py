@@ -318,9 +318,58 @@ def _superset(hits: list[GraphEntry]) -> GraphEntry | None:
     return strict[0] if len(strict) == 1 else None
 
 
+def _deepest_repo(hits: list[GraphEntry], texts: list[str]) -> Path | None:
+    """The repo containing the path: the deepest matching root, when that root is unique."""
+    containing: list[Path] = []
+    for entry in hits:
+        for root in entry.roots:
+            if not any(_under(root, text) for text in texts):
+                continue
+            try:
+                containing.append(root.expanduser().resolve())
+            except OSError:
+                containing.append(root)
+    if not containing:
+        return None
+    deepest: list[Path] = []
+    for root in containing:
+        if any(other != root and _under(root, str(other)) for other in containing):
+            continue
+        deepest.append(root)
+    unique = set(deepest)
+    if len(unique) != 1:
+        return None
+    return next(iter(unique))
+
+
+def _own_graph(hits: list[GraphEntry], texts: list[str]) -> GraphEntry | None:
+    """The one match whose roots are exactly the repo that contains the path."""
+    repo = _deepest_repo(hits, texts)
+    if repo is None:
+        return None
+    own = [entry for entry in hits if _root_set(entry) == {repo}]
+    return own[0] if len(own) == 1 else None
+
+
+def _pick(registry: Registry, hits: list[GraphEntry], texts: list[str]) -> GraphEntry:
+    """Superset, then the graph that is only that repo, then the configured default."""
+    chosen = _superset(hits)
+    if chosen is not None:
+        return chosen
+    chosen = _own_graph(hits, texts)
+    if chosen is not None:
+        return chosen
+    if registry.default:
+        by = registry.by_name()
+        default = by.get(registry.default)
+        if default is not None and default in hits:
+            return default
+    raise _choice_error(hits)
+
+
 def resolve(registry: Registry, *, graph: str | None, paths: list[str],
             cwd: Path | None = None, mcp_roots: list[str] | None = None) -> GraphEntry:
-    """Pick a graph. Several matches stay an error unless one graph's roots contain the others."""
+    """Pick a graph. Several matches use a superset, then a single-repo graph, then the default."""
     by = registry.by_name()
     if graph:
         if graph not in by:
@@ -330,10 +379,7 @@ def resolve(registry: Registry, *, graph: str | None, paths: list[str],
     if len(path_hits) == 1:
         return path_hits[0]
     if len(path_hits) > 1:
-        chosen = _superset(path_hits)
-        if chosen is not None:
-            return chosen
-        raise _choice_error(path_hits)
+        return _pick(registry, path_hits, paths)
     places: list[str] = []
     if mcp_roots:
         places.extend(mcp_roots)
@@ -342,10 +388,7 @@ def resolve(registry: Registry, *, graph: str | None, paths: list[str],
     if len(loc_hits) == 1:
         return loc_hits[0]
     if len(loc_hits) > 1:
-        chosen = _superset(loc_hits)
-        if chosen is not None:
-            return chosen
-        raise _choice_error(loc_hits)
+        return _pick(registry, loc_hits, places)
     if registry.default and registry.default in by:
         return by[registry.default]
     if len(registry.entries) == 1:
