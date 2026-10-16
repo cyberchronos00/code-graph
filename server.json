@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.cyberchronos00/cg-code-graph",
+  "title": "code-graph",
+  "description": "Local dependency graph: callers, entry points and file:line evidence for what a change affects.",
+  "version": "0.21.2",
+  "websiteUrl": "https://code-graph.cyberchronos00.workers.dev/",
+  "repository": {
+    "url": "https://github.com/cyberchronos00/code-graph",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/cyberchronos00/code-graph/main/assets/logo.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "cg-code-graph",
+      "version": "0.21.2",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--db",
+          "description": "Graph database built by `cg index . --db out/graph.db`; relative paths resolve from the working directory.",
+          "format": "filepath",
+          "default": "out/graph.db"
+        },
+        {
+          "type": "named",
+          "name": "--tools",
+          "description": "Tool allowlist: `core` lists a small set of tools; `all` or unset lists every tool (also CG_MCP_TOOLS).",
+          "default": "core"
+        }
+      ]
+    }
+  ]
+}

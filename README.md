@@ -6,6 +6,8 @@
 
 For you and your AI agent (CLI + MCP). No LLM in the graph.
 
+<!-- mcp-name: io.github.cyberchronos00/cg-code-graph -->
+
 [![PyPI](https://img.shields.io/pypi/v/cg-code-graph)](https://pypi.org/project/cg-code-graph/) [![Downloads](https://img.shields.io/pepy/dt/cg-code-graph)](https://pepy.tech/project/cg-code-graph) [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)](https://pypi.org/project/cg-code-graph/) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/cyberchronos00/code-graph/blob/main/LICENSE) [![Docs](https://img.shields.io/badge/docs-code--graph-93b600)](https://code-graph.cyberchronos00.workers.dev/)
 
 [Docs](https://code-graph.cyberchronos00.workers.dev/) · [Quick start](https://code-graph.cyberchronos00.workers.dev/docs/quickstart) · [CLI](https://code-graph.cyberchronos00.workers.dev/docs/cli) · [MCP](https://code-graph.cyberchronos00.workers.dev/docs/mcp) · [Changelog](https://github.com/cyberchronos00/code-graph/blob/main/CHANGELOG.md)

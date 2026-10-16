@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "code-graph": {
+      "command": "uvx",
+      "args": ["--from", "cg-code-graph", "cg-mcp", "--db", "out/graph.db", "--tools", "core"]
+    }
+  }
+}

@@ -2,6 +2,24 @@
 
 code-graph ships a stdio [Model Context Protocol](https://modelcontextprotocol.io) server. An agent gets callers, entry points and `file:line` evidence from the graph. It needs the `mcp` Python SDK (2.x). Use the installed `cg-mcp` command from [Install](install.md).
 
+## Use as an MCP server
+
+1. Build the graph first, from the repo root: `cg index . --db out/graph.db`. The server only reads a graph; it does not index on start.
+2. Add the server to your client. `cg install --host cursor` (or `claude`, `codex`, `vscode`, …) writes the entry for you. To add it by hand, without installing cg first:
+
+```json
+{
+  "mcpServers": {
+    "code-graph": {
+      "command": "uvx",
+      "args": ["--from", "cg-code-graph", "cg-mcp", "--db", "out/graph.db", "--tools", "core"]
+    }
+  }
+}
+```
+
+`--tools core` lists a small set of tools; drop it to list all of them. A relative `--db` resolves from the client's working directory, usually the project root. The same entry ships as `.mcp.json` in the repo, and the server is listed in the MCP Registry as `io.github.cyberchronos00/cg-code-graph`.
+
 ## Run
 
 ```bash

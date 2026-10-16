@@ -30,6 +30,7 @@ watch = ["watchfiles>=0.21"]
 [project.scripts]
 cg = "cg_code_graph.cli:main"
 cg-mcp = "cg_code_graph.mcp_server:main"
+cg-code-graph = "cg_code_graph.mcp_server:main"   # same as cg-mcp; lets `uvx cg-code-graph` (MCP Registry) start the server
 
 [project.urls]
 Homepage = "https://github.com/cyberchronos00/code-graph"

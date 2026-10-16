@@ -1,0 +1,14 @@
+{
+  "name": "code-graph",
+  "version": "0.21.2",
+  "description": "See what a change affects before you make it: callers, entry points, routes, tables and config from a local, deterministic dependency graph with file:line evidence. Run `cg index . --db out/graph.db` first.",
+  "author": {
+    "name": "cyberchronos00"
+  },
+  "homepage": "https://code-graph.cyberchronos00.workers.dev/",
+  "repository": "https://github.com/cyberchronos00/code-graph",
+  "license": "MIT",
+  "keywords": ["code-graph", "cg-code-graph", "cg impact", "cg reaches"],
+  "logo": "assets/logo.svg",
+  "mcpServers": ".mcp.json"
+}
