@@ -781,6 +781,9 @@ def _apply_file(plan: dict) -> None:
         if path.exists():
             path.unlink()
         parent = path.parent
+        if parent.name == "rules" and parent.parent.name == ".cursor" and parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()            # .cursor/rules/cg.mdc was the only rule
+            parent = parent.parent
         if parent.name in _EMPTY_PARENTS and parent.exists() and not any(parent.iterdir()):
             parent.rmdir()
         return
@@ -1023,7 +1026,7 @@ def run(hosts: list[str] | None, *, scope: str, root: str = ".", db: str | None 
         tools: str | None = None, portable: bool = False, remove: bool = False,
         dry_run: bool = False, assume_yes: bool = False, input_fn=input, out=print,
         registry: bool = False, migrate: bool = False, apply: bool = False,
-        graphs: str | None = None) -> int:
+        graphs: str | None = None, rules: bool = True) -> int:
     if migrate:
         return run_migrate(hosts, scope=scope, root=root, tools=tools, graphs=graphs, apply=apply and not dry_run, out=out)
     rootp = Path(root).resolve()
@@ -1050,6 +1053,16 @@ def run(hosts: list[str] | None, *, scope: str, root: str = ".", db: str | None 
         dbp = None
     plans = iter_plans(expanded, scope=scope, root=rootp, db=dbp, tools=tools, portable=portable, remove=remove,
                        registry=registry)
+    if rules and scope == "project" and not registry:
+        # "use cg first" rules for agents: AGENTS.md section + alwaysApply Cursor rule (cg_code_graph/install_rules.py)
+        from . import install_rules as IR
+        shown = "out/graph.db"
+        if dbp is not None and not portable:
+            try:
+                shown = dbp.relative_to(rootp).as_posix()
+            except ValueError:
+                shown = str(dbp)
+        plans = [*plans, *IR.plans(rootp, remove=remove, db=shown)]
     if not portable and not remove and uses_module_fallback():
         out(_FALLBACK_NOTE)
     for plan in plans:
@@ -1088,6 +1101,10 @@ def run(hosts: list[str] | None, *, scope: str, root: str = ".", db: str | None 
         _apply_file(plan)
         if plan.get("delete_file"):
             out(f"removed {plan['path']}")
+        elif plan.get("kind") == "text" and plan["action"] == "remove":
+            out(f"removed the cg section from {plan['path']}")
+        elif plan.get("kind") == "text":
+            out(f"wrote {plan['path']} (cg agent rules, {plan['action']})")
         else:
             out(f"wrote {plan['path']} ({plan['action']})")
     return 0

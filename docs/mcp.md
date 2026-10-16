@@ -137,6 +137,8 @@ Codex reads `<root>/.codex/config.toml` only in trusted projects. `cg doctor` li
 
 Without `--host`, cg acts on hosts it can see (the config file or its directory, or `claude` on `PATH` for Claude Code's user scope) and prints `detected: …`. Flags and exit codes: [install](cli.md#install).
 
+Agent rules: project-scope `cg install` also writes a short "use cg first" rule (use `search`, `impact` and `snippet` before grep or opening whole files, `graphs` when unsure which graph) to two places: a `<!-- cg:start --> … <!-- cg:end -->` section in `AGENTS.md`, which Claude Code, Codex and other agents read, and `.cursor/rules/cg.mdc` with `alwaysApply: true`. Both appear in the preview, and the output names each file written. A re-run replaces only the marked section, so it never duplicates the rule and keeps everything else in the file. An existing `cg.mdc` without front matter gets the `alwaysApply` header added once in front. `cg uninstall` removes the section and deletes a file that held nothing else. `--no-rules` skips both files. `--global` never writes them.
+
 `cg agents install` writes a short cg reading-rules block into `AGENTS.md`, `CLAUDE.md` or `.cursor/rules/cg.mdc`. It previews the change and asks before writing. `--mcp` edits only the `cg` entry in `.cursor/mcp.json` (or `--mcp-file`). `cg agents remove` takes it back out. See `cg agents -h`.
 
 ## Choosing tools
@@ -148,6 +150,10 @@ Without `--host`, cg acts on hosts it can see (the config file or its directory,
 - a leading `-` removes them (`all,-plan_*`)
 
 An unknown name is ignored after one warning. If the selection is empty, `cg-mcp` exits 2. Codex `enabled_tools` and Gemini `includeTools` can filter again on the host side. `cg install --tools LIST` stores the same list in the host entry. Per-graph `tools` in the registry narrows calls for that graph only; the listed set stays the union (or this server-wide list, when it is set).
+
+## Server instructions
+
+The `initialize` result carries short instructions (under 600 characters): use cg before grep or opening files, `search` to find a symbol, `impact` / `reaches` before editing, `snippet` instead of whole files, `graphs` when unsure, and normal search only for what cg reports as not covered. Each core tool's description opens with when to use it. The full reference (stacks, spec forms, per-feature notes) is the resource `cg://guide`.
 
 ## Suggested agent instructions
 

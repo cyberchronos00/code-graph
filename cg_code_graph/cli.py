@@ -73,6 +73,10 @@ def _add_install_parser(sub, uninstall: bool):
     p.add_argument("--uninstall", action="store_true", help="remove the entry instead of writing it")
     p.add_argument("--dry-run", action="store_true", help="print the exact changes and write nothing")
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p.add_argument("--no-rules", dest="rules", action="store_false",
+                   help=("leave AGENTS.md and .cursor/rules/cg.mdc alone" if uninstall else
+                         "do not write the 'use cg first' agent rules (AGENTS.md section, .cursor/rules/cg.mdc); "
+                         "project scope only"))
     if not uninstall:
         p.add_argument("--registry", action="store_true",
                        help="global single entry: cg-mcp with no --db; graphs come from the registry")
@@ -520,7 +524,8 @@ def main(argv=None):
         return run_install(a.host, scope="global" if a.glob else "project", root=a.dir, db=a.db,
                            tools=a.tools, portable=a.portable, remove=a.cmd == "uninstall" or a.uninstall,
                            dry_run=a.dry_run, assume_yes=a.yes, registry=registry, migrate=migrate,
-                           apply=bool(getattr(a, "apply", False)), graphs=getattr(a, "graphs", None))
+                           apply=bool(getattr(a, "apply", False)), graphs=getattr(a, "graphs", None),
+                           rules=a.rules)
     if a.cmd == "hooks":
         from . import hooks as HK
         return HK.run(a.action, root=a.dir, db=a.db, dry_run=a.dry_run, assume_yes=a.yes)

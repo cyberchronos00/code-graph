@@ -21,7 +21,7 @@ For you and your AI agent (CLI + MCP). No LLM in the graph.
 ```bash
 pipx install cg-code-graph          # or: uv tool install cg-code-graph
 cg index . --db out/graph.db        # prints starter queries for your repo
-cg install --host cursor    # or claude, codex, vscode, …: registers the MCP server
+cg install --host cursor    # or claude, codex, vscode, …: registers the MCP server and a "use cg first" agent rule
 cg reaches table:orders --db out/graph.db   # any table, connection or config key
 ```
 

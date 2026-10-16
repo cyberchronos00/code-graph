@@ -86,7 +86,7 @@ It lists the tools it found, whether extractor dependencies are installed, and f
 
 ### One MCP server for many graphs
 
-`cg install --host cursor` registers one project graph. When several repos would each add their own `cg-*` server, register them once and run a single `cg-mcp`:
+`cg install --host cursor` registers one project graph. In a project it also writes a short "use cg first" rule for agents: a marked section in `AGENTS.md` and `.cursor/rules/cg.mdc` (`--no-rules` skips both; see [Install into a host](mcp.md#install-into-a-host)). When several repos would each add their own `cg-*` server, register them once and run a single `cg-mcp`:
 
 ```console
 cg install --global --registry --host cursor

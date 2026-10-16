@@ -327,6 +327,7 @@ The first selected file in the table order (`AGENTS.md`, else `CLAUDE.md`, else 
 | `--tools LIST` | allowlist stored as `--tools` ([Choosing tools](mcp.md#choosing-tools)) |
 | `--portable` | `command` `cg-mcp` and `--db out/graph.db`, for a file committed to git |
 | `--uninstall` | remove, on `cg install` |
+| `--no-rules` | skip the agent rules. By default, project scope also writes a marked `<!-- cg:start -->` section in `AGENTS.md` and an `alwaysApply` `.cursor/rules/cg.mdc` telling agents to use cg first. A re-run replaces only that section, and `cg uninstall` removes it ([Install into a host](mcp.md#install-into-a-host)) |
 | `--dry-run` | print the diff and write nothing |
 | `--yes` | skip the prompt |
 

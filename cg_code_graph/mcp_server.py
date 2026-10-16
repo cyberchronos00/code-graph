@@ -62,9 +62,9 @@ STATE = _State({"db": str(ROOT / "out" / "graph.db"), "root": None, "gates": Non
                 "graph_entry": None, "graph_name": None, "graph_arg": False})
 _MCP_ROOTS: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar("cg_mcp_roots", default=None)
 
-server = MCPServer(
-    name="code-graph",
-    instructions=(
+# Reference text (stacks, spec forms, per-feature notes): the MCP resource cg://guide. The initialize
+# `instructions` stay short and directive so agents use cg before grep / file reads.
+GUIDE = (
         "Code graph of a project: classes, functions, routes, commands, jobs, pages, DB tables/columns, connections, "
         "config/env keys, each edge with file:line evidence and a confidence (exact / resolved / heuristic). Stacks: "
         "For a broad question ('how does X work') start with `explore`: source, entry points, call paths and blast radius in one call. "
@@ -119,8 +119,23 @@ server = MCPServer(
         "issue links) and overlays the graph without changing it. Workflow: write the plan -> `plan_check` (compact "
         "summary with counts and the top items; details=true for every item with file:line, forbidden paths and open "
         "findings) -> refine the plan -> `plan_baseline` -> implement -> `index` -> `plan_check(verify=true)` (planned "
-        "nodes/edges exist, forbidden paths gone or guarded, modified targets changed)."),
-)
+        "nodes/edges exist, forbidden paths gone or guarded, modified targets changed).")
+
+INSTRUCTIONS = (
+    "Use cg before grep or opening files for questions about where code is, what calls what, or what a change "
+    "affects. `search` finds a symbol; before editing, `impact` (callers up to entry points) or `reaches` (every "
+    "dependent) shows what the change affects; `snippet` reads one symbol instead of a whole file; `explore` answers "
+    "a broad 'how does X work' in one call. Unsure which graph? Call `graphs`. Fall back to normal search only for "
+    "what cg reports as not covered (`coverage`, a `coverage note:` line). Spec forms and stack notes: resource "
+    "cg://guide.")
+
+server = MCPServer(name="code-graph", instructions=INSTRUCTIONS)
+
+
+@server.resource("cg://guide", name="guide", description="cg reference: stacks, spec forms, per-feature notes",
+                 mime_type="text/plain")
+def guide() -> str:
+    return GUIDE
 
 
 def _rel_text(txt: str) -> str:
@@ -451,7 +466,8 @@ def _ename(e: dict) -> str:
 def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str = "module",
             include_gated: bool = True, max_per_group: int = 25, paths: bool = True, platform: str | None = None,
             connection: str | None = None) -> str:
-    """Reverse transitive dependents of one or more targets (union), e.g.
+    """Use before changing a column, table, connection, env key or symbol: everything that depends on it.
+    Reverse transitive dependents of one or more targets (union), e.g.
     ["orders.customer_id", "connection:warehouse", "connection:tenant_*"].
 
     Groups: RUNTIME (live; reached from http routes/schedules/jobs/listeners, or main()/exported FFI symbols in
@@ -489,7 +505,7 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
         route_lines = [Q.route_failure(st, s)["text"] for s in missing if Q.route_failure(st, s)]
         if route_lines and len(route_lines) == len(missing):
             return "\n".join(route_lines)
-        return "\n".join(pline + [f"targets: {tl}"]) + f"\nno node matches {', '.join(map(repr, missing))}; try search() with part of the name (spec forms are listed in the server instructions)"
+        return "\n".join(pline + [f"targets: {tl}"]) + f"\nno node matches {', '.join(map(repr, missing))}; try search() with part of the name (spec forms: resource cg://guide)"
     if not items and connection:
         return "\n".join(pline + [f"targets: {tl}", f"no dependents recorded for {', '.join(res['targets'])} on connection {connection!r} "
                                   f"(connections seen: {Q.seen_text(res.get('connections_seen') or [])})."])
@@ -550,7 +566,7 @@ def reaches(targets: list[str], min_confidence: str = "heuristic", group_by: str
 @tool
 def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, platform: str | None = None,
            paths: bool = True) -> str:
-    """Reverse callers of a method (Class::method, short or FQN) up to entry points, with the shortest call path
+    """Use before editing a function: what a change to it affects. Reverse callers of a method (Class::method, short or FQN) up to entry points, with the shortest call path
     from each entry point.
     platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
     condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
@@ -666,7 +682,7 @@ CALLER_KINDS = ("CALLS", "INSTANTIATES", "IMPLEMENTED_BY", "OVERRIDDEN_BY", "BOU
 
 @tool
 def callers(symbol: str, min_confidence: str = "heuristic", limit: int = 60) -> str:
-    """Direct callers of a function / method / class (one level: CALLS, INSTANTIATES, dispatch and framework edges
+    """Use to see who calls X right now. Direct callers of a function / method / class (one level: CALLS, INSTANTIATES, dispatch and framework edges
     into it), each with the call site file:line and confidence. For the full chain up to entry points use impact()."""
     st = _st()
     ids = Q.resolve_targets(st, symbol)
@@ -1042,8 +1058,9 @@ def affected(files: list[str] | None = None, base: str | None = None, max_depth:
 
 @tool
 def node(id_or_symbol: str) -> str:
-    """Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
-    by kind (in/out) with a few neighbours."""
+    """Use to inspect a symbol without reading its file. Details of one node: kind, FQN, file:line span, module, entry kinds, docblock (PHPDoc), and edge counts
+    by kind (in/out) with a few neighbours. Specs: Class::method | file#name | table.column | table:<t> |
+    route:<METHOD> <uri> | env:<KEY> | page:/path (more: resource cg://guide)."""
     st = _st()
     n = st.node(id_or_symbol)
     if not n:
@@ -1076,7 +1093,7 @@ def node(id_or_symbol: str) -> str:
 
 @tool
 def snippet(id_or_symbol: str, context: int = 0, max_lines: int = 200) -> str:
-    """Source of one symbol: a `path:start-end` header then the body with line numbers. Resolves a
+    """Use instead of opening a whole file. Source of one symbol: a `path:start-end` header then the body with line numbers. Resolves a
     node id or a symbol / FQN (as node() and search() do); an ambiguous name lists the candidates
     instead of guessing. context adds lines around the span; max_lines caps the body (truncation noted)."""
     return Q.render_snippet(Q.snippet(_st(), id_or_symbol, context=context, max_lines=max_lines))
@@ -1084,7 +1101,7 @@ def snippet(id_or_symbol: str, context: int = 0, max_lines: int = 200) -> str:
 
 @tool
 def search(name: str, kind: str | None = None, limit: int = 20, platform: str | None = None) -> str:
-    """Find nodes by name / FQN substring (case-insensitive), optionally filtered by kind
+    """Use first to find a symbol instead of grep. Finds nodes by name / FQN substring (case-insensitive), optionally filtered by kind
     (class, method, route, command, table, column, connection, config, env, job, admin...). Also matches route
     middleware, guards, auth and access checks (e.g. "auth" finds `auth:api`, `ApiKeyGuard`, `IsAuthenticated`) and
     lists the routes that carry them. Platform-specific symbols carry their targets, e.g. `[ios, android]`.
@@ -1115,7 +1132,7 @@ def explore(query: str, budget_tokens: int = 3000, max_symbols: int = 4) -> str:
 def routes(writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
            unguarded: bool = False, strict: bool = False, auth_pattern: str | None = None, max_items: int = 40, paths: bool = True,
            min_confidence: str = "heuristic", platform: str | None = None) -> str:
-    """Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
+    """Use for route, auth and middleware questions. Routes with their middleware / guards / auth, in one call. Optional scope: writes="*" (routes that reach any
     DB write) or writes="<table>", reaches=[specs] (routes that reach any of these nodes: table, column, connection,
     method, env key...). Optional filters: missing="<name>" keeps routes with no guard whose name contains it (e.g.
     "auth:api", "ApiKeyGuard"), unguarded=true keeps routes with no auth guard (the framework presets' auth guards and
@@ -1154,7 +1171,7 @@ def doctor(root: str | None = None, scip: list[str] | None = None, json_output: 
 
 @tool
 def coverage(path: str | None = None, all_files: bool = False, json_output: bool = False) -> str:
-    """Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
+    """Use when cg finds nothing or you need to know if a file is indexed. Which languages and files this index covers. Per language: parser mode (exact, heuristic only when an
     exact-mode indexer such as rust-analyzer or scip-clang is missing, skipped when the toolchain is missing, with the
     install hint) and file completeness (discovered vs indexed, with parse failures, files over the size limit,
     unmapped files outside the source roots, excluded files); unsupported source types by extension or shebang
@@ -1242,7 +1259,7 @@ def stats() -> str:
 @tool
 def downstream(target: str, max_per_kind: int = 25, paths: bool = True, min_confidence: str = "heuristic",
                platform: str | None = None) -> str:
-    """Forward dependencies of a node: what it ends up calling/reading. On a combined graph a frontend page goes
+    """Use to see what X ends up calling or reading (page -> routes -> tables). Forward dependencies of a node. On a combined graph a frontend page goes
     page -> composables/components -> HTTP endpoints -> backend routes -> controllers/services -> tables.
     Lists backend routes, tables touched (directly or via columns), columns, connections, config/env keys, each
     with one shortest evidence path. target: page:/reports/:id | app/pages/x.vue | Class::method | ...
@@ -1288,7 +1305,7 @@ def downstream(target: str, max_per_kind: int = 25, paths: bool = True, min_conf
 
 @tool
 def path(source: str, target: str, min_confidence: str = "heuristic", platform: str | None = None) -> str:
-    """Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
+    """Use to answer "how does A reach B". Shortest forward evidence chain from source to target (e.g. page:/reports/:id ->
     SalesReportService::report), one hop per line with file:line and confidence.
     platform: only code built for that target (windows, linux, macos, ios, android, web): code under a platform
     condition that is false there (#[cfg], #if, Platform.OS / Platform.isX, kIsWeb, .ios.ts / .android.ts files,
@@ -1601,7 +1618,7 @@ def _index(root: str | None = None, gates: str | None = None, repo: str | None =
 
 @tool
 def index(root: str | None = None, gates: str | None = None, repo: str | None = None) -> str:
-    """Re-index after editing (static analysis only: never boots the app or touches a database).
+    """Use after editing so later answers see the change. Re-index (static analysis only: never boots the app or touches a database).
     On a combined graph (any number of repos): with no arguments every repo is re-indexed from its recorded root and the
     cross-repo link is rebuilt; repo (a name used at link time) re-indexes just that repo; root is matched to the
     recorded repo roots (a repo directory, a path inside one, or a parent of several). A root that matches no repo, or
@@ -1623,7 +1640,7 @@ def index(root: str | None = None, gates: str | None = None, repo: str | None = 
 
 @tool
 def graphs() -> str:
-    """List the graphs this server can query: name, repo roots, languages, indexed commit and freshness.
+    """Use when unsure which graph a question belongs to. Lists the graphs this server can query: name, repo roots, languages, indexed commit and freshness.
     One `cg-mcp` process serves every registered graph. Pass `graph` to other tools to choose one, or omit it
     and the server resolves from a path in the call, then MCP roots or the working directory, then the configured
     default. An ambiguous choice returns the list instead of guessing."""

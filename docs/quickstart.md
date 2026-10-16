@@ -130,7 +130,7 @@ GET /api/books/  @bookstore-django/catalog/api.py:15  NO AUTH
 `cg reaches table:store_books --db out/graph.db` now also lists Flutter UI code (for example `lib/blocs/books/books_bloc.dart#BooksBloc._onLoad ... ui_page(1)`). The Laravel API and Nuxt sample (`examples/bookstore-api`, `examples/bookstore-web`; needs PHP 8.2+, Composer, Node 20+) and the Nest, Next and Express samples link the same way. Several apps: [Workspace](cli.md#workspace).
 
 ## Connect an agent (MCP)
-`cg install --host cursor` (or `claude`, `codex`, `vscode`, …) registers the MCP server. The key is `cg`:
+`cg install --host cursor` (or `claude`, `codex`, `vscode`, …) registers the MCP server and writes a short "use cg first" rule to `AGENTS.md` and `.cursor/rules/cg.mdc` (`--no-rules` skips that). The key is `cg`:
 ```json
 {"mcpServers": {"cg": {
   "command": "cg-mcp",
