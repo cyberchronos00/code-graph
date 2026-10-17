@@ -8,6 +8,23 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.3] - 2026-10-17
+
+### Added
+
+- Swift: a call that leaves out a defaulted argument gets its own `CALLS` edge to what the default calls, at the call site, with `attrs.omits_default` (the parameter label) and `attrs.default_of`. `impact` on the default's callee lists the callers that omit the argument (`through an omitted default argument`) and not those that pass it; `callers` labels them `(runs the default of gamut: in render)` and the declaration edge `(parameter default gamut:)` (#212, Swift part).
+
+### Changed
+
+- `impact` and `callers` count selector-only candidates (receiver type unknown, #83) apart from resolved callers: `transitive callers: 3 (+1 candidate)`, `direct callers: 2 (2 sites); candidate callers: 1 (1 site, ...)`, and `callers_resolved` / `callers_candidate` in the JSON. Candidates show their fan-out (`(candidate, 1 of 3 methods named refreshStatus)`, `candidate_of` in JSON) and are left out of `callers by module`. A caller without a module (a free function) is grouped as `<file> (top level)` instead of `?` (#204).
+- MCP `node` prints neighbours as `<id> :<line>`, so a per-platform variant reads `refreshStatus@24 :12` instead of `refreshStatus@24@12` (#201).
+- tree-sitter-swift 0.7.4 is supported (pin lifted to `<0.8`): `!Type.method()` parses with the operator around the callee and is unwrapped; members after an unknown attribute macro parse without recovery. Every Swift fixture gives the same graph on 0.7.3 and 0.7.4; corpus differences are listed in `docs/validation-log.md` (#199, part).
+
+### Fixed
+
+- Swift `#if` / `#else` variants: a reference made where only some targets build (a macOS-only caller or call) links only the per-platform definitions built on one of those targets, so a macOS-only call no longer reaches the `#else` stub and the stub no longer looks reached by macOS-only code. A reference whose definition is not built anywhere the site is moves to the sibling definition that is, and a `#else` type with no `init` of its own uses its implicit initializer instead of being bound to a sibling variant's `init`, so `platform_divergence` reports no false missing callee. References from code built everywhere still link every definition. `callers` counts a site linked to several variants once (#201).
+- Swift exact mode keeps the `default_arg` mark on a parameter default's call, so `impact` does not walk the declaring function as an unconditional caller (#208).
+
 ## [0.23.2] - 2026-10-17
 
 ### Added
