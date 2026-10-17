@@ -11,7 +11,7 @@ What `.swift` adds beyond [Install](install.md), [CLI specs](cli.md#query-target
 
 `--min-confidence resolved` (or `exact`) hides every heuristic call edge. SwiftPM `.build` / `.swiftpm`, Xcode `DerivedData`, `Pods`, and Carthage are skipped.
 
-tree-sitter-swift 0.7.3 rewrites some sources before parse (same length, so lines and names stay). Index stats count `files_with_<rewrite>`. What still fails is in `cg coverage --details`.
+tree-sitter-swift 0.7.3 and 0.7.4 (same graph on both) rewrite some sources before parse (same length, so lines and names stay). Index stats count `files_with_<rewrite>`. What still fails is in `cg coverage --details`.
 
 | rewrite | when | stat |
 |---|---|---|
@@ -51,7 +51,7 @@ A failed build keeps a `partial` store; the coverage reason includes the first `
 | `field:<Type>.<name>` | a stored `let` / `var`: `READS_PROP` / `WRITES_PROP` for `self.x`, a bare `x` in the type, and `v.x` when `v`'s type is known. `cg readers Type.prop` / `cg writers Type.prop` |
 | availability | `@available(iOS 17, *)` is node `attrs.available` (shown `[iOS 17+]`; members inherit the type). `if` / `guard #available` and the `else` of `#unavailable` set it on the edge. A check the deployment target already meets is `available_declared`, not a filter (`availability_always_true`) |
 
-`impact` shows an accessor as `(get)` / `(set)` / `(willSet)` / `(didSet)` and a candidate as `(candidate)`. The second of a `func` and a `static func` with one name has id suffix `~static` or `~instance`. In heuristic mode, two to five methods of one selector are `candidate` edges (`binding: "candidate"`), flagged by `cg tests` / `impact` and left out of platform divergence. An SDK-typed receiver binds only a project extension of that type, or of a protocol / open class such as `View`. Package code binds only its module and `Package.swift` dependencies (`candidates_outside_module`). Exact mode keeps every index-store reference, including ones outside that module.
+`impact` shows an accessor as `(get)` / `(set)` / `(willSet)` / `(didSet)` and a candidate as `(candidate)` (`(candidate, 1 of 3 methods named refreshStatus)` when the fan-out is known). Candidates are counted apart from resolved callers (`transitive callers: 3 (+1 candidate)`, `callers_candidate` in JSON) and left out of `callers by module`; a caller with no module (a free function) is grouped as `<file> (top level)`. The second of a `func` and a `static func` with one name has id suffix `~static` or `~instance`. In heuristic mode, two to five methods of one selector are `candidate` edges (`binding: "candidate"`), flagged by `cg tests` / `impact` and left out of platform divergence. An SDK-typed receiver binds only a project extension of that type, or of a protocol / open class such as `View`. Package code binds only its module and `Package.swift` dependencies (`candidates_outside_module`). Exact mode keeps every index-store reference, including ones outside that module.
 
 ## Framework facts
 
@@ -63,7 +63,8 @@ A failed build keeps a `partial` store; the coverage reason includes the first `
 | Fluent | `schema = "todos"` → `table:todos`. `query` / `find` read; `save` / `create` / `update` / `delete` and `database.schema(…).create()` write |
 | Vapor | `app.get`, `routes.post`, `grouped` / `group` prefixes, `RouteCollection.boot` → `route:`. Middleware on `grouped` is the guard |
 | Tests | XCTest `test*` (`xctest`) and Swift Testing `@Test` (`swift-testing`, `@Suite` on the type). `*UITests` is UI; a path through `@main` is omitted unless `--through-roots` |
-| Platforms | `#if os` / `canImport` / `targetEnvironment` / `@available(..., unavailable)` (`cg platforms`, `--platform`). Targets come from the Xcode project or `Package.swift` `platforms:` |
+| Platforms | `#if os` / `canImport` / `targetEnvironment` / `@available(..., unavailable)` (`cg platforms`, `--platform`). Targets come from the Xcode project or `Package.swift` `platforms:`. A reference made under `#if os(macOS)` links only the per-platform definitions built on macOS; code built everywhere links every definition. A `#else` type that declares no `init` uses its implicit one, not a sibling variant's |
+| Default arguments | a parameter default's calls are marked `default_arg` on the declaration and not walked by `impact` (`via default argument`). A call that leaves the argument out gets its own edge to the default's callee (`omits_default`, `default_of`), so `impact` lists it; a call that passes the argument does not |
 
 ```bash
 cg index examples/bookstore-django --db /tmp/dj.db

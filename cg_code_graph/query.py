@@ -981,6 +981,9 @@ def _hop_of(e) -> dict:
         a = json.loads(e["attrs"])
         if a.get("binding") == "candidate":      # one of several same-name methods, receiver type unknown (#83)
             hop["candidate"] = a.get("candidates") or True
+    if e["kind"] in ("CALLS", "TEST_CALLS") and e["attrs"] and '"omits_default"' in e["attrs"]:
+        a = json.loads(e["attrs"])     # the call leaves out a defaulted argument and runs its default (#212)
+        hop["omits_default"], hop["default_of"] = a.get("omits_default"), a.get("default_of")
     if e["kind"] in ("CALLS", "TEST_CALLS") and e["attrs"] and '"accessor"' in e["attrs"]:
         hop["accessor"] = json.loads(e["attrs"]).get("accessor")   # inside `didSet { }` / `get { }` (Swift, #72)
     if e["gate"]:
@@ -1253,7 +1256,7 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
         out.append(f"== {labels[cls]}: {len(group)} functions/methods")
         bymod = defaultdict(list)
         for i in group:
-            bymod[i.get("module") or "?"].append(i)
+            bymod[caller_group(i)].append(i)
         for mod in sorted(bymod):
             out.append(f"  [{mod}]")
             for i in bymod[mod]:
@@ -1270,7 +1273,7 @@ def render_reaches(res: dict, show_paths=True, kinds=CODE_KINDS + ENTRY_NODE_KIN
         out.append(f"== GATED UNDER SCENARIO '{res.get('gate')}' (dead when the scenario holds; live otherwise): {len(gated)} functions/methods")
         bymod = defaultdict(list)
         for i in gated:
-            bymod[i.get("module") or "?"].append(i)
+            bymod[caller_group(i)].append(i)
         for mod in sorted(bymod):
             out.append(f"  [{mod}]")
             for i in bymod[mod]:
@@ -1304,7 +1307,8 @@ def _first_hop(path: list[dict] | None) -> dict:
         return {}
     h = path[0]
     return {"edge": h["kind"], **({"how": h["how"]} if h.get("how") else {}), **({"via": h["via"]} if h.get("via") else {}),
-            **({"accessor": h["accessor"]} if h.get("accessor") else {})}
+            **({"accessor": h["accessor"]} if h.get("accessor") else {}),
+            **({"omits_default": h["omits_default"], "default_of": h.get("default_of")} if h.get("omits_default") else {})}
 
 
 def with_generated(row: dict) -> dict:
@@ -1348,6 +1352,54 @@ def generated_label(n: dict) -> str:
 
 
 CANDIDATE_LABEL = "  (candidate)"
+
+
+def _node_name(nid: str) -> str:
+    """`method:PrinterBridge.refreshStatus@24` -> `refreshStatus`."""
+    return nid.split(":", 1)[-1].split("@", 1)[0].rsplit(".", 1)[-1].rsplit("::", 1)[-1].rsplit("#", 1)[-1]
+
+
+def caller_group(c: dict) -> str:
+    """Module of a caller; a caller without one (a free function, a top-level script) is grouped by its file,
+    never as `?` (#204)."""
+    if c.get("module"):
+        return c["module"]
+    f = c.get("file")
+    return f"{os.path.basename(f)} (top level)" if f else "?"
+
+
+def fanout_text(c: dict) -> str:
+    """' (1 of 4 methods named refreshStatus)' for a selector-only candidate caller (#204), else ''."""
+    co = c.get("candidate_of") or {}
+    return f" (1 of {co['count']} methods named {co['name']})" if co.get("count") else ""
+
+
+def candidate_label(attrs: str | None, dst: str) -> str:
+    """'  (candidate, 1 of 3 methods named refreshStatus)' for a candidate call edge (#204)."""
+    try:
+        a = json.loads(attrs or "{}") or {}
+    except ValueError:
+        a = {}
+    n = a.get("candidates")
+    if isinstance(n, int) and not isinstance(n, bool) and n > 1:
+        return f"  (candidate, 1 of {n} methods named {_node_name(dst)})"
+    return CANDIDATE_LABEL
+
+
+def omitted_default_label(attrs: str | None) -> str:
+    """'  (runs the default of gamut: in render)' for a call site that leaves out a defaulted argument (#212)."""
+    if attrs and '"default_arg"' in attrs:
+        try:
+            return f"  (parameter default {(json.loads(attrs) or {}).get('default_arg')}:)"
+        except ValueError:
+            return ""
+    if not attrs or '"omits_default"' not in attrs:
+        return ""
+    try:
+        a = json.loads(attrs) or {}
+    except ValueError:
+        return ""
+    return f"  (runs the default of {a.get('omits_default')}: in {_node_name(a.get('default_of') or '?')})"
 CANDIDATE_NOTE = ("(candidate): through a call whose receiver type is unknown, bound to each project method with that "
                   "selector; it may reach a same-name sibling instead")
 
@@ -1418,7 +1470,10 @@ def caller_label(c: dict) -> str:
     if c.get("in_property"):                     # a type node: the call is in a property of that type (#72)
         lab += "  (in a property)"
     if c.get("candidate"):
-        lab += CANDIDATE_LABEL
+        co = c.get("candidate_of") or {}
+        lab += f"  (candidate, 1 of {co['count']} methods named {co['name']})" if co.get("count") else CANDIDATE_LABEL
+    if c.get("omits_default"):
+        lab += f"  (runs the default of {c['omits_default']}: in {_node_name(c.get('default_of') or '?')})"
     if c.get("via_override"):
         v = c["via_override"]
         lab += f"  (via override {v[0]}" + (f" +{len(v) - 1}" if len(v) > 1 else "") + ")"
@@ -1655,6 +1710,10 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
         p = paths.get(n) or []
         if path_candidate(p):
             c["candidate"] = True
+            fan = next((h for h in p if h.get("candidate")), {})
+            if isinstance(fan.get("candidate"), int) and not isinstance(fan.get("candidate"), bool):
+                # one of N project methods sharing the selector (#204)
+                c["candidate_of"] = {"count": fan["candidate"], "name": _node_name(fan["to"])}
         if p and p[0]["to"] in bases:      # calls the base declaration; reaches the target through the override
             c["via_base"] = fq.get(p[0]["to"], p[0]["to"])
         if n in direct:    # calls an override (not the target itself): reaches the target's API through it
@@ -1662,6 +1721,9 @@ def _impact(st: GraphStore, spec: str, min_conf: str, platform: str | None) -> d
         callers.append(c)
     out = {"targets": targets, "entry_points": sorted(entries, key=lambda x: (x["entry_kind"], x["name"])),
            "callers": sorted(callers, key=lambda x: (x["depth"], x["fqn"] or "")), **rel}
+    # selector-only candidates (receiver type unknown, #83) are counted apart from resolved callers (#204)
+    out["callers_candidate"] = sum(1 for c in callers if c.get("candidate"))
+    out["callers_resolved"] = len(callers) - out["callers_candidate"]
     defaults = _default_arguments(st, targets)
     if defaults:
         out["default_arguments"] = defaults

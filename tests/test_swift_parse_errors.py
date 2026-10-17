@@ -74,7 +74,12 @@ def test_members_after_an_unknown_macro_are_recovered_into_the_type():
     for t in ("testBeforeMacro", "testAfterMacro"):
         assert node(f"method:OrphanTests.{t}")[0] == "test", t
     assert not rows("SELECT id FROM nodes WHERE id LIKE 'function:test%'")
-    assert fix_db() and _S["stats"]["plugins"]["swift"]["declarations_recovered_into_type"] >= 1
+    # tree-sitter-swift < 0.7.4 leaves the members after `#warningx` in an ERROR node that the plugin recovers into
+    # the type; 0.7.4 parses them as members directly (#199). Same graph either way.
+    from importlib.metadata import version
+    rec = fix_db() and _S["stats"]["plugins"]["swift"].get("declarations_recovered_into_type", 0)
+    if tuple(int(x) for x in version("tree-sitter-swift").split(".")[:3]) < (0, 7, 4):
+        assert rec >= 1
 
 
 def test_valid_forms_the_grammar_rejects_are_rewritten_and_fully_indexed():

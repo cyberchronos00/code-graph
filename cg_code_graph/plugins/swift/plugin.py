@@ -565,6 +565,7 @@ class SwiftPlugin(LanguagePlugin):
             self._available(sf)
         self._resolve_calls()
         self._resolve_props()
+        self._omitted_defaults()
         self._at = None
         self._hierarchy()
         self._fluent_migrations(sfiles)
@@ -1437,6 +1438,11 @@ class SwiftPlugin(LanguagePlugin):
             # `a + weight(forExtraIndex: 2)` parses as `(a + weight)(forExtraIndex: 2)`: the callee is the right operand
             f = f.child_by_field_name("rhs")
             line = f.start_point[0] + 1
+        while f.type == "prefix_expression" and len(f.children) == 2 and self.t(f.children[0]) in ("!", "-", "~", "+") \
+                and f.children[1].type in ("navigation_expression", "simple_identifier"):
+            # tree-sitter-swift 0.7.4 parses `!Preview.matches(a, b)` as `(!Preview.matches)(a, b)`; 0.7.3 as
+            # `(!Preview).matches(a, b)` (handled below): either way the operator applies to the result (#199)
+            f = f.children[1]
         suf = next((x for x in c.children if x.type == "call_suffix"), None)
         args = next((x for x in suf.children if x.type == "value_arguments"), None) if suf is not None else None
         lam = next((x for x in suf.children if x.type in ("lambda_literal", "annotated_lambda")), None) if suf is not None else None
@@ -2122,6 +2128,8 @@ class SwiftPlugin(LanguagePlugin):
         return self._qext
 
     def _resolve_calls(self):
+        self._default_edges: dict[str, list] = defaultdict(list)   # function -> [(label, callee, attrs)] (#208)
+        self._call_sites: list = []                                  # (caller, callee, file, line, labels, trailing)
         for rec in self.calls:
             owner, name, recv, line, sf, decl, labels, trailing = rec[:8]
             default_arg = rec[8] if len(rec) > 8 else None
@@ -2151,14 +2159,56 @@ class SwiftPlugin(LanguagePlugin):
                                     **self.branch_of.get((owner, line, name), {}))
                     for m in hit:
                         self.b.add_edge(owner, m.id, "CALLS", sf.rel, line, HEURISTIC)
+                        self._call_sites.append((owner, m.id, sf.rel, line, labels, trailing))
                 else:
                     if default_arg:
                         how = {**how, "default_arg": default_arg}
+                        self._default_edges[owner].append((default_arg, t.id, {}))
+                    elif self._how != "candidate":
+                        self._call_sites.append((owner, t.id, sf.rel, line, labels, trailing))
                     self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, **how, **self._accessor_attr(decl, line))
                     if how:
                         self.st["calls_by_name_only" if self._how == "name" else "call_candidate_edges"] += 1
                 done = True
             self.st["calls_resolved" if done else "calls_unresolved"] += 1
+
+    def _omitted_defaults(self):
+        """A call that leaves out a defaulted argument runs the default expression: an edge from the caller to what
+        the default calls, at the call site, with `omits_default` (the parameter label) and `default_of` (#212). A
+        call that passes the argument gets none. The declaration's own `default_arg` edge stays (#208)."""
+        if not self._default_edges:
+            return
+        n = 0
+        for owner, did, rel, line, labels, trailing in self._call_sites:
+            defs = self._default_edges.get(did)
+            if not defs:
+                continue
+            left = self._left_out(did, labels, trailing)
+            for label, callee, extra in defs:
+                if label in left and callee != owner:
+                    self.b.add_edge(owner, callee, "CALLS", rel, line, HEURISTIC, omits_default=label, default_of=did,
+                                    **extra)
+                    n += 1
+        if n:
+            self.st["default_argument_sites"] = n
+
+    def _left_out(self, did: str, labels: tuple, trailing: bool) -> set:
+        """Labels of the defaulted / optional parameters the call leaves out, by the first signature it fits."""
+        for sig in self.sigs.get(did) or ():
+            i, ok, left, tr = 0, True, set(), trailing
+            for k, (lab, opt) in enumerate(sig):
+                if i < len(labels) and labels[i] == lab:
+                    i += 1
+                elif tr and i == len(labels) and all(o for _l, o in sig[k + 1:]):
+                    tr = False
+                elif opt:
+                    left.add(lab)
+                else:
+                    ok = False
+                    break
+            if ok and i == len(labels):
+                return left
+        return set()
 
     def _prop_member(self, cls: Decl | None, name: str, depth: int = 0) -> list[Decl]:
         """Property nodes named `name` of a type, its extensions and its supertypes (protocol extensions too)."""
@@ -2241,6 +2291,7 @@ class SwiftPlugin(LanguagePlugin):
                     continue
                 if default_arg:
                     how = {**how, "default_arg": default_arg}
+                    self._default_edges[owner].append((default_arg, t.id, {"property": "write" if write else "read"}))
                 self.b.add_edge(owner, t.id, "CALLS", sf.rel, line, HEURISTIC, property="write" if write else "read",
                                 **how, **self._accessor_attr(decl, line))
                 done = True

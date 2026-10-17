@@ -318,8 +318,10 @@ class ExactLayer:
                         acc = {**acc, "property": "read" if accessor_kind.get(o.usr) == "getter" else "write"}
                     br = self.p.branch_at.get((rel, o.line, self.b.nodes[dst].name), {}) \
                         if kind == "INSTANTIATES" else {}
+                    da = self.default_args.get((dst, rel, o.line)) if kind == "CALLS" else None
                     self.b.add_edge(src, dst, kind, rel, o.line, EXACT, source="indexstore",
-                                    **({"dynamic": True} if o.roles & ix.DYNAMIC else {}), **acc, **br)
+                                    **({"dynamic": True} if o.roles & ix.DYNAMIC else {}), **acc, **br,
+                                    **({"default_arg": da} if da else {}))
                     exact.add((src, dst, kind))
                     refs += 1
         st["index_references"] = refs
@@ -410,17 +412,22 @@ class ExactLayer:
         it is kept, marked `via: not-compiled`, and left out of the comparison. Candidate edges (#83) go to
         self.candidates, compared on their own."""
         out, cand, kept = set(), set(), 0
+        self.default_args = {}      # (callee, file, line) -> parameter label of a default-argument call (#208)
         for key, e in list(self.b.edges.items()):
             if e.confidence != HEURISTIC or e.file not in covered or e.kind not in CALL_KINDS:
                 continue
             n = self.b.nodes.get(e.src)
             if n is None or n.lang != "swift":
                 continue
+            if e.attrs.get("omits_default"):
+                continue              # the call runs a default the compiler records at the declaration only (#212)
             if (e.file, e.line) not in seen_lines:
                 e.attrs["via"] = "not-compiled"
                 kept += 1
                 continue
             (cand if e.attrs.get("binding") == "candidate" else out).add((e.src, e.dst, e.kind))
+            if e.attrs.get("default_arg"):
+                self.default_args[(e.dst, e.file, e.line)] = e.attrs["default_arg"]
             del self.b.edges[key]
         self.candidates = cand
         return out, kept

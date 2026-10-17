@@ -412,6 +412,26 @@ Alamofire, 247 heuristic edges sit in inactive `#if` branches (Apple-only code);
 names the reason (`Swift toolchain found but the package was not built ...`, `no Package.swift ...`,
 `swift build failed (exit 1: ...)`).
 
+### tree-sitter-swift 0.7.3 and 0.7.4 (#199)
+
+Every Swift test fixture (12 projects) gives the same nodes and edges on both grammar versions. Two parse changes in
+0.7.4 needed care: `!Preview.matches(a, b)` now parses as `(!Preview.matches)(a, b)` (the extractor unwraps the
+prefix operator, as it already stripped it from the receiver under 0.7.3), and members after an unknown attribute
+macro (`#warningx`) parse as members, so the ERROR recovery no longer runs.
+
+Heuristic graphs of six public corpora on both versions (Swift nodes and edges from Swift nodes):
+
+| corpus (commit) | nodes 0.7.3 / 0.7.4 | edges 0.7.3 / 0.7.4 | where they differ |
+| --- | --- | --- | --- |
+| Alamofire (bda9ed5) | 3330 / 3330 | 16515 / 16516 | an `&value` argument is a write, not a read |
+| IceCubesApp (9efcb16) | 6435 / 6434 | 18745 / 18747 | `isolated deinit` is no method named `isolated`; 3 more `.shared` reads |
+| Kingfisher (7bfa0b2) | 3267 / 3267 | 13667 / 13667 | none |
+| isowords (c727d3a) | 4702 / 4702 | 9994 / 10003 | `&self.x` arguments are writes; `Text(...) + self.scoreText` on its own line |
+| SwiftUIX (3a99044) | 12281 / 12296 | 29967 / 30006 | backticked enum cases parse; no `(AnyView)` pseudo-fields |
+| element-x-ios (9f14158) | 23705 / 23695 | 79553 / 79532 | `isolated deinit` bodies belong to the type, not to a method `isolated` |
+
+Every difference is 0.7.4 reading the source more closely, so the `<0.7.4` pin is lifted (`<0.8`).
+
 ## Web / native bridges
 
 `cg index <repo>` with no flags and no `.cg.yaml`, then `cg bridges` ([Web / native bridges](bridges.md)). The two Capacitor

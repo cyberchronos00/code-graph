@@ -601,7 +601,9 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
     dropped_line = [f"not built for {pf}: {', '.join(short(t) for t in dropped[:6])}"] if pf and dropped else []
     out = pline + dropped_line + [f"targets: {', '.join(short(t) for t in r['targets'][:5])}", *via_default, *Q.override_lines(r),
                    *([Q.connections_line(r["connections"])] if r.get("connections") else []),
-                   f"transitive callers: {len(r['callers'])}; entry points: {len(r['entry_points'])}"]
+                   f"transitive callers: {r.get('callers_resolved', len(r['callers']))}"
+                   + (f" (+{r['callers_candidate']} candidate)" if r.get("callers_candidate") else "")
+                   + f"; entry points: {len(r['entry_points'])}"]
     if not r["callers"] and not r["entry_points"]:
         return "\n".join(out + [Q.explain_no_callers(st, method, r["targets"], min_confidence)])
     byk = defaultdict(list)
@@ -619,7 +621,7 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
             out.append(f"  {lab}{Q.CANDIDATE_LABEL if e.get('candidate') else ''}{Q.platform_label(e)}{hop}")
     bymod = defaultdict(list)
     for c in r["callers"]:
-        bymod[c.get("module") or "?"].append(c)
+        bymod[Q.caller_group(c)].append(c)
     dup_lines = []
     for mod in sorted(bymod):
         cs = bymod[mod]
@@ -631,8 +633,10 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
         out.append("same name in one module: " + "; ".join(dup_lines))
     mods = defaultdict(int)
     for c in r["callers"]:
-        mods[c.get("module") or "?"] += 1
-    out.append("\ncallers by module: " + ", ".join(f"{m}×{c}" for m, c in sorted(mods.items(), key=lambda x: -x[1])))
+        if not c.get("candidate"):          # candidates are listed on their own below (#204)
+            mods[Q.caller_group(c)] += 1
+    if mods:
+        out.append("\ncallers by module: " + ", ".join(f"{m}×{c}" for m, c in sorted(mods.items(), key=lambda x: -x[1])))
     gen = [c for c in r["callers"] if c.get("generated")]
     if gen:    # indexed with --include-generated: callers in files a generator writes
         out.append(f"in generated / copied files ({len(gen)}): " + ", ".join(f"{short(c['id'])} [{c['generated']}]" for c in gen[:8])
@@ -648,8 +652,13 @@ def impact(method: str, min_confidence: str = "heuristic", max_items: int = 60, 
                                                              for c in vo[:8]) + (f" …+{len(vo) - 8}" if len(vo) > 8 else ""))
     cand = [c for c in r["callers"] if c.get("candidate")]
     if cand or any(e.get("candidate") for e in r["entry_points"]):   # reached through a candidate call edge (#83)
-        out.append(f"candidate callers ({len(cand)}): " + ", ".join(short(c["id"]) for c in cand[:12])
+        out.append(f"candidate callers ({len(cand)}): " + ", ".join(short(c["id"]) + Q.fanout_text(c) for c in cand[:12])
                    + (f" …+{len(cand) - 12}" if len(cand) > 12 else "") + "\n" + Q.CANDIDATE_NOTE)
+    od = [c for c in r["callers"] if c.get("omits_default")]
+    if od:     # calls that leave out a defaulted argument and so run its default (#212)
+        out.append(f"through an omitted default argument ({len(od)}): "
+                   + ", ".join(f"{short(c['id'])} ({c['omits_default']}: of {short(c.get('default_of'))})" for c in od[:8])
+                   + (f" …+{len(od) - 8}" if len(od) > 8 else ""))
     vb = [c for c in r["callers"] if c.get("via_base")]
     if vb:     # calls the base declaration; the target is reached through the override
         out.append(f"via base ({len(vb)}): " + ", ".join(f"{short(c['id'])} -> {c['via_base']}" for c in vb[:8])
@@ -702,12 +711,26 @@ def callers(symbol: str, min_confidence: str = "heuristic", limit: int = 60) -> 
     if not rows:
         return head + f"\nno direct callers of {symbol!r} in indexed code (min_confidence={min_confidence}). try: impact() for " \
                       f"entry points, reaches() for every dependent over all edge kinds, node() for its other edges"
-    out = [head, f"direct callers: {len({r['src'] for r in rows})} ({len(rows)} sites)"]
-    for r in rows[:limit]:
+    # one row per call site: a site linked to several per-platform definitions of the target is one site (#201)
+    seen, uniq = set(), []
+    for r in rows:
+        if (r["src"], r["kind"], r["file"], r["line"]) not in seen:
+            seen.add((r["src"], r["kind"], r["file"], r["line"]))
+            uniq.append(r)
+    rows = uniq
+    is_cand = [bool(r["attrs"] and '"binding": "candidate"' in r["attrs"]) for r in rows]
+    res = [r for r, cd in zip(rows, is_cand) if not cd]
+    cands = [r for r, cd in zip(rows, is_cand) if cd]
+    # selector-only candidates (receiver type unknown) are counted apart from resolved callers (#204)
+    out = [head, f"direct callers: {len({r['src'] for r in res})} ({len(res)} sites)"
+           + (f"; candidate callers: {len({r['src'] for r in cands})} ({len(cands)} site{'' if len(cands) == 1 else 's'}, receiver type unknown)"
+              if cands else "")]
+    for r in (res + cands)[:limit]:
         c = "" if r["confidence"] == "exact" else f" ~{r['confidence'][0]}"
         k = "ref" if r["kind"] == "REFERENCES_FN" else r["kind"]
-        cand = Q.CANDIDATE_LABEL if r["attrs"] and '"binding": "candidate"' in r["attrs"] else ""
-        out.append(f"  {short(r['src'])}  {k}@{at((r['file'] or '?') + ':' + str(r['line']))}{c}{cand}")
+        cand = Q.candidate_label(r["attrs"], r["dst"]) if r in cands else ""
+        out.append(f"  {short(r['src'])}  {k}@{at((r['file'] or '?') + ':' + str(r['line']))}{c}{cand}"
+                   + Q.omitted_default_label(r["attrs"]))
     if len(rows) > limit:
         out.append(f"  … +{len(rows) - limit} more (raise limit)")
     return "\n".join(out)
@@ -1086,7 +1109,8 @@ def node(id_or_symbol: str) -> str:
             for k, v in sorted(byk.items()):
                 if k == "CONTAINS":
                     continue
-                s = "; ".join(f"{short(r['o'])}@{r['line']}{'!g' if r['gate'] else ''}" for r in v[:6])
+                # `<id> :<line>`: a variant id carries its own `@N` (`refreshStatus@24 :12`, #201)
+                s = "; ".join(f"{short(r['o'])} :{r['line']}{'!g' if r['gate'] else ''}" for r in v[:6])
                 out.append(f"  {k}: {s}{' …' if len(v) > 6 else ''}")
     return "\n".join(out)
 

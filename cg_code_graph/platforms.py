@@ -29,6 +29,7 @@ on any target follow the implementation that target builds.
 """
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
 import json
 import os
@@ -658,11 +659,13 @@ def apply(project, builder) -> dict:
                 etag[k] = hit
     targets, tsrc = declared_targets(root, cfg, marks, set(langs) | ({"c_cpp"} if langs & {"c", "cpp"} else set()))
     _write_attrs(builder, ntag, nvals, etag, targets)
+    narrowed = _narrow_variant_edges(builder, nvals, etag)
     _variant_platforms(builder, nvals, targets)
     unknown = [m for m in marks if any(m["cond"].values().get(p) is None for p in targets)]
     tagged_files = sorted({m["file"] for m in marks})
     st = {"targets": targets, "target_sources": tsrc, "conditions": len(marks), "files_with_conditions": len(tagged_files),
-          "tagged_nodes": len(ntag), "tagged_edges": len(etag), "variant_edges": mirrored, "text_scanned_files": scanned,
+          "tagged_nodes": len(ntag), "tagged_edges": len(etag), "variant_edges": mirrored,
+          "variant_edges_narrowed": narrowed, "text_scanned_files": scanned,
           "unevaluated_conditions": len(unknown),
           "unevaluated_per_target": {p: sum(1 for m in unknown if m["cond"].values().get(p) is None) for p in targets},
           "unevaluated_samples": sorted({f"{m['cond'].text} @ {m['file']}:{m['line']}" for m in unknown})[:8]}
@@ -822,6 +825,63 @@ def _write_attrs(builder, ntag, nvals, etag, targets=None) -> None:
         if e is not None:
             e.attrs = dict(e.attrs or {})
             put(e.attrs, ms, _combine([m["cond"].values() for m in ms]))
+
+
+def _narrow_variant_edges(builder, nvals: dict, etag: dict) -> int:
+    """A reference made where only some targets build (`#if os(macOS)` around the caller or the call) reaches only the
+    per-platform definitions built on one of those targets (#201): a macOS-only call of `refreshStatus()` links the
+    macOS definition, not the `#else` stub. A reference whose definition is not built anywhere the site is moves to the
+    sibling definitions that are (the `#else` type's `Self()` names its own type), and a Swift `init` of a sibling
+    variant type that declares no initializer of its own (the implicit one) is no reference at all. References from
+    code built everywhere keep linking every definition."""
+    alts = {}
+    for ids in _alt_groups(builder, nvals).values():
+        if len(ids) > 1 and any(i in nvals for i in ids):
+            for i in ids:
+                alts[i] = ids
+    inits: dict[str, list] = defaultdict(list)       # Swift type -> its init nodes
+    parent: dict[str, str] = {}
+    for e in builder.edges.values():
+        if e.kind == "CONTAINS" and e.src.startswith("class:"):
+            parent[e.dst] = e.src
+            dn = builder.nodes.get(e.dst)
+            if dn is not None and dn.name == "init":
+                inits[e.src].append(e.dst)
+
+    def avail(i):
+        return {p for p in KNOWN if _avail(nvals.get(i), p)}
+
+    drop, adds = [], []
+    for k, e in builder.edges.items():
+        if e.kind in ("CONTAINS", "DEFINES", "GATED_BY"):
+            continue
+        vals = ([nvals[e.src]] if e.src in nvals else []) + [m["cond"].values() for m in etag.get(k, ())]
+        if not vals:
+            continue
+        site = {p for p, v in _combine(vals).items() if v is not False}
+        if not site or avail(e.dst) & site:
+            continue
+        ids = alts.get(e.dst)
+        if ids:
+            other = [i for i in ids if i != e.dst and avail(i) & site]
+            if other:
+                drop.append(k)
+                adds += [(e, i) for i in other]
+            continue
+        dn = builder.nodes.get(e.dst)
+        if dn is None or dn.lang != "swift" or dn.name != "init" or e.dst not in parent:
+            continue
+        own = parent[e.dst]
+        sib = [v for v in alts.get(own) or () if v != own and avail(v) & site]
+        if sib and all(not inits.get(v) for v in sib):
+            drop.append(k)                       # the sibling variant type's implicit initializer
+    for k in drop:
+        builder.edges.pop(k, None)
+    for e, nid in adds:
+        key = (e.src, nid, e.kind, e.file, e.line, e.gate)
+        if key not in builder.edges:
+            builder.edges[key] = dataclasses.replace(e, dst=nid, attrs={**(e.attrs or {}), "platform_variant_of": e.dst})
+    return len(drop)
 
 
 def _variant_platforms(builder, nvals: dict, targets) -> int:

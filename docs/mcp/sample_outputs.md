@@ -342,7 +342,7 @@ table books has no column 'titel'; similar: title. columns: id, store_id, isbn, 
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 32, "indexed": 32, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`
 
-## `node {'id_or_symbol': 'App\\Http\\Controllers\\Admin\\InventoryController::index'}`  (675 chars)
+## `node {'id_or_symbol': 'App\\Http\\Controllers\\Admin\\InventoryController::index'}`  (681 chars)
 
 ```
 method:App\Http\Controllers\Admin\InventoryController::index
@@ -352,12 +352,12 @@ attrs: {"repo":"bookstore-api"}
 doc:
 /** Stock list; stores still on the old warehouse read it from there. */
 out: CALLS×1, READS_COLUMN×2, READS_SETTING×1, USES_CONNECTION×1
-  CALLS: Models\Store::getSetting@16
-  READS_COLUMN: column:warehouse_stock.is_active@17!g; column:books.is_active@20
-  READS_SETTING: setting:features.new_inventory.enabled@16
-  USES_CONNECTION: connection:warehouse@17!g
+  CALLS: Models\Store::getSetting :16
+  READS_COLUMN: column:warehouse_stock.is_active :17!g; column:books.is_active :20
+  READS_SETTING: setting:features.new_inventory.enabled :16
+  USES_CONNECTION: connection:warehouse :17!g
 in: CONTAINS×1, ROUTES_TO×1
-  ROUTES_TO: route:GET /v1/{store}/admin/inventory@16
+  ROUTES_TO: route:GET /v1/{store}/admin/inventory :16
 ```
 
 structured `completeness`: `{"complete": true, "languages": {"bookstore-api/php": {"complete": true, "discovered": 32, "indexed": 32, "mode": "exact"}, "bookstore-web/typescript": {"complete": true, "discovered": 12, "excluded": 1, "indexed": 11, "mode": "exact"}}}`

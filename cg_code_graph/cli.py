@@ -733,7 +733,8 @@ def main(argv=None):
             print(Q.connections_line(res["connections"]))
         if not res["callers"] and not res["entry_points"]:
             print(Q.explain_no_callers(st, a.spec, res["targets"], a.min_confidence)); return
-        print(f"callers (transitive): {len(res['callers'])}")
+        nc = res.get("callers_candidate") or 0
+        print(f"callers (transitive): {len(res['callers']) - nc}" + (f" (+{nc} candidate)" if nc else ""))
         caller_names = _impact_labels(res["callers"], lambda c: c.get("fqn") or c["id"], lambda c: c.get("module") or c.get("kind"))
         for c, nm in zip(res["callers"], caller_names):
             loc = f"  @ {c['file']}:{c['line']}" if Q.NATIVE_FILE_RE.search(c.get("file") or "") else ""

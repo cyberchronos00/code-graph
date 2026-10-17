@@ -131,7 +131,7 @@ def test_unknown_receiver_with_ambiguous_selector_gives_candidates():
     assert "(candidate)" in out and Q.CANDIDATE_NOTE in out
     imp = Q.impact(st, "FeedStore.reload")
     assert [(c["fqn"], c.get("candidate")) for c in imp["callers"]] == [("Refresher.refreshAll", True)]
-    assert "(candidate)" in Q.caller_label(imp["callers"][0])
+    assert "(candidate, 1 of 2 methods named reload)" in Q.caller_label(imp["callers"][0])
     # a typed receiver is never a candidate
     assert not Q.impact(st, "SlotGate.cancel")["callers"][0].get("candidate")
     assert _S["stats"]["plugins"]["swift"]["call_candidate_edges"] == 4
