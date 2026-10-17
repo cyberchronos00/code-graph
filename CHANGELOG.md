@@ -8,6 +8,22 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.6] - 2026-10-17
+
+### Added
+
+- Default arguments in TypeScript / JavaScript, Kotlin, PHP and Python, as already done for Swift: a call inside a parameter's default value is an edge from the declaring function with `attrs.default_arg`, which `impact` lists as `via default argument` without walking it. In TypeScript / JavaScript, Kotlin and PHP (8.1 `new` in initializers), where the default runs on every call, a resolved call that leaves the argument out (or passes `undefined` in TS) also gets an edge from the caller to the default's callee with `attrs.omits_default` and `attrs.default_of`, so `impact` on that callee lists the callers that run it. Named and trailing-lambda arguments count; a call with a spread argument gets none. Python evaluates defaults once at `def` time, so only the declaration edge is marked. See [schema.md](docs/schema.md#default-arguments) (#212).
+- `docs/validation-log.md` records the `cg affected` hand-check of 20 (file → test) pairs: immich `server/` 20/20 after the TypeScript fix below, flask 9/20 (the misses are filed as #221), and the Swift narrowing numbers (#199, #218).
+
+### Changed
+
+- Swift heuristic mode narrows selector candidates: a local assigned from a project function or static factory with a declared project return type (`let b = makeBridge()`, `let s = Store.shared()`, `-> Self`) gets that type, and a selector with only one visible declaring type binds by name instead of as a candidate. `private` / `fileprivate` members, and members of a file-private type, count only in their own file; an overload set split across files or across access levels stays visible. Candidate edges drop on most corpora (Kingfisher 206 → 197, SwiftUIX 454 → 441) with exact-mode precision and recall on Alamofire unchanged; numbers in [validation-log.md](docs/validation-log.md#swift-selector-narrowing-218) (#218).
+
+### Fixed
+
+- TypeScript: an instance method no longer gets `OVERRIDDEN_BY` (or `IMPLEMENTED_BY`) from a base class's `static` member of the same name, so a base service's `static create(...)` factory is not an override target of every subclass's `create`. Found by the `cg affected` hand-check (#199).
+
+
 ## [0.23.5] - 2026-10-17
 
 ### Changed
@@ -1724,7 +1740,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.5...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.6...HEAD
+[0.23.6]: https://github.com/cyberchronos00/code-graph/compare/v0.23.5...v0.23.6
 [0.23.5]: https://github.com/cyberchronos00/code-graph/compare/v0.23.4...v0.23.5
 [0.23.4]: https://github.com/cyberchronos00/code-graph/compare/v0.23.3...v0.23.4
 [0.23.3]: https://github.com/cyberchronos00/code-graph/compare/v0.23.2...v0.23.3
