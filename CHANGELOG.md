@@ -8,6 +8,23 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.5] - 2026-10-17
+
+### Changed
+
+- Laravel API routes are stored and shown at their served path: a route in `routes/api.php` (or `routes/api/`) served at `/api/v1/orders` is `route:POST /api/v1/orders` in `cg routes`, route ids, `route:` specs and the viz, instead of `POST /v1/orders`. The prefix is read from `bootstrap/app.php` `withRouting(api:, apiPrefix:)`, from route files mounted in its `then:` closure (`Route::prefix('webhooks')->group(base_path('routes/hooks.php'))`) and from a Laravel ≤ 10 `RouteServiceProvider` group; `api` when nothing configures it. `web.php` stays unprefixed. Routes keep `attrs.declared_uri` and `attrs.prefix_from`. A `route:` spec with the declared path still resolves, with `note: declared path; served as POST /api/v1/orders`. `cg link` and `cg tests` match on the served path; the hard-coded `/api` variant is used only for the default prefix and for graphs built by older versions. **This affects saved plans, baselines and scripts that name Laravel API routes by id**: re-index, and update ids that should show the served path (#191).
+- `routes --writes` drops writes a route reaches only through overrides its receivers cannot dispatch to, with the same receiver narrowing as `downstream` (#120): its direct tables now agree with `downstream` of the route. A write reached only through an override hop whose receiver type is unknown is still listed (#149).
+
+### Added
+
+- Laravel: routes registered in loops over literal data are unrolled: `foreach` over a literal list or `key => value` array (or a `$var = [...]` assigned before it, or a class constant), `collect([...])->each/map`, `array_map` / `array_walk` and an enum's `cases()`. The loop variables are substituted into the path, name, middleware, `->defaults()`, `->where*()` and the action, and each route carries `attrs.unrolled_from` (`file`, `line`, `binding`); `cg routes` marks it `(unrolled: $genre = 'fiction')`. A loop over data cg can't evaluate, or with more than 64 combinations, stays a `laravel_loop_routes` blind spot with the reason (`iterable not literal`), and unrolled loops are no longer counted there (#184).
+- Laravel routes keep `->defaults()` as `attrs.defaults` and `->where()` / `whereNumber()` / `whereUuid()` / `whereIn()` / ... as `attrs.where` (#184).
+- Nuxt Nitro: object-form handlers (`defineEventHandler({ onRequest: [...], handler })`) route to the `handler` function, with `onRequest` / `onBeforeResponse` hooks as `USES_MIDDLEWARE` targets; `nitro.handlers` / `serverHandlers` entries in `nuxt.config` become routes (`attrs.registered_in`); `routeRules` with `proxy` mark the routes they cover (`attrs.proxy`) or add a proxy route; `server/` directories of local layers in `extends` are scanned; and a `server/middleware` handler that returns early outside a path prefix applies only to routes under it (`heuristic`) (#217).
+
+### Fixed
+
+- `downstream` and `impact` no longer follow every override after a `$this->m()` or `parent::m()` call: `$this->` keeps the receiver the path entered the method with (so a queued job's `$this->execute()` reaches its own class's override, not every sibling's), and `parent::m()` runs exactly the parent method with no override hop (#148).
+
 ## [0.23.4] - 2026-10-17
 
 ### Changed
@@ -1707,7 +1724,11 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.1...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.5...HEAD
+[0.23.5]: https://github.com/cyberchronos00/code-graph/compare/v0.23.4...v0.23.5
+[0.23.4]: https://github.com/cyberchronos00/code-graph/compare/v0.23.3...v0.23.4
+[0.23.3]: https://github.com/cyberchronos00/code-graph/compare/v0.23.2...v0.23.3
+[0.23.2]: https://github.com/cyberchronos00/code-graph/compare/v0.23.1...v0.23.2
 [0.23.1]: https://github.com/cyberchronos00/code-graph/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/cyberchronos00/code-graph/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/cyberchronos00/code-graph/compare/v0.21.2...v0.22.0
