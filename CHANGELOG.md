@@ -8,6 +8,16 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.4] - 2026-10-17
+
+### Changed
+
+- `readers` / `writers` of a Swift stored property show each site's `platforms=` when the property has per-platform declarations, and `field:<Type>.<name>@<line>` names one of them (#219).
+
+### Fixed
+
+- Swift: a stored property declared again in another `#if` branch (inside one type, or in a per-branch variant of the type) is its own `field:<Type>.<name>@<line>` node instead of being dropped, and `READS_PROP` / `WRITES_PROP` are narrowed by platform like `CALLS` (#201): a read made under `#if os(macOS)` links only the macOS declaration, and code built everywhere links every declaration (#219).
+
 ## [0.23.3] - 2026-10-17
 
 ### Added
