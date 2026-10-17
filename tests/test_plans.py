@@ -54,7 +54,7 @@ def test_malformed_items_are_errors_not_crashes(dbs, tmp_path):
     before, _ = dbs
     (tmp_path / "typo.yaml").write_text(
         "plan_version: 1\nname: typo\ntitle: Guard a route\nmodify:\n  - target: StockService::reserve\n"
-        "    intent: guard it\ncovers:\n  - page:app/pages/index.vue\nrequire: route:POST /v1/orders\n", encoding="utf-8")
+        "    intent: guard it\ncovers:\n  - page:app/pages/index.vue\nrequire: route:POST /api/v1/orders\n", encoding="utf-8")
     (tmp_path / "bad.yaml").write_text("plan_version: 1\nname: bad\ntitle: [unclosed\n", encoding="utf-8")
     pl = P.load_plan("typo", tmp_path)
     joined = "\n".join(pl["_schema_errors"])
@@ -102,7 +102,7 @@ def test_completeness_finds_omitted_siblings(dbs):
     assert "method:App\\Http\\Requests\\Admin\\UpdateBookRequest::rules" in by(r, "validation")
     assert "method:App\\Http\\Controllers\\Admin\\BookController::update" in by(r, "table_writer", "missing")
     assert {"method:App\\Http\\Controllers\\StockController::reserve", "method:App\\Http\\Controllers\\OrderController::store"} <= by(r, "caller")
-    assert "route:POST /v1/orders" in by(r, "entry_point")
+    assert "route:POST /api/v1/orders" in by(r, "entry_point")
     assert by(r, "external_client") == {"client:example/bookstore-mobile/pages/cart.vue"}  # /me hits no affected route
     assert "table:warehouse_stock" in by(r, "parallel_table", covered=True)          # old mirror (covered by the forbid)
     assert "method:App\\Services\\StockService::reserveFromWarehouse" in by(r, "parallel_method")
@@ -121,7 +121,7 @@ def test_conflicts_requirements_findings(dbs):
     assert f["present"] and f["guard"]["present"] is False
     assert [h["kind"] for h in f["hops"]][:1] == ["CALLS"] and f["hops"][0]["to"].endswith("::reserveFromWarehouse")
     assert r["require"][0]["missing"] == ["auth:api"]
-    assert r["middleware_diff"]["route:POST /v1/stock/reserve"]["lacks"] == ["auth:api"]
+    assert r["middleware_diff"]["route:POST /api/v1/stock/reserve"]["lacks"] == ["auth:api"]
     fs = {x["id"]: x for x in r["findings"]}
     assert fs["#7"]["linked"] and fs["#7"]["touches_plan"]
     assert not fs["#8"]["linked"] and fs["#8"]["touches_plan"] == ["method:App\\Services\\StockService::reserveLocal"]

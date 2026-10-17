@@ -150,7 +150,7 @@ def test_impact_on_external_and_table(dbs):
     res = impact(st, "external:postgres:db:5432")
     callers = {c["name"]: c["depth"] for c in res["callers"]}
     assert callers.get("pool") == 1 and "App\\Http\\Controllers\\OrderController::index" in {c["fqn"] for c in res["callers"]}
-    assert {e["name"] for e in res["entry_points"]} >= {"GET /orders", "POST /sync"}
+    assert {e["name"] for e in res["entry_points"]} >= {"GET /api/orders", "POST /sync"}
     t = impact(st, "table:orders")
     assert [c["fqn"] for c in t["callers"]] == ["App\\Http\\Controllers\\OrderController::index"]
     r = cli("impact", "external:postgres:db:5432", "--db", str(dbs["link"]))

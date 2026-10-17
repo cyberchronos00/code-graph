@@ -274,9 +274,9 @@ def test_php_clients_link_express_and_laravel(tmp_path):
     shared = one("http:ANY /shared")
     assert shared["matched"] == []
     payments = one("http:POST /payments")
-    assert any(m["route"].endswith("route:POST /payments") for m in payments["matched"])
+    assert any(m["route"].endswith("route:POST /api/payments") for m in payments["matched"])
     health = one("http:GET /health")
-    assert any(m["route"].endswith("route:GET /health") for m in health["matched"])
+    assert any(m["route"].endswith("route:GET /api/health") for m in health["matched"])
     status = one("http:GET /payments/{paymentId}/status")
     assert len(status["matched"]) == 1
     assert status["matched"][0]["route"].endswith("route:GET /payments/{paymentId}/status")

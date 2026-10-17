@@ -21,6 +21,7 @@ from . import presets
 from . import query as Q
 from .core.model import PROPAGATING
 from .core.store import GraphStore
+from .link import route_uri_variants
 
 PLAN_VERSION = 1
 STATUSES = ("draft", "agreed", "in_progress", "implemented", "abandoned")
@@ -419,10 +420,8 @@ class Ctx:
             a = json.loads(r["attrs"] or "{}")
             if not a.get("uri") or not a.get("method"):
                 continue
-            uris = [("as-declared", a["uri"])]
             f = (r["file"] or "").split("/", 1)[-1] if self.combined else (r["file"] or "")
-            if f.startswith("routes/api"):
-                uris.append(("api-prefixed", "/api" + a["uri"]))
+            uris = route_uri_variants(f, a)
             out.append({"id": r["id"], "uri": a["uri"], "method": a["method"], "uris": uris, "file": r["file"], "line": r["line"]})
         return out
 
@@ -796,10 +795,8 @@ def snapshot_clients(st, route_ids, root: str | Path | None = None) -> list[dict
                     a = json.loads(r["attrs"] or "{}")
                     if not a.get("uri") or not a.get("method"):
                         continue
-                    uris = [("as-declared", a["uri"])]
                     rf = (r["file"] or "").split("/", 1)[-1] if combined else (r["file"] or "")
-                    if rf.startswith("routes/api"):
-                        uris.append(("api-prefixed", "/api" + a["uri"]))
+                    uris = route_uri_variants(rf, a)
                     routes.append({"id": r["id"], "uri": a["uri"], "method": a["method"], "uris": uris,
                                    "file": r["file"], "line": r["line"]})
             hit = [m["route"] for m in match_endpoint(c.get("method") or "GET", base + c["path"], routes)["matched"]

@@ -18,6 +18,7 @@ contribute: file-based routing (route path per page), entry points (pages = ui_p
 from __future__ import annotations
 
 import atexit
+from collections import defaultdict
 import json
 import re
 import shutil
@@ -98,10 +99,30 @@ _SIDE_SKIP = re.compile(r"\.(test|spec)\.[cm]?[jt]sx?$|\.d\.ts$")
 
 def side_dirs(root: Path, src_dir: str) -> list[str]:
     """Root-level server/ and shared/ of a Nuxt project whose srcDir is not the root (with a root srcDir they are
-    already inside it; Nuxt 3's src/server sits inside a src/ srcDir)."""
+    already inside it; Nuxt 3's src/server sits inside a src/ srcDir), and the server/ dirs of local layers."""
     if src_dir in ("", "."):
         return []
-    return [d for d in SIDE_DIRS if (root / d).is_dir()]
+    return [d for d in SIDE_DIRS if (root / d).is_dir()] + layer_server_dirs(root, src_dir)
+
+
+def layer_server_dirs(root: Path, src_dir: str | None = None) -> list[str]:
+    """server/ dirs of local layers (#217): `extends: ['./layers/admin']` and the auto-registered layers/*/."""
+    out: list[str] = []
+    try:
+        plan_layers = nuxt_import_plan(root, src_dir)["layers"][1:]
+    except Exception:   # noqa: BLE001  (a config the scanner cannot read: no extends)
+        plan_layers = []
+    cands = [ly["dir"] for ly in plan_layers]
+    if (root / "layers").is_dir():
+        cands += sorted(d for d in (root / "layers").iterdir() if d.is_dir())
+    for d in cands:
+        try:
+            rel = d.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            continue
+        if rel and rel != "." and (root / rel / "server").is_dir() and f"{rel}/server" not in out:
+            out.append(f"{rel}/server")
+    return out
 
 
 def side_files(root: Path, dirs: list[str]) -> list[str]:
@@ -895,6 +916,83 @@ def nitro_route(rel: str, prefix: str = "") -> tuple[str, str] | None:
     return method, "/" + "/".join(s.strip("/") for s in [prefix.strip("/")] + segs if s.strip("/"))
 
 
+_OBJ_HOOK = re.compile(r"\b(onRequest|onBeforeResponse)\s*:\s*(\[[^\]]*\]|[A-Za-z_$][\w$]*|\(|async\b|function\b)")
+_OBJ_HANDLER_REF = re.compile(r"\bhandler\s*:\s*([A-Za-z_$][\w$]*)\s*[,}\n]")
+_PATH_GUARD = re.compile(r"if\s*\(\s*!\s*(?:event\.path|event\.node\.req\.url|getRequestURL\(\s*event\s*\)\.pathname)"
+                         r"(?:\?)?\.startsWith\(\s*['\"`]([^'\"`]+)['\"`]\s*\)\s*\)\s*\{?\s*return\b")
+
+
+def object_hooks(src: str) -> tuple[list[tuple[str, str]], str | None]:
+    """`defineEventHandler({ onRequest: [auth], onBeforeResponse: fn, handler })` (#217): [(hook, name)] where name is
+    an identifier or `<inline>`, and the identifier given as `handler` (None when it is an inline function)."""
+    i = src.find("defineEventHandler(")
+    if i < 0:
+        return [], None
+    j = i + len("defineEventHandler(")
+    while j < len(src) and src[j] in " \t\r\n":
+        j += 1
+    if j >= len(src) or src[j] != "{":
+        return [], None
+    body = src[j:]
+    hooks = []
+    for m in _OBJ_HOOK.finditer(body):
+        hook, val = m.group(1), m.group(2)
+        if val.startswith("["):
+            for name in re.findall(r"[A-Za-z_$][\w$]*", val[1:-1]):
+                hooks.append((hook, name))
+        elif val in ("(", "async", "function"):
+            hooks.append((hook, "<inline>"))
+        else:
+            hooks.append((hook, val))
+    ref = _OBJ_HANDLER_REF.search(body)
+    return hooks, ref.group(1) if ref and ref.group(1) not in ("async", "function") else None
+
+
+def path_guard(src: str) -> str | None:
+    """Prefix of `if (!event.path.startsWith('/api/admin')) return` at the top of a Nitro middleware (#217)."""
+    m = _PATH_GUARD.search(src)
+    return m.group(1) if m else None
+
+
+def rule_covers(pattern: str, uri: str) -> bool:
+    """Nitro routeRules pattern (`/api/legacy/**`, `/blog/*`, exact) against a route uri with {param} segments."""
+    pat = pattern.rstrip("/") or "/"
+    if pat.endswith("/**"):
+        base = pat[:-3]
+        return uri == base or uri.startswith(base + "/")
+    ps, us = pat.strip("/").split("/"), uri.strip("/").split("/")
+    if len(ps) != len(us):
+        return False
+    return all(p == "*" or p == u or (u.startswith("{") and p.startswith(":")) for p, u in zip(ps, us))
+
+
+def config_handlers(cfg: dict) -> list[dict]:
+    """`serverHandlers` and `nitro.handlers` entries of a parsed nuxt.config: [{route, method, handler, middleware}]."""
+    out = []
+    nitro = cfg.get("nitro") if isinstance(cfg.get("nitro"), dict) else {}
+    for where, items in (("serverHandlers", cfg.get("serverHandlers")), ("nitro.handlers", nitro.get("handlers"))):
+        for it in items if isinstance(items, list) else []:
+            if not isinstance(it, dict) or not isinstance(it.get("handler"), str):
+                continue
+            out.append({"route": it.get("route") if isinstance(it.get("route"), str) else None,
+                        "method": it.get("method") if isinstance(it.get("method"), str) else None,
+                        "handler": it["handler"], "middleware": it.get("middleware") is True, "from": where})
+    return out
+
+
+def proxy_rules(cfg: dict) -> dict[str, str]:
+    """routeRules / nitro.routeRules patterns with a `proxy` -> proxy target (or '?' when not a literal)."""
+    out = {}
+    nitro = cfg.get("nitro") if isinstance(cfg.get("nitro"), dict) else {}
+    for rules in (cfg.get("routeRules"), nitro.get("routeRules")):
+        for pat, rule in (rules.items() if isinstance(rules, dict) else ()):
+            if isinstance(rule, dict) and "proxy" in rule:
+                p = rule["proxy"]
+                target = p if isinstance(p, str) else (p.get("to") if isinstance(p, dict) and isinstance(p.get("to"), str) else "?")
+                out[pat] = target
+    return out
+
+
 def server_dirs(root: Path, src_dir: str) -> list[str]:
     """Nitro server dirs of a Nuxt project: the root server/ (Nuxt 4 serverDir) and <srcDir>/server (Nuxt 3)."""
     cands = ["server"] + ([] if src_dir in ("", ".") else [f"{src_dir.strip('/')}/server"])
@@ -1185,10 +1283,28 @@ class NuxtPlugin(FrameworkPlugin):
     def _nitro(self, project: Project, b: GraphBuilder) -> dict:
         from ..tsweb.common import add_route
         st = {"routes": 0, "middleware": 0, "plugins": 0, "proxy_routes": 0, "linked_calls": 0}
-        dirs = server_dirs(project.root, self.src_dir)
-        if not dirs:
+        self._mod_refs = None
+        root = project.root
+        dirs = server_dirs(root, self.src_dir)
+        layer_dirs = [d for d in layer_server_dirs(root, self.src_dir) if d not in dirs]
+        cfg_path = _config_path(root)
+        cfg = {}
+        if cfg_path:
+            try:
+                cfg = _find_config_object(cfg_path.read_text(errors="replace"))
+            except Exception:   # noqa: BLE001
+                cfg = {}
+        cfg_handlers = config_handlers(cfg)
+        if not dirs and not layer_dirs and not cfg_handlers:
             return st
+        dirs = dirs + layer_dirs
         files = sorted({n.file for n in b.nodes.values() if n.lang == "ts" and n.kind == "module" and n.file})
+
+        def read(f: str) -> str:
+            try:
+                return (root / f).read_text(errors="replace")
+            except OSError:
+                return ""
 
         def handler(f: str) -> tuple[str | None, str]:
             for nid in (f"function:{f}#default", f"function:{f}#handler"):
@@ -1212,7 +1328,7 @@ class NuxtPlugin(FrameworkPlugin):
                     h, _c = handler(f)
                     if h:
                         label(f, "middleware")
-                        middleware.append((h, f"nitro:{_NITRO_EXT.sub('', inner)}", "resolved"))
+                        middleware.append((h, f"nitro:{_NITRO_EXT.sub('', inner)}", "resolved", path_guard(read(f))))
                         st["middleware"] += 1
                 elif top == "plugins" and inner and nitro_route(inner) is not None:
                     h, _c = handler(f)
@@ -1224,24 +1340,104 @@ class NuxtPlugin(FrameworkPlugin):
                     r = nitro_route(inner, "/api" if top == "api" else "")
                     if r:
                         routes.append((f, top, r))
+        # nuxt.config serverHandlers / nitro.handlers: { route, method, handler: '~~/server/handlers/x.ts' }
+        for ch in cfg_handlers:
+            hf = self._config_handler_file(root, ch["handler"], set(files))
+            if not hf:
+                st["config_handlers_unresolved"] = st.get("config_handlers_unresolved", 0) + 1
+                continue
+            if ch["middleware"] or not ch["route"]:
+                h, _c = handler(hf)
+                if h:
+                    label(hf, "middleware")
+                    middleware.append((h, f"nitro:{ch['handler']}", "resolved", path_guard(read(hf))))
+                    st["middleware"] += 1
+                continue
+            method = (ch["method"] or "ANY").upper()
+            uri = re.sub(r":(\w+)", r"{\1}", "/" + ch["route"].strip("/"))
+            routes.append((hf, ch["from"], (method, uri)))
+        rules = proxy_rules(cfg)
+
+        def scoped(uri: str) -> list[tuple]:
+            out = []
+            for m in middleware:
+                prefix = m[3] if len(m) > 3 else None
+                if prefix is None:
+                    out.append(m[:3])
+                elif uri == prefix.rstrip("/") or uri.startswith(prefix.rstrip("/") + "/"):
+                    out.append((m[0], m[1], "heuristic"))     # early return outside the prefix (#217)
+            return out
+
         for f, top, (method, uri) in routes:
             h, conf = handler(f)
+            src = read(f)
+            hooks, ref = object_hooks(src)
+            if ref and b.has(f"function:{f}#{ref}"):
+                h, conf = f"function:{f}#{ref}", "exact"
             line = (b.nodes[h].line or 1) if h else 1
-            attrs = {"file_route": True, "nitro_dir": top, "method_from": "file suffix" if method != "ANY" else "any"}
-            try:
-                src = (project.root / f).read_text(errors="replace")
-            except OSError:
-                src = ""
+            attrs = {"file_route": top in ("api", "routes"), "nitro_dir": top,
+                     "method_from": ("file suffix" if top in ("api", "routes") else "config") if method != "ANY" else "any"}
+            if top not in ("api", "routes"):
+                attrs["registered_in"] = top
             if _PROXY_CALL.search(src):
                 attrs["proxy"] = True
+            for pat, target in rules.items():
+                if rule_covers(pat, uri):
+                    attrs["proxy"] = True
+                    attrs["proxy_rule"] = pat
+                    if target != "?":
+                        attrs["proxy_target"] = target
+                    break
+            if attrs.get("proxy"):
                 st["proxy_routes"] += 1
             if not h or h.startswith("module:"):
                 attrs["handler_unresolved"] = True
-            add_route(b, method, uri, [h] if h else [], f, line, "nuxt", conf, attrs, middleware)
+            mws = scoped(uri)
+            for hook, name in hooks:
+                nid = self._hook_node(b, f, hook, name)
+                if nid:
+                    mws.append((nid, f"{hook}:{name if name != '<inline>' else 'inline'}", "exact"))
+            add_route(b, method, uri, [h] if h else [], f, line, "nuxt", conf, attrs, mws)
             label(f, "route")
             st["routes"] += 1
         st["linked_calls"] = self._link_nitro(b)
         return st
+
+    def _config_handler_file(self, root: Path, spec: str, files: set[str]) -> str | None:
+        """A nuxt.config handler path (`~~/server/x.ts`, `~/server/x`, `./server/x.ts`) -> indexed file."""
+        s = spec.strip()
+        src = self.src_dir.strip("/") if self.src_dir not in ("", ".") else ""
+        bases = []
+        for alias, base in (("~~/", ""), ("@@/", ""), ("~/", src), ("@/", src), ("./", ""), ("/", "")):
+            if s.startswith(alias):
+                bases = [base, ""] if base else [""]
+                s = s[len(alias):]
+                break
+        else:
+            bases = [""]
+        for base in bases:
+            stem = f"{base}/{s}" if base else s
+            for cand in [stem] + [stem + ext for ext in (".ts", ".js", ".mjs", ".mts")] + [f"{stem}/index.ts"]:
+                if cand in files:
+                    return cand
+        return None
+
+    def _hook_node(self, b: GraphBuilder, f: str, hook: str, name: str) -> str | None:
+        """onRequest / onBeforeResponse function of an object-form handler: inline, local, or an imported function."""
+        local = f"function:{f}#{hook if name == '<inline>' else name}"
+        if b.has(local):
+            return local
+        if name == "<inline>":
+            return None
+        if getattr(self, "_mod_refs", None) is None:
+            self._mod_refs = defaultdict(list)
+            for e in b.edges.values():
+                if e.kind in ("CALLS", "REFERENCES") and e.src.startswith("module:"):
+                    self._mod_refs[e.src].append(e.dst)
+        for dst in self._mod_refs.get(f"module:{f}", ()):
+            if dst.endswith(f"#{name}") and b.has(dst):
+                return dst
+        return None
 
     def _link_nitro(self, b: GraphBuilder) -> int:
         """Same-origin client calls of this app (relative URLs: `$fetch('/api/x')`, `useFetch`) -> its Nitro routes.

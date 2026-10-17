@@ -587,7 +587,44 @@ def match_route_spec(st: GraphStore, spec: str) -> list[str]:
             continue
         if _norm_segs(got_p) == want:
             out.append(nid)
+    if not out:
+        out = [nid for nid, _ in _declared_route_hits(st, want_v, want)]
     return out
+
+
+def _declared_route_hits(st: GraphStore, want_v: str | None, want: list[str]) -> list[tuple[str, str]]:
+    """(route id, served path) of routes whose declared path (attrs.declared_uri, a Laravel API route stored under
+    its served /api path, #191) is the wanted one."""
+    out = []
+    for r in st.q("SELECT id, json_extract(attrs,'$.declared_uri') AS d FROM nodes "
+                  "WHERE kind='route' AND json_extract(attrs,'$.declared_uri') IS NOT NULL ORDER BY id"):
+        got_v, got_p = _route_verb_path(r["id"])
+        if want_v and got_v.upper() != want_v:
+            continue
+        if _norm_segs(r["d"]) == want:
+            out.append((r["id"], got_p))
+    return out
+
+
+def route_declared_note(st: GraphStore, spec: str) -> str | None:
+    """`note: declared path; served as POST /api/v1/orders` when a ``route:`` spec named a declared path."""
+    body = _route_body(spec)
+    if body is None:
+        return None
+    verb, path = _split_verb_path(body)
+    if "*" in path:
+        return None
+    want_v = None if verb == "*" else verb.upper()
+    want = _norm_segs(path)
+    for nid in _route_rows(st):
+        got_v, got_p = _route_verb_path(nid)
+        if (not want_v or got_v.upper() == want_v) and _norm_segs(got_p) == want:
+            return None
+    hits = _declared_route_hits(st, want_v, want)
+    if not hits:
+        return None
+    shown = ", ".join(nid[len("route:"):] for nid, _ in hits[:3])
+    return f"note: declared path; served as {shown}"
 
 
 def _edit_distance(a: str, b: str) -> int:
@@ -2062,6 +2099,36 @@ def _recv_constraint(e) -> frozenset | None:
     return frozenset(rc) if rc else None
 
 
+_RECV_KINDS = "('CALLS','TEST_CALLS','DISPATCHES','HANDLED_BY')"
+# in a receiver constraint: the call was `parent::m()`, which runs exactly that method (no override hop after it)
+_NO_DISPATCH = "<parent-call>"
+
+
+def _call_scope(e) -> tuple[frozenset | None, bool, bool]:
+    """(receiver class ids or None, a `$this->` call, a `parent::` call) of a call / job dispatch edge."""
+    raw = e["attrs"]
+    if not raw or not any(k in raw for k in ('"recv"', '"this"', '"parent"')):
+        return None, False, False
+    try:
+        a = json.loads(raw)
+    except ValueError:
+        return None, False, False
+    rc = a.get("recv")
+    return (frozenset(rc) if rc else None), bool(a.get("this")), bool(a.get("parent"))
+
+
+def _next_constraint(constraint, ecv, on_this: bool, on_parent: bool):
+    """Receiver constraint after a call edge (#148): `$this->m()` runs on the object the current method was
+    entered with, so the constraint the path carries wins over the edge's own; `parent::m()` keeps that receiver
+    for the `$this` calls inside but takes no override hop itself."""
+    carried = frozenset(constraint - {_NO_DISPATCH}) if constraint else None
+    if on_this and carried:
+        return carried
+    if on_parent:
+        return (carried or ecv or frozenset()) | {_NO_DISPATCH}
+    return ecv
+
+
 class _OverrideScope:
     """Which overrides a call may dispatch to: the receiver type's hierarchy, when that type is known."""
 
@@ -2070,16 +2137,103 @@ class _OverrideScope:
         self.owners: dict[str, str | None] = {}
         self.hier: dict[frozenset, set[str]] = {}
 
-    def allows(self, method: str, constraint: frozenset) -> bool:
+        self.down: dict[frozenset, set[str]] = {}
+
+    def owner(self, method: str) -> str | None:
         if method not in self.owners:
             r = self.st.q("SELECT src FROM edges WHERE dst=? AND kind='CONTAINS' LIMIT 1", (method,))
             self.owners[method] = r[0]["src"] if r else None
-        owner = self.owners[method]
+        return self.owners[method]
+
+    def allows(self, method: str, constraint: frozenset) -> bool:
+        """An override in the receiver's subtree, or one the receiver inherits (a class on its ancestor chain: a
+        `$this->m()` in a base class whose receiver is known to be a subclass, #148)."""
+        owner = self.owner(method)
         if owner is None:
             return True
         if constraint not in self.hier:
-            self.hier[constraint] = _descendants(self.st, list(constraint))
+            down = _descendants(self.st, list(constraint))
+            self.down[constraint] = down
+            up = set()
+            for c in constraint:
+                up |= _ancestors(self.st, c)
+            self.hier[constraint] = down | up
         return owner in self.hier[constraint]
+
+    def narrow(self, method: str, constraint: frozenset) -> frozenset:
+        """Receiver constraint after a dispatch hop into `method`: its class when that lies below the constraint."""
+        owner = self.owner(method)
+        if owner and owner not in constraint and owner in self.down.get(constraint, ()):
+            return frozenset({owner})
+        return constraint
+
+
+class ReceiverReach:
+    """Forward reach from entry nodes with the receiver-aware override narrowing of `downstream` (#120, #148), over
+    the edges GroupClosures already loaded (`fwd`). `routes --writes` uses it to drop the writes a route reaches only
+    through overrides its receivers cannot dispatch to (#149) and to mark the ones reached only through an override
+    hop whose receiver type is unknown."""
+
+    def __init__(self, st: GraphStore, fwd: dict, scope: set[str] | None = None, max_depth: int = 30):
+        self.st, self.fwd, self.scope, self.max_depth = st, fwd, scope, max_depth
+        self.over = _OverrideScope(st)
+        # raw attrs now, parsed on first use: a walk meets a small share of the call edges
+        self.raw: dict[int, str] = {r["id"]: r["attrs"] for r in st.q(
+            f"SELECT id, attrs FROM edges WHERE kind IN {_RECV_KINDS} AND attrs IS NOT NULL AND "
+            "(attrs LIKE '%\"recv\"%' OR attrs LIKE '%\"this\"%' OR attrs LIKE '%\"parent\"%')")}
+        self.calls: dict[int, tuple] = {}
+
+    def _scope(self, eid: int) -> tuple:
+        sc = self.calls.get(eid)
+        if sc is None:
+            raw = self.raw.get(eid)
+            sc = _call_scope({"attrs": raw}) if raw else (None, False, False)
+            self.calls[eid] = sc
+        return sc
+
+    def walk(self, start: str, want: set[str]) -> dict[str, tuple[bool, list[int]]]:
+        """node in `want` -> (reached without an untyped override hop, edge ids of one path, the surest first)."""
+        out: dict[str, tuple[bool, list[int]]] = {}
+        seen = {(start, None, False)}
+        prev: dict[tuple, tuple] = {}
+        frontier = [(start, None, False)]
+        depth = 0
+        while frontier and depth < self.max_depth:
+            nxt = []
+            for st8 in frontier:
+                node, constraint, loose = st8
+                for kind, eid, dst, _rank, _gate in self.fwd.get(node, ()):
+                    if self.scope is not None and dst not in self.scope:
+                        continue
+                    hop_loose = loose
+                    if kind in DISPATCH_KINDS:
+                        if constraint is None:
+                            hop_loose = True
+                            nc = None
+                        elif _NO_DISPATCH in constraint or not self.over.allows(dst, constraint):
+                            continue
+                        else:
+                            nc = self.over.narrow(dst, constraint)
+                    else:
+                        ecv, on_this, on_parent = self._scope(eid)
+                        nc = _next_constraint(constraint, ecv, on_this, on_parent)
+                    ns = (dst, nc, hop_loose)
+                    if ns in seen:
+                        continue
+                    seen.add(ns)
+                    prev[ns] = (st8, eid)
+                    if dst in want:
+                        cur = out.get(dst)
+                        if cur is None or (cur[0] is False and not hop_loose):
+                            path, x = [], ns
+                            while x in prev:
+                                x, e = prev[x]
+                                path.append(e)
+                            out[dst] = (not hop_loose, path[::-1])
+                    nxt.append(ns)
+            frontier = nxt
+            depth += 1
+        return out
 
 
 def _channels(flagsets) -> list[str]:
@@ -2130,9 +2284,9 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
         for i in range(0, len(srcs), 500):
             chunk = srcs[i:i + 500]
             q = ",".join("?" * len(chunk))
-            # attrs only matter on calls (the receiver type, attrs.recv)
+            # attrs only matter on calls and job dispatch (the receiver type attrs.recv, `$this` / `parent::`)
             for e in st.q(f"SELECT id,src,dst,kind,file,line,confidence,conf_rank,gate,"
-                          f"CASE WHEN kind IN ('CALLS','TEST_CALLS') THEN attrs END AS attrs FROM edges WHERE src IN ({q})", chunk):
+                          f"CASE WHEN kind IN {_RECV_KINDS} THEN attrs END AS attrs FROM edges WHERE src IN ({q})", chunk):
                 if e["kind"] not in kset or e["conf_rank"] < rank or (px and e["id"] in px):
                     continue
                 edges[e["src"]].append(e)
@@ -2141,7 +2295,7 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
                 # per-edge facts, shared by every state at this source
                 dst, ekind = e["dst"], e["kind"]
                 dispatch = ekind in ("OVERRIDDEN_BY", "IMPLEMENTED_BY")
-                ecv = _recv_constraint(e) if ekind in ("CALLS", "TEST_CALLS") else None
+                ecv, on_this, on_parent = _call_scope(e) if e["attrs"] else (None, False, False)
                 add = set()
                 if not dispatch:
                     if ekind == "USES_MIDDLEWARE" or _auth_node(dst):
@@ -2156,11 +2310,11 @@ def downstream(st: GraphStore, spec: str, min_conf="heuristic", max_depth=30, ki
                     if dispatch:
                         if constraint is None:
                             hop_override = True
-                        elif not scope.allows(dst, constraint):
+                        elif _NO_DISPATCH in constraint or not scope.allows(dst, constraint):
                             continue
-                        nc = constraint
+                        nc = constraint if constraint is None else scope.narrow(dst, constraint)
                     else:
-                        nc = ecv
+                        nc = _next_constraint(constraint, ecv, on_this, on_parent)
                     if hop_override:
                         ng = flags | add | _OVERRIDE_FLAG
                     else:
@@ -2895,7 +3049,8 @@ def route_targets(st: GraphStore, spec: str) -> list[str]:
             continue
         if verb and meth and not _method_ok(verb, meth):
             continue
-        uris = [uri] + (["/api" + uri] if re.search(r"(^|/)routes/api(\.php|/)", r["file"] or "") else [])
+        from .link import route_uri_variants
+        uris = [u for _, u in route_uri_variants(r["file"], a)]
         if any(match_path(path, u)[0] and match_path(path, u)[1]["lit"] == len([s for s in u.split("/") if s and not s.startswith("{")])
                for u in uris):
             out.append(r["id"])

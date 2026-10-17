@@ -106,7 +106,7 @@ def test_channels_query_backend_only():
 def test_impact_of_broadcast_event_and_channel_entry():
     st = GraphStore(built()["api"])
     ent = {e["id"] for e in Q.impact(st, "App\\Events\\TaskMoved")["entry_points"]}
-    assert ent == {"route:PATCH /tasks/{task}/move"}
+    assert ent == {"route:PATCH /api/tasks/{task}/move"}
     res = Q.impact(st, "App\\Support\\BoardAccess::visibleBoardIds")
     ids = {e["id"] for e in res["entry_points"]}
     assert "channel:board.{board}" in ids
@@ -125,9 +125,9 @@ def test_writers_accepts_table_prefix():
 def test_secret_checked_routes():
     st = GraphStore(built()["api"])
     items = {x["route"]: x for x in R.routes_report(st)["items"]}
-    assert items["route:POST /webhooks/payments"]["secret_checked"] and not items["route:POST /webhooks/payments"]["has_auth"]
-    assert items["route:GET /exports/{file}"]["secret_checked"]
-    assert not items["route:PATCH /tasks/{task}/move"]["secret_checked"]
+    assert items["route:POST /api/webhooks/payments"]["secret_checked"] and not items["route:POST /api/webhooks/payments"]["has_auth"]
+    assert items["route:GET /api/exports/{file}"]["secret_checked"]
+    assert not items["route:PATCH /api/tasks/{task}/move"]["secret_checked"]
     assert R.routes_report(st, unguarded=True)["items"] == []
     out = R.render_routes(R.routes_report(st))
     assert "SECRET-CHECKED" in out and "NO AUTH" not in out

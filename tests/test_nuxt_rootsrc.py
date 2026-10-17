@@ -135,8 +135,8 @@ def test_base_urls_from_runtime_config_and_env():
     stats = built()["link"]["stats"]
     assert (stats["endpoints_matched"], stats["endpoints"]) == (3, 5)      # /tasks/{id}/archive has no route
     m = dict(q("SELECT src, dst FROM edges WHERE kind='MATCHES_ROUTE'", "combined"))
-    assert m["http:PATCH /api/tasks/{id}/move"] == "route:PATCH /tasks/{task}/move"
-    assert m["http:POST /api/tasks/{taskId}/comments"] == "route:POST /tasks/{task}/comments"
+    assert m["http:PATCH /api/tasks/{id}/move"] == "route:PATCH /api/tasks/{task}/move"
+    assert m["http:POST /api/tasks/{taskId}/comments"] == "route:POST /api/tasks/{task}/comments"
 
 
 @needs_ts

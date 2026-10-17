@@ -7,8 +7,8 @@
   TEST_CALLS -> the file (beforeEach, uses(...) and other file-level setup);
 * HTTP test calls (`$this->getJson('/api/x')`, `->actingAs($u)->post(route('x.store'))`, Pest `get('/x')`,
   `$this->json('PATCH', '/x')`, and the same calls through project helpers such as `$this->getAs('/x')` whose URL /
-  verb are parameters) -> TEST_HTTP -> the matching route (URIs matched like cross-repo links, with the
-  `/api` prefix Laravel adds to routes/api.php; `route('name')` by route name).
+  verb are parameters) -> TEST_HTTP -> the matching route (URIs matched like cross-repo links, on the served path: routes/api.php routes
+  carry the API prefix Laravel adds; `route('name')` by route name).
 
 Edges made by test code are retyped to non-propagating TEST_* kinds afterwards (cg_code_graph/tests_index.py), so
 tests never change blast radius, caller counts or entry tagging. `cg tests <symbol|route>` walks them on purpose.
@@ -154,7 +154,7 @@ class LaravelTests:
 
     # ---- after reference emission
     def contribute(self) -> dict:
-        from ...link import match_endpoint
+        from ...link import match_endpoint, route_uri_variants
         b, prog = self.lp.b, self.prog
         st = defaultdict(int)
         self._expand_helpers(st)
@@ -162,9 +162,7 @@ class LaravelTests:
         for nid, n in b.nodes.items():
             if n.kind != "route" or not n.attrs.get("uri") or not n.attrs.get("method"):
                 continue
-            uris = [("as-declared", n.attrs["uri"])]
-            if (n.file or "").startswith(("routes/api.php", "routes/api/")):
-                uris.append(("api-prefixed", "/api" + n.attrs["uri"]))
+            uris = route_uri_variants(n.file, n.attrs)
             routes.append({"id": nid, "uri": n.attrs["uri"], "method": n.attrs["method"], "uris": uris})
             if n.attrs.get("name"):
                 by_name[n.attrs["name"]].append(n)

@@ -1,6 +1,6 @@
 # Example plan for the bundled sample app (examples/bookstore-api).
 # Deliberately incomplete: it does NOT list the admin update path, UpdateBookRequest, Book::$fillable,
-# the API/Filament BookResource, the POST /v1/orders entry route or the mobile client. `plan check` should find them.
+# the API/Filament BookResource, the POST /api/v1/orders entry route or the mobile client. `plan check` should find them.
 plan_version: 1
 name: preorders
 title: "Pre-order books: signed-in customers only, never filled from warehouse stock"
@@ -37,7 +37,7 @@ forbid:
     when: "the book is a pre-order (books.preorder_until set)"
     guard: {at: StockService::reserve, reads: column:books.preorder_until}
 require:
-  - route: "route:POST /v1/stock/reserve"
+  - route: "route:POST /api/v1/stock/reserve"
     middleware: ["auth:api"]
 precedents:
   - name: atomic counter

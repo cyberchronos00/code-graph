@@ -180,6 +180,7 @@ class LaravelPlugin(FrameworkPlugin):
         self.observers, self.listeners, self.schedules, self.bindings = [], [], [], []
         self.seen_cols = set()
         self.records = {r["file"]: r for r in prog.records}
+        self._apply_route_mounts()
         self._parse_config()
         self._parse_migrations()
         self._parse_models()
@@ -195,6 +196,40 @@ class LaravelPlugin(FrameworkPlugin):
         self.broadcast.register()          # types channel-callback users before inference
         self.tests = LaravelTests(self, prog)
         prog.test_fact_handlers.append(self.tests.handle_fact)
+
+    # ---- route files: served path (#191)
+    def _route_mounts(self) -> dict[str, tuple[str, str]]:
+        """routes file -> (prefix, where it comes from): `withRouting(api:, apiPrefix:)` / `then:` groups in
+        bootstrap/app.php, `Route::prefix(..)->group(base_path(..))` in a (Laravel <= 10) RouteServiceProvider."""
+        out: dict[str, tuple[str, str]] = {}
+        order = sorted(self.records, key=lambda f: (not f.startswith("bootstrap/"), f))
+        for f in order:
+            for m in self.records[f].get("route_mounts") or []:
+                rf = m.get("file")
+                if isinstance(rf, str) and rf not in out and isinstance(m.get("prefix"), str):
+                    out[rf] = (m["prefix"].strip("/"), f)
+        return out
+
+    def _apply_route_mounts(self):
+        """Every route of routes/api.php (and routes/api/) is stored at the path Laravel serves it under: the configured
+        API prefix, `api` when nothing configures it. The declared path stays in `declared_uri`."""
+        mounts = self._route_mounts()
+        for f, r in self.records.items():
+            if not f.startswith("routes/") or not r.get("routes"):
+                continue
+            hit = mounts.get(f)
+            if hit is None and f.startswith("routes/api/"):
+                hit = mounts.get("routes/api.php")
+            if hit is None and (f == "routes/api.php" or f.startswith("routes/api/")):
+                hit = ("api", "laravel-default")
+            if hit is None or not hit[0]:
+                continue
+            prefix, src = hit
+            for rt in r["routes"]:
+                declared = rt.get("full_uri") or "/"
+                rt["declared_uri"] = declared
+                rt["full_uri"] = "/" + "/".join(p for p in (prefix.strip("/"), declared.strip("/")) if p)
+                rt["prefix_from"] = src
 
     # ---- config/*.php
     def _parse_config(self):
@@ -916,13 +951,20 @@ class LaravelPlugin(FrameworkPlugin):
         cid = self.b.add_node("config", key, lang="php")
         self.b.add_edge(fn.id, cid, "READS_CONFIG", fn.file, line, conf)
 
+    def _recv_of(self, c, h) -> dict:
+        """attrs.recv for an edge into a job's handle() inherited from a base class: the job class, so the base
+        handle()'s `$this->execute()` reaches only this job's override (#148)."""
+        if c.methods.get("handle") is h or c.methods.get("__invoke") is h:
+            return {}
+        return {"recv": [f"{c.kind}:{c.fqcn}"]}
+
     def _dispatch(self, fn, cls, line, conf):
         c = self.prog.cls(cls)
         if not c:
             return
         h = self.prog.find_method(c.fqcn, "handle") or self.prog.find_method(c.fqcn, "__invoke")
         if self._is_job(c.fqcn) and h:
-            self.b.add_edge(fn.id, h.id, "DISPATCHES", fn.file, line, conf, via="job")
+            self.b.add_edge(fn.id, h.id, "DISPATCHES", fn.file, line, conf, via="job", **self._recv_of(c, h))
         else:
             eid = self.b.add_node("event", c.fqcn, name=c.fqcn.split("\\")[-1], fqn=c.fqcn, file=c.file, line=c.line,
                                   module=module_of(c.file), lang="php")
@@ -1011,6 +1053,8 @@ class LaravelPlugin(FrameworkPlugin):
         from ..php.inline_guards import for_action
         n = 0
         for f, r in self.records.items():
+            if r.get("route_loops"):
+                b.route_loops[f] = r["route_loops"]
             for rt in r.get("routes") or []:
                 for verb in rt["methods"]:
                     key = f"{verb.upper()} {rt['full_uri']}"
@@ -1021,6 +1065,15 @@ class LaravelPlugin(FrameworkPlugin):
                         self.stats["route_middleware_unresolved"] = self.stats.get("route_middleware_unresolved", 0) + 1
                     attrs = {"name": rt.get("name") or None, "middleware": mws if rt.get("middleware") is not None else None,
                              "uri": rt["full_uri"], "method": verb.upper()}
+                    if rt.get("declared_uri"):
+                        attrs["declared_uri"] = rt["declared_uri"]
+                        attrs["prefix_from"] = rt.get("prefix_from")
+                    for k, ak in (("defaults", "defaults"), ("wheres", "where")):
+                        if rt.get(k):
+                            attrs[ak] = rt[k]
+                    if rt.get("unrolled_from"):
+                        u = rt["unrolled_from"]
+                        attrs["unrolled_from"] = {"file": f, "line": u.get("line"), "binding": u.get("binding") or {}}
                     if rt.get("webhook_client"):
                         attrs["webhook_client"] = rt["webhook_client"]
                         attrs["webhook_framework"] = "laravel-webhook-client"
@@ -1197,7 +1250,7 @@ class LaravelPlugin(FrameworkPlugin):
                 if h:
                     jid = b.add_node("job", c.fqcn, name=c.fqcn.split("\\")[-1], fqn=c.fqcn, file=c.file, line=c.line,
                                      module=module_of(c.file), lang="php", entry_kind="queue_job")
-                    b.add_edge(jid, h.id, "HANDLED_BY", c.file, h.line, EXACT)
+                    b.add_edge(jid, h.id, "HANDLED_BY", c.file, h.line, EXACT, **self._recv_of(c, h))
                     self.stats["jobs"] += 1
             if c.fqcn.startswith("App\\Listeners\\"):
                 h = prog.find_method(c.fqcn, "handle")

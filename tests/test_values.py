@@ -77,7 +77,7 @@ def test_concept_query_surfaces_divergence_backend_only():
 def test_concept_query_client_side_never_sends_and_falls_back():
     r = resolutions(GraphStore(build()["combined"]), "timezone")
     top = [e for e in r["client"] if e["endpoint"].endswith("admin/reports/top")][0]
-    assert top["routes"] == ["route:GET /v1/{store}/admin/reports/top"]
+    assert top["routes"] == ["route:GET /api/v1/{store}/admin/reports/top"]
     assert top["backend_sites"][0]["site"].startswith("resolution:App\\Services\\SalesReportService::build")
     req = top["requests"][0]
     assert req["keys"]["timezone"] == "conditional"

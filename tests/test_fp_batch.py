@@ -128,7 +128,7 @@ def test_195_every_read_form_counts_and_per_page_needs_a_read(shop):
 def test_195_reads_only_route_has_no_unknown_query_findings(shop):
     assert not _issues(shop["res"], "GET /api/shelves")
     c = sqlite3.connect(shop["api"])
-    attrs = json.loads(c.execute("SELECT attrs FROM nodes WHERE id='route:GET /shelves'").fetchone()[0])
+    attrs = json.loads(c.execute("SELECT attrs FROM nodes WHERE id='route:GET /api/shelves'").fetchone()[0])
     assert attrs["request"]["closed"] is False
     assert {k["name"]: k["required"] for k in attrs["request"]["keys"]} == {"room": False, "per_page": False, "page": False}
 
@@ -137,7 +137,7 @@ def test_195_reads_only_route_has_no_unknown_query_findings(shop):
 @needs_php
 def test_195_reads_are_never_required(shop):
     c = sqlite3.connect(shop["api"])
-    for rid in ("route:GET /books", "route:GET /books/browse"):
+    for rid in ("route:GET /api/books", "route:GET /api/books/browse"):
         keys = json.loads(c.execute("SELECT attrs FROM nodes WHERE id=?", (rid,)).fetchone()[0])["request"]["keys"]
         assert keys and not any(k["required"] for k in keys)
 
@@ -215,22 +215,22 @@ def sms(tmp_path_factory):
 
 @needs_php
 def test_197_alias_class_and_name_only_middleware_are_verified(sms):
-    for name in ("POST /webhooks/sms/status", "POST /webhooks/sms/inbound", "POST /webhooks/partner/events", "POST /webhooks/carrier/delivery"):
+    for name in ("POST /api/webhooks/sms/status", "POST /api/webhooks/sms/inbound", "POST /api/webhooks/partner/events", "POST /api/webhooks/carrier/delivery"):
         wh = sms["items"][name]["webhook"]
         assert wh["verified"] is True and wh["how"] and wh["check"], name
-    status = sms["items"]["POST /webhooks/sms/status"]["webhook"]
+    status = sms["items"]["POST /api/webhooks/sms/status"]["webhook"]
     assert status["provider"] == "twilio"
     assert status["check"].startswith("app/Http/Middleware/VerifySmsSignature.php:")
-    assert sms["items"]["POST /webhooks/partner/events"]["webhook"]["check"] == "routes/api.php:16"
+    assert sms["items"]["POST /api/webhooks/partner/events"]["webhook"]["check"] == "routes/api.php:16"
 
 
 @needs_php
 def test_197_unverified_control_routes_stay_flagged(sms):
-    for name in ("POST /webhooks/sms/unchecked", "POST /webhooks/sms/keyed"):
+    for name in ("POST /api/webhooks/sms/unchecked", "POST /api/webhooks/sms/keyed"):
         assert sms["items"][name]["webhook"]["verified"] is False
-    assert "POST /webhooks/sms/unchecked  @routes/api.php:13  NO AUTH  WEBHOOK UNVERIFIED (twilio)" in sms["text"]
+    assert "POST /api/webhooks/sms/unchecked  @routes/api.php:13  NO AUTH  WEBHOOK UNVERIFIED (twilio)" in sms["text"]
     assert "webhook: twilio, verified at app/Http/Middleware/VerifySmsSignature.php:" in sms["text"]
-    assert "webhook" not in sms["items"]["POST /internal/sms/resend"] or not sms["items"]["POST /internal/sms/resend"].get("webhook")
+    assert "webhook" not in sms["items"]["POST /api/internal/sms/resend"] or not sms["items"]["POST /api/internal/sms/resend"].get("webhook")
 
 
 @needs_php

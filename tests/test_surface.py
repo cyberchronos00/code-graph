@@ -53,8 +53,8 @@ EXPECTED = {
         ("hardcoded", "external:postgres:pg.bookstore.example:5432"), ("hardcoded", "external:saas:mailgun"),
         ("hardcoded", "config:services.github.secret"), ("hardcoded", "config:services.ledger.token"),
         ("plaintext", "external:http:ledger.bookstore.example:80"),
-        ("unverified", "route:POST /hooks/github-open"),
-        ("unguarded", "route:DELETE /admin/orders"), ("unguarded", "route:POST /hooks/github-open"),
+        ("unverified", "route:POST /api/hooks/github-open"),
+        ("unguarded", "route:DELETE /api/admin/orders"), ("unguarded", "route:POST /api/hooks/github-open"),
         ("exposed-listener", "endpoint:tcp:7300"),
     },
 }
@@ -201,9 +201,9 @@ def test_inbound_surface_python(dbs, capsys):
 
 def test_inbound_surface_php_and_ts(dbs, capsys):
     php = _inbound(capsys, dbs("php"))
-    assert php["route:POST /orders"]["guard_state"] == "guarded" and php["route:POST /orders"]["guards"] == ["auth:sanctum"]
-    assert php["route:POST /orders"]["reaches_write"] and php["route:DELETE /admin/orders"]["reaches_write"]
-    assert php["route:POST /hooks/github"]["guard_state"] == "secret-checked"
+    assert php["route:POST /api/orders"]["guard_state"] == "guarded" and php["route:POST /api/orders"]["guards"] == ["auth:sanctum"]
+    assert php["route:POST /api/orders"]["reaches_write"] and php["route:DELETE /api/admin/orders"]["reaches_write"]
+    assert php["route:POST /api/hooks/github"]["guard_state"] == "secret-checked"
     assert php["endpoint:tcp:7300"]["exposure"] == "all" and php["endpoint:tcp:7301"]["exposure"] == "loopback"
     ts = _inbound(capsys, dbs("ts"))
     assert ts["route:POST /orders"]["guards"][0] == "requireAuth" and ts["route:POST /orders"]["guard_state"] == "guarded"

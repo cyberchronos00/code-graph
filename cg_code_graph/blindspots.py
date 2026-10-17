@@ -222,11 +222,23 @@ def express_loop_routes(root: Path, files: list[str]) -> dict | None:
 _PHP_LOOPS = re.compile(r"\b(?:foreach|for|while)\s*\(|->\s*(?:each|map|flatMap|eachSpread)\s*\(|\barray_(?:map|walk)\s*\(")
 
 
-def laravel_loop_routes(root: Path, files: list[str]) -> dict | None:
-    """Route::get(...) inside foreach / for / ->each(...) / array_map(...): the URIs come from data, so the Laravel
-    plugin cannot list them."""
+def laravel_loop_routes(root: Path, files: list[str], builder=None) -> dict | None:
+    """Route::get(...) inside foreach / for / ->each(...) / array_map(...) that the Laravel plugin did not unroll.
+
+    Loops over literal data in route files are unrolled (#184); the plugin records every loop it saw in
+    `builder.route_loops` ({file: [{line, end, unrolled, reason}]}). The ones it could not unroll are reported with
+    their reason (`iterable not literal`); the regex below still finds loops outside route files."""
     hits = []
+    reasons: dict[str, str] = {}
+    known = getattr(builder, "route_loops", None) or {}
+    for rel, loops in known.items():
+        for lp in loops:
+            if not lp.get("unrolled"):
+                hits.append((rel, lp["line"]))
+                if lp.get("reason"):
+                    reasons[f"{rel}:{lp['line']}"] = lp["reason"]
     for rel in files:
+        spans = [(lp["line"], lp.get("end") or lp["line"]) for lp in known.get(rel, [])]
         src = _read(root, rel)
         if not src or "Route::" not in src:
             continue
@@ -237,9 +249,17 @@ def laravel_loop_routes(root: Path, files: list[str]) -> dict | None:
                 continue
             if re.search(r"\bRoute::\s*(?:get|post|put|patch|delete|any|match|resource|apiResource|resources|apiResources|view|redirect)\s*\(",
                          src[b0:b1]):
-                hits.append((rel, _line(src, start)))
+                ln = _line(src, start)
+                if not any(lo <= ln <= hi for lo, hi in spans):
+                    hits.append((rel, ln))
                 done_until = b1
-    return _finding("laravel_loop_routes", hits)
+    out = _finding("laravel_loop_routes", hits)
+    if out and reasons:
+        out["reasons"] = {k: reasons[k] for k in out["samples"] if k in reasons}
+        why = sorted(set(out["reasons"].values()))
+        if why:
+            out["what"] = f"{out['what']} ({'; '.join(why)})"
+    return out
 
 
 # ------------------------------------------------------------------------------------------- Django (AST)
@@ -549,7 +569,7 @@ def detect(root: str | Path, files_by_ext: dict[str, list[str]], builder=None, p
     run(nuxt_unevaluable_import_dirs, root)
     run(vue_unresolved_navigation, builder)
     run(ts_unrecognised_http_client, root, js, builder)
-    run(laravel_loop_routes, root, php)
+    run(laravel_loop_routes, root, php, builder)
     py = programs.get("python")
     if py is not None:
         run(django_dynamic_urlpatterns, [(m.file, m.tree) for m in py.modules.values()])

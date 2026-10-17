@@ -77,20 +77,20 @@ def test_drf_default_shows_in_cg_routes(dbs, capsys):
 
 def test_laravel_group_middleware_and_a_route_outside_it(dbs, capsys):
     s = states(capsys, dbs("laravel"))
-    assert s["route:POST /shelves"]["guard_state"] == "guarded"
-    assert s["route:GET /shelves"]["guard_state"] == "guarded"
-    assert s["route:POST /pamphlets"]["guard_state"] == "unguarded"
-    assert s["route:GET /pamphlets"]["guard_state"] == "unguarded"
+    assert s["route:POST /api/shelves"]["guard_state"] == "guarded"
+    assert s["route:GET /api/shelves"]["guard_state"] == "guarded"
+    assert s["route:POST /api/pamphlets"]["guard_state"] == "unguarded"
+    assert s["route:GET /api/pamphlets"]["guard_state"] == "unguarded"
 
 
 @pytest.mark.parametrize("name, guard", [("laravel_kernel", "laravel-group:api:auth:sanctum"),
                                          ("laravel_bootstrap", "laravel-group:api:EnsureApiToken")])
 def test_laravel_global_and_group_middleware_from_kernel_and_bootstrap(dbs, capsys, name, guard):
     s = states(capsys, dbs(name))
-    assert s["route:POST /parcels"]["guard_state"] == "guarded" and s["route:POST /parcels"]["guards"] == [guard]
+    assert s["route:POST /api/parcels"]["guard_state"] == "guarded" and s["route:POST /api/parcels"]["guards"] == [guard]
     assert s["route:GET /storefront"]["guard_state"] == "unguarded"           # the web group has no auth middleware
     strict = states(capsys, dbs(name), "--strict")
-    assert strict["route:POST /parcels"]["guard_state"] == "unguarded"
+    assert strict["route:POST /api/parcels"]["guard_state"] == "unguarded"
 
 
 def test_nest_app_guard_and_public_opt_out(dbs, capsys):
@@ -141,9 +141,9 @@ def test_python_early_raise_on_missing_user_permission_and_staff(dbs, capsys):
 
 def test_php_abort_unless_auth_check(dbs, capsys):
     s = states(capsys, dbs("laravel"))
-    assert s["route:POST /stock"]["guard_state"] == "inline-guarded"
-    assert s["route:POST /stock"]["guards"] == ["auth()->check()"]
-    assert s["route:GET /audit"]["guard_state"] == "unguarded"
+    assert s["route:POST /api/stock"]["guard_state"] == "inline-guarded"
+    assert s["route:POST /api/stock"]["guards"] == ["auth()->check()"]
+    assert s["route:GET /api/audit"]["guard_state"] == "unguarded"
 
 
 def test_socketio_connect_check_guards_its_namespace_and_handler_checks(dbs, capsys):
@@ -168,7 +168,7 @@ def test_write_reached_is_medium_and_unclear_is_heuristic_low(dbs, capsys):
     assert f["route:ANY /catalog/"]["severity"] == "medium" and "reaches a write" in f["route:ANY /catalog/"]["detail"]
     assert f["route:ANY /catalog/"]["confidence"] == "resolved"
     lf = findings(capsys, dbs("laravel"))
-    assert lf["route:POST /pamphlets"]["severity"] == "medium"
+    assert lf["route:POST /api/pamphlets"]["severity"] == "medium"
 
 
 def test_strict_keeps_medium_and_route_level_facts(dbs, capsys):

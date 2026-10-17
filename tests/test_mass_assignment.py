@@ -160,5 +160,5 @@ def test_node_and_routes_show_the_mass_assignment_write():
     assert "via update(validated()) keys from UpdateBookRequest::rules ∩ Book::$fillable" in out
     out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "routes", "--reaches", "books.age_rating", "--db", api],
                          capture_output=True, text=True, check=True).stdout
-    assert "PUT /v1/admin/books/{id}" in out and "WRITES_COLUMN@BookController.php:30" in out
+    assert "PUT /api/v1/admin/books/{id}" in out and "WRITES_COLUMN@BookController.php:30" in out
 

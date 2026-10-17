@@ -59,7 +59,7 @@ def _app(root: Path) -> None:
         '{"require": {"laravel/framework": "^11.0"}, "autoload": {"psr-4": {"App\\\\": "app/"}}}'
     )
     (root / "artisan").write_text("")
-    (root / "routes" / "api.php").write_text(ROUTES)
+    (root / "routes" / "web.php").write_text(ROUTES)
     for name, methods in CONTROLLERS.items():
         body = "\n".join(f"    public function {m}() {{}}" for m in methods)
         (root / "app" / "Http" / "Controllers" / f"{name}.php").write_text(

@@ -38,65 +38,65 @@ def names(route):
 
 
 def test_permission_policy_role_and_ignored_after_write():
-    assert names("POST /orders/{order}/refund") == [
+    assert names("POST /api/orders/{order}/refund") == [
         ("hasPermission('orders.refund')", "permission", "RefundController::store", False)]
-    assert names("POST /orders/{order}/policy") == [
+    assert names("POST /api/orders/{order}/policy") == [
         ("authorize('update')", "policy", "PolicyController::update", False)]
-    assert names("POST /orders/{order}/gate") == [
+    assert names("POST /api/orders/{order}/gate") == [
         ("Gate::authorize('refund')", "policy", "PolicyController::gate", False)]
-    assert names("POST /orders/{order}/denies") == [
+    assert names("POST /api/orders/{order}/denies") == [
         ("Gate::denies('update')", "policy", "PolicyController::denies", True)]
-    assert names("POST /orders/{order}/maybe") == [
+    assert names("POST /api/orders/{order}/maybe") == [
         ("cannot('orders.refund')", "permission", "ConditionalController::update", True)]
-    assert names("POST /staff/role") == [
+    assert names("POST /api/staff/role") == [
         ("hasRole('admin')", "role", "RoleController::update", False)]
-    assert names("POST /orders/{order}/after") == []
+    assert names("POST /api/orders/{order}/after") == []
 
 
 def test_secret_form_request_and_project_checks():
-    assert names("POST /warehouse/sync") == [
+    assert names("POST /api/warehouse/sync") == [
         ("ensureValidSecret (hash_equals config:bookstore.sync_secret)", "secret",
          "WarehouseSyncController::ensureValidSecret", False)]
-    assert names("POST /sync/compare") == [
+    assert names("POST /api/sync/compare") == [
         ("=== config:bookstore.sync_secret", "secret", "SecretCompareController::store", True)]
-    assert names("POST /orders/{order}/form") == [
+    assert names("POST /api/orders/{order}/form") == [
         ("RefundRequest::authorize (can('orders.refund'))", "permission", "RefundRequest::authorize", False)]
-    assert names("POST /orders/{order}/open") == []
-    assert names("POST /orders/{order}/trait") == [
+    assert names("POST /api/orders/{order}/open") == []
+    assert names("POST /api/orders/{order}/trait") == [
         ("assertCanManage", "permission", "ManagesOrders::assertCanManage", False)]
-    assert names("POST /orders/{order}/plain") == [
+    assert names("POST /api/orders/{order}/plain") == [
         ("assertOwns", "permission", "ManagesOrders::assertOwns", False)]
-    assert names("POST /orders/{order}/deny") == [
+    assert names("POST /api/orders/{order}/deny") == [
         ("reject", "permission", "DenyController::reject", False)]
 
 
 def test_controller_middleware_depth_and_reach():
-    assert names("POST /mw/show") == [
+    assert names("POST /api/mw/show") == [
         ("can:orders.refund", "permission", "MwController::__construct", False)]
-    assert names("DELETE /mw/show") == [
+    assert names("DELETE /api/mw/show") == [
         ("can:orders.refund", "permission", "MwController::__construct", False),
         ("role:admin", "role", "MwController::__construct", False)]
-    assert names("GET /has/show") == [
+    assert names("GET /api/has/show") == [
         ("auth", "role", "HasMwController::middleware", False),
         ("can:orders.view", "permission", "HasMwController::middleware", False)]
-    assert names("GET /has/index") == [
+    assert names("GET /api/has/index") == [
         ("auth", "role", "HasMwController::middleware", False)]
-    assert names("POST /deep/ok") == [
+    assert names("POST /api/deep/ok") == [
         ("authorize('update')", "policy", "DeepController::level2", False)]
-    assert names("POST /deep/late") == []
+    assert names("POST /api/deep/late") == []
 
 
 def test_unguarded_hides_unconditional_inline_and_strict_does_not():
     st = GraphStore(db())
     plain = {i["name"] for i in R.routes_report(st, unguarded=True)["items"]}
     strict = {i["name"] for i in R.routes_report(st, unguarded=True, strict=True)["items"]}
-    hidden = {"POST /orders/{order}/refund", "POST /warehouse/sync", "POST /mw/show", "POST /orders/{order}/trait",
-              "POST /orders/{order}/form"}
+    hidden = {"POST /api/orders/{order}/refund", "POST /api/warehouse/sync", "POST /api/mw/show", "POST /api/orders/{order}/trait",
+              "POST /api/orders/{order}/form"}
     assert hidden.isdisjoint(plain)
     assert hidden <= strict
-    assert "POST /orders/{order}/maybe" in plain  # conditional only
-    assert "POST /orders/{order}/after" in plain
-    assert "POST /sync/compare" in plain
+    assert "POST /api/orders/{order}/maybe" in plain  # conditional only
+    assert "POST /api/orders/{order}/after" in plain
+    assert "POST /api/sync/compare" in plain
     text = R.render_routes(R.routes_report(st), st)
     assert "inline: hasPermission('orders.refund') [permission] RefundController::store" in text
     assert "[permission, conditional]" in text
@@ -109,76 +109,76 @@ def test_unguarded_hides_unconditional_inline_and_strict_does_not():
 def test_discarded_checks_do_not_hide_routes():
     """A check that does not gate the action stays visible to --unguarded."""
     open_routes = [
-        "POST /orders/{order}/ignored",
-        "POST /orders/{order}/allows",
-        "POST /orders/{order}/allows-return",
-        "POST /orders/{order}/ui",
-        "POST /orders/{order}/flag",
-        "POST /orders/{order}/preview",
-        "POST /orders/{order}/after-callee",
-        "POST /sync/headers",
-        "POST /sync/loose",
-        "POST /orders/{order}/branched",
-        "POST /orders/{order}/branch-call",
+        "POST /api/orders/{order}/ignored",
+        "POST /api/orders/{order}/allows",
+        "POST /api/orders/{order}/allows-return",
+        "POST /api/orders/{order}/ui",
+        "POST /api/orders/{order}/flag",
+        "POST /api/orders/{order}/preview",
+        "POST /api/orders/{order}/after-callee",
+        "POST /api/sync/headers",
+        "POST /api/sync/loose",
+        "POST /api/orders/{order}/branched",
+        "POST /api/orders/{order}/branch-call",
     ]
     for route in open_routes:
         assert names(route) == [] or all(g[3] for g in names(route)), (route, names(route))
         assert all(g[1] != "secret" for g in names(route)), (route, names(route))
-    assert names("POST /orders/{order}/ignored") == []
-    assert names("POST /orders/{order}/allows") == []
-    assert names("POST /orders/{order}/allows-return") == []
-    assert names("POST /orders/{order}/ui") == []
-    assert names("POST /orders/{order}/flag") == []
-    assert names("POST /orders/{order}/preview") == []
-    assert names("POST /orders/{order}/after-callee") == []
-    assert names("POST /sync/headers") == []
-    assert names("POST /sync/loose") == []
-    assert names("POST /orders/{order}/branched") == [
+    assert names("POST /api/orders/{order}/ignored") == []
+    assert names("POST /api/orders/{order}/allows") == []
+    assert names("POST /api/orders/{order}/allows-return") == []
+    assert names("POST /api/orders/{order}/ui") == []
+    assert names("POST /api/orders/{order}/flag") == []
+    assert names("POST /api/orders/{order}/preview") == []
+    assert names("POST /api/orders/{order}/after-callee") == []
+    assert names("POST /api/sync/headers") == []
+    assert names("POST /api/sync/loose") == []
+    assert names("POST /api/orders/{order}/branched") == [
         ("ensureAccessOrContinue", "permission", "FalseGuardController::ensureAccessOrContinue", True)]
-    assert names("POST /orders/{order}/branch-call") == [
+    assert names("POST /api/orders/{order}/branch-call") == [
         ("ensureAccess", "permission", "FalseGuardController::branchCall", True)]
-    assert names("POST /orders/{order}/allows-abort") == [
+    assert names("POST /api/orders/{order}/allows-abort") == [
         ("Gate::allows('update')", "policy", "FalseGuardController::allowsAbort", False)]
-    assert names("POST /orders/{order}/gated") == [
+    assert names("POST /api/orders/{order}/gated") == [
         ("ensureAccess", "permission", "FalseGuardController::gated", False)]
     st = GraphStore(db())
     plain = {i["name"] for i in R.routes_report(st, unguarded=True)["items"]}
     for route in open_routes:
         assert route in plain, route
-    assert "POST /orders/{order}/allows-abort" not in plain
-    assert "POST /orders/{order}/gated" not in plain
+    assert "POST /api/orders/{order}/allows-abort" not in plain
+    assert "POST /api/orders/{order}/gated" not in plain
 
 
 def test_resource_and_invokable_middleware_only_except():
-    assert names("GET /orders") == [
+    assert names("GET /api/orders") == [
         ("auth", "role", "OrderResourceController::__construct", False),
         ("can:orders.view", "permission", "OrderResourceController::__construct", False)]
-    assert names("GET /orders/create") == names("GET /orders")
-    assert names("PUT /orders/{order}") == [
+    assert names("GET /api/orders/create") == names("GET /api/orders")
+    assert names("PUT /api/orders/{order}") == [
         ("auth", "role", "OrderResourceController::__construct", False),
         ("can:orders.update", "permission", "OrderResourceController::__construct", False)]
-    assert names("DELETE /orders/{order}") == names("PUT /orders/{order}")
-    assert names("GET /orders/{order}/edit") == names("GET /orders")
-    assert names("GET /shipments") == [
+    assert names("DELETE /api/orders/{order}") == names("PUT /api/orders/{order}")
+    assert names("GET /api/orders/{order}/edit") == names("GET /api/orders")
+    assert names("GET /api/shipments") == [
         ("can:orders.view", "permission", "ShipmentController::middleware", False)]
-    assert names("PUT /shipments/{shipment}") == [
+    assert names("PUT /api/shipments/{shipment}") == [
         ("can:orders.update", "permission", "ShipmentController::middleware", False)]
-    assert names("DELETE /shipments/{shipment}") == names("PUT /shipments/{shipment}")
-    assert names("GET /shipments/{shipment}") == names("GET /shipments")
-    assert names("POST /invoke/sync") == [
+    assert names("DELETE /api/shipments/{shipment}") == names("PUT /api/shipments/{shipment}")
+    assert names("GET /api/shipments/{shipment}") == names("GET /api/shipments")
+    assert names("POST /api/invoke/sync") == [
         ("can:orders.refund", "permission", "InvokeMwController::__construct", False)]
     st = GraphStore(db())
     plain = {i["name"] for i in R.routes_report(st, unguarded=True)["items"]}
-    assert "GET /orders" not in plain and "PUT /orders/{order}" not in plain
-    assert "GET /shipments" not in plain and "PUT /shipments/{shipment}" not in plain
-    assert "POST /invoke/sync" not in plain
+    assert "GET /api/orders" not in plain and "PUT /api/orders/{order}" not in plain
+    assert "GET /api/shipments" not in plain and "PUT /api/shipments/{shipment}" not in plain
+    assert "POST /api/invoke/sync" not in plain
 
 
 def test_json_and_search_include_inline_guards():
     proc = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "routes", "--db", str(db()), "--json"],
                           check=True, capture_output=True, text=True)
     data = json.loads(proc.stdout)
-    refund = next(i for i in data["items"] if i["name"] == "POST /orders/{order}/refund")
+    refund = next(i for i in data["items"] if i["name"] == "POST /api/orders/{order}/refund")
     assert refund["inline_guards"] == [{
         "name": "hasPermission('orders.refund')", "kind": "permission",
         "at": "RefundController::store", "conditional": False}]

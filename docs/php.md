@@ -143,6 +143,48 @@ not an application call.
 Symfony HttpClient, `curl_*` and `file_get_contents` are not client endpoints. A host known only at run time is
 kept with `origin_kind` `unknown` and is not matched by host.
 
+## Route paths
+
+A route's id and `uri` are the path Laravel serves it under. Routes of `routes/api.php` and `routes/api/` carry
+the API prefix:
+
+- `withRouting(api: ..., apiPrefix: 'api/v2')` in `bootstrap/app.php`; `api` when `apiPrefix` is not given;
+- `Route::prefix('hooks')->group(base_path('routes/hooks.php'))` in a `then:` closure of `withRouting`, or in a
+  Laravel 10 (and earlier) `RouteServiceProvider`, for any route file it names;
+- `api` when nothing configures it (Laravel's default).
+
+`routes/web.php` stays unprefixed. `attrs.declared_uri` keeps the path as written (`/v1/orders`) and
+`attrs.prefix_from` names where the prefix came from (`bootstrap/app.php`, the provider, or `laravel-default`).
+A `route:` spec with the declared path still resolves, with `note: declared path; served as POST /api/v1/orders`
+on stderr. `cg link`, `cg tests` and webhook callbacks match on the served path. With the default prefix the
+declared path is tried too, as before. A prefix added outside the app (a reverse proxy, a path in `APP_URL`) is
+not seen.
+
+## Routes in loops
+
+`foreach` over a literal list or `key => value` array, `collect([...])->each(fn ($x) => ...)`,
+`array_map(fn ($x) => ..., [...])`, an enum's `cases()` and a class constant holding a literal array register one
+route per item. cg unrolls them and substitutes the loop variables into the path (`"genres/{$genre}"`,
+`'genres/'.$genre`), the name, the middleware, `->defaults()`, `->where*()` and the action
+(`[GenreController::class, $method]`, or an invokable controller class taken from the array). A `$genres = [...]`
+assignment before the loop counts as literal, and so does a lookup in one (`$extra[$key] ?? []`,
+`Arr::wrap(...)`). `->defaults()` and `->where()` / `whereNumber()` / `whereIn()` / ... are kept on every route
+as `attrs.defaults` and `attrs.where` (parameter → pattern). Each route carries
+`attrs.unrolled_from` (`file`, `line`, `binding`), and `cg routes` marks it `(unrolled: $genre = 'fiction')`.
+
+A loop over data cg cannot evaluate (a query, `config()`, a method result), a destructured loop variable, or
+nested loops with more than 64 combinations stays a `laravel_loop_routes` blind spot with the reason
+(`iterable not literal`). Routes registered by packages at run time (`Route::macro`, providers reading config)
+are not seen.
+
+## Overrides after `$this` and `parent::`
+
+A `$this->m()` call runs on the object the current method was entered with. When a route reaches an inherited
+method through a known receiver (a typed property, or a queued job's inherited `handle()`), the override hops
+after `$this->m()` stay in that receiver's class chain. `parent::m()` runs exactly the parent's method and takes
+no override hop. `downstream`, `reaches` and `routes --writes` use this narrowing, so a sibling class's override
+no longer adds its tables to a route.
+
 ## Route attributes
 
 spatie/laravel-route-attributes on a controller are routes, with the same `route:<METHOD> <uri>` nodes as

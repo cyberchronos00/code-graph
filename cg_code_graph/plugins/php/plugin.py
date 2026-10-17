@@ -584,12 +584,22 @@ class PhpProgram:
         self.stats[f"calls_{kind}"] += 1
         self.last_recv = []
         targets, status = self.call_targets(fn, f, ctx)
+        # #148: `$this->m()` dispatches on the object the caller runs on, `parent::m()` does not dispatch at all;
+        # downstream / routes --writes narrow the override hops after these calls by the receiver's class chain
+        scope = {}
+        if kind == "method" and (f.get("recv") or {}).get("k") == "this":
+            scope["this"] = True
+        elif kind == "static" and f.get("parentcall") and fn.cls:
+            scope["parent"] = True
+            own = self.cls(fn.cls)
+            if own and not self.last_recv:
+                self.last_recv = [f"{own.kind}:{own.fqcn}"]
         for m, conf in targets:
             if conf == HEURISTIC:
                 b.add_edge(fn.id, m.id, "CALLS", fn.file, line, HEURISTIC, via="unique-method-name")
             else:
                 b.add_edge(fn.id, m.id, "CALLS", fn.file, line, conf,
-                           **({"recv": sorted(set(self.last_recv))} if self.last_recv else {}))
+                           **({"recv": sorted(set(self.last_recv))} if self.last_recv else {}), **scope)
         if status == "resolved":
             self.stats["calls_resolved"] += 1
         elif status == "heuristic":

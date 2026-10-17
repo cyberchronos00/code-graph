@@ -90,7 +90,7 @@ plugin already made an entry point is not reported.
 | `django_dynamic_urlpatterns` | route | `urlpatterns` from a call, a comprehension or a loop |
 | `django_unresolved_include` | route | `include(<expression>)` cg could not follow (a third-party package is not reported) |
 | `express_loop_routes` | route | Express / Fastify / Koa / Hono / Elysia routes in a loop, or `router[m.method](...)` |
-| `laravel_loop_routes` | route | `Route::` inside `foreach` / `->each` / `array_map` |
+| `laravel_loop_routes` | route | `Route::` inside `foreach` / `->each` / `array_map` that cg could not unroll (not over literal data, or more than 64 combinations); the reason is in `what` and `reasons`. Loops over literal data are unrolled ([PHP](php.md#routes-in-loops)) |
 | `python_decorator_routes` | route | `@app.route` / `@router.get` that no plugin turned into a route |
 | `python_decorator_registration` | handler | `@registry.register` with no entry point and no caller (click, typer and MCP are entry points) |
 | `python_registry_assignment` | handler | `registry[key] = fn` and `fn` has no caller |

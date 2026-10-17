@@ -19,7 +19,7 @@ add_nodes: [{id: column:books.preorder_until, attrs: {nullable: true}}]
 modify: [{target: StockService::reserve, intent: "...", role: guard, issues: ["#7"]}]
 add_edges: [{from: StockService::reserve, kind: READS_COLUMN, to: column:books.preorder_until}]
 forbid: [{id: no-warehouse, type: path, from: StockService::reserve, to: table:warehouse_stock}]
-require: [{route: "route:POST /v1/stock/reserve", middleware: ["auth:api"]}]
+require: [{route: "route:POST /api/v1/stock/reserve", middleware: ["auth:api"]}]
 covers: [{spec: ..., note: ...}]
 out_of_scope: [{spec: ..., reason: ...}]
 ```

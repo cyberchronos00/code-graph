@@ -11,8 +11,11 @@ graphs (role backend, frontend or both):
 Matching is deterministic (no guessing):
   - the client path is the extractor's URL template with the origin (scheme://host or the
     unknown server-URL placeholder) and query string removed;
-  - backend URIs are tried as declared and, for routes from routes/api.php, with the `/api`
-    prefix Laravel adds;
+  - backend URIs are tried at the path the server serves them under: a Laravel route of routes/api.php is
+    stored with its API prefix (`apiPrefix` in bootstrap/app.php, a RouteServiceProvider group, `api` by
+    default) and keeps its declared path in attrs.declared_uri. When no prefix configuration was found
+    (the `api` default) the declared path is tried as well, and a route from an older graph without
+    declared_uri gets the `/api` + uri variant (see route_uri_variants);
   - segments match when literal == literal, client placeholder <-> route {param},
     client literal -> route {param} (resolved), or a client segment with an embedded
     placeholder fully matches a route literal (heuristic, e.g. export.{format} ~ export.csv);
@@ -38,6 +41,28 @@ from types import SimpleNamespace
 
 from .core.model import CONFIDENCE_RANK
 from .core.store import GraphStore
+
+
+_API_ROUTE_FILE = re.compile(r"(^|/)routes/api(\.php$|/)")
+
+
+def route_uri_variants(file: str | None, attrs: dict) -> list[tuple[str, str]]:
+    """(variant, uri) pairs a route answers to. `file` is the route node's file (with or without a repo prefix).
+
+    A Laravel route stores the served path (#191): attrs.uri carries the API prefix and attrs.declared_uri the
+    path as written. The declared path is also tried when the prefix is Laravel's default rather than read from
+    configuration. A route without declared_uri from routes/api.php (an older graph) gets the `/api` variant."""
+    uri = attrs.get("uri")
+    out = [("as-declared", uri)]
+    declared = attrs.get("declared_uri")
+    if declared:
+        out = [("served", uri)]
+        if attrs.get("prefix_from") == "laravel-default" and declared != uri:
+            out.append(("declared, without the default /api prefix", declared))
+        return out
+    if _API_ROUTE_FILE.search(file or "") and uri and not uri.startswith("/api/"):
+        out.append(("api-prefixed", "/api" + uri))
+    return out
 
 PARAM = re.compile(r"^\{(\w+)(\?)?\}$")
 CATCH_ALL = re.compile(r"^\{(\w+)\*(\?)?\}$")   # {rest*} one or more segments, {rest*?} zero or more (TS routers, Next.js)
@@ -401,9 +426,7 @@ def link_many(repos: list[tuple[str, str, str]], out_db: str, *, allow: dict | N
                     uri, method = a.get("uri"), a.get("method")
                     if not uri or not method:
                         continue
-                    uris = [("as-declared", uri)]
-                    if (r[1] or "").startswith("routes/api.php") or (r[1] or "").startswith("routes/api/"):
-                        uris.append(("api-prefixed", "/api" + uri))
+                    uris = route_uri_variants(r[1], a)
                     routes.append({"id": mid(name, r[0]), "uri": uri, "method": method, "uris": uris, "server": name,
                                    "file": f"{name}/{r[1]}" if r[1] else None, "line": r[3],
                                    "attrs": dict(a, _file=r[1], _line=r[3])})

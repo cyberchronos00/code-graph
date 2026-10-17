@@ -372,9 +372,8 @@ class Subs:
             uri, method = a.get("uri"), a.get("method")
             if not uri or not method:
                 continue
-            uris = [("as-declared", uri)]
-            if (n.file or "").startswith(("routes/api.php", "routes/api/")):
-                uris.append(("api-prefixed", "/api" + uri))
+            from .link import route_uri_variants
+            uris = route_uri_variants(n.file, a)
             out.append({"id": rid, "uri": uri, "method": method, "uris": uris, "name": a.get("name")})
         return out
 

@@ -57,11 +57,13 @@ def test_nitro_routes_link_frontend_to_handlers(indexed):
     from cg_code_graph import query
     stats, db = indexed
     nitro = stats["plugins"]["typescript/nuxt"]["nitro"]
-    assert nitro == {"routes": 6, "middleware": 1, "plugins": 1, "proxy_routes": 0, "linked_calls": 4}
+    assert nitro == {"routes": 12, "middleware": 2, "plugins": 1, "proxy_routes": 1, "linked_calls": 4}
     con = sqlite3.connect(db)
     routes = {r[0] for r in con.execute("SELECT id FROM nodes WHERE kind='route'")}
     assert routes == {"route:GET /api/plants", "route:POST /api/plants", "route:GET /api/plants/{id}",
-                      "route:ANY /api/orders", "route:ANY /api/{slug*}", "route:ANY /sitemap.xml"}
+                      "route:ANY /api/orders", "route:ANY /api/{slug*}", "route:ANY /sitemap.xml",
+                      "route:GET /api/recipes", "route:GET /api/admin/users", "route:ANY /api/legacy/{path*}",
+                      "route:GET /api/stats", "route:GET /api/feed", "route:ANY /rss.xml"}
     edges = set(con.execute("SELECT src, dst, kind FROM edges WHERE kind IN ('ROUTES_TO','MATCHES_ROUTE','USES_MIDDLEWARE')"))
     assert ("route:GET /api/plants", "function:server/api/plants.get.ts#default", "ROUTES_TO") in edges
     assert ("route:GET /api/plants/{id}", "function:server/api/plants/[id].get.ts#default", "ROUTES_TO") in edges
@@ -101,3 +103,53 @@ def test_nested_playwright_tree_is_indexed_as_tests(indexed):
     assert any(r["id"] == "function:help/playwright/support.ts#openShop" for r in found["nodes"])
     ts = next(e for e in stats["coverage"]["languages"] if e["language"] == "typescript")
     assert not [p for p in (ts["paths"].get("unmapped") or []) + (ts["paths"].get("excluded") or []) if p.startswith("help/")]
+
+
+@needs_ts
+def test_nitro_object_form_config_handlers_layers_and_proxy_rules(indexed):
+    """#217: object-form handlers, nuxt.config serverHandlers / nitro.handlers, layer server dirs, routeRules
+    proxies and middleware that returns early outside a path prefix."""
+    _stats, db = indexed
+    con = sqlite3.connect(db)
+    edges = set(con.execute("SELECT src, dst, kind, confidence FROM edges WHERE kind IN ('ROUTES_TO','USES_MIDDLEWARE')"))
+    # object form: `handler` is the ROUTES_TO target, onRequest / onBeforeResponse are middleware of that route
+    assert ("route:GET /api/recipes", "function:server/api/recipes.get.ts#handler", "ROUTES_TO", "exact") in edges
+    assert ("route:GET /api/recipes", "function:server/utils/auth.ts#requireUser", "USES_MIDDLEWARE", "exact") in edges
+    assert ("route:GET /api/recipes", "function:server/api/recipes.get.ts#onBeforeResponse", "USES_MIDDLEWARE", "exact") in edges
+    attrs = dict(con.execute("SELECT id, attrs FROM nodes WHERE kind='route'"))
+    assert "handler_unresolved" not in attrs["route:GET /api/recipes"]
+    # a local layer's server/api
+    assert ("route:GET /api/stats", "function:layers/admin/server/api/stats.get.ts#default", "ROUTES_TO", "exact") in edges
+    # handlers registered in nuxt.config
+    assert ("route:GET /api/feed", "function:server/handlers/feed.ts#default", "ROUTES_TO", "exact") in edges
+    assert ("route:ANY /rss.xml", "function:server/handlers/rss.ts#default", "ROUTES_TO", "exact") in edges
+    assert '"registered_in": "serverHandlers"' in attrs["route:GET /api/feed"]
+    # routeRules proxy
+    legacy = attrs["route:ANY /api/legacy/{path*}"]
+    assert '"proxy": true' in legacy and '"proxy_rule": "/api/legacy/**"' in legacy
+    # early return outside /api/admin: attached only below that prefix, heuristic
+    admin = "function:server/middleware/admin-only.ts#default"
+    assert ("route:GET /api/admin/users", admin, "USES_MIDDLEWARE", "heuristic") in edges
+    assert not any(d == admin for s, d, k, c in edges if s != "route:GET /api/admin/users")
+
+
+@pytest.mark.parametrize("pattern,uri,want", [
+    ("/api/legacy/**", "/api/legacy/{path*}", True),
+    ("/api/legacy/**", "/api/legacy", True),
+    ("/api/legacy/**", "/api/legacyx", False),
+    ("/blog/*", "/blog/{slug}", True),
+    ("/blog/*", "/blog/a/b", False),
+    ("/exact", "/exact", True),
+])
+def test_rule_covers(pattern, uri, want):
+    from cg_code_graph.plugins.nuxt.plugin import rule_covers
+    assert rule_covers(pattern, uri) is want
+
+
+def test_object_hooks_and_path_guard():
+    from cg_code_graph.plugins.nuxt.plugin import object_hooks, path_guard
+    hooks, ref = object_hooks("export default defineEventHandler({ onRequest: [a, b], onBeforeResponse: async (e) => 1, handler: run })")
+    assert hooks == [("onRequest", "a"), ("onRequest", "b"), ("onBeforeResponse", "<inline>")] and ref == "run"
+    assert object_hooks("export default defineEventHandler((e) => 1)") == ([], None)
+    assert path_guard("if (!event.path.startsWith('/api/admin')) return") == "/api/admin"
+    assert path_guard("if (!getRequestURL(event).pathname.startsWith('/x')) { return }") == "/x"

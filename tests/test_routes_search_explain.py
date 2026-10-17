@@ -49,25 +49,25 @@ def test_routes_reaching_writes_bookstore():
     st = db("combined")
     res = R.routes_report(st, writes="*")
     r = by_route(res)
-    assert res["total_routes"] == 14 and set(r) == {"DELETE /v1/{store}/admin/reports/{report}", "POST /v1/admin/books",
-                                                    "PUT /v1/admin/books/{id}", "POST /v1/orders",
-                                                    "POST /v1/orders/{order}/refund", "POST /v1/warehouse/sync"}
-    assert r["POST /v1/orders"]["has_auth"] and guards(r["POST /v1/orders"]) == {"auth:api": True}
-    assert not r["DELETE /v1/{store}/admin/reports/{report}"]["has_auth"]
-    assert r["POST /v1/orders/{order}/refund"]["has_auth"]
-    assert r["POST /v1/orders/{order}/refund"]["inline_guards"][0]["name"] == "hasPermission('orders.refund')"
-    assert r["POST /v1/warehouse/sync"]["inline_auth"] and not r["POST /v1/warehouse/sync"]["has_auth"]
+    assert res["total_routes"] == 14 and set(r) == {"DELETE /api/v1/{store}/admin/reports/{report}", "POST /api/v1/admin/books",
+                                                    "PUT /api/v1/admin/books/{id}", "POST /api/v1/orders",
+                                                    "POST /api/v1/orders/{order}/refund", "POST /api/v1/warehouse/sync"}
+    assert r["POST /api/v1/orders"]["has_auth"] and guards(r["POST /api/v1/orders"]) == {"auth:api": True}
+    assert not r["DELETE /api/v1/{store}/admin/reports/{report}"]["has_auth"]
+    assert r["POST /api/v1/orders/{order}/refund"]["has_auth"]
+    assert r["POST /api/v1/orders/{order}/refund"]["inline_guards"][0]["name"] == "hasPermission('orders.refund')"
+    assert r["POST /api/v1/warehouse/sync"]["inline_auth"] and not r["POST /api/v1/warehouse/sync"]["has_auth"]
     txt = R.render_routes(res, st)
     assert "6 of 14 routes" in txt and "NO AUTH" in txt and "WRITES_TABLE@SalesReportService.php:24" in txt
     assert "called from: page:app/pages/index.vue" in txt  # frontend caller on the combined graph
     assert "inline: hasPermission('orders.refund') [permission] RefundController::store" in txt
     assert "inline: ensureValidSecret (hash_equals config:bookstore.sync_secret) [secret]" in txt
     unguarded = R.routes_report(st, writes="*", unguarded=True)
-    assert set(by_route(unguarded)) == set(r) - {"POST /v1/orders", "POST /v1/orders/{order}/refund", "POST /v1/warehouse/sync"}
+    assert set(by_route(unguarded)) == set(r) - {"POST /api/v1/orders", "POST /api/v1/orders/{order}/refund", "POST /api/v1/warehouse/sync"}
     strict = R.routes_report(st, writes="*", unguarded=True, strict=True)
-    assert "POST /v1/warehouse/sync" in by_route(strict) and "POST /v1/orders/{order}/refund" not in by_route(strict)
+    assert "POST /api/v1/warehouse/sync" in by_route(strict) and "POST /api/v1/orders/{order}/refund" not in by_route(strict)
     missing = R.routes_report(st, writes="books", missing="auth:api")
-    assert set(by_route(missing)) == {"POST /v1/admin/books", "PUT /v1/admin/books/{id}"}
+    assert set(by_route(missing)) == {"POST /api/v1/admin/books", "PUT /api/v1/admin/books/{id}"}
 
 
 @needs_ts
@@ -87,8 +87,8 @@ def test_routes_names_routes_hidden_by_min_confidence():
 def test_routes_reaching_connection_and_gated_only():
     st = db("combined")
     r = by_route(R.routes_report(st, reaches=["connection:warehouse"]))
-    assert {"GET /v1/{store}/admin/inventory", "POST /v1/stock/reserve"} <= set(r)
-    inv = r["GET /v1/{store}/admin/inventory"]["reaches"][0]
+    assert {"GET /api/v1/{store}/admin/inventory", "POST /api/v1/stock/reserve"} <= set(r)
+    inv = r["GET /api/v1/{store}/admin/inventory"]["reaches"][0]
     assert inv["gated_only"]
 
 
@@ -148,7 +148,7 @@ def test_routes_empty_result_explains():
 def test_search_matches_route_guards():
     st = db("api")
     res = Q.search(st, "auth")
-    assert "auth:api" in res["guards"] and res["guards"]["auth:api"][0]["route"] == "route:POST /v1/orders"
+    assert "auth:api" in res["guards"] and res["guards"]["auth:api"][0]["route"] == "route:POST /api/v1/orders"
     assert "auth:api" in Q.render_search(res)
     assert "no matches for 'zzz_nothing'" in Q.render_search(Q.search(st, "zzz_nothing"))
     assert "ApiKeyGuard" in Q.search(db("nest"), "ApiKey")["guards"]

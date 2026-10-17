@@ -826,6 +826,9 @@ def main(argv=None):
 def _unknown_route(st, spec: str, as_json: bool) -> bool:
     miss = Q.route_failure(st, spec)
     if not miss:
+        note = Q.route_declared_note(st, spec)
+        if note:
+            print(note, file=sys.stderr)
         return False
     if as_json:
         print(json.dumps({"error": miss["error"], "spec": miss["spec"], "suggestions": miss["suggestions"]}))

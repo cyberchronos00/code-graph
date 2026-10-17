@@ -23,6 +23,10 @@ ini_set('memory_limit', '2G');
 $root = rtrim($argv[1], '/');
 $files = array_filter(array_map('trim', file($argv[2])));
 $parser = (new ParserFactory())->createForNewestSupportedVersion();
+const ROUTE_LOOP_MAX = 64;
+$GLOBALS['routeEval'] = false;
+$GLOBALS['routeVars'] = [];
+$GLOBALS['classLikeCache'] = [];
 
 final class Ctx {
     public ?string $class = null;      // current class FQCN
@@ -31,6 +35,7 @@ final class Ctx {
     public array $closureStack = [];   // enclosing call contexts for closures
     public array $ranges = [];         // spl_object_id(node) => [lo, hi) fact-index range of the subtree
     public array $nodeFact = [];       // spl_object_id(call node) => fact index
+    public array $routeLoops = [];     // route files: loops around Route:: calls (#184) {line, end, unrolled, reason}
 }
 
 function nameStr($n): ?string {
@@ -295,6 +300,7 @@ function walkNode(Node $node, Ctx $c, \PhpParser\NameContext $nc): void {
 }
 
 function literal($e) {
+    if (!empty($GLOBALS['routeEval'])) { $r = routeLiteral($e); if ($r !== null) return $r; }
     if ($e instanceof Scalar\String_) return $e->value;
     if ($e instanceof Scalar\Int_ || $e instanceof Scalar\Float_) return $e->value;
     if ($e instanceof Expr\ConstFetch) { $n = strtolower($e->name->toString()); return $n === 'true' ? true : ($n === 'false' ? false : null); }
@@ -461,7 +467,15 @@ foreach ($files as $rel) {
             foreach ($top as $s) if ($s instanceof Stmt\Return_ && $s->expr instanceof Expr\Array_) $rec['config'] = configTree($s->expr, $c);
         }
         if (preg_match('#^routes/#', $rel)) {
-            $rec['routes'] = routeWalk($top, ['prefix' => '', 'middleware' => [], 'name' => '', 'controller' => null], $c);
+            $GLOBALS['routeEval'] = true; $GLOBALS['routeVars'] = [];
+            try {
+                $rec['routes'] = routeWalk($top, ['prefix' => '', 'middleware' => [], 'name' => '', 'controller' => null], $c);
+            } finally { $GLOBALS['routeEval'] = false; $GLOBALS['routeVars'] = []; }
+            if ($c->routeLoops) $rec['route_loops'] = $c->routeLoops;
+        }
+        if (preg_match('#^(bootstrap/|app/Providers/)#', $rel) || str_contains($rel, 'RouteServiceProvider')) {
+            $mounts = routeMounts($ast);
+            if ($mounts) $rec['route_mounts'] = $mounts;
         }
     } catch (\Throwable $e) {
         $rec['error'] = get_class($e) . ': ' . $e->getMessage();
@@ -696,11 +710,295 @@ function strList($e): array {
     if ($e instanceof Expr\ClassConstFetch) return [ltrim(nameStr($e->class), '\\')];
     return [];
 }
+/* ---------------- #184: routes registered in loops over literal data ----------------
+ * While a route file is walked, $GLOBALS['routeEval'] is on and $GLOBALS['routeVars'] holds the loop variables (and
+ * plain `$x = [...]` assignments) in scope, so literal() also evaluates variables, interpolated strings, `.`
+ * concatenation, class constants and enum cases (`Genre::cases()`, `$g->value`).
+ */
+
+/** A class-like declared in the project (enum cases, class constants), found by its file's short name. */
+function projectClassLike(string $fqcn): ?Stmt\ClassLike {
+    $cache = &$GLOBALS['classLikeCache'];
+    if (array_key_exists($fqcn, $cache)) return $cache[$fqcn];
+    $cache[$fqcn] = null;
+    $short = substr(strrchr('\\' . $fqcn, '\\'), 1);
+    foreach ($GLOBALS['files'] as $rel) {
+        if (basename($rel) !== $short . '.php') continue;
+        $code = @file_get_contents($GLOBALS['root'] . '/' . $rel);
+        if ($code === false) continue;
+        try {
+            $ast = $GLOBALS['parser']->parse($code);
+            $tr = new NodeTraverser(); $tr->addVisitor(new NameResolver()); $ast = $tr->traverse($ast);
+        } catch (\Throwable $e) { continue; }
+        foreach ((new \PhpParser\NodeFinder())->findInstanceOf($ast, Stmt\ClassLike::class) as $cl) {
+            if ($cl->namespacedName && $cl->namespacedName->toString() === $fqcn) { $cache[$fqcn] = $cl; return $cl; }
+        }
+    }
+    return null;
+}
+
+/** Enum cases as ['__enum__' => FQCN, 'name' => ..., 'value' => ...]; null when the enum is not in the project. */
+function enumCases(string $fqcn): ?array {
+    $cl = projectClassLike($fqcn);
+    if (!($cl instanceof Stmt\Enum_)) return null;
+    $out = [];
+    foreach ($cl->stmts as $s) {
+        if ($s instanceof Stmt\EnumCase) {
+            $out[] = ['__enum__' => $fqcn, 'name' => $s->name->toString(), 'value' => $s->expr ? literal($s->expr) : null];
+        }
+    }
+    return $out;
+}
+
+function classConstValue(string $fqcn, string $name) {
+    $cl = projectClassLike($fqcn);
+    if (!$cl) return null;
+    foreach ($cl->stmts as $s) {
+        if ($s instanceof Stmt\ClassConst) foreach ($s->consts as $k) if ($k->name->toString() === $name) return literal($k->value);
+        if ($s instanceof Stmt\EnumCase && $s->name->toString() === $name)
+            return ['__enum__' => $fqcn, 'name' => $name, 'value' => $s->expr ? literal($s->expr) : null];
+    }
+    return null;
+}
+
+/** Route-file evaluation beyond plain literals; null when the expression is not one of these forms. */
+function routeLiteral($e) {
+    if ($e instanceof Expr\Variable && is_string($e->name)) {
+        $vars = $GLOBALS['routeVars'];
+        return array_key_exists($e->name, $vars) ? $vars[$e->name] : null;
+    }
+    if ($e instanceof Scalar\InterpolatedString) {
+        $out = '';
+        foreach ($e->parts as $p) {
+            if ($p instanceof Node\InterpolatedStringPart) { $out .= $p->value; continue; }
+            $v = literal($p);
+            if (!is_string($v) && !is_int($v)) return null;
+            $out .= (string) $v;
+        }
+        return $out;
+    }
+    if ($e instanceof Expr\BinaryOp\Concat) {
+        $l = literal($e->left); $r = literal($e->right);
+        if ((is_string($l) || is_int($l)) && (is_string($r) || is_int($r))) return $l . $r;
+        return null;
+    }
+    if ($e instanceof Expr\PropertyFetch && $e->name instanceof Node\Identifier) {
+        $of = literal($e->var);
+        $n = $e->name->toString();
+        if (is_array($of) && isset($of['__enum__']) && ($n === 'value' || $n === 'name')) return $of[$n];
+        return null;
+    }
+    if ($e instanceof Expr\ClassConstFetch && $e->name instanceof Node\Identifier && $e->name->toString() !== 'class'
+        && $e->class instanceof Node\Name) {
+        return classConstValue(ltrim($e->class->toString(), '\\'), $e->name->toString());
+    }
+    if ($e instanceof Expr\StaticCall && $e->class instanceof Node\Name && nameStr($e->name) === 'cases' && !$e->args) {
+        return enumCases(ltrim($e->class->toString(), '\\'));
+    }
+    if ($e instanceof Expr\ArrayDimFetch && $e->dim !== null) {
+        $of = literal($e->var); $k = literal($e->dim);
+        if (is_array($of) && !isset($of['__class__']) && !isset($of['__enum__']) && (is_string($k) || is_int($k))) return $of[$k] ?? null;
+        return null;
+    }
+    if ($e instanceof Expr\BinaryOp\Coalesce) {
+        // only `$map[$key] ?? default` over a literal map: a missing key takes the default
+        $l = $e->left;
+        if (!($l instanceof Expr\ArrayDimFetch) || $l->dim === null || !is_array(literal($l->var))) return null;
+        $v = literal($l);
+        return $v !== null ? $v : literal($e->right);
+    }
+    if ($e instanceof Expr\StaticCall && $e->class instanceof Node\Name && preg_match('/(^|\\\\)Arr$/', $e->class->toString())
+        && nameStr($e->name) === 'wrap' && count($e->args) === 1 && $e->args[0] instanceof Node\Arg) {
+        $v = literal($e->args[0]->value);
+        if ($v === null) {
+            $raw = $e->args[0]->value;
+            // Arr::wrap($map[$key] ?? []) with the key missing: the default
+            return ($raw instanceof Expr\BinaryOp\Coalesce) ? [] : null;
+        }
+        return is_array($v) && !isset($v['__class__']) && !isset($v['__enum__']) ? $v : [$v];
+    }
+    if ($e instanceof Expr\FuncCall && $e->name instanceof Node\Name && in_array(strtolower($e->name->toString()), ['array_keys', 'array_values'], true)
+        && count($e->args) === 1 && $e->args[0] instanceof Node\Arg) {
+        $a = literal($e->args[0]->value);
+        if (!is_array($a)) return null;
+        return strtolower($e->name->toString()) === 'array_keys' ? array_keys($a) : array_values($a);
+    }
+    return null;
+}
+
+/** Does the subtree register a route through the Route facade? */
+function hasRouteCall($nodes): bool {
+    $f = new \PhpParser\NodeFinder();
+    return (bool) $f->findFirst(is_array($nodes) ? $nodes : [$nodes], fn($n) => $n instanceof Expr\StaticCall
+        && nameStr($n->class) !== null && preg_match('/(^|\\\\)Route$/', nameStr($n->class)));
+}
+
+function paramName($p): ?string {
+    return ($p->var instanceof Expr\Variable && is_string($p->var->name)) ? $p->var->name : null;
+}
+
+function callbackBody($fn): array {
+    if ($fn instanceof Expr\ArrowFunction) return [new Stmt\Expression($fn->expr, $fn->getAttributes())];
+    return $fn->stmts;
+}
+
+/** A loop statement around Route:: calls: [iterable expr, key var, value var, body stmts], or null. */
+function routeLoopOf(Stmt $s): ?array {
+    if ($s instanceof Stmt\Foreach_) {
+        if (!hasRouteCall($s->stmts)) return null;
+        $k = ($s->keyVar instanceof Expr\Variable && is_string($s->keyVar->name)) ? $s->keyVar->name : null;
+        $v = ($s->valueVar instanceof Expr\Variable && is_string($s->valueVar->name)) ? $s->valueVar->name : false;
+        return [$s->expr, $k, $v, $s->stmts];
+    }
+    if ($s instanceof Stmt\For_ || $s instanceof Stmt\While_ || $s instanceof Stmt\Do_) {
+        return hasRouteCall($s->stmts) ? [null, null, false, $s->stmts] : null;
+    }
+    if (!($s instanceof Stmt\Expression)) return null;
+    $e = $s->expr;
+    $isFn = fn($a) => $a instanceof Node\Arg && ($a->value instanceof Expr\Closure || $a->value instanceof Expr\ArrowFunction);
+    // collect([...])->each(fn ($v, $k) => ...) / ->map(...)
+    if ($e instanceof Expr\MethodCall && in_array(strtolower((string) nameStr($e->name)), ['each', 'map'], true)
+        && $isFn($e->args[0] ?? null)) {
+        $fn = $e->args[0]->value;
+        if (!hasRouteCall(callbackBody($fn))) return null;
+        $src = $e->var;
+        $iter = null;
+        if ($src instanceof Expr\FuncCall && nameStr($src->name) === 'collect' && ($src->args[0] ?? null) instanceof Node\Arg) $iter = $src->args[0]->value;
+        elseif ($src instanceof Expr\StaticCall && nameStr($src->name) === 'make' && ($src->args[0] ?? null) instanceof Node\Arg
+            && preg_match('/(^|\\\\)Collection$/', (string) nameStr($src->class))) $iter = $src->args[0]->value;
+        return [$iter, isset($fn->params[1]) ? paramName($fn->params[1]) : null, isset($fn->params[0]) ? (paramName($fn->params[0]) ?? false) : null, callbackBody($fn)];
+    }
+    if ($e instanceof Expr\FuncCall && $e->name instanceof Node\Name) {
+        $n = strtolower($e->name->toString());
+        // array_map(fn ($v) => ..., [...]) / array_walk([...], fn ($v, $k) => ...)
+        if ($n === 'array_map' && $isFn($e->args[0] ?? null) && ($e->args[1] ?? null) instanceof Node\Arg) {
+            $fn = $e->args[0]->value;
+            if (!hasRouteCall(callbackBody($fn))) return null;
+            return [$e->args[1]->value, null, isset($fn->params[0]) ? (paramName($fn->params[0]) ?? false) : null, callbackBody($fn)];
+        }
+        if ($n === 'array_walk' && $isFn($e->args[1] ?? null) && ($e->args[0] ?? null) instanceof Node\Arg) {
+            $fn = $e->args[1]->value;
+            if (!hasRouteCall(callbackBody($fn))) return null;
+            return [$e->args[0]->value, isset($fn->params[1]) ? paramName($fn->params[1]) : null, isset($fn->params[0]) ? (paramName($fn->params[0]) ?? false) : null, callbackBody($fn)];
+        }
+    }
+    return null;
+}
+
+function bindingScalar($v) {
+    if (is_array($v) && isset($v['__enum__'])) return $v['__enum__'] . '::' . $v['name'];
+    if (is_array($v) && isset($v['__class__'])) return $v['__class__'];
+    return $v;
+}
+
+/** Unroll one route loop; returns its routes (null routes when it is not unrolled: a blind spot with a reason). */
+function unrollRouteLoop(Stmt $s, array $loop, array $ctx, Ctx $c): array {
+    [$iterExpr, $kv, $vv, $body] = $loop;
+    $rec = ['line' => $s->getStartLine(), 'end' => $s->getEndLine(), 'unrolled' => false, 'reason' => null];
+    $items = $iterExpr === null ? null : literal($iterExpr);
+    $combos = ($ctx['combos'] ?? 1);
+    if ($iterExpr === null) $rec['reason'] = 'loop is not over a literal list';
+    elseif (!is_array($items)) $rec['reason'] = 'iterable not literal';
+    elseif ($vv === false) $rec['reason'] = 'loop variable is destructured';
+    elseif (count($items) * $combos > ROUTE_LOOP_MAX) $rec['reason'] = 'more than ' . ROUTE_LOOP_MAX . ' combinations';
+    if ($rec['reason'] !== null) { $c->routeLoops[] = $rec; return []; }
+    $rec['unrolled'] = true;
+    $idx = count($c->routeLoops);
+    $c->routeLoops[] = $rec;
+    $routes = [];
+    $saved = $GLOBALS['routeVars'];
+    $inner = $ctx; $inner['combos'] = $combos * max(1, count($items));
+    foreach ($items as $k => $v) {
+        $binding = [];
+        if ($kv !== null) { $GLOBALS['routeVars'][$kv] = $k; $binding[$kv] = bindingScalar($k); }
+        if ($vv !== null) { $GLOBALS['routeVars'][$vv] = $v; $binding[$vv] = bindingScalar($v); }
+        foreach (routeWalk($body, $inner, $c) as $r) {
+            if (isset($r['unrolled_from'])) $r['unrolled_from']['binding'] = $binding + $r['unrolled_from']['binding'];
+            else $r['unrolled_from'] = ['line' => $rec['line'], 'end' => $rec['end'], 'binding' => $binding];
+            $routes[] = $r;
+        }
+        $GLOBALS['routeVars'] = $saved;
+    }
+    $c->routeLoops[$idx]['routes'] = count($routes);
+    return $routes;
+}
+
+/* ---------------- #191: where route files are mounted (bootstrap/app.php, RouteServiceProvider) ---------------- */
+function routeFileIn($e): ?string {
+    if ($e === null) return null;
+    foreach ((new \PhpParser\NodeFinder())->findInstanceOf([$e], Scalar\String_::class) as $s) {
+        if (preg_match('#(?:^|/)(routes/[\w./-]+\.php)$#', $s->value, $m)) return $m[1];
+    }
+    return null;
+}
+
+/** [{file: routes/x.php, prefix, line, how}] from withRouting(api:, apiPrefix:, web:, then:) and
+ *  Route::prefix(...)->group(base_path('routes/x.php')) calls anywhere in the file. */
+function routeMounts(array $ast): array {
+    $out = [];
+    $finder = new \PhpParser\NodeFinder();
+    foreach ($finder->findInstanceOf($ast, Expr\MethodCall::class) as $mc) {
+        $n = strtolower((string) nameStr($mc->name));
+        if ($n === 'withrouting') {
+            $named = [];
+            foreach ($mc->args as $a) if ($a instanceof Node\Arg && $a->name) $named[$a->name->toString()] = $a->value;
+            $prefix = isset($named['apiPrefix']) ? literal($named['apiPrefix']) : 'api';
+            if (!is_string($prefix)) continue;
+            foreach (['api' => trim($prefix, '/'), 'web' => ''] as $key => $p) {
+                if (!isset($named[$key])) continue;
+                $vals = $named[$key] instanceof Expr\Array_ ? array_map(fn($it) => $it ? $it->value : null, $named[$key]->items) : [$named[$key]];
+                foreach ($vals as $v) {
+                    $f = routeFileIn($v);
+                    if ($f) $out[] = ['file' => $f, 'prefix' => $p, 'line' => $mc->getStartLine(), 'how' => $key === 'api' ? 'withRouting(apiPrefix)' : 'withRouting(web)'];
+                }
+            }
+            continue;
+        }
+        if ($n !== 'group') continue;
+        $arg = null; $prefix = '';
+        if (count($mc->args) === 1 && $mc->args[0] instanceof Node\Arg && !($mc->args[0]->value instanceof Expr\Closure)) $arg = $mc->args[0]->value;
+        if (!$arg) continue;
+        $f = routeFileIn($arg);
+        if (!$f) continue;
+        $e = $mc->var;
+        $parts = [];
+        while ($e instanceof Expr\MethodCall || $e instanceof Expr\StaticCall) {
+            if (strtolower((string) nameStr($e->name)) === 'prefix') {
+                $p = strList($e->args[0] ?? null)[0] ?? '';
+                array_unshift($parts, trim($p, '/'));
+            }
+            if ($e instanceof Expr\StaticCall) break;
+            $e = $e->var;
+        }
+        $out[] = ['file' => $f, 'prefix' => trim(implode('/', array_filter($parts, fn($x) => $x !== '')), '/'), 'line' => $mc->getStartLine(), 'how' => 'group'];
+    }
+    // Route::group(['prefix' => 'api'], base_path('routes/api.php'))
+    foreach ($finder->findInstanceOf($ast, Expr\StaticCall::class) as $sc) {
+        if (strtolower((string) nameStr($sc->name)) !== 'group' || count($sc->args) !== 2) continue;
+        $a0 = $sc->args[0]; $a1 = $sc->args[1];
+        if (!($a0 instanceof Node\Arg) || !($a0->value instanceof Expr\Array_) || !($a1 instanceof Node\Arg)) continue;
+        $f = routeFileIn($a1->value);
+        if (!$f) continue;
+        $opts = literal($a0->value) ?: [];
+        $out[] = ['file' => $f, 'prefix' => trim((string) ($opts['prefix'] ?? ''), '/'), 'line' => $sc->getStartLine(), 'how' => 'group'];
+    }
+    return $out;
+}
+
 function routeWalk(array $stmts, array $ctx, Ctx $c): array {
     $routes = [];
     $verbs = ['get','post','put','patch','delete','options','any','match'];
     foreach ($stmts as $s) {
+        $loop = routeLoopOf($s);
+        if ($loop !== null) { $routes = array_merge($routes, unrollRouteLoop($s, $loop, $ctx, $c)); continue; }
         if (!($s instanceof Stmt\Expression)) continue;
+        // `$genres = [...];` before a loop: a literal the loop can iterate (#184)
+        if ($s->expr instanceof Expr\Assign && $s->expr->var instanceof Expr\Variable && is_string($s->expr->var->name)) {
+            $v = literal($s->expr->expr);
+            if ($v !== null) $GLOBALS['routeVars'][$s->expr->var->name] = $v;
+            else unset($GLOBALS['routeVars'][$s->expr->var->name]);
+            continue;
+        }
         $chain = routeChain($s->expr);
         if (!$chain) continue;
         $local = $ctx; $route = null; $groupBody = null; $resource = null; $localName = ''; $localMw = []; $wheres = [];
@@ -754,6 +1052,14 @@ function routeWalk(array $stmts, array $ctx, Ctx $c): array {
                         $action = ['class' => ltrim(nameStr($v->class), '\\'), 'method' => '__invoke'];
                     } elseif ($v instanceof Expr\Closure || $v instanceof Expr\ArrowFunction) {
                         $action = ['closure' => true];
+                    } elseif (is_array($lv = literal($v)) && isset($lv['__class__'])) {
+                        $action = ['class' => $lv['__class__'], 'method' => '__invoke'];   // $controller bound in an unrolled loop
+                    } elseif (is_array($lv) && count($lv) === 2 && isset($lv[0]['__class__']) && is_string($lv[1] ?? null)) {
+                        $action = ['class' => $lv[0]['__class__'], 'method' => $lv[1]];
+                    } elseif (is_string($lv)) {
+                        // 'Controller@'.$method inside an unrolled loop
+                        if (str_contains($lv, '@')) { [$cl, $mt] = explode('@', $lv, 2); $action = ['class' => $cl, 'method' => $mt]; }
+                        elseif ($local['controller']) $action = ['class' => $local['controller'], 'method' => $lv];
                     }
                 }
                 $route = ['methods' => $methods, 'uri' => $uri, 'action' => $action, 'line' => $line];
@@ -789,7 +1095,28 @@ function routeWalk(array $stmts, array $ctx, Ctx $c): array {
                 $resource['scoped'] = true;
                 $resource['binding_fields'] = is_array($value) ? array_filter($value, fn($v) => is_string($v) || $v === null) : [];
             }
-            elseif ($lm === 'where' || $lm === 'wherenumber' || $lm === 'whereuuid') { }
+            elseif ($route && $lm === 'defaults') {
+                $k = ($args[0] ?? null) instanceof Node\Arg ? literal($args[0]->value) : null;
+                $v = ($args[1] ?? null) instanceof Node\Arg ? literal($args[1]->value) : null;
+                if (is_string($k) && (is_scalar($v) || $v === null)) $route['defaults'][$k] = $v;
+            }
+            elseif ($route && str_starts_with($lm, 'where')) {
+                $a0 = ($args[0] ?? null) instanceof Node\Arg ? literal($args[0]->value) : null;
+                $a1 = ($args[1] ?? null) instanceof Node\Arg ? literal($args[1]->value) : null;
+                $fixed = ['wherenumber' => '[0-9]+', 'wherealpha' => '[a-zA-Z]+', 'wherealphanumeric' => '[a-zA-Z0-9]+',
+                          'whereuuid' => '[\da-fA-F]{8}-[\da-fA-F]{4}-[\da-fA-F]{4}-[\da-fA-F]{4}-[\da-fA-F]{12}',
+                          'whereulid' => '[0-7][0-9a-hjkmnp-tv-zA-HJKMNP-TV-Z]{25}'];
+                $names = is_array($a0) && $lm !== 'where' ? $a0 : (is_string($a0) ? [$a0] : []);
+                if ($lm === 'where' && is_array($a0)) {
+                    foreach ($a0 as $k => $v) if (is_string($k) && is_string($v)) $route['wheres'][$k] = $v;
+                } elseif ($lm === 'where' && is_string($a0) && is_string($a1)) {
+                    $route['wheres'][$a0] = $a1;
+                } elseif ($lm === 'wherein' && is_string($a0) && is_array($a1)) {
+                    $route['wheres'][$a0] = implode('|', array_map(fn($x) => preg_quote((string)$x, '#'), array_filter($a1, 'is_scalar')));
+                } elseif (isset($fixed[$lm])) {
+                    foreach ($names as $n) if (is_string($n)) $route['wheres'][$n] = $fixed[$lm];
+                }
+            }
         }
         if ($route) {
             $route['prefix'] = $local['prefix'];

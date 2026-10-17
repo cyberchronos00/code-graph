@@ -206,29 +206,32 @@ coverage note: 1 route registration cg does not model (Django urlpatterns built 
 - **Filters.** `--unguarded` keeps routes with no auth guard. An unconditional inline check counts, so those routes are left out. `--unguarded --strict` counts route guards only. `--missing NAME` keeps routes whose route guards and inline checks do not contain NAME.
 - **Inline guards (Laravel).** Checks the handler runs before its own work are a separate line, not route middleware. `--json` adds `inline_guards`: `name`, `kind` (`policy`, `permission`, `secret`, `role`), `at`, `conditional`. `auth.extra_patterns` selects project method names when that method rejects, or when the caller aborts on its result. A conditional check stays listed and does not hide the route from `--unguarded`. See [PHP](php.md#inline-guards).
 - `search` matches the same guard names, including inline checks.
+- **Served paths (Laravel).** Routes of `routes/api.php` are listed under their API prefix (`/api/v1/orders`, or the `apiPrefix` from `bootstrap/app.php`); `route:` specs also accept the declared path. See [PHP](php.md#route-paths).
+- **Unrolled loops (Laravel).** A route registered in a loop over literal data is listed once per item and marked `(unrolled: $genre = 'fiction')`. See [PHP](php.md#routes-in-loops).
+- **`--writes` and overrides.** A write is listed only when the route can dispatch to it: overrides outside the receiver's class chain (a known receiver type, `$this`, `parent::`) are not followed, as in `downstream`. A write reached only through an override hop whose receiver type is unknown is marked `via override` in `--json`.
 
 ```text
 $ cg routes --db api.db
-POST /v1/orders/{order}/refund  @routes/api.php:25
+POST /api/v1/orders/{order}/refund  @routes/api.php:25
     guards: auth:sanctum [auth]
     inline: hasPermission('orders.refund') [permission] RefundController::store
-POST /v1/warehouse/sync  @routes/api.php:26
+POST /api/v1/warehouse/sync  @routes/api.php:26
     guards: (none)
     inline: ensureValidSecret (hash_equals config:bookstore.sync_secret) [secret] WarehouseSyncController::ensureValidSecret
 ```
 
-`--unguarded` lists neither route. `--unguarded --strict` lists `POST /v1/warehouse/sync` (no route middleware; the secret check is inline).
+`--unguarded` lists neither route. `--unguarded --strict` lists `POST /api/v1/warehouse/sync` (no route middleware; the secret check is inline).
 
 ```text
 $ cg routes --writes books --missing auth:api --db out/graph.db
 routes reaching a write to books: 3 of 9 routes | filter: missing a guard matching 'auth:api' -> 2
 auth guard: 0 with, 2 without (auth = a framework preset auth guard or a name matching the auth pattern)
 
-POST /v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
+POST /api/v1/admin/books  @bookstore-api/routes/api.php:23  NO AUTH
     guards: (none)
     writes books via Http\Controllers\Admin\BookController::store conf=resolved  ROUTES_TO@api.php:23 → WRITES_COLUMN@BookController.php:15~r → column:books.store_id
 
-PUT /v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
+PUT /api/v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
     guards: (none)
     writes books via Http\Controllers\Admin\BookController::update conf=resolved  ROUTES_TO@api.php:24 → WRITES_COLUMN@BookController.php:30~r → column:books.title
 ```

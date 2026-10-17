@@ -320,6 +320,27 @@ class GuardRefiner:
         return g, igs, extra
 
 
+def _through_dispatch(gc, eids: list[int], start: str) -> bool:
+    """Does the path (edge ids from `start`) take an OVERRIDDEN_BY / IMPLEMENTED_BY hop?"""
+    node = start
+    for eid in eids:
+        for kind, e, dst, _r, _g in gc.fwd.get(node, ()):
+            if e == eid:
+                if kind in Q.DISPATCH_KINDS:
+                    return True
+                node = dst
+                break
+    return False
+
+
+def unrolled_marker(u) -> str:
+    """`  (unrolled: $genre = 'fiction')` for a Laravel route registered in a loop over literal data (#184)."""
+    if not isinstance(u, dict) or not isinstance(u.get("binding"), dict):
+        return ""
+    parts = [f"${k} = {v!r}" if isinstance(v, str) else f"${k} = {json.dumps(v)}" for k, v in u["binding"].items()]
+    return f"  (unrolled: {', '.join(parts)})" if parts else "  (unrolled)"
+
+
 def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] | None = None, missing: str | None = None,
                   unguarded: bool = False, strict: bool = False, auth_pattern: str | None = None, min_conf: str = "heuristic",
                   gate: str | None = "auto", platform: str | None = None, deadline: float | None = None) -> dict:
@@ -360,6 +381,35 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
         pairs = [(rid, i) for rid in routes for i in range(len(labels)) if gc.groups_of(rid) >> i & 1]
         pairs.sort(key=lambda x: x[1])
         pe = {pr: gc.path_edges(*pr) for pr in pairs}
+        loose: set[tuple] = set()
+        wl = [i for i, k in enumerate(labels) if k.startswith("writes ")]
+        if wl and pairs:
+            # #149: the override narrowing of `downstream` (receiver type, `$this`, `parent::`): a write reached only
+            # through an override the route's receiver cannot dispatch to is dropped; one reached only through an
+            # override hop with an unknown receiver is kept and marked
+            wbits = sum(1 << i for i in wl)
+            scope = {n for n in gc.levels if gc.groups_of(n) & wbits}
+            rr = Q.ReceiverReach(st, gc.fwd, scope | set(routes))
+            reach: dict[str, dict] = {}
+            kept = []
+            for rid, i in pairs:
+                if i not in wl:
+                    kept.append((rid, i))
+                    continue
+                if rid not in reach:
+                    want = {t for j in wl for t in groups[labels[j]][0]}
+                    reach[rid] = rr.walk(rid, want)
+                hits = [(t, reach[rid][t]) for t in groups[labels[i]][0] if t in reach[rid]]
+                if not hits:
+                    continue
+                sure = [h for h in hits if h[1][0]]
+                if not sure:
+                    loose.add((rid, i))
+                if sure and _through_dispatch(gc, pe[(rid, i)], rid):
+                    # the shortest path goes through an override hop; show the receiver-aware one
+                    pe[(rid, i)] = min(sure, key=lambda h: len(h[1][1]))[1][1]
+                kept.append((rid, i))
+            pairs = kept
         hops = gc.hops([e for v in pe.values() for e in v])
         for rid, i in pairs:
             label, final = labels[i], groups[labels[i]][1]
@@ -369,8 +419,10 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
             if w:
                 p.append({"from": w["src"], "kind": w["kind"], "to": w["dst"], "at": f"{w['file']}:{w['line']}", "confidence": w["confidence"],
                           **({"connection": ci["connection"], "connection_default": ci["default"]} if (ci := Q.conn_of(w.get("attrs"))) else {})})
-            reached[rid].append({"what": label, "via": Q.short_id(w["src"]) if w else None, "depth": gc.depth(rid, i), "path": p, "path_confidence": Q.path_confidence(p),
-                                 "gated_only": bool(gate) and not gc.reached(rid, i, live=True)})
+            reached[rid].append({"what": label, "via": Q.short_id(w["src"]) if w else None, "depth": len(pe[(rid, i)]) if i in wl else gc.depth(rid, i),
+                                 "path": p, "path_confidence": Q.path_confidence(p),
+                                 "gated_only": bool(gate) and not gc.reached(rid, i, live=True),
+                                 **({"via_override": True} if (rid, i) in loose else {})})
     items = []
     refine = None if strict else GuardRefiner(st, mw)
     for rid, n in routes.items():
@@ -386,6 +438,7 @@ def routes_report(st: GraphStore, writes: str | None = None, reaches: list[str] 
               "has_auth": any(x["auth"] for x in g), "secret_checked": any(x.get("secret") for x in g),
               "inline_guards": igs, "inline_auth": any(not x.get("conditional") for x in igs), **extra,
               **({"webhook": a["webhook"]} if a.get("webhook") else {}),
+              **({"unrolled_from": a["unrolled_from"]} if isinstance(a.get("unrolled_from"), dict) else {}),
               "reaches": sorted(reached.get(rid, []), key=lambda x: x["what"]),
               "clients": _clients(st, rid), "callbacks": _callbacks(st, rid)}
         items.append(it)
@@ -521,7 +574,7 @@ def render_routes(res: dict, st: GraphStore | None = None, max_items: int = 60, 
                 flag = ""   # a shared-secret guard does not verify the provider signature: the two labels contradict
             flag += f"  WEBHOOK UNVERIFIED ({i['webhook'].get('provider')})"
         out.append("")
-        out.append(f"{i['name']}  @{i['at']}{flag}")
+        out.append(f"{i['name']}  @{i['at']}{unrolled_marker(i.get('unrolled_from'))}{flag}")
         out.append(f"    guards: {gs}")
         igs = i.get("inline_guards") or []
         if igs:

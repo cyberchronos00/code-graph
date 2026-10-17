@@ -18,7 +18,7 @@ from cg_code_graph.core.store import GraphStore  # noqa: E402
 from cg_code_graph import mcp_server as M  # noqa: E402
 
 pytestmark = pytest.mark.skipif(not EXTRACTOR_DEPS.exists(), reason="run `npm ci` in cg_code_graph/plugins/ts/extractor")
-DELETE = "route:DELETE /v1/{store}/admin/reports/{report}"
+DELETE = "route:DELETE /api/v1/{store}/admin/reports/{report}"
 
 
 @pytest.fixture()
@@ -135,7 +135,7 @@ def test_impact_lists_snapshot_clients(monkeypatch):
     monkeypatch.setitem(M.STATE, "plans", str(PLANS))
     out = M.impact("StockService::reserve")
     assert "external clients (snapshot, not indexed): 1" in out
-    assert "POST /stock/reserve -> POST /v1/stock/reserve  @example/bookstore-mobile@4f2c9e1:pages/cart.vue:12" in out
+    assert "POST /stock/reserve -> POST /api/v1/stock/reserve  @example/bookstore-mobile@4f2c9e1:pages/cart.vue:12" in out
     assert "external clients" not in M.impact("SalesReportService::remove")  # its route has no snapshot client
     from cg_code_graph import cli
     import contextlib, io

@@ -53,31 +53,31 @@ def _sends(db):
 
 def test_cashier_and_webhook_client(dbs):
     wh, rx = _wh(dbs["php"]), _recv(dbs["php"])
-    stripe = wh["route:POST /stripe/webhook"]
+    stripe = wh["route:POST /api/stripe/webhook"]
     assert stripe["provider"] == "stripe" and stripe["verified"] and stripe["how"] == "Laravel Cashier"
     assert stripe["events"] == ["customer.subscription.created", "invoice.paid", "invoice.payment_action_required"]
     c = "method:App\\Http\\Controllers\\CashierWebhookController::"
     assert rx[(f"endpoint:webhook:stripe:customer.subscription.created", c + "handleCustomerSubscriptionCreated")] == "heuristic"
     assert rx[(f"endpoint:webhook:stripe:invoice.paid", c + "handleInvoicePaid")] == "heuristic"
     assert rx[(f"endpoint:webhook:stripe:invoice.payment_action_required", c + "handleInvoicePaymentActionRequired")] == "heuristic"
-    billing = wh["route:POST /billing/webhook"]
+    billing = wh["route:POST /api/billing/webhook"]
     assert billing["provider"] == "stripe" and billing["how"] == "Laravel Cashier"
     assert billing["events"] == ["customer.updated"]
-    assert wh["route:POST /invoices/paid"] is None
+    assert wh["route:POST /api/invoices/paid"] is None
     plain = "method:App\\Http\\Controllers\\InvoiceActionsController::"
     assert not any(dst.startswith(plain) for _src, dst in rx)
-    pay = wh["route:POST /payments/hooks"]
+    pay = wh["route:POST /api/payments/hooks"]
     assert pay["verified"] and pay["how"] == "spatie/laravel-webhook-client"
     assert pay["events"] == ["payment.captured", "payment.failed"]
     assert ("endpoint:webhook:webhook:payment.captured", "method:App\\Jobs\\ProcessPaymentsWebhook::handle") in rx
     assert ("endpoint:webhook:webhook:payment.captured", "method:App\\Jobs\\ProcessPaymentsWebhook::capture") in rx
     assert ("endpoint:webhook:webhook:payment.failed", "method:App\\Webhooks\\PaymentsProfile::shouldProcess") in rx
-    checked = wh["route:POST /checked/hooks"]
+    checked = wh["route:POST /api/checked/hooks"]
     assert checked["verified"] and checked["how"] == "spatie/laravel-webhook-client custom validator"
-    assert wh["route:POST /open/hooks"] is None
-    assert wh["route:POST /blank/hooks"] is None
-    assert wh["route:POST /missing/hooks"] is None
-    assert wh["route:POST /hooks/loose"] is None
+    assert wh["route:POST /api/open/hooks"] is None
+    assert wh["route:POST /api/blank/hooks"] is None
+    assert wh["route:POST /api/missing/hooks"] is None
+    assert wh["route:POST /api/hooks/loose"] is None
 
 
 def test_route_attributes_and_signature_constant(dbs):
@@ -101,7 +101,7 @@ def test_route_attributes_and_signature_constant(dbs):
     h = "method:App\\Http\\Controllers\\GithubHookController::"
     assert rx[("endpoint:webhook:github:push", h + "handle")] == "exact"
     assert rx[("endpoint:webhook:github:push", h + "deploy")] == "exact"
-    saleor = wh["route:POST /webhooks/saleor"]
+    saleor = wh["route:POST /api/webhooks/saleor"]
     assert saleor["verified"] and saleor["how"] == "HMAC signature" and saleor["provider"] == "hmac"
     send = _sends(dbs["php"])[("method:App\\Services\\SaleorNotifier::send", "endpoint:webhook:bookstore-hooks:order.paid")]
     assert send[0] == "exact" and send[1]["how"] == "signed POST (saleor-signature)"

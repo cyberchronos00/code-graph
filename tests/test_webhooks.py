@@ -85,10 +85,10 @@ def test_py_receivers(dbs):
 def test_php_receivers(dbs):
     wh, rx = _wh(dbs["hooks-php"]), _recv(dbs["hooks-php"])
     c = "method:App\\Http\\Controllers\\"
-    assert wh["route:POST /webhooks/stripe"]["verified"] and wh["route:POST /webhooks/stripe-open"]["verified"] is False
-    gh = wh["route:POST /webhooks/github"]
+    assert wh["route:POST /api/webhooks/stripe"]["verified"] and wh["route:POST /api/webhooks/stripe-open"]["verified"] is False
+    gh = wh["route:POST /api/webhooks/github"]
     assert gh["verified"] and gh["check"] == "app/Http/Controllers/GithubWebhookController.php:36"   # in a helper method
-    assert wh["route:POST /webhooks/gitlab"] == {**wh["route:POST /webhooks/gitlab"], "provider": "gitlab", "verified": False}
+    assert wh["route:POST /api/webhooks/gitlab"] == {**wh["route:POST /api/webhooks/gitlab"], "provider": "gitlab", "verified": False}
     assert ("endpoint:webhook:stripe:invoice.payment_failed", c + "StripeWebhookController::paymentFailed") in rx
     assert ("endpoint:webhook:stripe:customer.subscription.updated", c + "StripeWebhookController::subscriptionUpdated") in rx
     assert ("endpoint:webhook:github:push", c + "GithubWebhookController::deploy") in rx
@@ -100,12 +100,12 @@ def test_routes_report(dbs):
     st = GraphStore(str(dbs["hooks-php"]))
     res = routes_report(st)
     by = {i["name"]: i for i in res["items"]}
-    assert by["POST /webhooks/stripe"]["secret_checked"] and not by["POST /webhooks/stripe-open"]["secret_checked"]
+    assert by["POST /api/webhooks/stripe"]["secret_checked"] and not by["POST /api/webhooks/stripe-open"]["secret_checked"]
     txt = render_routes(res, st)
     assert "WEBHOOK UNVERIFIED (stripe)" in txt and "WEBHOOK UNVERIFIED (gitlab)" in txt
     assert "webhook signature (Stripe constructEvent) [secret]" in txt
     un = routes_report(st, unguarded=True)
-    assert {i["name"] for i in un["items"]} == {"POST /webhooks/stripe-open", "POST /webhooks/gitlab"}
+    assert {i["name"] for i in un["items"]} == {"POST /api/webhooks/stripe-open", "POST /api/webhooks/gitlab"}
 
 
 def _sends(db):

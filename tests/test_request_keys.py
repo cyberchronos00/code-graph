@@ -191,7 +191,7 @@ def test_laravel_route_request_keys(tmp_path):
     index_project(root, tmp_path / "g.db", "req")
     c = sqlite3.connect(tmp_path / "g.db")
     routes = {r[0]: json.loads(r[1] or "{}") for r in c.execute("SELECT id, attrs FROM nodes WHERE kind='route'")}
-    store = {k["name"]: k for k in routes["route:POST /orders"]["request"]["keys"]}
+    store = {k["name"]: k for k in routes["route:POST /api/orders"]["request"]["keys"]}
     assert store["book_id"]["required"] is True and store["book_id"]["type"] == "integer"
     assert store["book_id"]["location"] == "body"
     assert store["quantity"]["required"] is True and store["quantity"]["type"] == "integer"
@@ -205,25 +205,25 @@ def test_laravel_route_request_keys(tmp_path):
     assert store["status"]["type"] == "enum" and store["status"]["enum"] == ["open", "closed"]
     assert store["book_id"]["file"].endswith("StoreOrderRequest.php")
 
-    update = {k["name"]: k for k in routes["route:PUT /orders/{id}"]["request"]["keys"]}
+    update = {k["name"]: k for k in routes["route:PUT /api/orders/{id}"]["request"]["keys"]}
     assert update["sku"]["required"] is True and update["sku"]["type"] == "string"
     assert "items.*.id" in update and update["nickname"]["sometimes"] is True
 
-    adjust = {k["name"]: k for k in routes["route:PATCH /orders/{id}"]["request"]["keys"]}
+    adjust = {k["name"]: k for k in routes["route:PATCH /api/orders/{id}"]["request"]["keys"]}
     assert adjust["qty"]["type"] == "integer" and adjust["qty"]["required"] is True
     assert adjust["status"]["enum"] == ["open", "closed"] and adjust["status"]["required"] is False
 
-    coupon = routes["route:POST /coupons"]["request"]["keys"]
+    coupon = routes["route:POST /api/coupons"]["request"]["keys"]
     assert len(coupon) == 1 and coupon[0]["name"] == "coupon" and coupon[0]["via"] == "validated"
     assert coupon[0]["required"] is False and coupon[0]["location"] == "body"
 
-    index = {k["name"]: k for k in routes["route:GET /orders"]["request"]["keys"]}
+    index = {k["name"]: k for k in routes["route:GET /api/orders"]["request"]["keys"]}
     assert index["q"]["location"] == "query" and index["q"]["required"] is True and index["q"]["type"] == "string"
 
-    loose = routes["route:POST /loose"]["request"]
+    loose = routes["route:POST /api/loose"]["request"]
     assert loose["closed"] is False
     assert loose["keys"][0]["name"] == "note" and loose["keys"][0]["required"] is False
-    assert "request" not in routes["route:GET /plain/{id}"]
-    cased = routes["route:POST /cased"]
+    assert "request" not in routes["route:GET /api/plain/{id}"]
+    cased = routes["route:POST /api/cased"]
     assert "ConvertCase" in (cased.get("middleware") or [])
     assert cased["request"]["closed"] is True

@@ -111,22 +111,22 @@ def linked(dbs, tmp_path_factory):
 def test_link_pairs_subscriber_url(linked):
     db, res, md = linked
     m = {(r[0], r[1]): (r[2], json.loads(r[3])) for r in _rows(db, "select src, dst, confidence, attrs from edges where kind='MATCHES_ROUTE'")}
-    conf, a = m[("endpoint:webhook:sender-php:order.paid", "route:POST /webhooks/orders")]
+    conf, a = m[("endpoint:webhook:sender-php:order.paid", "route:POST /api/webhooks/orders")]
     assert conf == "heuristic" and a["via"] == "subscriber url" and a["url"] == "https://bookstore-api.test/webhooks/orders"
-    assert ("endpoint:webhook:sender-php:order.paid", "route:POST /webhooks/inventory") in m
+    assert ("endpoint:webhook:sender-php:order.paid", "route:POST /api/webhooks/inventory") in m
     ep = {(r[0], r[1]): r[2] for r in _rows(db, "select src, dst, confidence from edges where kind='MATCHES_ENDPOINT'")}
     assert ep[("endpoint:webhook:sender-php:order.paid", "endpoint:webhook:hmac:order.paid")] == "heuristic"
     sec = md.split("## Webhook subscriptions paired by URL")[1].split("\n## ")[0]
-    assert "`route:POST /webhooks/orders` <- subscriber URL https://bookstore-api.test/webhooks/orders" in sec
+    assert "`route:POST /api/webhooks/orders` <- subscriber URL https://bookstore-api.test/webhooks/orders" in sec
     assert "unpaired: https://elsewhere.test/hooks/none" in sec
-    assert not any(u["route"] in ("route:POST /webhooks/orders", "route:POST /webhooks/inventory") for u in res["uncalled_routes"])
+    assert not any(u["route"] in ("route:POST /api/webhooks/orders", "route:POST /api/webhooks/inventory") for u in res["uncalled_routes"])
 
 
 # ------------------------------------------------------------------ 3. REGISTERS_CALLBACK
 @NEEDS_PHP
 def test_callbacks_php(dbs):
     cb = _cb(dbs["sender-php"])
-    pay, refund = "route:POST /webhooks/payments/{store}", "route:POST /webhooks/refunds/{store}"
+    pay, refund = "route:POST /api/webhooks/payments/{store}", "route:POST /api/webhooks/refunds/{store}"
     c, a = cb[("method:App\\Services\\PaymentsClient::createPayment", pay)]
     assert c == "exact" and a["body_key"] == "callback_url" and a["endpoint"] == "http:POST https://pay.provider.test/v1/payments"
     assert cb[("method:App\\Services\\PaymentsClient::createRefund", refund)][1]["body_key"] == "notify_url"
@@ -158,10 +158,10 @@ def test_routes_and_link_report_for_callbacks(dbs, linked):
     assert "client: external callback (PaymentsClient::createRefund)" in txt
     _db, res, md = linked
     sec = md.split("## Routes called back by external parties")[1].split("\n## ")[0]
-    assert ("`route:POST /webhooks/payments/{store}` <- callback URL registered in `PaymentsClient::createPayment` "
+    assert ("`route:POST /api/webhooks/payments/{store}` <- callback URL registered in `PaymentsClient::createPayment` "
             "(body key `callback_url`, outbound `http:POST https://pay.provider.test/v1/payments`)") in sec
     without = md.split("## Backend routes without a client call")[1]
-    assert "/webhooks/payments" not in without and "/webhooks/refunds" not in without and "GET /books" in without
+    assert "/webhooks/payments" not in without and "/webhooks/refunds" not in without and "GET /api/books" in without
 
 
 # ------------------------------------------------------------------ 4. drivers resolved at run time
@@ -169,7 +169,7 @@ def test_routes_and_link_report_for_callbacks(dbs, linked):
 def test_driver_resolved_gateway_routes(dbs):
     st = GraphStore(str(dbs["driver-php"]))
     by = {i["name"]: i for i in routes_report(st)["items"]}
-    for name in ("POST /webhooks/gateway/{gateway}", "POST /webhooks/managed"):
+    for name in ("POST /api/webhooks/gateway/{gateway}", "POST /api/webhooks/managed"):
         w = by[name]["webhook"]
         assert w["verified"] and w["how"] == "driver StripeGateway" and w["via"] == "driver" and w["provider"] == "stripe"
         assert w["events"] == ["charge.refunded", "invoice.paid"]
