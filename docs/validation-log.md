@@ -1579,3 +1579,29 @@ NAVIGATES_TO edges.
 |---|---|---|---|---|---|
 | remix-run/react-router-templates `default/` (067adb3) | 1 | 1 | 0 | 0 | `app/routes.ts` is `index("routes/home.tsx")` inside a `root.tsx` layout. Home has no loader, so no `route:` node. `welcome.tsx` is a component, not a route |
 | remix-run/indie-stack (56abb93, archived Remix v2) | 8 | 2 | 12 | 11 | `flatRoutes` file conventions: `_index`, `notes.$noteId`, `notes._index` (so `notes.tsx` is a layout). 2 navigation sites stay unresolved. 5 form / fetcher calls match an in-repo loader or action |
+
+## `cg affected` hand-check (#199)
+
+20 changed files sampled at random (seeded) from each corpus, excluding test files; for each, one reported test picked at random from `cg affected <file> --json` (direct or transitive) and its path read by hand against the source. A pair is valid when the test reaches a symbol in the changed file.
+
+| corpus (revision) | valid | notes |
+|---|---|---|
+| immich `server/` (c5e06dc), TypeScript | 15/20 before, 20/20 after the fix | The 5 misses all went through `OVERRIDDEN_BY` from a base class's `static create(...)` factory to subclass instance `create` methods. An instance method no longer overrides a static one (v0.23.6); re-sampled with the same seed: 20/20 (service → repository calls, DTO mappers, Kysely helpers, table types used by test factories) |
+| flask (d73fa1c), Python | 9/20 | 11 misses. 10 go through a test-client request (`client.get("/")`) that matches `GET /` routes of other tests' inline apps and of the `examples/` apps. 3 (one of them on its own) go from `Scaffold.route` / `.get` / `.post` through a decorator reference to every view decorated with it. Filed as #221 |
+
+## Swift selector narrowing (#218)
+
+Heuristic mode, tree-sitter-swift 0.7.4, same clones as the Swift sections above, 0.23.5 → 0.23.6. A local assigned from a project function or static factory with a declared project return type (`let b = makeBridge()`, `let c = Cache.shared()`) now has that type, and a selector whose only visible declaring type is one project type binds by name instead of as a candidate (members that are `private` / `fileprivate`, or belong to a file-private type, are visible only in their own file).
+
+| corpus | candidate edges | name-bound edges |
+|---|---|---|
+| Alamofire | 148 → 153 | unchanged |
+| IceCubesApp | 87 → 80 | 258 → 261 |
+| Kingfisher | 206 → 197 | 315 → 320 |
+| isowords | 38 → 36 | unchanged |
+| SwiftUIX | 454 → 441 | unchanged |
+| element-x-ios | 1,696 → 1,684 | unchanged |
+
+The resolved / name-bound edges that went away were read by hand: calls to a `private` member from another file through a closure property, and members of a private nested class.
+
+Exact mode (`CG_SWIFT_INDEX=1`, swift 6 on Linux) is available for Alamofire only (the other corpora need Apple SDKs or did not build): `candidate_agree` 54/190 → 56/197; heuristic edges 849, agreeing 821, precision 0.967 and recall 0.715 unchanged.

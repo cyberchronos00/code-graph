@@ -509,6 +509,7 @@ class PhpProgram:
         return self.b.has(fn.id)
 
     def emit_references(self):
+        self._dflt_edges = defaultdict(list)      # function id -> [(parameter, callee, kind)] of its defaults (#212)
         self._emit_refs(self.all_funcs, self.fact_handlers)
         # test code: calls / instantiations / class refs plus the test-only handlers; framework handlers (columns,
         # bindings, schedules, listeners...) never run on tests, so a test cannot add facts to the application graph
@@ -516,21 +517,30 @@ class PhpProgram:
 
     def _emit_refs(self, funcs, handlers):
         b = self.b
+        self._dflt_sites = []
+        if not hasattr(self, "_dflt_edges"):
+            self._dflt_edges = defaultdict(list)
         for fn in funcs:
             ctx = ResolveCtx(self, fn)
             for i, f in enumerate(fn.facts):
                 b.current_gate = fn.dead.get(i)
                 t = f["t"]
                 line = f.get("line")
+                da = {"default_arg": f["default_arg"]} if f.get("default_arg") else {}
                 if t == "call":
-                    self._emit_call(fn, f, ctx)
+                    self._emit_call(fn, f, ctx, da)
                 elif t == "new" and f.get("class"):
                     c = self.cls(f["class"])
                     if c:
-                        b.add_edge(fn.id, f"{c.kind}:{c.fqcn}", "INSTANTIATES", fn.file, line, EXACT)
+                        b.add_edge(fn.id, f"{c.kind}:{c.fqcn}", "INSTANTIATES", fn.file, line, EXACT, **da)
                         ctor = self.find_method(c.fqcn, "__construct")
+                        if da:
+                            self._dflt_edges[fn.id].append((da["default_arg"], f"{c.kind}:{c.fqcn}", "INSTANTIATES"))
                         if ctor:
-                            b.add_edge(fn.id, ctor.id, "CALLS", fn.file, line, EXACT)
+                            b.add_edge(fn.id, ctor.id, "CALLS", fn.file, line, EXACT, **da)
+                            self._dflt_sites.append((fn, ctor, f))
+                            if da:
+                                self._dflt_edges[fn.id].append((da["default_arg"], ctor.id, "CALLS"))
                 elif t in ("fetch", "pwrite"):
                     self._emit_prop(fn, f, ctx)
                 elif t == "classref" and f.get("class"):
@@ -543,6 +553,30 @@ class PhpProgram:
                 for h in handlers:
                     h(self, fn, f, ctx)
             b.current_gate = None
+        self._omitted_defaults()
+
+    def _omitted_defaults(self):
+        """A call that leaves out a defaulted argument runs the default (`Clock $clock = new SystemClock()`): an edge
+        from the caller to what the default calls, at the call site, with `omits_default` and `default_of` (#212)."""
+        n = 0
+        for fn, m, f in self._dflt_sites:
+            defs = self._dflt_edges.get(m.id)
+            if not defs:
+                continue
+            args = f.get("args") or []
+            if any(a.get("k") == "variadic" or a.get("unpack") for a in args) or len(args) > 13:
+                continue
+            named = {a["named"] for a in args if a.get("named")}
+            pos = sum(1 for a in args if not a.get("named"))
+            params = m.params or []
+            given = {p["name"] for p in params[:pos]} | named
+            left = {p["name"] for p in params if p.get("default") and p["name"] not in given}
+            for label, dst, kind in defs:
+                if label in left and dst != fn.id:
+                    self.b.add_edge(fn.id, dst, kind, fn.file, f.get("line"), RESOLVED, omits_default=label, default_of=m.id)
+                    n += 1
+        if n:
+            self.stats["default_argument_sites"] += n
 
     def call_targets(self, fn: PhpFunc, f: dict, ctx: ResolveCtx) -> tuple[list, str]:
         """Resolve a call fact to (targets [(PhpFunc, confidence)], status)."""
@@ -579,7 +613,7 @@ class PhpProgram:
             return [(cands[0], HEURISTIC)], "heuristic"
         return [], "unresolved_method"
 
-    def _emit_call(self, fn: PhpFunc, f: dict, ctx: ResolveCtx):
+    def _emit_call(self, fn: PhpFunc, f: dict, ctx: ResolveCtx, da: dict | None = None):
         b, line, kind = self.b, f.get("line"), f["kind"]
         self.stats[f"calls_{kind}"] += 1
         self.last_recv = []
@@ -594,12 +628,16 @@ class PhpProgram:
             own = self.cls(fn.cls)
             if own and not self.last_recv:
                 self.last_recv = [f"{own.kind}:{own.fqcn}"]
+        da = da or {}
         for m, conf in targets:
             if conf == HEURISTIC:
-                b.add_edge(fn.id, m.id, "CALLS", fn.file, line, HEURISTIC, via="unique-method-name")
+                b.add_edge(fn.id, m.id, "CALLS", fn.file, line, HEURISTIC, via="unique-method-name", **da)
             else:
                 b.add_edge(fn.id, m.id, "CALLS", fn.file, line, conf,
-                           **({"recv": sorted(set(self.last_recv))} if self.last_recv else {}), **scope)
+                           **({"recv": sorted(set(self.last_recv))} if self.last_recv else {}), **scope, **da)
+                self._dflt_sites.append((fn, m, f))
+            if da:
+                self._dflt_edges[fn.id].append((da["default_arg"], m.id, "CALLS"))
         if status == "resolved":
             self.stats["calls_resolved"] += 1
         elif status == "heuristic":

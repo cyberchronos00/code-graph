@@ -169,6 +169,7 @@ function argsDesc(array $args, Ctx $c, int $depth = 0): array {
         if (!($a instanceof Node\Arg)) { $o[] = ['k' => 'variadic']; continue; }
         $d = desc($a->value, $c, $depth);
         if ($a->name) $d['named'] = $a->name->toString();
+        if ($a->unpack) $d['unpack'] = true;
         $o[] = $d;
         if ($i > 12) break;
     }
@@ -328,7 +329,8 @@ function funcLike($fn, Ctx $c, \PhpParser\NameContext $nc, ?string $doc): array 
         $pn = ($p->var instanceof Expr\Variable && is_string($p->var->name)) ? $p->var->name : '?';
         $ts = typeList($p->type);
         if (!$ts && isset($docParams[$pn])) $ts = $docParams[$pn];
-        $params[] = ['name' => $pn, 'types' => $ts, 'promoted' => $p->flags !== 0, 'line' => $p->getStartLine()];
+        $params[] = ['name' => $pn, 'types' => $ts, 'promoted' => $p->flags !== 0, 'line' => $p->getStartLine()]
+            + ($p->default !== null ? ['default' => true] : []) + ($p->variadic ? ['variadic' => true] : []);
     }
     $returns = typeList($fn->returnType ?? null);
     $nullable = ($fn->returnType ?? null) instanceof Node\NullableType
@@ -339,6 +341,14 @@ function funcLike($fn, Ctx $c, \PhpParser\NameContext $nc, ?string $doc): array 
     if (isset($fn->stmts) && $fn->stmts !== null) walk($fn->stmts, $c, $nc);
     if ($fn instanceof Expr\ArrowFunction) walk($fn->expr, $c, $nc);
     $skel = (isset($fn->stmts) && $fn->stmts !== null) ? skelStmts($fn->stmts, $c) : [];
+    // a parameter default (`Clock $clock = new SystemClock()`, PHP 8.1) runs on each call that leaves the argument
+    // out: its facts come last, marked with the parameter (#212)
+    foreach ($fn->params as $p) {
+        if ($p->default === null || !($p->var instanceof Expr\Variable) || !is_string($p->var->name)) continue;
+        $lo = count($c->facts);
+        walk($p->default, $c, $nc);
+        for ($i = $lo; $i < count($c->facts); $i++) $c->facts[$i]['default_arg'] = $p->var->name;
+    }
     return ['params' => $params, 'returns' => $returns, 'returns_nullable' => $nullable, 'facts' => $c->facts, 'skel' => $skel];
 }
 

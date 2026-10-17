@@ -58,6 +58,23 @@ STOP_METHODS = {"get", "set", "save", "delete", "update", "filter", "all", "item
 ASYNC_WRAPPERS = {"sync_to_async", "async_to_sync", "database_sync_to_async", "run_sync"}
 
 
+def _default_call_params(fn) -> dict[int, str]:
+    """id(call node) -> parameter name, for calls inside a parameter default (`def render(gamut=current_gamut())`).
+    Python evaluates a default once, when the `def` runs, so only the declaration edge is marked (#212)."""
+    a = getattr(fn, "args", None)
+    if a is None:
+        return {}
+    pos = list(a.posonlyargs) + list(a.args)
+    pairs = list(zip(pos[len(pos) - len(a.defaults):], a.defaults)) + \
+        [(k, d) for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+    out = {}
+    for arg, d in pairs:
+        for n in ast.walk(d):
+            if isinstance(n, ast.Call):
+                out[id(n)] = arg.arg
+    return out
+
+
 def _recv_attr(prog, call, tgt) -> dict:
     """{"recv": [class ids]} for a call on a receiver whose class inherits the target method, else {}."""
     r = prog.recv.get((id(call.func), id(tgt)))
@@ -1460,16 +1477,18 @@ class PythonPlugin(LanguagePlugin):
             calls: list = []
             body = {id(x) for x in f.node.body}
             rp.scan(f.id, [(c, f.node, id(c) in body) for c in ast.iter_child_nodes(f.node)], ctx, f.file, False, calls)
+            dflt = _default_call_params(f.node)
             for sub in calls:
+                da = {"default_arg": dflt[id(sub)]} if id(sub) in dflt else {}
                 for tgt, conf, via in prog.resolve_call(sub, ctx):
                     if isinstance(tgt, ClassInfo):
-                        b.add_edge(f.id, tgt.id, "INSTANTIATES", f.file, sub.lineno, conf)
+                        b.add_edge(f.id, tgt.id, "INSTANTIATES", f.file, sub.lineno, conf, **da)
                         init = prog.find_method(tgt, "__init__")
                         if init:
-                            b.add_edge(f.id, init.id, "CALLS", f.file, sub.lineno, conf, via="constructor")
+                            b.add_edge(f.id, init.id, "CALLS", f.file, sub.lineno, conf, via="constructor", **da)
                     else:
                         b.add_edge(f.id, tgt.id, "CALLS", f.file, sub.lineno, conf, **({"via": via} if via else {}),
-                                   **_recv_attr(prog, sub, tgt))
+                                   **_recv_attr(prog, sub, tgt), **da)
                     conf_ct[conf] += 1
             n_env += self.env_reads(prog, b, f.id, f.node, ctx)
         for m in prog.modules.values():

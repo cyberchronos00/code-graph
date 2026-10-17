@@ -1980,6 +1980,7 @@ function addEdge(src, dst, kind, file, line, conf, attrs) {
   edges.push({ src, dst, kind, file, line, confidence: conf, attrs: attrs || undefined })
 }
 const callSites = []
+const defaultCalls = []      // calls inside parameter defaults (#212)
 
 // ---------- class hierarchy: EXTENDS / IMPLEMENTS between project classes, OVERRIDDEN_BY base method -> override ----------
 // (a call on a base-typed value resolves to the base declaration; the override edge lets impact / tests reach the
@@ -1988,7 +1989,9 @@ const callSites = []
   const memberNode = (cls, name) => {
     for (const m of cls.members || []) {
       if (m.name && (ts.isIdentifier(m.name) || ts.isPrivateIdentifier(m.name) || ts.isStringLiteralLike(m.name)) && m.name.text === name
-          && (ts.isMethodDeclaration(m) || ts.isGetAccessor(m) || ts.isSetAccessor(m) || ts.isPropertyDeclaration(m)) && declId.has(m)) return declId.get(m)
+          && (ts.isMethodDeclaration(m) || ts.isGetAccessor(m) || ts.isSetAccessor(m) || ts.isPropertyDeclaration(m)) && declId.has(m)
+          // an instance method never overrides a static one (`static create(Service, ctx)` on a base service, #199)
+          && !(m.modifiers && m.modifiers.some(x => x.kind === ts.SyntaxKind.StaticKeyword))) return declId.get(m)
     }
     return null
   }
@@ -3278,8 +3281,27 @@ function handleCall(node, cur, sf, r, encFn) {
   if (kind === 'REFERENCES_TYPE') return
   const recv = kind === 'CALLS' && ts.isPropertyAccessExpression(callee) ? receiverClasses(callee.expression, t.id) : null
   const br = kind === 'INSTANTIATES' && !inTpl ? branchOf(node, sf) : null
-  addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined, recv: recv || undefined, ...(br || {}) })
+  const dp = defaultParamOf(node)
+  if (dp) defaultCalls.push({ fid: cur, idx: dp.idx, name: dp.name, dst: t.id, kind, conf: t.conf })
+  addEdge(cur, t.id, kind, r, line, t.conf, { via: t.via.length ? t.via : undefined, template: inTpl || undefined, recv: recv || undefined,
+    default_arg: dp ? dp.name : undefined, ...(br || {}) })
   callSites.push({ target: t.id, node, cur, r, line, encFn })
+}
+
+// a call inside a parameter's default value (`function render(gamut = currentGamut())`): runs only when a call leaves
+// that argument out (#212). Returns the parameter's position and name, or null.
+function defaultParamOf(node) {
+  let x = node
+  while (x && x.parent) {
+    const p = x.parent
+    if (ts.isParameter(p)) {
+      if (p.initializer !== x || !p.parent || !p.parent.parameters) return null
+      return { idx: p.parent.parameters.indexOf(p), name: ts.isIdentifier(p.name) ? p.name.text : p.name.getText().slice(0, 40) }
+    }
+    if (ts.isFunctionLike(p) || ts.isClassLike(p) || ts.isSourceFile(p)) return null
+    x = p
+  }
+  return null
 }
 
 // `b.run()` landing on `Base.run` (B inherits it): the receiver's project classes (attrs.recv), so `impact B.run` can
@@ -3559,6 +3581,28 @@ for (const d of deferredParamSubs) {
     }
   }
   if (deep) stats.realtime_subscriptions_wrapper_too_deep = (stats.realtime_subscriptions_wrapper_too_deep || 0) + 1
+}
+
+// a call that leaves out a defaulted argument (or passes `undefined`) runs the default: an edge from the caller to what
+// the default calls, at the call site, with `omits_default` and `default_of` (#212)
+if (defaultCalls.length) {
+  const byFn = new Map()
+  for (const d of defaultCalls) { if (!byFn.has(d.fid)) byFn.set(d.fid, []); byFn.get(d.fid).push(d) }
+  let n = 0
+  for (const c of callSites) {
+    const ds = byFn.get(c.target)
+    if (!ds || !(ts.isCallExpression(c.node) || ts.isNewExpression(c.node))) continue
+    const args = c.node.arguments || []
+    if (args.some(a => ts.isSpreadElement(a))) continue
+    for (const d of ds) {
+      const a = args[d.idx]
+      if (a && !(ts.isIdentifier(unwrap(a)) && unwrap(a).text === 'undefined')) continue
+      if (d.dst === c.cur) continue
+      addEdge(c.cur, d.dst, d.kind, c.r, c.line, d.conf === 'exact' ? 'resolved' : d.conf, { omits_default: d.name, default_of: c.target })
+      n++
+    }
+  }
+  if (n) stats.default_argument_sites = n
 }
 
 const httpFns = new Set(apiCalls.map(a => a.src))

@@ -305,6 +305,9 @@ class KotlinPlugin(LanguagePlugin):
         self.calls: list[tuple] = []
         self.unresolved_calls: list[tuple] = []          # (owner_id, name, receiver, line, file obj, decl)
         self.call_branch: dict = {}           # (owner_id, line, name) -> {branch, branch_line} (#88)
+        self.call_default: dict = {}          # (owner_id, line, name) -> parameter whose default holds the call (#212)
+        self.call_args: dict = {}             # (owner_id, line, name) -> (positional count, named labels, trailing lambda)
+        self.fn_params: dict = {}             # function id -> [(name, has default, function type)]
         # properties with a custom accessor, `by lazy` or a delegate are nodes (#89); kept out of by_name / members so
         # a call `x()` never binds to one
         self.props: dict[str, dict] = {}                                   # decl id -> {"property", "accessors"}
@@ -599,11 +602,14 @@ class KotlinPlugin(LanguagePlugin):
                 fq = f"{owner}.{nm}" if owner else nm
                 kind = "method" if cls else "function"
                 params = next((d for d in c.children if d.type == "function_value_parameters"), None)
+                fparams = self._param_defaults(params)
                 dc = Decl(f"{kind}:{fq}{self._variant(kf, mods)}", kind, nm, fq, kf.rel, c.start_point[0] + 1,
                           c.end_point[0] + 1, cls.fqn if cls else None, [], anns, mods, recv,
                           self._params(params) if params is not None else {}, kf.test, self._name_line(c),
                           slots=self._fn_slots(params))
                 self._local_types(c, dc.types)
+                if any(dflt for _n, dflt, _f in fparams):
+                    self.fn_params[dc.id] = fparams
                 self._add_decl(dc, kind)
                 self._local_fns(c, kf, dc)
             elif ty == "enum_entry" and cls is not None:
@@ -1161,11 +1167,76 @@ class KotlinPlugin(LanguagePlugin):
                     if typ:
                         self.navs.append((owner, None, typ, kf.rel, line))
         self.calls.append((owner, name, rtext, line, kf, decl, self._accessor(c) if owner in self.props else None))
+        dp = self._default_param(c)
+        if dp:
+            self.call_default[(owner, line, name)] = dp
+        if args is not None:
+            vas = [x for x in args.children if x.type == "value_argument"]
+            named = {self.t(x.children[0]) for x in vas if any(k.type == "=" for k in x.children) and x.children}
+            spread = any(self.t(x).lstrip().startswith("*") for x in vas)
+            self.call_args[(owner, line, name)] = (None if spread else len(vas) - len(named), named, lam is not None)
+        elif lam is not None:
+            self.call_args[(owner, line, name)] = (0, set(), True)
         if name[:1].isupper():                      # a constructor or a composable: its branch (#88)
             br = self._branch(c)
             if br:
                 self.call_branch[(owner, line, name)] = br
         return False
+
+    def _param_defaults(self, fvp) -> list:
+        """[(name, has a default value, function-typed)] per value parameter of a `function_value_parameters` node."""
+        out = []
+        kids = list(fvp.children) if fvp is not None else []
+        for i, p in enumerate(kids):
+            if p.type != "parameter":
+                continue
+            ids = [x for x in p.children if x.type == "identifier"]
+            if not ids:
+                continue
+            ft = any(x.type == "function_type" or (x.type == "nullable_type" and "->" in self.t(x)) for x in p.children)
+            out.append((self.t(ids[0]), i + 1 < len(kids) and kids[i + 1].type == "=", ft))
+        return out
+
+    def _default_param(self, c) -> str | None:
+        """The parameter whose default value holds call `c` (`fun render(gamut: Int = currentGamut())`), else None."""
+        x = c
+        while x is not None and x.parent is not None:
+            p = x.parent
+            if p.type == "function_value_parameters":
+                prev = x.prev_sibling
+                if prev is None or prev.type != "=":
+                    return None
+                par = prev.prev_sibling
+                ids = [y for y in par.children if y.type == "identifier"] if par is not None and par.type == "parameter" else []
+                return self.t(ids[0]) if ids else None
+            if p.type in ("function_declaration", "lambda_literal", "anonymous_function", "class_body", "function_body"):
+                return None
+            x = p
+        return None
+
+    def _omitted_defaults(self):
+        """A call that leaves out a defaulted argument runs the default: an edge from the caller to what the default
+        calls, at the call site, with `omits_default` and `default_of` (#212). A call that passes it gets none."""
+        if not self._default_edges:
+            return
+        n = 0
+        for owner, tid, rel, line, key in self._default_sites:
+            defs = self._default_edges.get(tid)
+            params = self.fn_params.get(tid)
+            ca = self.call_args.get(key, (0, set(), False))
+            if not defs or not params or ca[0] is None:
+                continue
+            pos, named, trailing = ca
+            given = {nm for nm, _d, _f in params[:pos]} | named
+            if trailing and params[-1][2]:
+                given.add(params[-1][0])
+            left = {nm for nm, dflt, _f in params if dflt and nm not in given}
+            for label, callee, kind in defs:
+                if label in left and callee != owner:
+                    self.b.add_edge(owner, callee, kind, rel, line, HEURISTIC, omits_default=label, default_of=tid)
+                    n += 1
+        if n:
+            self.st["default_argument_sites"] = n
 
     def _branch(self, c) -> dict:
         """The innermost `if` / `else` / `when` entry around a construction or a composable call inside its function
@@ -1525,6 +1596,7 @@ class KotlinPlugin(LanguagePlugin):
         return []
 
     def _resolve_calls(self):
+        self._default_edges, self._default_sites = defaultdict(list), []
         for owner, name, recv, line, kf, decl, acc in self.calls:
             self._data_access(owner, name, recv, line, kf, decl)
             self._how = self._recv = None
@@ -1543,17 +1615,24 @@ class KotlinPlugin(LanguagePlugin):
                 how["candidates"] = len(targets)
                 self.st["call_candidate_edges"] += len(targets)
             br = self.call_branch.get((owner, line, name), {})
+            dp = self.call_default.get((owner, line, name))
+            da = {"default_arg": dp} if dp else {}
             for t in targets[:MAX_CANDIDATES if self._how == "candidate" else 3]:
                 if t.kind == "class":
-                    self.b.add_edge(owner, t.id, "INSTANTIATES", kf.rel, line, HEURISTIC, **br)
+                    self.b.add_edge(owner, t.id, "INSTANTIATES", kf.rel, line, HEURISTIC, **br, **da)
                     ctor = [m for m in self.members.get(t.fqn, {}).get("init", [])]
                     self.b.add_edge(owner, t.id, "USES_TYPE", kf.rel, line, HEURISTIC, how="constructor call")
                     for m in ctor:
-                        self.b.add_edge(owner, m.id, "CALLS", kf.rel, line, HEURISTIC)
+                        self.b.add_edge(owner, m.id, "CALLS", kf.rel, line, HEURISTIC, **da)
                 else:
                     composable = br and any(a[0] == "Composable" for a in t.annotations)
-                    self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, **how, **(br if composable else {}))
+                    self.b.add_edge(owner, t.id, "CALLS", kf.rel, line, HEURISTIC, **how, **(br if composable else {}), **da)
+                    if self._how != "candidate":
+                        self._default_sites.append((owner, t.id, kf.rel, line, (owner, line, name)))
+                if dp:
+                    self._default_edges[owner].append((dp, t.id, "INSTANTIATES" if t.kind == "class" else "CALLS"))
             self.st["calls_resolved"] += 1
+        self._omitted_defaults()
         self._resolve_reads()
         self._resolve_fields()
         self._resolve_copies()

@@ -177,6 +177,12 @@ LOCAL_DECL = re.compile(
     r"\b(?:let|var)\s+(\w+)\s*(?::\s*(?:some\s+|any\s+)?([A-Z][\w.]*))?\s*(?:=\s*(?:try\s*[?!]?\s+)?(?:await\s+)?"
     r"(?:([A-Z]\w*)\s*(?:<[^=\n]*?>)?\s*\(|((?:true|false)\b|-?\d+\.\d+\b|-?\d+\b|\"))?)?")
 
+# `let r = makeBridge()`, `let r = try await ShelfBridge.make()`: a local initialised from a function's result; typed by
+# that function's declared return type when it is a project type (#218)
+LOCAL_CALL = re.compile(r"\b(?:let|var)\s+(\w+)\s*=\s*(?:try\s*[?!]?\s+)?(?:await\s+)?(?:([A-Z]\w*)\s*\.\s*)?([a-z_]\w*)\s*\(")
+
+PRIVATE_MODS = frozenset({"private", "fileprivate"})
+
 
 def _static(d) -> bool:
     return bool(STATIC_MODS & d.modifiers)
@@ -502,6 +508,8 @@ class SwiftPlugin(LanguagePlugin):
         self.globals_: dict[str, list] = {}      # file-level constant name -> [(id, file, test, private)]
         self.prop_refs: list[tuple] = []         # (owner, name, receiver | None, line, sf, decl, write)
         self.sigs: dict[str, list] = defaultdict(list)   # function / init node id -> [((label, optional), ...)]
+        self._multi_file: set[str] = set()   # nodes shared by same-name declarations in several files or of mixed access
+        self.rets: dict[str, str] = {}   # function / method node id -> declared return type name ('' when overloads differ)
         self.http: list[dict] = []
         self.navs: list[tuple] = []          # (owner, view type name, how, file, line)
         # navigationDestination(for: T.self) { switch d { case .x: V() } }: T -> case (None: any) -> view names (#68)
@@ -838,15 +846,27 @@ class SwiftPlugin(LanguagePlugin):
                     # second carries `~static` / `~instance` (like `~2` for a second TypeScript declaration);
                     # overloads of one static-ness still share a node
                     did = f"{did}~{'static' if STATIC_MODS & mods else 'instance'}"
+                ret = None
+                for i, x in enumerate(kids[:-1]):
+                    if x.type == "->":
+                        rm = re.fullmatch(r"\s*([A-Z][\w.]*)\s*[?!]?\s*", self.t(kids[i + 1]))
+                        ret = rm.group(1) if rm else ""
+                        break
                 if did in self.decls:
                     prev = self._prev(did, cls)
                     if not self._branch_variant(prev, sf, c, cls):           # overloads share one node
+                        if self.rets.get(prev.id, ret) != ret:
+                            self.rets[prev.id] = ""
+                        if sf.rel != prev.file or bool(mods & PRIVATE_MODS) != bool(prev.modifiers & PRIVATE_MODS):
+                            self._multi_file.add(prev.id)    # one node for declarations in several files / of mixed access
                         prev.types.update(params)
                         self.sigs[did].append(tuple(sig))
                         self._overloads[(sf.rel, c.start_point[0] + 1, nm)] = prev    # its body's calls are prev's
                         continue
                     did = f"{did}@{c.start_point[0] + 1}"                     # per-platform definition (#if os)
                 self.sigs[did].append(tuple(sig))
+                if ret is not None:
+                    self.rets[did] = ret
                 d = Decl(did, kind, nm, fq, sf.rel, c.start_point[0] + 1, c.end_point[0] + 1,
                          cls.fqn if cls else None, [], attrs, mods, params, sf.test, owner=self._owner(cls))
                 self._add(d, "protocol requirement" if ty == "protocol_function_declaration" else kind)
@@ -2475,6 +2495,8 @@ class SwiftPlugin(LanguagePlugin):
                 found.append((m.start(), nm, tn))
             for m in CLOSURE_PARAM.finditer(txt):         # `Path { p in p.close() }`: p is a Path
                 found.append((m.start(), m.group(2), CLOSURE_PARAM_TYPES[m.group(1)]))
+            for m in LOCAL_CALL.finditer(txt):
+                found.append((m.start(), m.group(1), self._returned(m.group(2), m.group(3))))
             for pos, nm, tn in sorted(found, key=lambda x: x[0]):
                 out[nm].append((decl.line + txt.count("\n", 0, pos), tn))
             cache[key] = out
@@ -2483,6 +2505,25 @@ class SwiftPlugin(LanguagePlugin):
             if ln <= line:
                 best = tn
         return best
+
+    def _returned(self, tname: str | None, fname: str) -> str | None:
+        """The project type a call's result has: the declared return type of the one free function `fname` (of the
+        static `tname.fname` when qualified), when every declaration of it agrees and it is a project type (#218)."""
+        if tname:
+            t = self._type(tname)
+            if t is None or "extension-only" in t.modifiers:
+                return None
+            ds = [d for d in self._member(t, fname) if d.kind == "method" and _static(d)]
+        else:
+            ds = [d for d in self.by_name.get(fname, []) if d.kind == "function"]
+        rets = {self.rets.get(d.id) for d in ds}
+        if len(rets) != 1:
+            return None
+        ret = next(iter(rets))
+        if ret == "Self" and tname:
+            ret = t.fqn
+        rt = self._type(ret) if ret else None
+        return rt.fqn if rt is not None and "extension-only" not in rt.modifiers else None
 
     def _recv_type(self, recv: str, decl: Decl | None, cls: Decl | None) -> tuple[str, str | None]:
         """What a receiver expression is: ("type", T) a value of project type T, ("meta", T) the project type T itself
@@ -2557,7 +2598,17 @@ class SwiftPlugin(LanguagePlugin):
         return state
 
     def _fitting(self, ds: list, labels: tuple, trailing: bool) -> list:
-        return [d for d in ds if self._fits(d.id, labels, trailing) and self._sees(d, True)]
+        return [d for d in ds if self._fits(d.id, labels, trailing) and self._file_visible(d) and self._sees(d, True)]
+
+    def _file_visible(self, d: Decl) -> bool:
+        """A `private` / `fileprivate` member, or a member of such a type, is not visible from another file (#218)."""
+        at = getattr(self, "_at", None)
+        if at is None or at[0] is None or d.file == at[0].rel or d.id in self._multi_file:
+            return True
+        if d.modifiers & PRIVATE_MODS:
+            return False
+        t = self.types.get(d.cls) if d.cls else None
+        return not (t is not None and t.file == d.file and t.id not in self._multi_file and t.modifiers & PRIVATE_MODS)
 
     def _dispatch_visible(self, d: Decl, caller: str, depth: int = 0) -> bool:
         """A member of a type outside the caller's modules that overrides or implements a member of a supertype the

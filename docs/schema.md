@@ -77,6 +77,17 @@ Insecure transport facts: a function, method, module or `file:config:<path>` nod
 
 Platform conditions, generated-file markers and bridge attrs sit on `nodes.attrs` / `edges.attrs`. The language and boundary pages list the keys (`platforms`, `generated`, `process`, `via`, `dispatch`).
 
+## Default arguments
+
+A call inside a parameter's default value is an edge from the declaring function with `attrs.default_arg` (the
+parameter name); `impact` lists it as `via default argument` and does not walk it. Where the language evaluates the
+default on each call (Swift, TypeScript / JavaScript, Kotlin, PHP 8.1 `new` in initializers), a resolved call that
+leaves the argument out (or passes `undefined` in TypeScript) gets its own edge from the caller to the default's callee
+at the call site, with `attrs.omits_default` (the parameter) and `attrs.default_of` (the declaring function), so
+`impact` on the default's callee lists the callers that run it and not those that pass their own value. Positional,
+named (Kotlin, PHP) and trailing-lambda (Kotlin) arguments count; a call with a spread argument gets none. Python
+evaluates a default once, when the `def` runs, so only the declaration edge is marked.
+
 ## Confidence
 
 | value | when |
