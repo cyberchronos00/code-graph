@@ -995,7 +995,7 @@ def _alt_groups(builder, nvals: dict) -> dict[str, list[str]]:
     """Rust / C / C++ / Swift alternative definitions of one symbol (one per `cfg` / `#if` branch), keyed by _vkey."""
     alts: dict[str, list[str]] = defaultdict(list)
     for nid, n in builder.nodes.items():
-        if n.lang in ("rust", "c", "cpp", "swift") and n.kind in ALT_KINDS:
+        if n.lang in ("rust", "c", "cpp", "swift") and n.kind in ALT_KINDS or n.lang == "swift" and n.kind == "field":
             alts[_vkey(nid, n, nvals)].append(nid)
     # a static C function and a macro / function of the same name visible in its file are variants too
     for k in [k for k in alts if k.startswith("c-fn:") and "#" in k]:

@@ -785,6 +785,8 @@ def _prop_lines(rows: list, limit: int) -> list[str]:
     for r in rows[:limit]:
         a = r.get("attrs") or {}
         ex = " ".join(f"{k}={a[k]}" for k in ("receiver", "accessor", "storage") if k in a)
+        if a.get("variant_platforms"):        # one of a property's per-platform declarations (#219)
+            ex = f"{ex} platforms={','.join(a['variant_platforms'])}".strip()
         ek = ",".join(sorted(r["entry_kinds"])) or "-"
         out.append(f"  {'[test] ' if r.get('test') else ''}{r['fqn']}  @{os.path.basename(r['file'] or '?')}:{r['line']}"
                    f"  {ex}  entries: {ek}")

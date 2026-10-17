@@ -492,6 +492,8 @@ class SwiftPlugin(LanguagePlugin):
         self.stored_names: set[str] = set()      # names of plain stored properties anywhere in the project
         self.stored_in: dict[str, set[str]] = defaultdict(set)    # type fqn -> its stored property names
         self.fields: dict[str, dict[str, str]] = defaultdict(dict)  # type fqn -> stored instance property -> field id
+        self._vfields: dict[tuple, str] = {}      # (type decl id, stored property) -> field id of that `#if` variant
+        self._field_owner: dict[str, str | None] = {}     # field id -> the variant type declaring it (#219)
         self.field_names: set[str] = set()
         self.mutating_names: set[str] = set()
         self.branch_of: dict[tuple, dict] = {}     # (owner, line, type name) -> enclosing branch of a construction
@@ -929,9 +931,18 @@ class SwiftPlugin(LanguagePlugin):
     def _field(self, cls: Decl, nm: str, sf: SFile, c, attrs: list):
         """A stored instance property (`var count = 0`, `@State private var value`, `@Published var items`) is a
         `field:<Type>.<name>` node (#88): reads and writes of it are READS_PROP / WRITES_PROP edges, for `cg readers` /
-        `cg writers Type.prop`. Its property wrapper, if any, is attrs.wrapper."""
-        if nm in self.fields.get(cls.fqn, {}):
-            return
+        `cg writers Type.prop`. Its property wrapper, if any, is attrs.wrapper. The same property declared again in
+        another `#if` branch (in the type, or in a per-branch variant of the type) is a node of its own,
+        `field:<Type>.<name>@<line>` (#219); the platform pass narrows references to the one built where they are."""
+        key = f"{cls.fqn}.{nm}"
+        line = c.start_point[0] + 1
+        prev_id = self.fields.get(cls.fqn, {}).get(nm)
+        if prev_id:
+            pn = self.b.nodes[prev_id]
+            prev = SimpleNamespace(file=pn.file, line=pn.line, owner=self._field_owner.get(prev_id))
+            if not self._branch_variant(prev, sf, c, cls):
+                return
+            key = f"{key}@{line}"
         kw = next((self.t(x).split()[0] for x in c.children if x.type == "value_binding_pattern" and self.t(x).strip()), "var")
         a = {"property": "stored", "binding": "let" if kw == "let" else "var"}
         wrappers = [x for x in attrs if x not in ("MainActor", "objc", "IBOutlet", "IBInspectable", "available", "nonobjc")]
@@ -943,15 +954,16 @@ class SwiftPlugin(LanguagePlugin):
                     a["key"] = m.group(1)
         if sf.test:
             a["test"] = True
-        fid = self.b.add_node("field", f"{cls.fqn}.{nm}", name=nm, fqn=f"{cls.fqn}.{nm}", file=sf.rel,
-                              line=c.start_point[0] + 1, end_line=c.end_point[0] + 1,
+        fid = self.b.add_node("field", key, name=nm, fqn=f"{cls.fqn}.{nm}", file=sf.rel,
+                              line=line, end_line=c.end_point[0] + 1,
                               module=getattr(self.b.nodes.get(cls.id), "module", None), lang="swift", attrs=a)
-        self.b.add_edge(cls.id, fid, "CONTAINS", sf.rel, c.start_point[0] + 1, EXACT)
-        self.fields[cls.fqn][nm] = fid
-        self.field_names.add(nm)
-        if wrappers:          # `_value = State(initialValue: x)`: the wrapper's storage is the same property
-            self.fields[cls.fqn]["_" + nm] = fid
-            self.field_names.add("_" + nm)
+        self.b.add_edge(cls.id, fid, "CONTAINS", sf.rel, line, EXACT)
+        self._field_owner[fid] = self._owner(cls)
+        names = [nm] + (["_" + nm] if wrappers else [])   # `_value = State(initialValue: x)`: the wrapper's storage
+        for x in names:
+            self.fields[cls.fqn].setdefault(x, fid)
+            self._vfields[(cls.id, x)] = fid
+            self.field_names.add(x)
         self.st["stored_property_nodes"] += 1
 
     def _prop_decl(self, c, nm: str, sf: SFile, cls: Decl):
@@ -2303,7 +2315,7 @@ class SwiftPlugin(LanguagePlugin):
         """The field node of a stored property `name` of a type or its superclasses."""
         if cls is None or depth > 6:
             return None
-        fid = self.fields.get(cls.fqn, {}).get(name)
+        fid = self._vfields.get((cls.id, name)) or self.fields.get(cls.fqn, {}).get(name)
         if fid:
             return fid
         for s in cls.supers:

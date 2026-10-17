@@ -1781,6 +1781,8 @@ def prop_fields(st: GraphStore, spec: str) -> list[str]:
     spec = spec[len("property:"):] if spec.startswith("property:") else spec
     if ("." not in spec and "::" not in spec) or spec.startswith(("table:", "column:")):
         return []
+    if "@" in spec:       # `field:Type.prop@<line>`: one per-platform declaration (#219)
+        return [r["id"] for r in st.q("SELECT id FROM nodes WHERE id=? AND kind='field'", (f"field:{spec}",))]
     # PHP: `User.name`, `User::$name`, `App\Models\User::$name` -> the `property:` node (fqn `App\Models\User::$name`)
     cls, _, prop = spec.replace("::$", "::").replace("::", ".").rpartition(".")
     php = f"{cls}::${prop.lstrip('$')}"
