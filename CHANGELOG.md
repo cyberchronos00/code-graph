@@ -8,6 +8,19 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.10] - 2026-10-19
+
+### Added
+
+- `cg parity --structure` pairs the missing members of a matched type inside the counterpart type: with an unmatched
+  member or a top-level function that makes the same paired calls (`duplicatePlants` ↔ `copySelected`), or with a
+  `case .x:` arm of a Swift `receive(_:)` / `perform(_:)` switch (`handleHelpCenterClick` ↔ `case .helpCenterTapped`,
+  `case` in JSON). On Bitwarden: 19 more iOS → Android and 62 more Android → iOS pairs (#227).
+
+### Changed
+
+- A Swift `receive(_:)` / `perform(_:)` method with `case .x:` arms is no longer paired as a whole with one handler.
+
 ## [0.23.9] - 2026-10-19
 
 ### Added
@@ -1796,7 +1809,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.9...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.10...HEAD
+[0.23.10]: https://github.com/cyberchronos00/code-graph/compare/v0.23.9...v0.23.10
 [0.23.9]: https://github.com/cyberchronos00/code-graph/compare/v0.23.8...v0.23.9
 [0.23.8]: https://github.com/cyberchronos00/code-graph/compare/v0.23.7...v0.23.8
 [0.23.7]: https://github.com/cyberchronos00/code-graph/compare/v0.23.6...v0.23.7
