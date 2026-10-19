@@ -8,6 +8,29 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.9] - 2026-10-19
+
+### Added
+
+- Swift platform files: `Foo+iOS.swift`, `Foo.macOS.swift` and files in an `iOS/` / `macOS/` / `watchOS/` / `tvOS/` /
+  `visionOS/` folder are built for that platform and unknown on the other Apple platforms, when Xcode target membership
+  does not say. A guess: it never makes a dead branch, and `platforms.path_conventions: false` turns it off (#230).
+
+### Changed
+
+- Swift and Kotlin receivers are typed through call chains (`shop.engine().run()`, `makeShop().engine()`), locals
+  initialised from one (`let e = shop.engine()`), `Self` return types (`Sub.make()` on a `class func make() -> Self`) and
+  generic substitution (`Garage<Engine>(…).get()` with `func get() -> T`). Kotlin expression bodies (`= Engine()`) count
+  as the return type. Fewer name-bound and candidate edges (#229, part of #109).
+- `#available` branches are column-precise: `if #available(…) { a() } else { b() }` on one line and `} else { b() }`
+  on the closing line no longer mark `b` as guarded; conditions after the check (`, x.isOn`) are (#230, part of #225).
+
+### Fixed
+
+- Swift `Self(…)`, implicit `.init(…)` (from the annotation or the declared return type) and nested-type initializers
+  (`Point.Delta(…)`) are `INSTANTIATES` plus `CALLS` to the `init` (#231, part of #108).
+- A bare Swift `class func` / `class var` is static, so calls through a subclass resolve (#229).
+
 ## [0.23.8] - 2026-10-19
 
 ### Added
@@ -1773,7 +1796,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.8...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.9...HEAD
+[0.23.9]: https://github.com/cyberchronos00/code-graph/compare/v0.23.8...v0.23.9
 [0.23.8]: https://github.com/cyberchronos00/code-graph/compare/v0.23.7...v0.23.8
 [0.23.7]: https://github.com/cyberchronos00/code-graph/compare/v0.23.6...v0.23.7
 [0.23.6]: https://github.com/cyberchronos00/code-graph/compare/v0.23.5...v0.23.6
