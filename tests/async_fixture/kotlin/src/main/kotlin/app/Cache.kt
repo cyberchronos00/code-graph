@@ -2,6 +2,7 @@ package app
 
 class Thumbnails {
     private val cache = HashMap<String, String>()
+    private var density = 2
 
     fun thumbnail(url: String, size: Int): String {
         val rendered = render(url, size)
@@ -11,6 +12,12 @@ class Thumbnails {
 
     fun badge(url: String, size: Int): String {
         val rendered = render(url, size)
+        cache["$url-$size"] = rendered
+        return rendered
+    }
+
+    fun icon(url: String, size: Int): String {
+        val rendered = render(url, size * density)
         cache["$url-$size"] = rendered
         return rendered
     }

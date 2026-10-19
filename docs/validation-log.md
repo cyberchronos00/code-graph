@@ -1644,3 +1644,24 @@ methods return `Self`). Alamofire's `validate` candidates between request types 
 initializers (`WebSocketRequest.Configuration(…)`), `Self(…)` / `.init(…)` and chained calls. Edges inside
 `#available` branches went from 54 to 51 on IceCubesApp: `} else if x {` on the line that closes the guarded branch is
 no longer counted as guarded.
+
+## State tracking: Compose local state, Options API templates, async-state rules (0.23.11)
+
+Heuristic READS_PROP / WRITES_PROP, before → after; every other edge is unchanged on all five:
+
+| project | fields | READS_PROP | WRITES_PROP |
+|---|---|---|---|
+| Element X Android | 8557 → 9116 | 10033 → 11191 | 535 → 1155 |
+| Bitwarden Android | 9080 → 9312 | 5834 → 6427 | 1362 → 1715 |
+| nowinandroid | 469 → 504 | 299 → 381 | 24 → 55 |
+| monica (Vue Options API) | – | 3314 → 3877 | 1595 → 1718 |
+| akaunting (Vue Options API) | – | 3080 → 3433 | 2345 → 2354 |
+
+New fields are Compose local delegates, many in Molecule `present()` functions; new Vue edges are template uses of
+`data()` keys. Sampled edges matched the source. `lint async-state` findings are unchanged on these and on
+IceCubesApp, Element X iOS and Bitwarden iOS: Kotlin suspend calls add 10 / 7 candidate writes on Element X /
+Bitwarden Android, all filtered as fixed requests or unrelated writes. Bare fields in cache keys first gave 3 false
+positives (a summary factory, an API client, a media loader); calling methods on a field now marks it a dependency.
+A Compose `searchResults = AsyncData.Loading()` reset was a two-writers false positive until sentinels counted as
+defaults. `cg roundtrip --all` takes 1.2 s on Element X iOS and 1.1 s on Bitwarden iOS (was about 200 s and 57 s)
+and finds the same two Element X round trips as the per-property runs.

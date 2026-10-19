@@ -72,7 +72,18 @@ def test_pinia_options_store_and_vue_data():
     add, comp = "function:src/stores/cart.ts#useCartStore.add", "component:src/components/Counter.vue"
     assert e[(add, s + "items", "WRITES_PROP", 7)]["via"] == "mutating"
     assert (add, s + "total", "WRITES_PROP", 8) in e and (add, s + "total", "READS_PROP", 9) in e
-    assert e[(comp, v + "count", "WRITES_PROP", 14)] == {"receiver": "this"}
-    assert e[(comp, s + "total", "WRITES_PROP", 16)] == {"receiver": "cart"}
-    assert (comp, s + "items", "READS_PROP", 17) in e
-    assert e[(comp, s + "total", "READS_PROP", 17)] == {"receiver": "useCartStore()"}
+    assert e[(comp, v + "count", "WRITES_PROP", 17)] == {"receiver": "this"}
+    assert e[(comp, s + "total", "WRITES_PROP", 19)] == {"receiver": "cart"}
+    assert (comp, s + "items", "READS_PROP", 20) in e
+    assert e[(comp, s + "total", "READS_PROP", 20)] == {"receiver": "useCartStore()"}
+
+
+def test_vue_options_template_reads_and_writes():
+    """`{{ count }}`, `:title="label"` and `@click="count++"` in an Options API template read / write the data() key;
+    a v-for variable of the same name (`label in labels`) does not."""
+    e = edges("vue_options_fixture", ("READS_PROP", "WRITES_PROP"))
+    comp, v = "component:src/components/Counter.vue", "field:src/components/Counter.vue#"
+    assert e[(comp, v + "count", "READS_PROP", 2)] == {"template": True}
+    assert (comp, v + "labels", "READS_PROP", 3) in e and (comp, v + "label", "READS_PROP", 3) not in e
+    assert (comp, v + "label", "WRITES_PROP", 4) in e and (comp, v + "label", "READS_PROP", 4) in e
+    assert (comp, v + "count", "WRITES_PROP", 5) in e

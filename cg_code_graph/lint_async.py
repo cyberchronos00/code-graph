@@ -61,6 +61,24 @@ def _input_dependent(text: str) -> bool:
     t = re.sub(r"(?<![\w$])[A-Za-z_$][\w$]*\s*(?:<[^<>]*>)?\s*\(", " (", t)  # call names
     ids = re.findall(r"(?<![\w$])[A-Za-z_$][\w$]*", t)
     return any(i.startswith("SELFREF_") or (i not in KEYWORDS and not i[0].isupper()) for i in ids)
+_SUSP: dict = {}          # file -> lines with a call of a Kotlin `suspend` function (an await point with no marker)
+
+
+def _load_suspend(st: GraphStore) -> None:
+    """A plain call of a project `suspend` function inside `launch { }` (`val x = repo.load()`) suspends like
+    `.await()`: the indexed CALLS edges to nodes marked `suspend` give those lines."""
+    _SUSP.clear()
+    for r in st.q("""SELECT e.file, e.line FROM edges e JOIN nodes n ON n.id = e.dst
+                     WHERE e.kind = 'CALLS' AND n.attrs LIKE '%"suspend": true%' AND e.file IS NOT NULL"""):
+        _SUSP.setdefault(r["file"], set()).add(r["line"])
+
+
+def _aw(t: str, file: str | None = None, line: int | None = None) -> bool:
+    """Is there an await point in this line of source: a marker (`await`, `.await()`, `withContext`, `delay`) or,
+    in Kotlin, a call of a `suspend` function?"""
+    return bool(AWAIT_RE.search(t)) or (line is not None and line in _SUSP.get(file, ()))
+
+
 TEST_PATH_RE = re.compile(r"(?:^|/)(?:tests?|__tests__|spec|testing|fixtures?|factories|Tests|UITests)/|"
                           r"[._-](?:test|spec)s?\.\w+:|Tests?\.swift:|Test\.kt:|(?:^|/)test_\w+\.py:")
 
@@ -104,6 +122,7 @@ def _opener(ls: list[str], line: int, lo: int):
 
 
 def stale_async(st: GraphStore, include_tests: bool = False, limit: int = 500) -> list[dict]:
+    _load_suspend(st)
     root = st.meta().get("root")
     cache: dict = {}
     fields = {r["id"]: json.loads(r["attrs"] or "{}") for r in st.q("SELECT id, attrs FROM nodes WHERE kind IN ('field','property')")}
@@ -122,7 +141,8 @@ def stale_async(st: GraphStore, include_tests: bool = False, limit: int = 500) -
             continue
         kind, o = op
         body = ls[o - 1:r["line"] - 1]
-        aw = next((o + i for i, t in enumerate(body) if AWAIT_RE.search(t if i else t[t.find("{") + 1:] if "{" in t else t)), None)
+        aw = next((o + i for i, t in enumerate(body) if _aw(t if i else t[t.find("{") + 1:] if "{" in t else t,
+                                                           r["file"], o + i if i else None)), None)
         if aw is None:
             continue
         before = "\n".join(ls[o - 1:aw - 1]) + "\n" + ls[aw - 1].split("await")[0]
@@ -131,7 +151,10 @@ def stale_async(st: GraphStore, include_tests: bool = False, limit: int = 500) -
         if GUARD_RE.search(after) or SINGLE_FLIGHT_RE.search(ls[o - 1]):
             continue
         aw_line = ls[aw - 1]
-        k = max(aw_line.find("await"), 0)
+        k = aw_line.find("await")
+        if k < 0:                                  # a Kotlin suspend call: the request is the right-hand side
+            m = re.search(r"(?<![=!<>])=(?!=)", aw_line)
+            k = m.end() if m else 0
         stmt, depth = [], 0
         for i in range(aw - 1, min(len(ls), aw + 5)):
             x = ls[i][k:] if i == aw - 1 else ls[i]
@@ -144,10 +167,10 @@ def stale_async(st: GraphStore, include_tests: bool = False, limit: int = 500) -
         # the written value must come from the awaited result: a name bound on the await line (or derived from one
         # after it), or the await itself on the write line; a loading flag reset after the await is not a stale result
         res_vars = set()
-        for t in ls[aw - 1:r["line"] - 1]:
+        for j, t in enumerate(ls[aw - 1:r["line"] - 1]):
             m = DECL_RE.search(t) or re.search(r"^\s*(?:self\.)?([A-Za-z_$][\w$]*)\s*=(?!=)", t)
             nm = m and (m.group(1) or (m.group(2) if m.lastindex and m.lastindex >= 2 else None))
-            if nm and (AWAIT_RE.search(t) or any(re.search(rf"(?<![\w$.]){re.escape(v)}\b", t.split("=", 1)[-1]) for v in res_vars)):
+            if nm and (_aw(t, r["file"], aw + j) or any(re.search(rf"(?<![\w$.]){re.escape(v)}\b", t.split("=", 1)[-1]) for v in res_vars)):
                 res_vars.add(nm)
         wl = ls[r["line"] - 1]
         if r["line"] - 1 == aw - 1:
@@ -182,7 +205,8 @@ LIFECYCLE_RE = re.compile(r"\.onAppear\b|\bonAppear\s*\(|\.task\s*[({]|\bonMount
 CALLBACK_RE = re.compile(r"\.sink\s*\{|\.onReceive\s*\(|\.subscribe\s*[({]|\.collect(?:Latest)?\s*\{|\.observe\w*\s*\(|"
                          r"\bcompletion(?:Handler)?\s*:\s*\{|\{\s*\[?\s*(?:weak|unowned)\s+self\s*\]?|\.then\s*\(|\.on\s*\(\s*['\"]")
 LITERAL_RHS_RE = re.compile(r"(?<![=!<>])=\s*(?:\[\s*\]|\[:\]|\{\s*\}|nil|null|None|undefined|0(?:\.0+)?[fFdDL]?|false|False|true|True|"
-                            r"''|\"\"|emptyList\(\)|emptyMap\(\)|mutableListOf\(\)|\.init\(\)|\w+\(\)|\.\w+)\s*;?\s*$")
+                            r"''|\"\"|emptyList\(\)|emptyMap\(\)|mutableListOf\(\)|\.init\(\)|\w+\(\)|\.\w+|"
+                            r"[A-Z]\w*(?:\.[A-Z]\w*)+(?:\(\))?)\s*;?\s*$")     # a sentinel: `AsyncData.Loading()`, `UiState.Idle`
 LITERAL_ARG_RE = re.compile(r"\(\s*(?:nil|null|None|undefined|true|false|True|False|-?\d+(?:\.\d+)?|'[^']*'|\"[^\"]*\"|\[\s*\]|\{\s*\})\s*\)\s*;?\s*$")
 INIT_NAMES = {"init", "__init__", "constructor", "<init>", "viewDidLoad", "onCreate", "initState", "mounted", "created", "setup"}
 
@@ -198,7 +222,7 @@ def _lifecycle(st, ls, r, node) -> str | None:
     """Is this write lifecycle code: an initializer with a real (non-default) value, or code directly inside
     onAppear / .task (before any await) / onMounted / LaunchedEffect / useEffect / viewDidLoad?"""
     t = ls[r["line"] - 1]
-    if AWAIT_RE.search(t):
+    if _aw(t, r["file"], r["line"]):
         return None
     nm = ((node["name"] if node is not None else "") or "").split(".")[-1]
     if nm in INIT_NAMES or (node is not None and node["kind"] == "class"):
@@ -212,7 +236,7 @@ def _lifecycle(st, ls, r, node) -> str | None:
     lo = max(1, r["line"] - 6)
     for i in range(r["line"], lo - 1, -1):
         x = ls[i - 1]
-        if i < r["line"] and AWAIT_RE.search(x):
+        if i < r["line"] and _aw(x, r["file"], i):
             return None
         m = LIFECYCLE_RE.search(x)
         if m:
@@ -225,7 +249,8 @@ def _async_callback(ls, r, lo) -> str | None:
     op = _opener(ls, r["line"], lo)
     if op is not None:
         body = ls[op[1] - 1:r["line"] - 1]
-        if any(AWAIT_RE.search(x) for x in body[1:]) or AWAIT_RE.search(body[0][body[0].find("{") + 1:] if body else ""):
+        if any(_aw(x, r["file"], op[1] + j) for j, x in enumerate(body) if j) or \
+                (body and AWAIT_RE.search(body[0][body[0].find("{") + 1:])):
             return f"after await in {op[0]}"
     for i in range(r["line"] - 1, max(lo, r["line"] - 8) - 1, -1):
         m = CALLBACK_RE.search(ls[i - 1]) if i >= 1 else None
@@ -235,6 +260,7 @@ def _async_callback(ls, r, lo) -> str | None:
 
 
 def two_writers(st: GraphStore, include_tests: bool = False) -> list[dict]:
+    _load_suspend(st)
     root = st.meta().get("root")
     cache: dict = {}
     rows = st.q("""SELECT e.src, e.dst, e.file, e.line, e.attrs, n.line AS fl FROM edges e JOIN nodes n ON n.id = e.src
@@ -361,6 +387,14 @@ def incomplete_cache_key(st: GraphStore, include_tests: bool = False) -> list[di
         sig = "\n".join(body[:3])
         sig = sig[sig.find("("):] if "(" in sig else ""
         params = _idents(_split_args(sig[1:]) and ",".join(re.sub(r"[:=].*", "", a, flags=re.S) for a in _split_args(sig[1:])) or "")
+        # instance fields used without `self.` / `this.` (Swift, Kotlin): the READS_PROP edges bind them
+        own = {e["dst"].rsplit(".", 1)[-1] for e in st.q("SELECT dst, attrs FROM edges WHERE kind = 'READS_PROP' AND src = ?",
+                                                         (fn["id"],))
+               if json.loads(e["attrs"] or "{}").get("receiver") in (None, "self", "this")}
+        text = "\n".join(body)
+        # ... unless the field is an object the function calls (`client.get(…)`, `mediaLoader.load(…)`): a dependency,
+        # not an input of the cached value
+        own = {f for f in own if not re.search(rf"(?<![\w$.]){re.escape(f)}\s*[?!]?\.\s*\w+\s*[({{]", text)}
         assigns: dict = {}
         for off, t in enumerate(body):
             m = re.search(r"\b(?:let|var|val|const)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=(?!=)(.*)|^\s*([a-z_$][\w$]*)\s*=(?!=)(.*)", t)
@@ -384,8 +418,10 @@ def incomplete_cache_key(st: GraphStore, include_tests: bool = False) -> list[di
                 vb = val.strip().rstrip(";")
                 if re.fullmatch(r"[A-Za-z_$][\w$]*", vb) and vb not in assigns:
                     continue                    # `put(key, value)` passes a value through; nothing is computed here
-                kids = _expand(_idents(key), assigns)
-                vids = _expand(_idents(val), assigns) - {vb}
+                bare = lambda ids: {f"self_{i}" if i in own and i not in params and i not in assigns else i  # noqa: E731
+                                    for i in ids}
+                kids = bare(_expand(_idents(key), assigns))
+                vids = bare(_expand(_idents(val), assigns)) - {vb}
                 setter = re.match(r"(?:set|put|insert|store|save|cache|add|update|write|remember|record)(?![a-z])",
                                   (fn["fqn"] or "").split(".")[-1].split("(")[0])
                 inputs = {i for i in vids if (i in params and not setter and not PAYLOAD_RE.fullmatch(i.lstrip("$")))
@@ -421,6 +457,7 @@ def echo_suppression(st: GraphStore, include_tests: bool = False, patterns: list
     programmatic writes of some state so the change observer, which checks the guard and returns early, does not
     echo them back. Reports state of that pattern that is also written from an async path / callback *without*
     setting the guard: that write reaches the observer and is sent back (a loop or a clobbered edit)."""
+    _load_suspend(st)
     root = st.meta().get("root")
     cache: dict = {}
     guards = [r["id"] for r in st.q("SELECT id, name FROM nodes WHERE kind = 'field'") if GUARD_FIELD_RE.fullmatch((r["name"] or "").rsplit(".", 1)[-1].replace("_", ""))]

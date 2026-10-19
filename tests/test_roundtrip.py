@@ -126,3 +126,15 @@ def test_call_args_scopes_caller_hop():
     stmt = "rooms.insert(Room(spaceRoom: spaceRoom), at: Int(index))"
     assert _call_args(St(), stmt, "method:Room.init", "spaceRoom").strip() == "spaceRoom"
     assert _call_args(St(), "x = Room(spaceRoom: Int(v), other: 1)", "method:Room.init", "spaceRoom") == "Int(v)"
+
+
+@pytest.mark.parametrize("lang", ["swift", "kotlin", "python"])
+def test_all_properties_one_pass(lang):
+    """`cg roundtrip --all` finds the same round trips as asking for the property, in one pass over every field."""
+    pytest.importorskip("tree_sitter_swift" if lang == "swift" else "tree_sitter_kotlin" if lang == "kotlin" else "json")
+    one = rt(lang)["findings"]
+    allr = RT.roundtrip_all(GraphStore(db(lang)))
+    got = [(f["write"], f["read"]) for f in allr["findings"] if f["state"] in rt(lang)["fields"]]
+    assert one and got == [(f["write"], f["read"]) for f in one]
+    assert allr["fields_with_writes"] >= 1 and allr["lossy_writes"] >= 1
+    assert "round trips" in RT.render_all(allr)

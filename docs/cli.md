@@ -28,7 +28,7 @@
 | `writers SPEC` | Writers of a table, a column, or a stored property (`WRITES_TABLE`, `WRITES_COLUMN`, `WRITES_PROP`). `SPEC` is `table`, `table:X`, `table.column`, `column:table.column`, `Type.prop` or `Class::$prop`. A column lists its column writers, then "table-level writes (columns not recorded)". `--json` rows carry `target_kind` (`table`, `column`, `property`) and `connection`. `--connection NAME` keeps one database connection. | [spec forms](#readers-and-writers-specs) |
 | `readers SPEC` | Readers of a table (`READS_TABLE`, `READS_COLUMN` grouped by column), a column (`READS_COLUMN`), or a stored property (`READS_PROP`). Same `SPEC` forms as `writers`. Heuristic string matches (`MENTIONS_COLUMN`) come last and are labelled. `--connection NAME` keeps one database connection. | [spec forms](#readers-and-writers-specs) |
 | `siblings SYMBOL` | Hierarchy, the same method on siblings, shared resources, co-callers. | `cg siblings -h` |
-| `roundtrip Type.prop` | Heuristic lossy-write / UI-seed pairs. `--tests` includes test code. Nothing is written to the graph. | [heuristics](#heuristics) |
+| `roundtrip Type.prop` / `roundtrip --all` | Heuristic lossy-write / UI-seed pairs; `--all` checks every stored property in one pass and lists only the round trips. `--tests` includes test code. Nothing is written to the graph. | [heuristics](#heuristics) |
 | `lint async-state` | Heuristic rules `stale-async-result`, `two-writers`, `incomplete-cache-key`, `echo-suppression`. `--rules` is a subset. `--tests` includes test code. | [heuristics](#heuristics) |
 | `api-calls SPEC` | Client endpoints, call sites, request keys, matched route. SPEC is `all`, `unmatched`, a substring, or a `*` glob. | `cg api-calls -h` |
 | `channels [PATTERN]` | Who can join, who publishes, who listens. `--no-source` hides source. | [channels](channels-and-tests.md#broadcast-channels) |
@@ -241,7 +241,12 @@ PUT /api/v1/admin/books/{id}  @bookstore-api/routes/api.php:24  NO AUTH
 Both are labelled `heuristic` in text and in JSON (`confidence`). Neither adds edges.
 
 - `roundtrip` pairs a write of a stored property through a lossy transform with a read that seeds UI state (path: write, lossy call, property, read, seed, each with `file:line`). MCP tool: `roundtrip(prop)`.
-- `lint async-state` runs all four rules unless `--rules` lists a subset. MCP tool: `lint_async_state`.
+- `roundtrip --all` reads every write site once and reads only for properties with a lossy write: about 1 s on a
+  5,000-field app, against minutes for one call per property. MCP: `roundtrip(prop="")`.
+- `lint async-state` runs all four rules unless `--rules` lists a subset. MCP tool: `lint_async_state`. An await point
+  is an `await` / `.await()` / `withContext` / `delay` marker or, in Kotlin, a call of a project `suspend` function
+  (`val hits = repo.find(q)` inside `launch { }`). `incomplete-cache-key` counts a Swift / Kotlin field used without
+  `self.` / `this.` as an input, unless the function calls methods on it (`client.get(…)`, a dependency).
 
 ## explore
 

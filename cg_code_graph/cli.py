@@ -317,7 +317,8 @@ def main(argv=None):
     p.add_argument("--json", action="store_true"); p.add_argument("--tests", action="store_true", help="include test code")
     p = sub.add_parser("roundtrip", help="heuristic: writes of a stored property `Type.prop` through a lossy transform, "
                                          "read back to seed UI state (#88)")
-    p.add_argument("spec"); p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("spec", nargs="?"); p.add_argument("--db", required=True); p.add_argument("--json", action="store_true")
+    p.add_argument("--all", action="store_true", help="every stored property in one pass: only the round trips")
     p.add_argument("--tests", action="store_true", help="include test code's reads and writes")
     p = sub.add_parser("viz-plan", help="self-contained HTML overlay of a plan on the real graph")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("-o", "--out", required=True); p.add_argument("--plans-dir")
@@ -769,8 +770,14 @@ def main(argv=None):
         print(json.dumps(res, indent=1) if a.json else LA.render(res))
     elif a.cmd == "roundtrip":
         from . import roundtrip as RT
-        res = RT.roundtrip(st, a.spec, include_tests=a.tests)
-        print(RT.to_json(res) if a.json else RT.render(res))
+        if a.all or not a.spec:
+            if not a.all:
+                sys.exit("cg roundtrip: give a property `Type.prop`, or --all")
+            res = RT.roundtrip_all(st, include_tests=a.tests)
+            print(RT.to_json(res) if a.json else RT.render_all(res))
+        else:
+            res = RT.roundtrip(st, a.spec, include_tests=a.tests)
+            print(RT.to_json(res) if a.json else RT.render(res))
     elif a.cmd in ("writers", "readers"):
         groups = Q.access(st, a.spec, a.cmd, a.connection)
         rows = [r for g in groups for r in g["rows"]]

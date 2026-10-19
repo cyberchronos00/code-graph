@@ -119,6 +119,13 @@ def _bounds(text: str) -> tuple[float, float] | None:
 
 def _fn_bounds(st: GraphStore, src: _Src, name: str) -> tuple[float, float] | None:
     """Bounds inside a project function `name` (`func clamp(_ v: Double) -> Double { min(max(v, 0), 10) }`)."""
+    memo = src.__dict__.setdefault("bounds", {})
+    if name not in memo:
+        memo[name] = _fn_bounds1(st, src, name)
+    return memo[name]
+
+
+def _fn_bounds1(st: GraphStore, src: _Src, name: str) -> tuple[float, float] | None:
     for r in st.q("SELECT file, line, end_line FROM nodes WHERE kind IN ('function','method') AND name=? LIMIT 3", (name,)):
         ls = src.lines(r["file"])
         body = "\n".join(ls[(r["line"] or 1) - 1:(r["end_line"] or r["line"] or 1)])
@@ -273,8 +280,19 @@ def roundtrip(st: GraphStore, spec: str, include_tests: bool = False) -> dict:
     for r in Q.prop_access(st, spec, "READS_PROP"):
         if include_tests or not r.get("test"):
             res["reads"].append(_read_site(st, src, r))
-    lossy = [w for w in res["writes"] if w["lossy"]]
-    seeds = [x for x in res["reads"] if x["seeds"]]
+    res["findings"] = _pair(src, res["writes"], res["reads"], prop)
+    for x in res["writes"]:
+        x.pop("_span", None)
+    for x in res["reads"]:
+        x.pop("_src", None)
+    return res
+
+
+def _pair(src, writes, reads, prop) -> list[dict]:
+    """Findings: a lossy write and a read of the same property that seeds UI state."""
+    out = []
+    lossy = [w for w in writes if w["lossy"]]
+    seeds = [x for x in reads if x["seeds"]]
     for w in lossy:
         b = w["lossy"].get("bounds")
         for x in seeds:
@@ -287,12 +305,58 @@ def roundtrip(st: GraphStore, spec: str, include_tests: bool = False) -> dict:
                  "read": x["at"], "seeds": x["seeds"], "wider_ranges": []}
             if b:
                 f["wider_ranges"] = _ranges(src, x["at"].rsplit(":", 1)[0], tuple(b))[:5]
-            res["findings"].append(f)
-    for x in res["writes"]:
-        x.pop("_span", None)
-    for x in res["reads"]:
-        x.pop("_src", None)
+            out.append(f)
+    return out
+
+
+def roundtrip_all(st: GraphStore, include_tests: bool = False) -> dict:
+    """Every stored property in one pass (`cg roundtrip --all`): write sites are read once, file lines and callee
+    bounds are shared, and reads are looked at only for properties with a lossy write."""
+    root = st.meta().get("root")
+    globs, lsrc = lossy_names(st, root)
+    src = _Src(root)
+    stored = {r["id"]: r["fqn"] or r["name"] or r["id"] for r in st.q(
+        """SELECT id, fqn, name FROM nodes WHERE kind IN ('field', 'property') AND attrs LIKE '%"property": "stored"%'""")}
+
+    def rows(kind):
+        by: dict = {}
+        for r in st.q("""SELECT e.src, e.dst, e.kind, e.file, e.line, n.fqn FROM edges e JOIN nodes n ON n.id = e.src
+                         WHERE e.kind = ? OR (e.kind = 'TEST_USES' AND e.attrs LIKE ?) ORDER BY e.dst, e.file, e.line""",
+                      (kind, f'%"orig": "{kind}"%')):
+            if r["dst"] in stored and r["file"] and (include_tests or r["kind"] != "TEST_USES"):
+                d = dict(r)
+                d["test"] = r["kind"] == "TEST_USES"
+                by.setdefault(r["dst"], []).append(d)
+        return by
+
+    res = {"confidence": "heuristic", "lossy_sources": lsrc, "fields_with_writes": 0, "lossy_writes": 0, "findings": []}
+    writes = rows("WRITES_PROP")
+    res["fields_with_writes"] = len(writes)
+    lossy: dict = {}
+    for fid, ws in writes.items():
+        prop = re.split(r"[.$:#]", stored[fid])[-1]
+        sites = [_write_site(st, src, r, prop, globs) for r in ws]
+        if any(w["lossy"] for w in sites):
+            lossy[fid] = (prop, sites)
+            res["lossy_writes"] += sum(1 for w in sites if w["lossy"])
+    if lossy:
+        reads = rows("READS_PROP")
+        for fid, (prop, sites) in lossy.items():
+            for f in _pair(src, sites, [_read_site(st, src, r) for r in reads.get(fid, [])], prop):
+                res["findings"].append(dict(f, state=fid))
     return res
+
+
+def render_all(res: dict) -> str:
+    out = [f"roundtrip --all — heuristic; lossy names: {', '.join(res['lossy_sources'])}",
+           f"{res['fields_with_writes']} stored properties with writes, {res['lossy_writes']} lossy writes, "
+           f"{len(res['findings'])} round trips"]
+    for f in res["findings"]:
+        out.append(f"  {f['state']}: write @{f['write']} -> {'/'.join(f['lossy']['calls'])} @{f['lossy']['at']} "
+                   f"-> read @{f['read']} -> seeds {f['seeds']}")
+        for g in f["wider_ranges"]:
+            out.append(f"      un-narrowed range {_fmt(g['range'])} @{g['at']}: {g['code']}")
+    return "\n".join(out)
 
 
 def _read_back(src, w, x, prop) -> bool:

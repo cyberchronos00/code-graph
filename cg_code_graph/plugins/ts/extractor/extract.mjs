@@ -983,6 +983,7 @@ const STATE_HOOKS = new Set(['useState', 'useReducer', 'ref', 'shallowRef', 'rea
 const optFields = new Map()       // options ObjectLiteralExpression -> Map(name -> field id)
 const storeFields = new Map()     // store VariableDeclaration -> Map(name -> field id)
 const optNames = new Set()
+const fileOptData = new Map()     // rel .vue path -> Map(data() key -> field id): bare names in its template
 function returnedObject(f) {
   if (!f) return null
   f = unwrap(f)
@@ -1013,6 +1014,7 @@ function optionsFields(sf, r, fid) {
     }
     optFields.set(obj, m)
     if (storeDecl) storeFields.set(storeDecl, m)
+    if (hook === 'data') { const f = fileOptData.get(r) || new Map(); for (const [k, v] of m) f.set(k, v); fileOptData.set(r, f) }
   }
   const scan = (n) => {
     if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'defineStore') {
@@ -1063,6 +1065,20 @@ function optionsRef(node, cur, sf, r) {
   const [write, via] = writeOf(node)
   const recv = node.expression.kind === ts.SyntaxKind.ThisKeyword ? 'this' : node.expression.getText(sf).slice(0, 40)
   addEdge(cur, fid, write ? 'WRITES_PROP' : 'READS_PROP', r, lineOf(node, sf), m === null ? 'resolved' : (recv === 'this' ? 'exact' : 'resolved'), { receiver: recv, ...(via ? { via } : {}) })
+  stats[write ? 'state_field_writes' : 'state_field_reads'] = (stats[write ? 'state_field_writes' : 'state_field_reads'] || 0) + 1
+}
+// `{{ count }}` / `@click="count++"` in the template of an Options API component: a bare data() key (#88)
+function optionsTplRef(node, cur, sf, r) {
+  const m = fileOptData.get(r), fid = m && m.get(node.text)
+  if (!fid || fid === cur || !isTemplateLine(node, sf)) return
+  const p = node.parent
+  if (p && ((ts.isPropertyAccessExpression(p) && p.name === node) || (ts.isPropertyAssignment(p) && p.name === node)
+      || ts.isParameter(p) || ts.isFunctionDeclaration(p))) return
+  let s = null
+  try { s = checker.getSymbolAtLocation(node) } catch { }
+  if (s && (s.declarations || []).length) return          // a v-for variable / slot prop / import of that name
+  const [write, via] = writeOf(node)
+  addEdge(cur, fid, write ? 'WRITES_PROP' : 'READS_PROP', r, lineOf(node, sf), 'resolved', { template: true, ...(via ? { via } : {}) })
   stats[write ? 'state_field_writes' : 'state_field_reads'] = (stats[write ? 'state_field_writes' : 'state_field_reads'] || 0) + 1
 }
 function stateDecl(d, cur, sf, r) {
@@ -2865,6 +2881,7 @@ for (const sf of sourceFiles) {
     if (ts.isVariableDeclaration(node) && node.initializer && cur) stateDecl(node, cur, sf, r)
     if (ts.isIdentifier(node) && stateNames.has(node.text) && cur) stateRef(node, cur, sf, r)
     if (ts.isPropertyAccessExpression(node) && optNames.has(node.name.text) && cur) optionsRef(node, cur, sf, r)
+    if (isVue && ts.isIdentifier(node) && optNames.has(node.text) && cur && fileOptData.has(r)) optionsTplRef(node, cur, sf, r)
     // .astro: `<a href>` inside a template expression (`{posts.map(p => <a href={`/blog/${p.slug}`}>)}`) is navigation,
     // like a top-level one (the scanner handles those)
     if (isAstro && ts.isJsxAttribute(node) && node.initializer && ts.isIdentifier(node.name) && node.name.text === 'href'

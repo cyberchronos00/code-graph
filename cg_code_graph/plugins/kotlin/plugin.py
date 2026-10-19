@@ -207,6 +207,12 @@ def _suspend_lambdas(src: bytes) -> tuple[bytes, int]:
 # `get<T>` the whitespace character in front of `get` / `set` becomes `;`. That ends the declaration and keeps every
 # byte offset.
 _ROUTE_ACCESSOR = re.compile(rb"([ \t]*)[ \t]((?:get|set)\s*(?:\(\s*(?:\"|\"\"\")|\{|<))")
+# `var x by remember { mutableStateOf(..) }`, `by rememberSaveable { .. }`, `by mutableStateOf(..)`,
+# `by vm.state.collectAsState()` / `collectAsStateWithLifecycle()`, `by produceState(..)`, `by derivedStateOf { }`
+LOCAL_STATE = re.compile(r"\b(var|val)\s+(\w+)(?:\s*:\s*[^=\n]+?)?\s+by\s+(?:remember(?:Saveable)?\b[^\n{]*\{\s*"
+                         r"(mutable\w*StateOf|derivedStateOf|mutableStateListOf|mutableStateMapOf)"
+                         r"|(mutable\w*StateOf|derivedStateOf)\s*[({]|[\w.]*?\b(collectAs\w*State\w*)\s*\("
+                         r"|(produceState|observeAsState|subscribeAsState)\b|[\w.]*?\.(observeAsState|subscribeAsState)\s*\()")
 _DECL_LINE = re.compile(rb"^\s*(?:(?:private|internal|public|protected|const|lateinit|override|open)\s+)*(?:val|var)\s")
 
 
@@ -321,6 +327,7 @@ class KotlinPlugin(LanguagePlugin):
         # stored properties of a class / enum are `field:<Type>.<name>` nodes with READS_PROP / WRITES_PROP (#88)
         self.fields: dict[str, dict[str, str]] = defaultdict(dict)        # class fqn -> name -> field id
         self.field_names: set[str] = set()
+        self.local_state: dict[str, dict[str, str]] = defaultdict(dict)   # function id -> local state name -> field id
         self.copies: list[tuple] = []         # (owner, receiver (type, text), [(arg name, line)], kf, decl): `x.copy(a = 1)`
         self.frefs: list[tuple] = []          # (owner_id, name, receiver (type, text) | None, line, file, decl, write)
         self.reads: list[tuple] = []          # (owner_id, name, receiver node, line, file obj, decl, read | write)
@@ -617,6 +624,7 @@ class KotlinPlugin(LanguagePlugin):
                 if any(dflt for _n, dflt, _f in fparams):
                     self.fn_params[dc.id] = fparams
                 self._add_decl(dc, kind)
+                self._local_state(dc, kf, c)
                 self._local_fns(c, kf, dc)
             elif ty == "enum_entry" and cls is not None:
                 nm = self._name(c)
@@ -654,6 +662,30 @@ class KotlinPlugin(LanguagePlugin):
         self.fields[cls.fqn][nm] = fid
         self.field_names.add(nm)
         self.st["stored_property_nodes"] += 1
+
+    def _local_state(self, dc: Decl, kf: KFile, c):
+        """Compose state held in a local delegate (`var count by remember { mutableIntStateOf(0) }`, `val ui by
+        vm.state.collectAsStateWithLifecycle()`): a `field:<function>.<name>` node (`property: state`, `hook`) whose
+        reads and writes inside the function are READS_PROP / WRITES_PROP, like React `useState` (#105, #88)."""
+        txt = self.t(c)
+        if " by " not in txt:
+            return
+        for m in LOCAL_STATE.finditer(txt):
+            nm = m.group(2)
+            if nm in self.local_state[dc.id]:
+                continue
+            hook = next(g for g in m.groups()[2:] if g).split(".")[-1]
+            line = c.start_point[0] + 1 + txt.count("\n", 0, m.start(2))
+            a = {"property": "state", "hook": hook, "binding": m.group(1), "local": True}
+            if kf.test:
+                a["test"] = True
+            fid = self.b.add_node("field", f"{dc.fqn}.{nm}", name=nm, fqn=f"{dc.fqn}.{nm}", file=kf.rel, line=line,
+                                  end_line=line, module=getattr(self.b.nodes.get(dc.id), "module", None), lang="kotlin",
+                                  attrs=a)
+            self.b.add_edge(dc.id, fid, "CONTAINS", kf.rel, line, EXACT)
+            self.local_state[dc.id][nm] = fid
+            self.field_names.add(nm)
+            self.st["local_state_nodes"] += 1
 
     def _prop_kind(self, c) -> tuple | None:
         """(property kind, accessors) of a property that runs code when read or written (#89): a custom `get()` /
@@ -1954,6 +1986,13 @@ class KotlinPlugin(LanguagePlugin):
                 decl if decl is not None and decl.kind == "class" else None)
             fid = None
             rt = recv[1] if recv is not None else None
+            loc = self.local_state.get(decl.id, {}).get(name) if recv is None and decl is not None else None
+            if loc:
+                if loc != owner:
+                    self.b.add_edge(owner, loc, "WRITES_PROP" if write else "READS_PROP", kf.rel, line, RESOLVED,
+                                    receiver="local", **({"via": write} if isinstance(write, str) else {}))
+                    self.st["local_state_writes" if write else "local_state_reads"] += 1
+                continue
             if recv is None or rt == "this":
                 if recv is None and self._shadowed_local(decl, name, kf):
                     continue

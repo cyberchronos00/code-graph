@@ -877,13 +877,16 @@ def _access_text(st, spec: str, what: str, limit: int, connection: str | None = 
 
 
 @tool
-def roundtrip(prop: str, include_tests: bool = False) -> str:
+def roundtrip(prop: str = "", include_tests: bool = False) -> str:
     """Heuristic (#88): does a stored property `Type.prop` round-trip through a lossy transform? Each write site with
     the lossy call it passes through (clamp, min/max, round, truncating casts, `fit*`, `.cg.yaml` `lossy:` names,
     `@cg-lossy` functions; within the function plus one hop through direct callers), each read site that seeds UI
     state (init, onAppear, remember, useState(initial), mounted), and un-narrowed ranges drawn next to such a read.
-    Findings are heuristic evidence with file:line, not proof."""
+    Findings are heuristic evidence with file:line, not proof. An empty `prop` (or `*`) checks every stored property
+    in one pass and lists only the round trips."""
     from . import roundtrip as RT
+    if prop.strip() in ("", "*"):
+        return RT.render_all(RT.roundtrip_all(_st(), include_tests=include_tests))
     return RT.render(RT.roundtrip(_st(), prop, include_tests=include_tests))
 
 

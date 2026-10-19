@@ -167,7 +167,9 @@ The checker’s property access is `READS_PROP` / `WRITES_PROP` (`exact`). Write
 `.js`, `this.x =` without a declaration is `declared: this`.
 
 Pinia `state` keys and Vue `data()` keys use the same edges (`hook: pinia` / `data`), from
-`this.x`, `useStore().x`. React `useState` / `useReducer` and Vue `ref` / `reactive` in a
+`this.x`, `useStore().x`. In an Options API template a bare `{{ count }}`, `:title="label"` or
+`@click="count++"` reads or writes the `data()` key (`template: true`); a `v-for` variable of that name does
+not. React `useState` / `useReducer` and Vue `ref` / `reactive` in a
 component or composable are `property: state`; `setCount(...)` is `via: setter`. Passing the
 setter on is not a write. A `RENDERS` or `INSTANTIATES` edge inside `if` / `switch` / `&&`
 carries `branch` and `branch_line`.

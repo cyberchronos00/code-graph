@@ -45,7 +45,10 @@ def test_swift():
 
 
 def test_kotlin():
-    assert found("kotlin") == [("src/main/kotlin/app/Search.kt:10", "launch", "heuristic")]  # not :19 (requestId)
+    # not :19 (requestId); SuspendSearch.kt:9 awaits a plain `suspend` call (no marker), :16 is a fixed request and
+    # :23 calls a non-suspend function
+    assert found("kotlin") == [("src/main/kotlin/app/Search.kt:10", "launch", "heuristic"),
+                               ("src/main/kotlin/app/SuspendSearch.kt:9", "launch", "heuristic")]
 
 
 def test_react():
@@ -87,8 +90,8 @@ def test_mcp_tool(monkeypatch):
 
 
 @pytest.mark.parametrize("lang,at,missing", [
-    ("swift", "Sources/App/Cache.swift:9", ["size"]),
-    ("kotlin", "src/main/kotlin/app/Cache.kt:8", ["size"]),
+    ("swift", "Sources/App/Cache.swift:9", ["self.scale", "size"]),      # `scale` is a field used without `self.`
+    ("kotlin", "src/main/kotlin/app/Cache.kt:9", ["size"]),
     ("react", "src/Cache.tsx:5", ["size"]),
     ("python", "app/cache.py:8", ["self.theme"]),
 ])
@@ -102,7 +105,7 @@ def test_incomplete_cache_key(lang, at, missing):
         pytest.skip("node not installed")
     got = [(f["at"], f["missing"], f["confidence"]) for f in LA.lint(GraphStore(db(lang)))["findings"]
            if f["rule"] == "incomplete-cache-key"]
-    assert got == [(at, missing, "heuristic")]
+    assert got[0] == (at, missing, "heuristic") and len(got) == (2 if lang == "kotlin" else 1)   # + Kotlin `icon`
 
 
 def test_cache_key_idents():
@@ -142,3 +145,17 @@ def test_rules_subset():
     out = subprocess.run([sys.executable, "-m", "cg_code_graph.cli", "lint", "async-state", "--db", str(db("python")),
                           "--rules", "incomplete-cache-key"], capture_output=True, text=True, check=True, cwd=ROOT).stdout
     assert "[incomplete-cache-key]" in out and "[echo-suppression]" not in out
+
+
+def test_incomplete_cache_key_bare_kotlin_field():
+    """`render(url, size * density)` keyed by url and size: `density` is a field used without `this.`."""
+    got = [(f["at"], f["missing"]) for f in LA.lint(GraphStore(db("kotlin")))["findings"] if f["rule"] == "incomplete-cache-key"]
+    assert ("src/main/kotlin/app/Cache.kt:21", ["self.density"]) in got, got
+
+
+def test_sentinel_reset_is_a_default():
+    """`searchResults = AsyncData.Loading()` / `= UiState.Idle` reset state to a sentinel: not a competing value."""
+    assert LA.LITERAL_RHS_RE.search("searchResults = AsyncData.Loading()")
+    assert LA.LITERAL_RHS_RE.search("state = UiState.Idle")
+    assert not LA.LITERAL_RHS_RE.search("results = Search.run(query)")
+    assert not LA.LITERAL_RHS_RE.search("now = clock.now()")
