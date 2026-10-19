@@ -8,6 +8,26 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.11] - 2026-10-19
+
+### Added
+
+- `cg roundtrip --all` (MCP `roundtrip(prop="")`): every stored property in one pass, listing only the round trips.
+  About 1 s on a 5,000-field iOS app, where one call per property took minutes (#233).
+- Compose state in a local delegate (`var count by remember { mutableIntStateOf(0) }`, `by rememberSaveable { }`,
+  `by mutableStateOf()`, `by vm.state.collectAsStateWithLifecycle()`, `by produceState`) is a `field:<function>.<name>`
+  node (`property: state`, `hook`, `local`) with READS_PROP / WRITES_PROP for bare uses in the function and its
+  lambdas (#234).
+- Vue Options API templates: a bare `{{ count }}`, `:title="label"` or `@click="count++"` reads / writes the `data()`
+  key (`template: true`); a `v-for` variable of that name does not (#234).
+
+### Changed
+
+- `cg lint async-state`: a call of a project Kotlin `suspend` function (`val hits = repo.find(q)` inside `launch { }`)
+  is an await point. `incomplete-cache-key` counts a Swift / Kotlin field used without `self.` / `this.` as an input,
+  unless the function calls methods on it. `two-writers` treats a sentinel reset (`= AsyncData.Loading()`,
+  `= UiState.Idle`) as a default (#233).
+
 ## [0.23.10] - 2026-10-19
 
 ### Added
@@ -1809,7 +1829,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.10...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.11...HEAD
+[0.23.11]: https://github.com/cyberchronos00/code-graph/compare/v0.23.10...v0.23.11
 [0.23.10]: https://github.com/cyberchronos00/code-graph/compare/v0.23.9...v0.23.10
 [0.23.9]: https://github.com/cyberchronos00/code-graph/compare/v0.23.8...v0.23.9
 [0.23.8]: https://github.com/cyberchronos00/code-graph/compare/v0.23.7...v0.23.8

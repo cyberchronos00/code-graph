@@ -3,7 +3,7 @@
   "name": "io.github.cyberchronos00/cg-code-graph",
   "title": "code-graph",
   "description": "Local dependency graph: callers, entry points and file:line evidence for what a change affects.",
-  "version": "0.23.10",
+  "version": "0.23.11",
   "websiteUrl": "https://code-graph.cyberchronos00.workers.dev/",
   "repository": {
     "url": "https://github.com/cyberchronos00/code-graph",
@@ -23,7 +23,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "cg-code-graph",
-      "version": "0.23.10",
+      "version": "0.23.11",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
