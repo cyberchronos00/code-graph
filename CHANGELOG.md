@@ -8,6 +8,18 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.8] - 2026-10-19
+
+### Added
+
+- `cg parity --structure` pairs types still missing by the fields they declare (confidence `fields`). Stored properties count under their wire names: Swift `CodingKeys` raw values, or Kotlin `@SerialName` / `@SerializedName` / `@Json(name =)`. So a Swift `Codable` model meets its renamed Kotlin `@Serializable` port. Enum cases are compared with enum cases. On Bitwarden this adds 52 and 55 inferred pairs, mostly request / response models and their `…Json` counterparts. See [parity.md](docs/parity.md) (#226, #93).
+- Image and raw resources (`Image("x")`, `UIImage(named:)`, `Asset.Images.x`, `Image(.x)`, `R.drawable.x`, `Res.drawable.x`) are a structure feature (`res:`) (#226).
+- `cg parity --both-sides` lists the matched pairs and what only the target has (`== ONLY IN TARGET`, `--json` `target_only`): unmatched target types and top-level symbols, plus unmatched members of matched target types (#226).
+
+### Changed
+
+- `cg parity --structure`: a pair whose shared uses are all generic (found in more than three files on a side, such as `l10n:cancel` or `l10n:yes`) now needs two shared name words. Numbers are in [validation-log.md](docs/validation-log.md#parity-fields-resources-generic-keys-93) (#226).
+
 ## [0.23.7] - 2026-10-19
 
 ### Added
@@ -1761,7 +1773,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.7...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.8...HEAD
+[0.23.8]: https://github.com/cyberchronos00/code-graph/compare/v0.23.7...v0.23.8
 [0.23.7]: https://github.com/cyberchronos00/code-graph/compare/v0.23.6...v0.23.7
 [0.23.6]: https://github.com/cyberchronos00/code-graph/compare/v0.23.5...v0.23.6
 [0.23.5]: https://github.com/cyberchronos00/code-graph/compare/v0.23.4...v0.23.5
