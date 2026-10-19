@@ -172,7 +172,7 @@ Pinia `state` keys and Vue `data()` keys use the same edges (`hook: pinia` / `da
 not. React `useState` / `useReducer` and Vue `ref` / `reactive` in a
 component or composable are `property: state`; `setCount(...)` is `via: setter`. Passing the
 setter on is not a write. A `RENDERS` or `INSTANTIATES` edge inside `if` / `switch` / `&&`
-carries `branch` and `branch_line`.
+carries `branch` and `branch_line`. Two branches that render the same component on one line are two edges.
 
 `cg readers` / `cg writers` take `Class.field`. Public numbers:
 [TypeScript / JavaScript frameworks](validation-log.md#typescript--javascript-frameworks).

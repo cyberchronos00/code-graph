@@ -10,3 +10,7 @@ export function App({ user, mode }) {
   }
   return <div>{user ? <Panel /> : <Empty />}{user && <Empty />}</div>
 }
+
+export function Again({ user }) {
+  return <span>{user ? <Panel /> : <Panel />}</span>
+}

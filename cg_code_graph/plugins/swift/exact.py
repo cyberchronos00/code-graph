@@ -316,7 +316,7 @@ class ExactLayer:
                         continue
                     if prop is not None:
                         acc = {**acc, "property": "read" if accessor_kind.get(o.usr) == "getter" else "write"}
-                    br = self.p.branch_at.get((rel, o.line, self.b.nodes[dst].name), {}) \
+                    br = self._take_branch(rel, o.line, o.col, self.b.nodes[dst].name) \
                         if kind == "INSTANTIATES" else {}
                     da = self.default_args.get((dst, rel, o.line)) if kind == "CALLS" else None
                     self.b.add_edge(src, dst, kind, rel, o.line, EXACT, source="indexstore",
@@ -397,6 +397,28 @@ class ExactLayer:
                 if d.line <= o.line <= d.end or d.kind != "class":
                     return d.id
         return None
+
+    def _take_branch(self, rel, line, col, name) -> dict:
+        """The construction branch recorded for this occurrence. One branch on the line is that branch.
+        Several are matched by column, each used once (#235)."""
+        items = self.p.branch_at.get((rel, line, name)) or []
+        if not items:
+            return {}
+        if len(items) == 1:
+            return items[0][1]
+        used = self.__dict__.setdefault("_used_br", {})
+        seen = used.setdefault((rel, line, name), set())
+        best_i = best_d = None
+        for i, (c, _br) in enumerate(items):
+            if i in seen:
+                continue
+            d = abs((c or 0) - (col or 0))
+            if best_d is None or d < best_d:
+                best_i, best_d = i, d
+        if best_i is None:
+            return {}
+        seen.add(best_i)
+        return items[best_i][1]
 
     def _owner_type(self, rel, line):
         best = None

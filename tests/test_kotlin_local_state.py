@@ -37,6 +37,7 @@ fun CounterScreen(vm: CounterViewModel) {
     }
     TextField(value = name, onValueChange = { name = it })
     if (shown) Dialog(onDismiss = { shown = false })
+    Text("$count of $total")
 }
 
 @Composable
@@ -72,6 +73,7 @@ def test_local_state_reads_and_writes(g):
         "select src, dst, kind, line from edges where kind in ('READS_PROP','WRITES_PROP') and dst like 'field:app.CounterScreen.%'")}
     assert {("count", "READS_PROP", 15), ("count", "WRITES_PROP", 15), ("count", "READS_PROP", 16),
             ("total", "READS_PROP", 16), ("name", "READS_PROP", 18), ("name", "WRITES_PROP", 18),
-            ("shown", "READS_PROP", 19), ("shown", "WRITES_PROP", 19)} <= e, e
+            ("shown", "READS_PROP", 19), ("shown", "WRITES_PROP", 19),
+            ("count", "READS_PROP", 20), ("total", "READS_PROP", 20)} <= e, e
     srcs = {s for (s,) in g.execute("select src from edges where dst like 'field:app.CounterScreen.%' and kind like '%PROP'")}
     assert srcs == {"function:app.CounterScreen"}

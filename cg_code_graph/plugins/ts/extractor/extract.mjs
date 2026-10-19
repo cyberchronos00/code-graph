@@ -2045,7 +2045,8 @@ const pageMeta = {}
 const edgeSeen = new Set()
 function addEdge(src, dst, kind, file, line, conf, attrs) {
   if (!src || !dst || (src === dst && kind === 'CALLS')) return
-  const k = `${src}|${dst}|${kind}|${line}`
+  const br = attrs && attrs.branch ? `|${attrs.branch}` : ''
+  const k = `${src}|${dst}|${kind}|${line}${br}`
   if (edgeSeen.has(k)) return
   edgeSeen.add(k)
   edges.push({ src, dst, kind, file, line, confidence: conf, attrs: attrs || undefined })

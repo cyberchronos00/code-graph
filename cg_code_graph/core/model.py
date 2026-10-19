@@ -71,6 +71,7 @@ EDGE_KINDS: dict[str, tuple[bool, str]] = {
     "ACCESSES_FIELD": (True, "code reads/writes a struct/class field or enum variant"),
     "READS_PROP": (True, "code reads a stored property (field node: Swift `var x`, `@State`, `@Published`)"),
     "WRITES_PROP": (True, "code writes a stored property (assignment, compound assignment)"),
+    "SHARES_STORAGE": (False, "two stored properties persist under the same @AppStorage / @SceneStorage key"),
     "USES_VALUE": (True, "code refers to an enum case, a constant, a static/global variable or an object-like macro"),
     "REGISTERS_CALLBACK": (False, "function builds a callback URL for one of the app's own routes and registers it with an external party (attrs.body_key, endpoint)"),
     "REFERENCES_FN": (True, "code/data takes a function as a value (callback, dispatch table, handler registration)"),
