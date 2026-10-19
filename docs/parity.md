@@ -62,6 +62,18 @@ their features is at least 0.3, each is the other's best candidate, and the runn
 A use found in more than three files on either side is generic (`l10n:cancel`, `l10n:yes`). A
 pair whose shared uses are all generic needs two shared name words as well.
 
+Members of a matched type that are still missing are then paired inside the counterpart type
+(confidence `structure`). The candidates are the counterpart's unmatched members, top-level
+functions that make two of the same paired calls, and the `case .x:` arms of a Swift
+`receive(_:)` / `perform(_:)` switch (a dispatching method stands for its arms). Uses are weighed
+within the two types, so a call common across the project still tells two members apart. A pair
+needs two shared uses, a use and a name word, or two name words, with an overlap of at least 0.35
+(0.25 with a use and a name word, 0.45 with names only) and the same margin over the runner-up.
+An arm match is shown as `-> SettingsProcessor.receive  [structure 0.55] case .helpCenterTapped, …`
+and carries `case` in JSON. On Bitwarden this adds 19 iOS → Android and 62 Android → iOS pairs,
+35 of them view-model handlers with processor arms (`handleHelpCenterClick` ↔
+`case .helpCenterTapped`).
+
 Types still missing after that are paired by the fields they declare (confidence `fields`).
 Stored properties count under their wire name when one is declared: Swift `CodingKeys` raw
 values, or Kotlin `@SerialName` / `@SerializedName` / `@Json(name =)`. So a Swift model with

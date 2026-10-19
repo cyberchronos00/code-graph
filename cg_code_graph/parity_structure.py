@@ -56,6 +56,11 @@ RES = re.compile(r"""\b(?:UI|NS)?Image\(\s*(?:named:\s*)?"([^"\n]+)"|\bAsset\.(?
                  r"""\bImage\(\s*\.(\w+)\s*\)|\b(?:R|Res)\.(?:drawable|mipmap|raw)\.(\w+)""")
 WIRE = re.compile(r'@(?:SerialName|SerializedName|JsonProperty|Json\(\s*name\s*=)\s*\(?\s*(?:value\s*=\s*)?"([^"\n]+)"')
 RAW_CASE = re.compile(r'\bcase\s+`?(\w+)`?\s*=\s*"([^"\n]+)"')
+ARM = re.compile(r"^(\s*)case\s+(?:let\s+|var\s+)?((?:\.\w+(?:\([^)]*\))?\s*,?\s*)+)(?:where\b[^:]*)?:")
+DISPATCH = {"receive", "perform", "handle", "handleaction", "onaction", "reduce", "send", "dispatch", "process"}
+MIN_MEMBER_SCORE = 0.35
+MIN_NAME_SCORE = 0.45
+MIN_BOTH_SCORE = 0.25
 EDGE_KINDS = ("CALLS", "INSTANTIATES", "NAVIGATES_TO", "HTTP_CALLS", "USES_VALUE", "REFERENCES_FN", "USES_TYPE")
 
 
@@ -140,9 +145,11 @@ class Side:
             self.by_file[r["file"]].append((r["line"], r["end_line"] or r["line"], r["id"]))
             self.span[r["id"]] = (r["file"], r["line"], r["end_line"] or r["line"])
         self.out = defaultdict(list)
-        q = f"SELECT src, dst, kind FROM edges WHERE kind IN ({','.join('?' * len(EDGE_KINDS))})"
+        self.out_at = defaultdict(list)        # src -> [(line, dst, kind)]
+        q = f"SELECT src, dst, kind, line FROM edges WHERE kind IN ({','.join('?' * len(EDGE_KINDS))})"
         for r in c.execute(q, EDGE_KINDS):
             self.out[r["src"]].append((r["dst"], r["kind"]))
+            self.out_at[r["src"]].append((r["line"] or 0, r["dst"], r["kind"]))
         self.http = {r["id"]: (r["name"] or r["id"]) for r in c.execute("SELECT id, name FROM nodes WHERE kind='http'")}
         self.decl = defaultdict(list)          # owner fqn -> [(name, kind, file, line)] of stored fields / enum cases
         for r in c.execute("SELECT kind, fqn, file, line, attrs FROM nodes WHERE kind IN ('field', 'enum_case') "
@@ -202,20 +209,49 @@ class Side:
             for la, lb, nid in self.by_file.get(file, ()):
                 if a <= la <= b:
                     for dst, kind in self.out.get(nid, ()):
-                        if kind == "HTTP_CALLS" or dst in self.http:
-                            p = re.sub(r"\{[^}]*\}|(?<=/):\w+", "{}", self.http.get(dst, dst).split(" ")[-1])
-                            f.add("http:" + p.lstrip("/").lower())
-                            continue
-                        dq = self.fqn_of.get(dst)
-                        t = rename(dq)
-                        if t:
-                            f.add("sym:" + t)
-                        # the called member's own name (two words or more): `getDevices` on an AuthService and on
-                        # an AuthRepository is the same call even when the owners are not paired
-                        nm = _short(dq or "").split("(")[0]
-                        if kind == "CALLS" and len(_words(nm)) >= 2:
-                            f.add("call:" + re.sub(r"^(get|fetch|load)(?=[a-z])", "", _fold(nm)))
+                        self._edge(f, dst, kind, rename)
         return f
+
+    def _edge(self, f: set, dst: str, kind: str, rename) -> None:
+        if kind == "HTTP_CALLS" or dst in self.http:
+            p = re.sub(r"\{[^}]*\}|(?<=/):\w+", "{}", self.http.get(dst, dst).split(" ")[-1])
+            f.add("http:" + p.lstrip("/").lower())
+            return
+        dq = self.fqn_of.get(dst)
+        t = rename(dq)
+        if t:
+            f.add("sym:" + t)
+        # the called member's own name (two words or more): `getDevices` on an AuthService and on
+        # an AuthRepository is the same call even when the owners are not paired
+        nm = _short(dq or "").split("(")[0]
+        if kind == "CALLS" and len(_words(nm)) >= 2:
+            f.add("call:" + re.sub(r"^(get|fetch|load)(?=[a-z])", "", _fold(nm)))
+
+    def arms(self, sym: dict) -> list:
+        """The top-level `case .x:` arms of a Swift `receive(_:)` / `perform(_:)` style switch: [(case names,
+        features of what the arm calls)]."""
+        file, a, b = self.span.get(sym["id"], (None, 0, 0))
+        if not file or b <= a:
+            return []
+        rows = self.text(file, a, b).split("\n")
+        hits = [(i, len(m.group(1)), m.group(2)) for i, ln in enumerate(rows) for m in [ARM.match(ln)] if m]
+        if not hits:
+            return []
+        top = min(h[1] for h in hits)
+        hits = [h for h in hits if h[1] == top]
+        out = []
+        for k, (i, _, names) in enumerate(hits):
+            lo, hi = a + i, (a + hits[k + 1][0] - 1 if k + 1 < len(hits) else b)
+            f = set()
+            for ln, dst, kind in self.out_at.get(sym["id"], ()):
+                if lo <= ln <= hi:
+                    self._edge(f, dst, kind, lambda x: x)
+            for la, lb, nid in self.by_file.get(file, ()):
+                if lo <= la <= hi and nid != sym["id"]:
+                    for dst, kind in self.out.get(nid, ()):
+                        self._edge(f, dst, kind, lambda x: x)
+            out.append((re.findall(r"\.(\w+)", names), f))
+        return out
 
 
 def match(S: dict, T: dict, out: dict, sym_of: dict, cat_of: dict, t_syms: dict, t_cat: dict, learn: bool = True) -> dict:
@@ -369,7 +405,8 @@ def _structure(S, T, out, sym_of, cat_of, t_syms, t_cat, used):
         if sym is not None:
             src_f[row["symbol"]] = sS.features(sym, lambda x: pairs.get(x)) | name_words(row["symbol"])
     tgt_f = {fq: sT.features(sym, lambda x: x) | name_words(fq) for fq, sym in t_syms.items()
-             if fq not in used and not PREVIEW.search(_short(fq))}
+             if fq not in used and not PREVIEW.search(_short(fq))
+             and not (_fold(_short(fq).split("(")[0]) in DISPATCH and sT.arms(sym))}    # its arms are paired below
     src_f = {fq: f for fq, f in src_f.items() if not PREVIEW.search(_short(fq))}
     df = Counter()
     for fs in list(src_f.values()) + list(tgt_f.values()):
@@ -423,4 +460,88 @@ def _structure(S, T, out, sym_of, cat_of, t_syms, t_cat, used):
         else:
             keep.append(row)
     out["missing"] = keep
+    _members(sS, sT, out, sym_of, cat_of, t_syms, t_cat, used, S, T)
     _by_fields(sS, sT, out, sym_of, cat_of, t_syms, t_cat, used, S, T)
+
+
+def _members(sS, sT, out, sym_of, cat_of, t_syms, t_cat, used, S, T):
+    """Members of matched types still missing, paired inside the counterpart type (#227): with an unmatched member,
+    or a top-level function, that makes the same paired calls, or with a `case .x:` arm of its `receive(_:)` /
+    `perform(_:)` switch (`handleCopyClick` on a view model, `case .copyGeneratedValue:` in the processor). Uses are
+    weighed within the pair of types, so a call that is common across the project still tells two members apart."""
+    pairs = {r["symbol"]: r["target"] for r in out["matched"]}
+    by_owner = defaultdict(list)
+    for r in out["missing"]:
+        if r.get("owner_matched") and r["symbol"] in sym_of and not PREVIEW.search(_short(r["symbol"])):
+            by_owner[r["owner_matched"]].append(r)
+    if not by_owner:
+        return
+    ident = lambda x: x  # noqa: E731
+    top, top_inv = None, defaultdict(list)
+    taken_arms, best, cand_of = set(), {}, {}
+    for o, rows in by_owner.items():
+        units = []                                   # (key, target fqn, case name or None, category, features)
+        for nm, sym in T["members"].get(o, {}).items():
+            fq = f"{o}.{nm}"
+            arms = sT.arms(sym) if _fold(nm.split("(")[0]) in DISPATCH else []
+            for names, f in arms:                    # a dispatching switch stands for its arms, not as a whole
+                ws = set().union(*(name_words(n) for n in names))
+                units.append(((fq, names[0]), fq, names[0], "func", f | ws))
+            if not arms and fq not in used and not PREVIEW.search(nm):
+                units.append((fq, fq, None, t_cat.get(fq), sT.features(sym, ident) | name_words(fq)))
+        src = {r["symbol"]: sS.features(sym_of[r["symbol"]], pairs.get) | name_words(r["symbol"]) for r in rows}
+        if top is None:                              # top-level functions, met only through two paired uses
+            top = {}
+            for fq, sym in t_syms.items():
+                if t_cat.get(fq) == "func" and fq not in used and "." not in fq.replace(o, "") and fq in T["top"]:
+                    top[fq] = {f for f in sT.features(sym, ident) if f.startswith("sym:")} | name_words(fq)
+                    for f in top[fq]:
+                        if f.startswith("sym:"):
+                            top_inv[f].append(fq)
+        df = Counter()
+        for fs in list(src.values()) + [u[4] for u in units]:
+            df.update(fs)
+        n = len(src) + len(units)
+        for fq, fs in src.items():
+            extra = {t for f in fs if f.startswith("sym:") for t in top_inv.get(f, ())}
+            cands = [u for u in units if u[3] == cat_of.get(fq)] + [(t, t, None, "func", top[t]) for t in extra
+                                                                    if cat_of.get(fq) == "func"]
+            scored = []
+            for key, t, case, cat, tf in cands:
+                sh = fs & tf
+                uses = sum(1 for f in sh if not f.startswith("w:"))
+                words = len(sh) - uses
+                if case is None and t in top and uses < 2:
+                    continue
+                if not (uses >= 2 or (uses and words) or words >= 2):
+                    continue
+                wt = lambda f: math.log(1 + n / df[f]) if df[f] else math.log(1 + n)  # noqa: E731
+                sc = sum(wt(f) for f in sh) / math.sqrt(sum(wt(f) for f in fs) * sum(wt(f) for f in tf))
+                if sc < (MIN_NAME_SCORE if not uses else MIN_BOTH_SCORE if words else MIN_MEMBER_SCORE):
+                    continue                         # names alone must agree more; a use and a name word less
+                scored.append((sc, key, t, case, sh))
+            scored.sort(key=lambda x: -x[0])
+            if scored and (len(scored) == 1 or scored[1][0] < MARGIN * scored[0][0]):
+                best[fq] = scored[0]
+    by_key = defaultdict(list)
+    for fq, (sc, key, *_rest) in best.items():
+        by_key[key].append((sc, fq))
+    keep = []
+    for row in out["missing"]:
+        got = best.get(row["symbol"])
+        if not got:
+            keep.append(row)
+            continue
+        sc, key, t, case, sh = got
+        if max(by_key[key])[1] != row["symbol"] or (case is None and t in used) or key in taken_arms:
+            keep.append(row)
+            continue
+        if case is None:
+            used.add(t)
+        taken_arms.add(key)
+        ev = sorted(sh, key=lambda f: (f.startswith("w:"), f))[:6]
+        r = dict(row, target=t, confidence="structure", score=round(sc, 2), evidence=([f"case .{case}"] if case else []) + ev)
+        if case:
+            r["case"] = case
+        out["matched"].append(r)
+    out["missing"] = keep
