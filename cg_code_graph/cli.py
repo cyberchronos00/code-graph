@@ -301,9 +301,12 @@ def main(argv=None):
     p.add_argument("--strip-prefix", action="append", default=[], help="a name prefix one side adds (`Vault` in "
                    "VaultAddEditState for AddEditState), ignored when matching (repeatable)")
     p.add_argument("--structure", action="store_true", help="also pair symbols whose names differ by what they use: "
-                   "shared strings, localization keys, endpoints and already-paired callees, plus rename rules learned "
-                   "from the pairs found (#93); matches carry their evidence")
+                   "shared strings, localization keys, resources, endpoints and already-paired callees, then types by "
+                   "their declared fields, plus rename rules learned from the pairs found (#93); matches carry their "
+                   "evidence")
     p.add_argument("--no-learn", action="store_true", help="with --structure: no learned rename rules")
+    p.add_argument("--both-sides", action="store_true", help="also list the matched pairs and what only --against "
+                   "has (target symbols no source symbol matched)")
     p.add_argument("--write-map", help="with --structure: write the inferred pairs as a --map JSON file to review")
     p.add_argument("--json", action="store_true"); p.add_argument("--max-items", type=int, default=200)
     p = sub.add_parser("lint", help="heuristic lints (#88): `lint async-state` flags stale async results, state with "
@@ -574,7 +577,7 @@ def main(argv=None):
         from . import parity as PA
         mapping = json.loads(open(a.map, encoding="utf-8").read()) if a.map else None
         res = PA.parity(a.db, a.against, mapping=mapping, fuzzy=not a.no_fuzzy, strip_prefixes=a.strip_prefix,
-                        structure=a.structure, learn=not a.no_learn)
+                        structure=a.structure, learn=not a.no_learn, both_sides=a.both_sides)
         if a.write_map:
             with open(a.write_map, "w", encoding="utf-8") as fh:
                 json.dump(PA.rename_map(res), fh, indent=1, sort_keys=True)

@@ -1605,3 +1605,23 @@ Heuristic mode, tree-sitter-swift 0.7.4, same clones as the Swift sections above
 The resolved / name-bound edges that went away were read by hand: calls to a `private` member from another file through a closure property, and members of a private nested class.
 
 Exact mode (`CG_SWIFT_INDEX=1`, swift 6 on Linux) is available for Alamofire only (the other corpora need Apple SDKs or did not build): `candidate_agree` 54/190 → 56/197; heuristic edges 849, agreeing 821, precision 0.967 and recall 0.715 unchanged.
+
+## Parity: fields, resources, generic keys (#93)
+
+`cg parity --structure` on bitwarden/ios ↔ bitwarden/android and element-x-ios ↔ element-x-android, October 2026,
+before and after pairing by declared fields, image resources and the generic-key rule:
+
+| direction | inferred before | inferred after | of which `fields` | earlier inferred dropped |
+|---|---|---|---|---|
+| Bitwarden iOS → Android | 97 | 150 | 52 | 2 |
+| Bitwarden Android → iOS | 124 | 175 | 55 | 7 |
+| Element X Android → iOS | 143 | 153 | 13 | 4 |
+| Element X iOS → Android | 109 | 121 | 14 | 3 |
+
+Read by eye, the `fields` pairs are mostly request / response models and their `…Json` ports
+(`IdentityTokenResponseModel` ↔ `GetTokenResponseJson.Success`, `KdfConfig` ↔ `KdfJson`) and enums with the same
+cases. Questionable pairs: `VaultListGroup` ↔ `VaultItemCipherType` (0.54), a UI item type ↔ its SDK model, and
+`ImageProcessingInfo` ↔ `ThumbnailInfo`. The dropped pairs rested on generic keys plus one name word. Some of them
+were right (`SyncWithBrowserView` ↔ `CookieAcquisitionContent`) and some were wrong (`AutoFillState.warningMessage` ↔
+`isAdvancedMatching`). Default output (no `--structure`) is byte-identical to 0.23.7 in both directions. The
+hand-checked false-missing samples of #93 were not redone in this round.

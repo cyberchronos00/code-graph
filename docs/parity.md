@@ -48,6 +48,7 @@ Off by default. With it, symbols still missing after the name rules are paired b
 |---|---|
 | `l10n:<key>` | `Localizations`, `L10n`, `R.string`, `CommonStrings` (case and `_` folded) |
 | `str:<text>` | string literals of 5–80 characters |
+| `res:<name>` | image and raw resources: `Image("ic_lock")`, `UIImage(named:)`, `Asset.Images.x`, `Image(.x)`, `R.drawable.x`, `Res.drawable.x` (case and `_` folded) |
 | `http:<path>` | HTTP paths, parameters folded |
 | `sym:<target>` | calls already paired, renamed to the target's name |
 | `call:<name>` | member names it calls (two words or more) |
@@ -57,6 +58,32 @@ Two symbols pair when they share a use and either two uses or two name words, th
 their features is at least 0.3, each is the other's best candidate, and the runner-up is below
 0.8 of the best. Category and UI-ness must agree. A `Coordinator` does not meet a `State`;
 `Processor` meets `ViewModel`. Compose previews are left out.
+
+A use found in more than three files on either side is generic (`l10n:cancel`, `l10n:yes`). A
+pair whose shared uses are all generic needs two shared name words as well.
+
+Types still missing after that are paired by the fields they declare (confidence `fields`).
+Stored properties count under their wire name when one is declared: Swift `CodingKeys` raw
+values, or Kotlin `@SerialName` / `@SerializedName` / `@Json(name =)`. So a Swift model with
+`case trailId = "trail_id"` meets a Kotlin `@SerialName("trail_id") val id`. Enum cases are
+compared with enum cases only. A pair needs:
+
+- three shared fields;
+- an IDF-weighted overlap of at least 0.5, plus a shared name word, or an overlap of 0.75 without one;
+- each to be the other's best candidate, with the same margin over the runner-up.
+
+On Bitwarden this pairs 52 iOS → Android types, mostly request and response models with their
+`…Json` counterparts (`IdentityTokenResponseModel` ↔ `GetTokenResponseJson.Success`). On Element
+X it pairs 13–14 types in each direction.
+
+### Both sides (`--both-sides`)
+
+`--both-sides` lists the matched pairs (`== MATCHED pairs`). It also lists what only the target
+has (`== ONLY IN TARGET`, `--json` `target_only`): target types and top-level symbols that no
+source symbol matched, plus the unmatched members of target types that were matched. Members of
+an unmatched target type are counted under that type, not listed. Previews, boilerplate,
+overrides and files with syntax errors are left out (`target_only_hidden`). It works with or
+without `--structure`, and without the flag the output is unchanged.
 
 A word rewrite seen at least twice, and in two thirds of the pairs with that tail (
 `Coordinator` → `Navigator`), is applied to the rest (`learned`). `--no-learn` turns that
@@ -102,4 +129,4 @@ Element X iOS → Android inferred 83; before the platform-tag fix, 3,551 of 4,1
 were `platform_only` because they are tagged `ios`.
 
 `--json` returns `matched`, `missing`, `unknown`, `platform_only`, `learned_rules` and
-`summary`.
+`summary`, plus `target_only` with `--both-sides`.

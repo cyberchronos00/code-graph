@@ -220,21 +220,27 @@ def _cat(sym: dict, is_type: bool) -> str:
     return "type" if is_type else "const" if sym["kind"] in ("constant", "enum_case") else "func"
 
 
+INFERRED = ("structure", "fields", "learned")
+PREVIEW_NAME = re.compile(r"Preview")
+
+
 def parity(source_db: str, target_db: str, mapping: dict | None = None, fuzzy: bool = True,
-           strip_prefixes: list[str] | None = None, structure: bool = False, learn: bool = True) -> dict:
+           strip_prefixes: list[str] | None = None, structure: bool = False, learn: bool = True,
+           both_sides: bool = False) -> dict:
     """See the module docstring. `strip_prefixes`: name prefixes one side adds (`Vault` in `VaultAddEditState`
     for `AddEditState`), dropped before normalized matching on both sides. `structure` (#93): after the name rules,
     pair the rest by shared strings, localization keys, endpoints and paired callees, and (`learn`) apply rename
-    rules learned from the pairs found (cg_code_graph/parity_structure.py); off, the output is the name matching alone."""
+    rules learned from the pairs found (cg_code_graph/parity_structure.py); off, the output is the name matching alone.
+    `both_sides`: also list what only the target has (`target_only`)."""
     _PREFIXES[:] = [p.lower() for p in strip_prefixes or ()]
     try:
-        return _parity(source_db, target_db, mapping, fuzzy, structure, learn)
+        return _parity(source_db, target_db, mapping, fuzzy, structure, learn, both_sides)
     finally:
         _PREFIXES.clear()
 
 
 def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool, structure: bool = False,
-            learn: bool = True) -> dict:
+            learn: bool = True, both_sides: bool = False) -> dict:
     S, T = load(source_db), load(target_db)
     mapping = mapping or {}
     exact_ix, norm_ix, comp_ix, all_short = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
@@ -357,7 +363,7 @@ def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool, s
                 tm.setdefault(_short(nt), T["types"][nt])
             tm_norm = {norm_member(k): k for k in tm}
             for nm, sym in sorted(S["members"].get(sfq, {}).items()):
-                if nm in ("body", "init", "deinit", "hash", "description", "encode", "hashValue") or sym["override"]:
+                if nm in BOILERPLATE or sym["override"]:
                     out["skipped"] += 1          # lifecycle / platform overrides (viewDidLoad, onCreate) and boilerplate
                     continue
                 if nm in tm:
@@ -375,7 +381,7 @@ def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool, s
     match_members(tmap)
     if structure:
         _structure(S, T, out, tmap, learn)
-        inferred = {r["symbol"]: r["target"] for r in out["matched"] if r.get("confidence") in ("structure", "learned")
+        inferred = {r["symbol"]: r["target"] for r in out["matched"] if r.get("confidence") in INFERRED
                     and r["symbol"] in S["types"] and r["target"] in T["types"]}
         match_members(inferred)
     counts = defaultdict(int)
@@ -387,8 +393,42 @@ def _parity(source_db: str, target_db: str, mapping: dict | None, fuzzy: bool, s
                       "missing": len(out["missing"]), "unknown": len(out["unknown"]),
                       "platform_only": len(out["platform_only"])}
     if structure:
-        out["summary"]["inferred"] = sum(1 for r in out["matched"] if r["confidence"] in ("structure", "learned"))
+        out["summary"]["inferred"] = sum(1 for r in out["matched"] if r["confidence"] in INFERRED)
+    if both_sides:
+        _target_only(T, out, t_nested)
+        out["summary"]["target_only"] = len(out["target_only"])
     return out
+
+
+BOILERPLATE = ("body", "init", "deinit", "hash", "description", "encode", "hashValue")
+
+
+def _target_only(T, out, t_nested):
+    """`--both-sides`: target types and top-level symbols no source symbol matched, and the unmatched members of
+    target types that were matched. Members of an unmatched type are counted under it, not listed."""
+    used = {r["target"] for r in out["matched"]}
+    rows, hidden = [], 0
+    for coll in (T["types"], T["top"]):
+        for fq, sym in sorted(coll.items()):
+            if fq in used:
+                continue
+            owner = fq.rsplit(".", 1)[0] if "." in fq else None
+            if owner in T["types"] and owner not in used:
+                continue                       # a nested type of an unmatched type: the type is listed
+            if PREVIEW_NAME.search(_short(fq)) or sym["file"] in T["err_files"]:
+                hidden += 1
+                continue
+            rows.append(_row(sym, None, None))
+    for o in sorted(o for o in T["members"] if o in used):
+        for nm, sym in sorted(T["members"][o].items()):
+            if f"{o}.{nm}" in used:
+                continue
+            if nm in BOILERPLATE or sym["override"] or sym["file"] in T["err_files"]:
+                hidden += 1
+                continue
+            rows.append(_row(sym, None, None))
+    out["target_only"] = rows
+    out["target_only_hidden"] = hidden
 
 
 def _structure(S, T, out, tmap, learn):
@@ -409,7 +449,7 @@ def _structure(S, T, out, tmap, learn):
 
 def rename_map(res: dict) -> dict:
     """The structure / learned matches as a `--map` file ({source: target}) to review and commit."""
-    return {r["symbol"]: r["target"] for r in res["matched"] if r.get("confidence") in ("structure", "learned")}
+    return {r["symbol"]: r["target"] for r in res["matched"] if r.get("confidence") in INFERRED}
 
 
 def _row(sym, target, how, owner_match=None) -> dict:
@@ -435,6 +475,25 @@ def _group(file: str) -> str:
     return "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if parts else "")
 
 
+def _grouped(lines, title, rows, total, max_items):
+    by = defaultdict(list)
+    for r in rows:
+        by[r["module"]].append(r)
+    if not by:
+        return
+    lines += ["", f"== {title}: {total}"]
+    shown = 0
+    for mod in sorted(by, key=lambda k: -len(by[k])):
+        lines.append(f"  {mod or '.'}  ({len(by[mod])})")
+        for r in by[mod]:
+            if shown >= max_items:
+                break
+            shown += 1
+            lines.append(f"    {r['symbol']}  [{r['kind']}] {r['file']}:{r['line']}")
+    if shown < total:
+        lines.append(f"  ... {total - shown} more (--json for all)")
+
+
 def render(res: dict, max_items: int = 200) -> str:
     s = res["summary"]
     m = s["matched"]
@@ -457,7 +516,14 @@ def render(res: dict, max_items: int = 200) -> str:
                 lines.append(f"    {r['symbol']}  [{r['kind']}] {r['file']}:{r['line']}")
         if shown < s["missing"]:
             lines.append(f"  ... {s['missing'] - shown} more (--json for all)")
-    inferred = [r for r in res["matched"] if r.get("confidence") in ("structure", "learned")]
+    if "target_only" in res:
+        lines[1] += f"; {s['target_only']} only in the target"
+        lines += ["", f"== MATCHED pairs: {sum(m.values())}"]
+        for r in sorted(res["matched"], key=lambda r: (r["confidence"] != "explicit", r["symbol"]))[:max_items]:
+            lines.append(f"    {r['symbol']} -> {r['target']}  [{r['confidence']}]")
+        if sum(m.values()) > max_items:
+            lines.append(f"  ... {sum(m.values()) - max_items} more (--json for all)")
+    inferred = [r for r in res["matched"] if r.get("confidence") in INFERRED]
     if inferred:
         lines += ["", f"== INFERRED matches (not by name): {len(inferred)}"]
         for r in inferred[:max_items]:
@@ -467,6 +533,8 @@ def render(res: dict, max_items: int = 200) -> str:
         if rule is (res.get("learned_rules") or [None])[0]:
             lines += ["", "== LEARNED rename rules"]
         lines.append(f"    {rule['at']}: {rule['from']!r} -> {rule['to']!r} (seen {rule['support']}x)")
+    if "target_only" in res:
+        _grouped(lines, "ONLY IN TARGET (no source counterpart)", res["target_only"], s["target_only"], max_items)
     if res["unknown"]:
         lines += ["", f"== UNKNOWN (file parsed with syntax errors): {s['unknown']}"]
         lines += [f"    {r['symbol']}  {r['file']}:{r['line']}" for r in res["unknown"][:max_items]]

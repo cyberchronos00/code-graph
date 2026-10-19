@@ -11,7 +11,20 @@ its outgoing edges:
   sym:<target> symbols it calls / instantiates / navigates to that are already paired (the source side is
                rewritten to the target's name, so a call to a paired API on both sides is a shared feature)
   call:<name>  the names of the members it calls (two words or more)
+  res:<name>   image and raw resources it uses (`Image("ic_lock")`, `UIImage(named:)`, `Asset.Images.icLock`,
+               `Image(.icLock)`, `R.drawable.ic_lock`, `Res.drawable.x`), case and `_` folded; colors are design
+               tokens shared by every screen and are left out
   w:<stem>     the stemmed content words of its own name
+
+A use is specific when it appears in at most SPECIFIC_FILES files on each side (files, not symbols, since a type's span
+holds its members'); a pair whose shared uses are all generic needs two shared name words, so two screens that only
+share `l10n:cancel` / `l10n:yes` and one word do not pair.
+
+Types that are still missing after that are paired by their declared fields (`fields`): stored properties, each under
+its wire name when one is declared (Swift `CodingKeys` raw values, Kotlin `@SerialName` / `@SerializedName` /
+`@Json(name =)`), and enum cases, kept apart from properties; case and `_` folded. A pair needs MIN_FIELDS shared
+fields, an IDF-weighted overlap of at least MIN_FIELD_SCORE, a shared name word or a higher overlap, mutual best and
+the margin.
 
 A pair is accepted when it shares a use (any feature but w:) and either two uses or two name words, its IDF-weighted
 cosine is at least MIN_SCORE, both symbols are each other's best candidate, the runner-up scores below MARGIN times
@@ -21,6 +34,7 @@ MIN_SUPPORT times, two thirds of the time for that source tail, is applied to th
 top-level symbols. Every match carries its evidence; name matches are left as they are."""
 from __future__ import annotations
 
+import json
 import math
 import re
 import sqlite3
@@ -32,9 +46,16 @@ MIN_SHARED = 2
 MARGIN = 0.8                 # the runner-up must score below MARGIN * best
 MIN_SUPPORT = 2
 MAX_DF = 40
+SPECIFIC_FILES = 3           # a shared use found in more files than this on either side is generic (`l10n:cancel`)
+MIN_FIELDS = 3
+MIN_FIELD_SCORE = 0.5
 PREVIEW = re.compile(r"Preview")           # Compose @Preview functions / PreviewParameterProviders, SwiftUI previews                  # features shared by more symbols than this do not propose candidates
 L10N = re.compile(r"\b(?:Localizations|L10n|R\.string|BitwardenString|CommonStrings|[A-Z]\w*Strings)\.([A-Za-z_]\w*)")
 STR = re.compile(r'"((?:[^"\\\n]|\\.){5,80})"')
+RES = re.compile(r"""\b(?:UI|NS)?Image\(\s*(?:named:\s*)?"([^"\n]+)"|\bAsset\.(?:Images|Assets)\.(\w+)|"""
+                 r"""\bImage\(\s*\.(\w+)\s*\)|\b(?:R|Res)\.(?:drawable|mipmap|raw)\.(\w+)""")
+WIRE = re.compile(r'@(?:SerialName|SerializedName|JsonProperty|Json\(\s*name\s*=)\s*\(?\s*(?:value\s*=\s*)?"([^"\n]+)"')
+RAW_CASE = re.compile(r'\bcase\s+`?(\w+)`?\s*=\s*"([^"\n]+)"')
 EDGE_KINDS = ("CALLS", "INSTANTIATES", "NAVIGATES_TO", "HTTP_CALLS", "USES_VALUE", "REFERENCES_FN", "USES_TYPE")
 
 
@@ -123,7 +144,39 @@ class Side:
         for r in c.execute(q, EDGE_KINDS):
             self.out[r["src"]].append((r["dst"], r["kind"]))
         self.http = {r["id"]: (r["name"] or r["id"]) for r in c.execute("SELECT id, name FROM nodes WHERE kind='http'")}
+        self.decl = defaultdict(list)          # owner fqn -> [(name, kind, file, line)] of stored fields / enum cases
+        for r in c.execute("SELECT kind, fqn, file, line, attrs FROM nodes WHERE kind IN ('field', 'enum_case') "
+                           "AND fqn IS NOT NULL AND file IS NOT NULL"):
+            if ".Companion." in r["fqn"] or "." not in r["fqn"]:
+                continue
+            if r["kind"] == "field" and (json.loads(r["attrs"] or "{}").get("property") or "stored") != "stored":
+                continue
+            o, nm = r["fqn"].rsplit(".", 1)
+            self.decl[o].append((nm, r["kind"], r["file"], r["line"]))
         c.close()
+
+    def fields(self, fq: str) -> set:
+        """`field:<wire name>` for each stored property declared directly on the type: the explicit wire name
+        (`@SerialName("item_title")`, a `CodingKeys` case `title = "item_title"`) or else the property name; `case:<name>`
+        for each enum case, so an enum of field names does not meet the type that has those fields."""
+        raw = {}
+        for nm, kind, file, line in self.decl.get(fq + ".CodingKeys", ()):
+            m = RAW_CASE.search(self.text(file, line, line))
+            if m:
+                raw[m.group(1)] = m.group(2)
+        out = set()
+        for nm, kind, file, line in self.decl.get(fq, ()):
+            wire = raw.get(nm)
+            if not wire and kind == "field":
+                m = WIRE.search(self.text(file, line, line))
+                if not m and line > 1:            # an annotation on its own line above
+                    prev = self.text(file, line - 1, line - 1)
+                    m = None if re.search(r"\b(?:val|var|let)\s", prev) else WIRE.search(prev)
+                wire = m.group(1) if m else None
+            k = _fold(wire or nm)
+            if len(k) > 1:
+                out.add(("case:" if kind == "enum_case" else "field:") + k)
+        return out
 
     def text(self, file: str, a: int, b: int) -> str:
         if file not in self.lines:
@@ -139,6 +192,9 @@ class Side:
         if file and a:
             src = self.text(file, a, b)
             f |= {"l10n:" + _fold(m) for m in L10N.findall(src)}
+            for m in RES.finditer(src):
+                f.add("res:" + _fold(next(g for g in m.groups() if g)))
+            src = RES.sub(" ", src)
             for m in STR.findall(src):
                 s = m.strip().lstrip("/")
                 if len(s) >= 5 and re.search(r"[A-Za-z]{3}", s) and not re.search(r"\\\(|\$\{|%[@sd]", s):
@@ -250,6 +306,60 @@ def _apply_rules(rules, out, sym_of, cat_of, t_syms, t_cat, used):
     out["missing"] = keep
 
 
+def _by_fields(sS, sT, out, sym_of, cat_of, t_syms, t_cat, used, S, T):
+    """Types still missing, paired by the fields they declare (`ViewItemState` / `VaultItemState`, a Swift
+    `Codable` model and its Kotlin `@Serializable` port)."""
+    src = {r["symbol"]: sS.fields(r["symbol"]) for r in out["missing"] if cat_of.get(r["symbol"]) == "type"
+           and "owner_matched" not in r}
+    src = {k: v for k, v in src.items() if len(v) >= MIN_FIELDS and _short(k) != "CodingKeys"}
+    tgt = {fq: sT.fields(fq) for fq in t_syms if t_cat.get(fq) == "type" and fq not in used}
+    tgt = {k: v for k, v in tgt.items() if len(v) >= MIN_FIELDS and _short(k) != "CodingKeys"}
+    if not src or not tgt:
+        return
+    df = Counter()
+    for fs in list(src.values()) + list(tgt.values()):
+        df.update(fs)
+    n = len(src) + len(tgt)
+    w = {f: math.log(1 + n / c) for f, c in df.items()}
+    inv = defaultdict(list)
+    for fq, fs in tgt.items():
+        for f in fs:
+            inv[f].append(fq)
+
+    def score(fq, t):
+        a, b = src[fq], tgt[t]
+        sh = a & b
+        if len(sh) < MIN_FIELDS:
+            return 0.0, sh
+        sc = sum(w[f] for f in sh) / sum(w[f] for f in a | b)
+        words = name_words(fq) & name_words(t)
+        if sc < MIN_FIELD_SCORE or (not words and sc < 0.75):
+            return 0.0, sh
+        return sc, sh | words
+
+    best = {}
+    for fq, fs in src.items():
+        cands = {t for f in fs if df[f] <= MAX_DF for t in inv[f]
+                 if compatible(fq, "type", t, "type", S["_ui"].get(fq), T["_ui"].get(t))}
+        scored = sorted(((score(fq, t), t) for t in cands), key=lambda x: -x[0][0])
+        if scored and scored[0][0][0] > 0 and (len(scored) == 1 or scored[1][0][0] < MARGIN * scored[0][0][0]):
+            best[fq] = (scored[0][1], scored[0][0][0], scored[0][0][1])
+    by_t = defaultdict(list)
+    for fq, (t, sc, sh) in best.items():
+        by_t[t].append((sc, fq))
+    keep = []
+    for row in out["missing"]:
+        got = best.get(row["symbol"])
+        if got and max(by_t[got[0]])[1] == row["symbol"] and got[0] not in used:
+            t, sc, sh = got
+            used.add(t)
+            ev = sorted(sh, key=lambda f: (f.startswith("w:"), -w.get(f, 0), f))[:6]
+            out["matched"].append(dict(row, target=t, confidence="fields", score=round(sc, 2), evidence=ev))
+        else:
+            keep.append(row)
+    out["missing"] = keep
+
+
 def _structure(S, T, out, sym_of, cat_of, t_syms, t_cat, used):
     sS, sT = Side(S), Side(T)
     pairs = {r["symbol"]: r["target"] for r in out["matched"]}
@@ -264,6 +374,12 @@ def _structure(S, T, out, sym_of, cat_of, t_syms, t_cat, used):
     df = Counter()
     for fs in list(src_f.values()) + list(tgt_f.values()):
         df.update(fs)
+    spread = [defaultdict(set), defaultdict(set)]          # feature -> files having it, per side
+    for k, (fsets, syms) in enumerate(((src_f, sym_of), (tgt_f, t_syms))):
+        for fq, fs in fsets.items():
+            for f in fs:
+                spread[k][f].add(syms[fq]["file"])
+    specific = {f for f in df if len(spread[0][f]) <= SPECIFIC_FILES and len(spread[1][f]) <= SPECIFIC_FILES}
     n = max(1, len(src_f) + len(tgt_f))
     w = {f: math.log(1 + n / c) for f, c in df.items()}
     inv = defaultdict(list)
@@ -278,6 +394,8 @@ def _structure(S, T, out, sym_of, cat_of, t_syms, t_cat, used):
         # what they use must carry the match: two shared uses, or one use and two shared name words
         if nw < 1 or (nw < MIN_SHARED and len(sh) - nw < 2):
             return 0.0, sh
+        if len(sh) - nw < 2 and not any(f in specific for f in sh if not f.startswith("w:")):
+            return 0.0, sh                      # only generic uses (`l10n:cancel`, `l10n:yes`) and one name word
         return sum(w[f] for f in sh) / math.sqrt(sum(w[f] for f in a) * sum(w[f] for f in b)), sh
 
     best_s = {}
@@ -305,3 +423,4 @@ def _structure(S, T, out, sym_of, cat_of, t_syms, t_cat, used):
         else:
             keep.append(row)
     out["missing"] = keep
+    _by_fields(sS, sT, out, sym_of, cat_of, t_syms, t_cat, used, S, T)
