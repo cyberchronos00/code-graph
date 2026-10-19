@@ -254,6 +254,29 @@ OTHER_OS_STEM = re.compile(r"(?:^|[_-])(aix|sunos|solaris|os390|zos|ibmi|freebsd
                            r"cygwin|hurd|illumos|pase)$", re.I)
 
 
+# Swift platform files (#225): `Foo+iOS.swift`, `Foo.macOS.swift`, `Foo_watchOS.swift`, or a folder `macOS/` / `iOS/`
+# of a multiplatform app. A guess: built for that platform, unknown on the other Apple platforms, absent elsewhere
+SWIFT_PLAT = {"ios": "ios", "iphone": "ios", "ipados": "ios", "macos": "macos", "osx": "macos", "mac": "macos",
+              "appkit": "macos", "tvos": "tvos", "watchos": "watchos", "visionos": "visionos", "xros": "visionos"}
+SWIFT_STEM = re.compile(r"[+._-](iOS|iPhone|iPadOS|macOS|OSX|Mac|AppKit|tvOS|watchOS|visionOS|xrOS)$")
+SWIFT_DIR = re.compile(r"^(iOS|iPadOS|macOS|OSX|tvOS|watchOS|visionOS|xrOS)$")
+APPLE = ("ios", "macos", "tvos", "watchos", "visionos")
+
+
+def swift_path_convention(rel: str) -> tuple[str, str] | None:
+    parts = rel.split("/")
+    stem = parts[-1][:-len(".swift")] if parts[-1].endswith(".swift") else None
+    if stem is None:
+        return None
+    m = SWIFT_STEM.search(stem)
+    if m:
+        return SWIFT_PLAT[m.group(1).lower()], f"file name {parts[-1]}"
+    for d in parts[:-1]:
+        if SWIFT_DIR.match(d):
+            return SWIFT_PLAT[d.lower()], f"directory {d}/"
+    return None
+
+
 def _plat_atom(name: str):
     if name == "other":                            # an OS outside the known targets
         return ("atom", "platform", "__other__")
@@ -655,6 +678,18 @@ def apply(project, builder) -> dict:
                 tree = ("any", [_plat_atom(p) for p in ps]) if len(ps) > 1 else _plat_atom(ps[0])
                 names = ", ".join(m["targets"][:3]) + (" …" if len(m["targets"]) > 3 else "")
                 mark(builder, f, 1, BIG, Cond("tree", tree, f"Xcode target membership ({names})"), line=1)
+    if "swift" in langs and pc.get("path_conventions", True):
+        whole = {m["file"] for m in builder.platform_marks if m["start"] <= 1 and m.get("end") in (None, BIG)}
+        for f, ns in nodes_by_file.items():
+            if f in whole or ns[0].lang != "swift":
+                continue                         # Xcode membership (or .cg.yaml paths) already says where it is built
+            pcv = swift_path_convention(f)
+            if pcv:
+                n0 = len(builder.platform_marks)
+                tree = ("any", [_plat_atom(pcv[0])] + [("atom", "unknown_on", p) for p in APPLE if p != pcv[0]])
+                mark(builder, f, 1, BIG, Cond("tree", tree, f"{pcv[1]} (platform file name)"), line=1)
+                if len(builder.platform_marks) > n0:
+                    builder.platform_marks[-1]["convention"] = True
     marks = builder.platform_marks
     if not marks:
         return {}

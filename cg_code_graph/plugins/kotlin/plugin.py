@@ -296,6 +296,8 @@ class KotlinPlugin(LanguagePlugin):
         if files is None:
             files = source_files(project.root, project)
         self.decls: dict[str, Decl] = {}
+        self.rets: dict[str, str] = {}       # function / method id -> declared (or constructed) result type text (#109)
+        self._ksrc: dict[str, bytes] = {}
         self.test_fw: dict[str, str | None] = {}
         self._fd = None
         self.by_name: dict[str, list[Decl]] = defaultdict(list)
@@ -361,7 +363,8 @@ class KotlinPlugin(LanguagePlugin):
                     tree = nt
                     self.st["files_reparsed_by_member"] += 1
                     self.st["members_dropped_by_reparse"] += len(dropped)
-            kf = KFile(rel, src, tree)            # names and text from the original bytes; offsets are unchanged
+            kf = KFile(rel, src, tree)
+            self._ksrc[rel] = src            # names and text from the original bytes; offsets are unchanged
             if tree.root_node.has_error or dropped:
                 self.st["files_with_syntax_errors"] += 1
                 errs[rel] = merge(tree_spans(tree.root_node) + [list(x) for x in dropped])
@@ -608,6 +611,9 @@ class KotlinPlugin(LanguagePlugin):
                           self._params(params) if params is not None else {}, kf.test, self._name_line(c),
                           slots=self._fn_slots(params))
                 self._local_types(c, dc.types)
+                rt = self._ret_text(c)
+                if rt is not None:
+                    self.rets[dc.id] = rt if self.rets.get(dc.id, rt) == rt else ""
                 if any(dflt for _n, dflt, _f in fparams):
                     self.fn_params[dc.id] = fparams
                 self._add_decl(dc, kind)
@@ -1970,11 +1976,28 @@ class KotlinPlugin(LanguagePlugin):
                             **({"via": write} if isinstance(write, str) else {}))
             self.st["stored_property_writes" if write else "stored_property_reads"] += 1
 
-    def _local_type(self, decl: Decl, name: str, kf: KFile) -> str | None:
-        """`val d = Cart(...)` inside the function body: the constructed type of a local."""
+    def _local_type(self, decl: Decl, name: str, kf: KFile, depth: int = 0) -> str | None:
+        """`val d = Cart(...)` inside the function body: the constructed type of a local; also `val g: Garage<E>`,
+        `val g = Garage<E>(..)` and `val e = shop.engine()` through the call chain's declared result (#109)."""
         src = "\n".join(kf.src.decode("utf-8", "replace").split("\n")[decl.line - 1:decl.end])
-        m = re.search(r"\b(?:val|var)\s+" + re.escape(name) + r"\s*(?::\s*([A-Z][\w.]*))?\s*=\s*([A-Z][\w.]*)\s*\(", src)
-        return (m.group(1) or m.group(2)) if m else None
+        m = re.search(r"\b(?:val|var)\s+" + re.escape(name) +
+                      r"\s*(?::\s*([A-Z][\w.]*(?:<[^=\n]*?>)?))?\s*=\s*([A-Z][\w.]*(?:<[^=\n(){}]*?>)?)\s*\(", src)
+        if m:
+            return m.group(1) or m.group(2)
+        m = re.search(r"\b(?:val|var)\s+" + re.escape(name) + r"\s*(?::\s*([A-Z][\w.]*(?:<[^=\n]*?>)?)\s*\??)?\s*="
+                      r"\s*([^\n;]*)", src)
+        if not m:
+            return None
+        if m.group(1):
+            return m.group(1)
+        rhs = m.group(2).strip()
+        if depth > 2 or not re.fullmatch(r"[a-z_][\w]*(?:\([^()]*\))?(?:\s*[?!]*\.\s*\w+(?:\([^()]*\))?)*", rhs) \
+                or rhs.split(".")[0].split("(")[0] == name:
+            return None
+        if "(" not in rhs and "." not in rhs:
+            return None
+        c, args = self._expr_type(rhs, kf, decl, depth + 1)
+        return (c.name + (f"<{', '.join(args)}>" if args else "")) if c is not None else None
 
     def _prop_member(self, cls: Decl, name: str, depth: int = 0) -> list[Decl]:
         hit = self.prop_members.get(cls.fqn, {}).get(name)
@@ -2056,6 +2079,140 @@ class KotlinPlugin(LanguagePlugin):
                                 **({"binding": how} if how else {}))
                 self.st[{"read": "property_reads", "write": "property_writes"}.get(m, "property_read_writes")] += 1
 
+    def _ret_text(self, c) -> str | None:
+        """`fun f(): Garage<Engine>?` -> 'Garage<Engine>'; `fun f() = Engine(..)` -> 'Engine' (#109)."""
+        kids = c.children
+        seen_params = False
+        for i, x in enumerate(kids):
+            if x.type == "function_value_parameters":
+                seen_params = True
+            elif seen_params and x.type == ":" and i + 1 < len(kids):
+                return self.t(kids[i + 1]).rstrip("?! ").strip()
+            elif seen_params and x.type == "function_body":
+                m = re.match(r"=\s*([A-Z]\w*(?:<[^=\n(){}]*?>)?)\s*\(", self.t(x))
+                return m.group(1) if m else None
+        return None
+
+    @staticmethod
+    def _split_type(txt: str | None) -> tuple[str | None, list]:
+        """'Garage<Engine, Map<A, B>>?' -> ('Garage', ['Engine', 'Map'])."""
+        if not txt:
+            return None, []
+        m = re.match(r"\s*([A-Z][\w.]*)\s*(?:<(.*)>)?", txt, re.S)
+        if not m:
+            return None, []
+        args, depth, cur = [], 0, ""
+        for ch in (m.group(2) or "") + ("," if m.group(2) else ""):
+            if ch in "<([":
+                depth += 1
+            elif ch in ">)]":
+                depth -= 1
+            if ch == "," and depth == 0:
+                a = re.match(r"\s*(?:out\s+|in\s+)?([A-Z][\w.]*)", cur)
+                args.append(a.group(1).split(".")[-1] if a else "")
+                cur = ""
+            else:
+                cur += ch
+        return m.group(1).split(".")[-1], args
+
+    def _gparams(self, cls: Decl) -> list[str]:
+        cache = self.__dict__.setdefault("_gp_cache", {})
+        if cls.id not in cache:
+            src = self._ksrc.get(cls.file, b"").decode("utf-8", "replace").split("\n")[cls.line - 1:cls.line + 2]
+            m = re.search(r"\b(?:class|interface)\s+" + re.escape(cls.name) + r"\s*<([^>{(]*)>", "\n".join(src))
+            cache[cls.id] = [re.split(r"[:\s]", re.sub(r"^\s*(?:out|in|reified)\s+", "", x).strip())[0]
+                             for x in m.group(1).split(",")] if m else []
+        return cache[cls.id]
+
+    def _full_type(self, where: Decl | None, name: str, ty: str | None) -> str | None:
+        """Parameter / property types are kept without their generic arguments; read them back from the declaring
+        span (`val garage: Garage<Engine>`, `fun f(g: Garage<Engine>)`) when the stored type is generic there."""
+        if where is None or not ty or "<" in ty:
+            return ty
+        src = "\n".join(self._ksrc.get(where.file, b"").decode("utf-8", "replace").split("\n")[where.line - 1:where.end])
+        m = re.search(r"\b" + re.escape(name) + r"\s*:\s*((?:[\w]+\.)*" + re.escape(ty) + r"\s*<[^=\n(){}]*>)", src)
+        return m.group(1) if m else ty
+
+    def _as_class(self, txt: str | None, owner: Decl | None, args: list, kf: KFile) -> tuple:
+        """A declared type text read on a receiver: a generic parameter of `owner` becomes the receiver's argument."""
+        name, targs = self._split_type(txt)
+        if name is None:
+            return None, []
+        if owner is not None:
+            gp = self._gparams(owner)
+            if name in gp:
+                i = gp.index(name)
+                name, targs = (args[i] if i < len(args) and args[i] else None), []
+                if name is None:
+                    return None, []
+        c = self._class_of(name, kf)
+        return c, targs
+
+    def _expr_type(self, txt: str, kf: KFile, decl: Decl | None, depth: int = 0) -> tuple:
+        """The project class of a receiver expression (`shop.engine()`, `Garage<E>(e).get()`, `makeShop().engine()`,
+        `repo.items.first()`), with its generic arguments; (None, []) when a step is not known (#109)."""
+        if depth > 3 or not txt:
+            return None, []
+        segs, d, cut, q = [], 0, 0, False
+        t = txt.strip()
+        for i, ch in enumerate(t):
+            if ch == '"':
+                q = not q
+            if q:
+                continue
+            if ch in "([{<" and not (ch == "<" and not t[cut:i].strip()[:1].isupper()):
+                d += 1
+            elif ch in ")]}>" and d > 0:
+                d -= 1
+            elif ch == "." and d == 0:
+                segs.append(t[cut:i])
+                cut = i + 1
+        segs.append(t[cut:])
+        segs = [x.strip().rstrip("?!").strip() for x in segs]
+        cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
+        cur, args = None, []
+        for i, seg in enumerate(segs):
+            m = re.match(r"^([A-Za-z_]\w*)\s*(<[^=\n(){}]*?>)?\s*(\(|\{)?", seg)
+            if not m:
+                return None, []
+            ident, ga, called = m.group(1), m.group(2), m.group(3)
+            if i == 0:
+                if ident == "this":
+                    cur = cls
+                elif ident[:1].isupper():
+                    cur = self._class_of(ident, kf)
+                    args = self._split_type(ident + (ga or ""))[1]
+                elif called:
+                    ds = [x for x in self._member(cls, ident) if x.kind != "class"] if cls is not None else []
+                    if not ds:
+                        ds = [x for x in self.by_name.get(ident, []) if x.kind == "function"]
+                    rets = {self.rets.get(x.id) for x in ds}
+                    if len(rets) != 1 or not next(iter(rets)):
+                        return None, []
+                    cur, args = self._as_class(next(iter(rets)), None, [], kf)
+                else:
+                    ty = (self._full_type(decl, ident, decl.types.get(ident)) if decl is not None else None) or \
+                        (self._full_type(cls, ident, self._field_type(cls, ident)) if cls is not None else None) or \
+                        (self._local_type(decl, ident, kf, depth + 1) if decl is not None and decl.kind != "class" else None)
+                    cur, args = self._as_class(ty, None, [], kf)
+                if cur is None:
+                    return None, []
+                continue
+            owner = cur
+            if called:
+                ds = [x for x in self._member(cur, ident) if x.kind != "class"]
+                rets = {self.rets.get(x.id) for x in ds}
+                if len(rets) != 1 or not next(iter(rets)):
+                    return None, []
+                dcls = self.classes.get(ds[0].cls) if ds[0].cls else cur
+                cur, args = self._as_class(next(iter(rets)), dcls, args, kf)
+            else:
+                ty = self._full_type(cur, ident, self._field_type(cur, ident))
+                cur, args = self._as_class(ty, owner, args, kf)
+            if cur is None:
+                return None, []
+        return cur, args
+
     def _targets(self, name: str, recv: str | None, kf: KFile, decl: Decl | None) -> list[Decl]:
         cls = self.classes.get(decl.cls) if decl is not None and decl.cls else None
         if recv is None or recv == "this":
@@ -2098,6 +2255,13 @@ class KotlinPlugin(LanguagePlugin):
             tyname = decl.types.get(rname)
         if tyname is None and cls is not None:
             tyname = self._field_type(cls, rname)
+        if tyname is None and ("." in recv.strip("?!") or "(" in recv or rname[:1].islower()):
+            tc, _args = self._expr_type(recv, kf, decl)          # `shop.engine().run()`, a local from a call (#109)
+            if tc is not None:
+                r = self._member(tc, name)
+                if r:
+                    self._recv = tc
+                    return self._same_set(r, kf)
         if tyname is None and rname[:1].isupper():
             tyname = re.sub(r"\s*[({].*$", "", rname, flags=re.S)     # `WishController().add(x)`: a WishController
         if tyname:

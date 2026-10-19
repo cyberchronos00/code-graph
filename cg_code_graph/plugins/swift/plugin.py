@@ -181,6 +181,32 @@ LOCAL_DECL = re.compile(
 # that function's declared return type when it is a project type (#218)
 LOCAL_CALL = re.compile(r"\b(?:let|var)\s+(\w+)\s*=\s*(?:try\s*[?!]?\s+)?(?:await\s+)?(?:([A-Z]\w*)\s*\.\s*)?([a-z_]\w*)\s*\(")
 
+# `let g = Garage<Engine>(...)`, `let g: Garage<Engine> = ...`, `var g: Garage<Engine>`: the generic arguments (#109)
+GENERIC_USE = re.compile(r"(?::\s*|=\s*(?:try\s*[?!]?\s+)?(?:await\s+)?)([A-Z][\w.]*)\s*<([^=\n(){}]*?)>")
+LOCAL_GENERIC = re.compile(r"\b(?:let|var)\s+(\w+)\s*" + GENERIC_USE.pattern)
+# `let e = shop.engine()`, `let x = a.b.c()`: a local initialised from a call chain on a value, typed when the chain is (#109)
+LOCAL_CHAIN = re.compile(r"\b(?:let|var)\s+(\w+)\s*=\s*(?:try\s*[?!]?\s+)?(?:await\s+)?"
+                         r"([a-z_]\w*(?:\s*\([^()\n]*\))?(?:\s*[?!]?\.\s*\w+(?:\s*\([^()\n]*\))?)+)[ \t]*(?=\n|$|;)")
+TYPE_HEAD = re.compile(r"\b(?:struct|class|enum|actor|protocol)\s+(\w+)\s*<([^>{]*)>")
+
+
+def _gargs(txt: str) -> list[str]:
+    """`Engine, [String: Int]` -> ['Engine', '']: the top-level generic arguments, simple type names only."""
+    out, depth, cur = [], 0, ""
+    for ch in txt + ",":
+        if ch in "<[(":
+            depth += 1
+        elif ch in ">])":
+            depth -= 1
+        if ch == "," and depth == 0:
+            m = re.fullmatch(r"\s*([A-Z][\w.]*)\s*[?!]?\s*", cur)
+            out.append(m.group(1) if m else "")
+            cur = ""
+        else:
+            cur += ch
+    return out
+
+
 PRIVATE_MODS = frozenset({"private", "fileprivate"})
 
 
@@ -509,6 +535,8 @@ class SwiftPlugin(LanguagePlugin):
         self.prop_refs: list[tuple] = []         # (owner, name, receiver | None, line, sf, decl, write)
         self.sigs: dict[str, list] = defaultdict(list)   # function / init node id -> [((label, optional), ...)]
         self._multi_file: set[str] = set()   # nodes shared by same-name declarations in several files or of mixed access
+        self._srcs: dict[str, bytes] = {}    # file -> source, for generic parameter lists (#109)
+        self._pargs: dict[tuple, list] = {}  # (type fqn, property) -> generic arguments of its declared type (#109)
         self.rets: dict[str, str] = {}   # function / method node id -> declared return type name ('' when overloads differ)
         self.http: list[dict] = []
         self.navs: list[tuple] = []          # (owner, view type name, how, file, line)
@@ -548,6 +576,7 @@ class SwiftPlugin(LanguagePlugin):
                 errs[rel] = tree_spans(tree.root_node)
             sfiles.append(SFile(rel, src, tree))
             sfiles[-1].attr_blocks = blocks
+            self._srcs[rel] = src
         self._fd: dict[str, list[Decl]] = defaultdict(list)
         self._avail_regions: dict[str, list] = {}
         self.deploy = deployment_targets(project.root)
@@ -595,6 +624,7 @@ class SwiftPlugin(LanguagePlugin):
                 self.st["routes_unresolved_handler"] += 1
         self.file_report = {"seen": [sf.rel for sf in sfiles] + failed, "parse_failed": failed, "syntax_errors": errs}
         mode = self._exact(project, [sf.rel for sf in sfiles])
+        self._sfiles = sfiles
         self._apply_available()
         st = dict(self.st)
         st.update({"mode": mode, "files": len(sfiles), "declarations": len(self.decls),
@@ -700,6 +730,8 @@ class SwiftPlugin(LanguagePlugin):
                                 self._raw.setdefault(attrs[-1], self.t(m))
                     else:
                         mods.update(self.t(m).split())
+            elif c.type == "class" and n.type != "class_declaration":
+                mods.add("class")              # a bare `class func make()` / `class var x`: the keyword is no modifier node
         return attrs, mods
 
     def _name(self, n) -> str | None:
@@ -947,6 +979,9 @@ class SwiftPlugin(LanguagePlugin):
                 tn = m.group(1) if m else None
             if nm and tn:
                 d.types[nm] = tn
+                g = GENERIC_USE.search(self.t(x))
+                if g and g.group(1).split(".")[-1] == tn.split(".")[-1]:
+                    self._pargs[(d.fqn, nm)] = _gargs(g.group(2))
 
     def _field(self, cls: Decl, nm: str, sf: SFile, c, attrs: list):
         """A stored instance property (`var count = 0`, `@State private var value`, `@Published var items`) is a
@@ -1478,8 +1513,11 @@ class SwiftPlugin(LanguagePlugin):
         suf = next((x for x in c.children if x.type == "call_suffix"), None)
         args = next((x for x in suf.children if x.type == "value_arguments"), None) if suf is not None else None
         lam = next((x for x in suf.children if x.type in ("lambda_literal", "annotated_lambda")), None) if suf is not None else None
-        if f.type == "simple_identifier":
+        if f.type == "simple_identifier" or self.t(f) == "Self":
             return None, self.t(f), args, lam, line
+        if f.type == "prefix_expression" and len(f.children) == 2 and self.t(f.children[0]) == "." \
+                and f.children[1].type == "simple_identifier":
+            return ".", self.t(f.children[1]), args, lam, line      # `.init(x: 1)`: typed by its context (#108)
         if f.type == "navigation_expression":
             target = f.child_by_field_name("target") or f.children[0]
             sfx = next((x for x in f.children if x.type == "navigation_suffix"), None)
@@ -1517,10 +1555,39 @@ class SwiftPlugin(LanguagePlugin):
                 out.append((self.t(lab).strip() if lab is not None else None, val))
         return out
 
+    def _implicit_ctx(self, c, decl: Decl | None) -> str | None:
+        """The contextual type of an implicit member call `.init(...)` / `.make(...)` (#108): the annotation of the
+        property / local it initialises, or the declared return type of the function whose result it is."""
+        p, cur = c.parent, c
+        while p is not None and p.type in ("parenthesized_expression", "try_expression", "await_expression"):
+            cur, p = p, p.parent
+        if p is None:
+            return None
+        if p.type == "property_declaration":
+            ta = next((x for x in p.children if x.type == "type_annotation"), None)
+            if ta is not None:
+                m = re.match(r":\s*([A-Z][\w.]*)\s*[?!]?\s*$", self.t(ta))
+                return m.group(1) if m else None
+            return None
+        ret_ctx = p.type == "control_transfer_statement" and self.t(p).startswith("return")
+        if p.type == "statements" and len([x for x in p.children if x.is_named]) == 1 and p.parent is not None \
+                and p.parent.type in ("function_body", "computed_property"):
+            ret_ctx = True                       # `func moved() -> Point { .init(x: 1) }`
+        if ret_ctx and decl is not None and decl.kind != "class":
+            r = self.rets.get(decl.id)
+            if r == "Self":
+                return decl.cls
+            return r or None
+        return None
+
     def _call(self, c, sf: SFile, owner: str, decl: Decl | None, ctx: dict) -> bool:
         recv, name, args, lam, line = self._callee(c)
         if not name or not re.match(r"^\w+$", name):
             return False
+        if recv == ".":
+            recv = self._implicit_ctx(c, decl)
+            if recv is None:
+                return False
         al = self._args(args)
         # ---- SwiftUI / UIKit navigation
         if name == "NavigationLink":
@@ -1922,20 +1989,28 @@ class SwiftPlugin(LanguagePlugin):
             if not opens or not closes:
                 return
             if not neg:
-                a, z = kids[opens[0]].start_point[0] + 1, kids[closes[0]].start_point[0] + 1
+                cl = kids[closes[0]]
+                # from the end of the check: the conditions after it (`, Assistant.isAvailable`) run only when it holds
+                a, z = c.end_point[0] + 1, cl.start_point[0] + 1
+                acol, zcol = c.end_point[1] - 1, cl.start_point[1]
             else:                              # `if #unavailable(iOS 17) { old } else { new }`: the else branch
                 if len(opens) < 2:
                     return
-                a, z = kids[opens[1]].start_point[0] + 1, p.end_point[0] + 1
+                o = kids[opens[1]]
+                a, z = o.start_point[0] + 1, p.end_point[0] + 1
+                acol, zcol = o.start_point[1], p.end_point[1]
         elif p.type == "guard_statement" and not neg:
             stmts = p.parent
-            a, z = p.end_point[0] + 2, (stmts.end_point[0] + 1 if stmts is not None else p.end_point[0] + 1)
+            a, z = p.end_point[0] + 1, (stmts.end_point[0] + 1 if stmts is not None else p.end_point[0] + 1)
+            acol, zcol = p.end_point[1], (stmts.end_point[1] if stmts is not None else p.end_point[1])
         else:
             return
         av = self._unmet(av, self.cur.rel if self.cur is not None else "", c.start_point[0] + 1,
                          "#unavailable" if neg else "#available")
         if z >= a and av:
-            regions.append((a, z, av))
+            # columns too (#225): `} else { legacy() }` on the closing line, or a one-line `if #available { } else { }`,
+            # is outside the guarded branch
+            regions.append((a, z, av, acol, zcol))
             self.st["available_branches"] += 1
 
     def _unmet(self, av: dict, rel: str, line: int, what: str) -> dict:
@@ -1961,14 +2036,25 @@ class SwiftPlugin(LanguagePlugin):
         """References inside `if #available(...)` / after `guard #available(...)`: edge attrs.available."""
         if not any(self._avail_regions.values()):
             return
+        srcs = {sf.rel: sf.src.split(b"\n") for sf in getattr(self, "_sfiles", ())}
         for e in self.b.edges.values():
             regs = self._avail_regions.get(e.file)
             if not regs or e.line is None:
                 continue
             av = {}
-            for a, z, v in regs:
-                if a <= e.line <= z:
-                    av = self._vmax(av, v)
+            for a, z, v, acol, zcol in regs:
+                if not a <= e.line <= z:
+                    continue
+                if e.line in (a, z) and e.file in srcs:
+                    dn = self.b.nodes.get(e.dst)
+                    nm = ((dn.name if dn is not None else None) or e.dst.rsplit(".", 1)[-1]).encode()
+                    ln = srcs[e.file][e.line - 1] if e.line - 1 < len(srcs[e.file]) else b""
+                    cols = [m.start() for m in re.finditer(rb"(?<![\w])" + re.escape(nm) + rb"(?![\w])", ln)]
+                    lo = acol if e.line == a else -1
+                    hi = zcol if e.line == z else len(ln) + 1
+                    if cols and not any(lo < c < hi for c in cols):
+                        continue
+                av = self._vmax(av, v)
             if av:
                 e.attrs = {**(e.attrs or {}), "available": av}
                 self.st["available_references"] += 1
@@ -2497,14 +2583,73 @@ class SwiftPlugin(LanguagePlugin):
                 found.append((m.start(), m.group(2), CLOSURE_PARAM_TYPES[m.group(1)]))
             for m in LOCAL_CALL.finditer(txt):
                 found.append((m.start(), m.group(1), self._returned(m.group(2), m.group(3))))
+            for m in LOCAL_CHAIN.finditer(txt):
+                if m.group(2).split(".")[0].split("(")[0].strip() != m.group(1):   # not `let x = x.next()`
+                    found.append((m.start(), m.group(1), ("chain", m.group(2))))
+            gen = {}
+            for m in LOCAL_GENERIC.finditer(txt):
+                gen[m.start()] = _gargs(m.group(3))
             for pos, nm, tn in sorted(found, key=lambda x: x[0]):
-                out[nm].append((decl.line + txt.count("\n", 0, pos), tn))
+                out[nm].append((decl.line + txt.count("\n", 0, pos), tn, gen.get(pos)))
             cache[key] = out
-        best = None
-        for ln, tn in cache[key].get(ident, ()):
+        best, self._largs = None, None
+        for ln, tn, ga in cache[key].get(ident, ()):
             if ln <= line:
-                best = tn
+                best, self._largs = tn, ga
+        if isinstance(best, tuple):
+            # typed by its initialiser's call chain, resolved now (a depth guard against `let a = b.f(); let b = a.g()`)
+            guard = self.__dict__.setdefault("_chain_guard", set())
+            if (key, ident) in guard or len(guard) > 4:
+                return None
+            guard.add((key, ident))
+            try:
+                kind, tn = self._recv_type(best[1], decl, self._encl_type(decl))
+                self._largs = getattr(self, "_rargs", None)
+            finally:
+                guard.discard((key, ident))
+            return tn if kind == "type" else None
         return best
+
+    def _gparams(self, t: Decl | None) -> list[str]:
+        """The generic parameter names of a project type (`struct Garage<T, U: Hashable>` -> ['T', 'U'])."""
+        if t is None or t.file not in self._srcs:
+            return []
+        cache = self.__dict__.setdefault("_gp_cache", {})
+        if t.id not in cache:
+            lines = self._srcs[t.file].decode("utf-8", "replace").split("\n")[t.line - 1:t.line + 2]
+            m = TYPE_HEAD.search("\n".join(lines))
+            cache[t.id] = [re.split(r"[:\s]", x.strip())[0] for x in m.group(2).split(",")] \
+                if m and m.group(1) == t.name else []
+        return cache[t.id]
+
+    def _subst(self, ret: str | None, owner: Decl | None, recv_t: Decl | None, args: list | None) -> tuple:
+        """A member's declared type read on a receiver: `Self` is the receiver's type, a generic parameter of the
+        declaring type is the receiver's generic argument (`Garage<Engine>.get() -> T` is an Engine). (fqn, args)."""
+        if not ret:
+            return None, None
+        if ret == "Self" and recv_t is not None:
+            return recv_t.fqn, args
+        if owner is not None and args:
+            gp = self._gparams(owner)
+            if ret in gp and gp.index(ret) < len(args) and args[gp.index(ret)]:
+                ret = args[gp.index(ret)]
+                rt = self._type(ret)
+                return (rt.fqn if rt is not None and "extension-only" not in rt.modifiers else None), None
+        if owner is not None and ret in self._gparams(owner):
+            return None, None
+        rt = self._type(ret)
+        return (rt.fqn if rt is not None and "extension-only" not in rt.modifiers else None), None
+
+    def _call_result(self, t: Decl | None, name: str, static: bool, args: list | None) -> tuple:
+        """The type a call `T.name(...)` (static) / `value.name(...)` returns, when every declaration agrees (#109)."""
+        if t is None:
+            return None, None
+        ds = [d for d in self._member(t, name) if d.kind == "method" and _static(d) == static]
+        rets = {self.rets.get(d.id) for d in ds}
+        if len(rets) != 1:
+            return None, None
+        owner = self.types.get(ds[0].cls) if ds[0].cls else None
+        return self._subst(next(iter(rets)), owner, t, args)
 
     def _returned(self, tname: str | None, fname: str) -> str | None:
         """The project type a call's result has: the declared return type of the one free function `fname` (of the
@@ -2534,12 +2679,19 @@ class SwiftPlugin(LanguagePlugin):
         if not segs:
             return "unknown", None
         state: tuple[str, str | None] = ("unknown", None)
+        args: list | None = None              # the generic arguments of the value so far (#109)
+        self._rargs = None
         for i, seg in enumerate(segs):
             seg = seg.rstrip("!?")
             m = re.match(r"^([A-Za-z_]\w*)\s*(.*)$", seg, re.S)
             if not m:
                 return "unknown", None
             ident, rest = m.group(1), m.group(2).strip()
+            targs = None
+            if rest.startswith("<") and ident[:1].isupper():     # `Garage<Engine>(item: e)`
+                g = re.match(r"<([^=\n(){}]*?)>\s*", rest)
+                if g:
+                    targs, rest = _gargs(g.group(1)), rest[g.end():]
             called = rest.startswith(("(", "{"))
             sub = rest.startswith("[")
             if i == 0:
@@ -2552,6 +2704,7 @@ class SwiftPlugin(LanguagePlugin):
                     t = self._type(ident)
                     if t is not None and "extension-only" not in t.modifiers:
                         state = ("type", t.fqn) if called else ("meta", t.fqn)
+                        args = targs
                     else:                            # an SDK type, its initializer or a value built from it
                         state = ("sdk", ident) if t is not None else self._sdk_or_unknown(ident)
                         if called and len(segs) == 1 and state[0] == "sdk":
@@ -2559,11 +2712,24 @@ class SwiftPlugin(LanguagePlugin):
                     if sub:
                         state = ("unknown", None)
                     continue
-                if called:                            # a free function's result
-                    return "unknown", None
+                if called:                            # a free function's (or own method's) result (#109)
+                    rt = None
+                    if cls is not None and self._member(cls, ident):
+                        own_static = bool(decl is not None and decl.kind != "class" and _static(decl))
+                        rt, args = self._call_result(cls, ident, own_static, None)
+                    elif not self.by_name.get(ident) or all(d.kind == "function" for d in self.by_name[ident]):
+                        rt, args = self._returned(None, ident), None
+                    if rt is None or sub:
+                        return "unknown", None
+                    state = ("type", rt)
+                    continue
+                self._largs = None
                 ltn = self._local(decl, ident)
+                args = self._largs if ltn else None
                 tn = ltn or (decl.types.get(ident) if decl is not None else None) or \
                     (cls.types.get(ident) if cls is not None else None)
+                if not ltn and tn and cls is not None and not (decl is not None and ident in decl.types):
+                    args = self._pargs.get((cls.fqn, ident))
                 if tn is None or sub:
                     return "unknown", None
                 t = self._type(tn)
@@ -2582,12 +2748,26 @@ class SwiftPlugin(LanguagePlugin):
                 # anything further down a chain (`Text("x").font(...)`) is some SDK value
                 state = ("sdk", tname if not called and i == 1 and segs[0][:1].isupper() else None)
                 continue
+            if kind in ("type", "meta") and called and not sub:
+                # `shop.engine().run()`, `Garage<E>(..).get().run()`, `Sub.make().ping()` (#109)
+                rt, args = self._call_result(self._type(tname), ident, kind == "meta", args)
+                if rt is None:
+                    return "unknown", None
+                state = ("type", rt)
+                continue
             if kind in ("type", "meta") and not called and not sub:
                 tc = self.types.get(tname)
                 tn = tc.types.get(ident) if tc is not None else None
+                if tc is not None and tn and tn in self._gparams(tc) and args:     # `let item: T` on Garage<E>
+                    rt, _ = self._subst(tn, tc, tc, args)
+                    if rt:
+                        state, args = ("type", rt), None
+                        continue
+                    return "unknown", None
                 t = self._type(tn)
                 if t is not None and "extension-only" not in t.modifiers:
                     state = ("type", t.fqn)
+                    args = self._pargs.get((tc.fqn, ident)) if tc is not None else None
                     continue
                 if tn:
                     state = ("sdk", tn) if t is not None else self._sdk_or_unknown(tn)
@@ -2595,6 +2775,7 @@ class SwiftPlugin(LanguagePlugin):
                         return state
                     continue
             return "unknown", None
+        self._rargs = args
         return state
 
     def _fitting(self, ds: list, labels: tuple, trailing: bool) -> list:
@@ -2681,6 +2862,8 @@ class SwiftPlugin(LanguagePlugin):
                         bool(decl is not None and decl.kind != "class" and _static(decl))
                     return [d for d in fit if _static(d) == want] or (fit if recv is None else
                                                                       [d for d in fit if d.name == "init"])
+            if name == "Self" and cls is not None and "extension-only" not in cls.modifiers:
+                return [cls]                         # `Self(x: 0)` inside the type: its initializer (#108)
             if name[:1].isupper():
                 t = self.types.get(name)
                 return [t] if t is not None else []
@@ -2691,6 +2874,9 @@ class SwiftPlugin(LanguagePlugin):
                 return [min(cands, key=lambda d: ("@" in d.id, d.line))]
             return cands if len(cands) == 1 else []
         kind, tname = self._recv_type(recv, decl, cls)
+        if kind == "meta" and name[:1].isupper():
+            nt = self.types.get(f"{tname}.{name}")       # `Point.Delta(dx: 1)`: a nested type's initializer (#108)
+            return [nt] if nt is not None and "extension-only" not in nt.modifiers else []
         if kind in ("type", "meta"):
             tc = self._type(tname)
             self._recv = tc

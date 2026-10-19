@@ -1625,3 +1625,22 @@ cases. Questionable pairs: `VaultListGroup` ↔ `VaultItemCipherType` (0.54), a 
 were right (`SyncWithBrowserView` ↔ `CookieAcquisitionContent`) and some were wrong (`AutoFillState.warningMessage` ↔
 `isAdvancedMatching`). Default output (no `--structure`) is byte-identical to 0.23.7 in both directions. The
 hand-checked false-missing samples of #93 were not redone in this round.
+
+## Swift and Kotlin dispatch part 3 (0.23.9)
+
+Heuristic mode, before → after, on public projects:
+
+| project | CALLS | INSTANTIATES | candidate edges |
+|---|---|---|---|
+| Alamofire | 1394 → 1389 | 202 → 209 | 206 → 196 |
+| IceCubesApp | 3119 → 3198 | 686 → 721 | |
+| Kingfisher | 2141 → 2138 | 273 → 281 | 248 → 218 (name-bound 389 → 240) |
+| SwiftUIX | 8550 → 8627 | 4997 → 5045 | |
+| element-x-ios | 15399 → 15428 | 4641 → 4661 | |
+
+The lost edges were guesses replaced by typed ones. Kingfisher's `KFImage(url).cacheOriginalImage().fade(…)` chains
+bound by name to `KF.Builder.fade`; they now land on `KFImageProtocol.fade` with `recv: KFImage` (the protocol
+methods return `Self`). Alamofire's `validate` candidates between request types are now typed. The gains are nested-type
+initializers (`WebSocketRequest.Configuration(…)`), `Self(…)` / `.init(…)` and chained calls. Edges inside
+`#available` branches went from 54 to 51 on IceCubesApp: `} else if x {` on the line that closes the guarded branch is
+no longer counted as guarded.

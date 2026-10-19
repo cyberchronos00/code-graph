@@ -75,6 +75,12 @@ projects build it there too (`__linux__` is defined on Android). `__PASE__` (IBM
 `__illumos__` count as other operating systems. `platforms.cmake_membership: false` turns the
 CMake reading off.
 
+Swift platform files: a file named `Foo+iOS.swift`, `Foo.macOS.swift` or `Foo_watchOS.swift`, or one in a
+`iOS/` / `macOS/` / `watchOS/` / `tvOS/` / `visionOS/` folder, is built for that platform, unknown on the
+other Apple platforms and absent elsewhere (`platform_expr` ends in `(platform file name)`). It is a guess, so it
+never makes a dead branch. Xcode target membership or `.cg.yaml` `platforms.paths` wins over it, and
+`platforms.path_conventions: false` turns it off.
+
 One compile database per target build is the exact answer for C / C++ membership:
 `platforms.compile_commands` maps a target to the `compile_commands.json` of that target's build
 (`linux: build-linux/compile_commands.json`). A source file is built on the targets whose
