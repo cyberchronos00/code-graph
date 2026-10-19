@@ -174,7 +174,7 @@ C_FACTS: dict[str, dict[str, str | None]] = {
 }
 C_OTHER_OS = ("__FreeBSD__", "__OpenBSD__", "__NetBSD__", "__DragonFly__", "__sun", "__sun__", "_AIX", "__HAIKU__",
               "__Fuchsia__", "__QNX__", "__CYGWIN32__", "__MSYS__", "__hpux", "__GNU__", "__OS400__", "__VMS", "__MVS__",
-              "__ZEPHYR__", "__redox__")
+              "__ZEPHYR__", "__redox__", "__PASE__", "__illumos__")
 C_MACROS = set(C_OTHER_OS) | {m for f in C_FACTS.values() for m in f}
 
 
@@ -532,6 +532,15 @@ def apply(project, builder) -> dict:
     marks = builder.platform_marks
     # .cg.yaml platforms.paths and the C / C++ directory / file-name conventions
     user_paths = pc.get("paths") or {}
+    cmake, compdb = {}, {}
+    from .cmake_sources import tree as cmake_tree
+    if langs & {"c", "cpp"} and pc.get("compile_commands"):
+        from .cmake_sources import compile_db_membership
+        compdb = compile_db_membership(root, pc["compile_commands"],
+                                       {f for f, ns in nodes_by_file.items() if ns[0].lang in ("c", "cpp")})
+    if langs & {"c", "cpp"} and pc.get("cmake_membership", True):
+        from .cmake_sources import membership
+        cmake = membership(root, {f for f, ns in nodes_by_file.items() if ns[0].lang in ("c", "cpp") and f not in compdb})
     for f, ns in nodes_by_file.items():
         hit = next(((g, ts) for g, ts in user_paths.items() if fnmatch.fnmatch(f, g)), None)
         if hit:
@@ -539,10 +548,31 @@ def apply(project, builder) -> dict:
             tree = ("any", [_plat_atom(t) for t in ts]) if len(ts) > 1 else _plat_atom(ts[0])
             mark(builder, f, 1, BIG, Cond("tree", tree, f"{cfg.get('file', '.cg.yaml')} platforms.paths {g}"), line=1)
             continue
+        if f in compdb:
+            # one compile database per target build: the exact answer for what each listed target compiles (#111)
+            mark(builder, f, 1, BIG, Cond("tree", cmake_tree(compdb[f]["values"]), compdb[f]["text"]), line=1)
+            continue
+        if f in cmake:
+            # the build's own per-platform source lists win over the directory / file-name guess (#111)
+            c = cmake[f]
+            more = f", +{c['mentions'] - 1} more" if c["mentions"] > 1 else ""
+            n0 = len(builder.platform_marks)
+            mark(builder, f, 1, BIG, Cond("tree", cmake_tree(c["values"]), f"CMake {c['text']} ({c['at']}{more})"), line=1)
+            if c["elsewhere"] and len(builder.platform_marks) > n0:
+                builder.platform_marks[-1]["elsewhere"] = True     # also built for another OS: its #else is live there
+            continue
         if C_EXT.search(f) and pc.get("path_conventions", True) and ns[0].lang in ("c", "cpp"):
             pcv = path_convention(f)
             if pcv:
-                mark(builder, f, 1, BIG, Cond("tree", _plat_atom(pcv[0]), pcv[1]), line=1)
+                n0 = len(builder.platform_marks)
+                tree = _plat_atom(pcv[0])
+                if pcv[0] == "linux":
+                    # a Linux-named file (linux.c, random-sysctl-linux.c) is built for the Linux kernel: some projects
+                    # also build it for Android (__linux__ is defined there), others keep a separate _android file
+                    tree = ("any", [tree, ("atom", "unknown_on", "android")])
+                mark(builder, f, 1, BIG, Cond("tree", tree, pcv[1]), line=1)
+                if len(builder.platform_marks) > n0:
+                    builder.platform_marks[-1]["convention"] = True     # a guess from the path, not a build condition
     # React Native / Expo platform files
     groups: list[dict] = []
     if "ts" in langs and pc.get("file_suffixes", True) and uses_react_native(root):
@@ -657,8 +687,13 @@ def apply(project, builder) -> dict:
             hit = [m for m in ms if _inside(m, e.line, name, lines_of)]
             if hit:
                 etag[k] = hit
+    dead = _dead_branches(builder, ntag, etag)
     targets, tsrc = declared_targets(root, cfg, marks, set(langs) | ({"c_cpp"} if langs & {"c", "cpp"} else set()))
     _write_attrs(builder, ntag, nvals, etag, targets)
+    for nid in dead["nodes"]:
+        n = builder.nodes.get(nid)
+        if n is not None:
+            n.attrs = {**(n.attrs or {}), "dead_branch": True}
     narrowed = _narrow_variant_edges(builder, nvals, etag)
     _variant_platforms(builder, nvals, targets)
     unknown = [m for m in marks if any(m["cond"].values().get(p) is None for p in targets)]
@@ -671,7 +706,78 @@ def apply(project, builder) -> dict:
           "unevaluated_samples": sorted({f"{m['cond'].text} @ {m['file']}:{m['line']}" for m in unknown})[:8]}
     st["per_target"] = _per_target(builder, nodes_by_file, nvals, targets)
     st["divergence"] = divergence_findings(builder, groups, nvals, targets)
+    st["divergence"]["dead_branch"] = dead["regions"][:400]
+    st["divergence"]["counts"]["dead_branch"] = len(dead["regions"])
+    if dead["regions"]:
+        st["dead_branch_regions"] = len(dead["regions"])
+        st["dead_branch_references"] = dead["dropped"]
     return st
+
+
+# C conditions that also select builds outside the known targets: a POSIX layer on Windows (Cygwin, MSYS, MinGW) or
+# another OS. `#ifdef __CYGWIN__` inside `#ifndef _WIN32` is live on Cygwin, so such regions are never dead branches
+C_ELSEWHERE = re.compile(r"\b(?:__CYGWIN__|__CYGWIN32__|__MSYS__|__MINGW32__|__MINGW64__|"
+                         + "|".join(re.escape(m) for m in C_OTHER_OS) + r")\b")
+
+
+def _contradictory(ms: list) -> bool:
+    """Do the conditions around a piece of code exclude every known target together, while each one alone holds on
+    some target (`#elseif os(macOS)` nested in `#if os(iOS)`)? A condition that no known target meets by itself
+    (`__NetBSD__`, an `aix.c` file, `os(macOS)` in a Catalyst-only app) is code for another build, not a dead branch."""
+    ms = [m for m in ms if not m.get("convention")]
+    if len(ms) < 2 or any(m.get("elsewhere") for m in ms):
+        return False
+    if any(m["cond"].kind == "c" and C_ELSEWHERE.search(m["cond"].text) for m in ms):
+        return False
+    vals = [m["cond"].values() for m in ms]
+    if any(all(v[p] is False for p in KNOWN) for v in vals):
+        return False
+    comb = _combine(vals)
+    return all(comb[p] is False for p in KNOWN)
+
+
+def _dead_branches(builder, ntag: dict, etag: dict) -> dict:
+    """Dead branches (#222): code under nested conditions that contradict each other is compiled for no target.
+    Its call / read / write / type references are left out of the graph (so readers, writers, callers and impact do
+    not list them), the symbols it declares are tagged `dead_branch`, and each region is a finding."""
+    regions: dict[tuple, dict] = {}
+
+    def region(ms: list) -> dict:
+        one = {}
+        for m in sorted(ms, key=lambda m: (m["start"], -m["end"])):
+            one.setdefault((m["file"], m["line"], m["cond"].text), m)      # one condition marked twice (a `mod` and its body)
+        ms = list(one.values())
+        key = tuple((m["file"], m["line"], m["cond"].text) for m in ms)
+        r = regions.get(key)
+        if r is None:
+            end = min(m["end"] for m in ms)
+            r = regions[key] = {"file": ms[0]["file"], "lines": [max(m["start"] for m in ms), None if end >= BIG else end],
+                                "conditions": [{"condition": m["cond"].text, "at": f"{m['file']}:{m['line']}",
+                                                "platforms": [p for p, v in m["cond"].values().items() if v is not False]}
+                                               for m in ms],
+                                "symbols": [], "references": [], "references_left_out": 0}
+        return r
+    nodes = []
+    for nid, ms in ntag.items():
+        if _contradictory(ms):
+            nodes.append(nid)
+            region(ms)["symbols"].append(nid)
+    drop = []
+    for k, e in builder.edges.items():
+        if e.kind in ("CONTAINS", "DEFINES", "GATED_BY"):
+            continue
+        ms = list(etag.get(k, ()))      # the conditions around the reference itself (the source node can be a
+        if _contradictory(ms):          # merged variant, or sit in another file: IMPLEMENTED_BY, OVERRIDDEN_BY)
+            drop.append(k)
+            r = region(ms)
+            r["references_left_out"] += 1
+            if len(r["references"]) < 20:
+                r["references"].append({"from": e.src, "to": e.dst, "kind": e.kind, "at": f"{e.file}:{e.line}"})
+    for k in drop:
+        builder.edges.pop(k, None)
+        etag.pop(k, None)
+    out = sorted(regions.values(), key=lambda r: (r["file"], r["lines"][0]))
+    return {"nodes": nodes, "regions": out, "dropped": len(drop)}
 
 
 def _dart_atom(name: str, val):
@@ -1427,11 +1533,27 @@ def render_divergence(res: dict, limit: int = 40) -> str:
             out.append(f"  {m['from']} -{m['kind']}-> {m['to']}  @ {m['at']}  missing on: {', '.join(m['missing_on'])}"
                        f"  (callee: {', '.join(m['callee_platforms']) or 'no known target'}"
                        + (f", {m['callee_condition']}" if m.get("callee_condition") else "") + ")")
+    db = res.get("dead_branch") or []
+    if db:
+        out.append(f"\n== DEAD BRANCHES (nested conditions no target meets together; their references are left out): {len(db)}")
+        for r in db[:limit]:
+            ln = r["lines"]
+            span = f"{ln[0]}-{ln[1]}" if ln[1] else f"{ln[0]}-"
+            conds = " inside ".join(f"{c['condition']} [{', '.join(c['platforms']) or '-'}] @ {c['at']}"
+                                    for c in reversed(r["conditions"]))
+            out.append(f"  {r['file']}:{span}  {conds}")
+            if r.get("symbols"):
+                out.append(f"      declares: {', '.join(r['symbols'][:6])}")
+            for x in r.get("references", [])[:6]:
+                out.append(f"      left out: {x['from']} -{x['kind']}-> {x['to']}  @ {x['at']}")
+            more = r.get("references_left_out", 0) - min(6, len(r.get("references", [])))
+            if more > 0:
+                out.append(f"      ... {more} more reference(s) left out")
     c = res.get("counts") or {}
     if c.get("missing_callee_skipped_no_target"):
         out.append(f"  ({c['missing_callee_skipped_no_target']} reference(s) to code built for no declared target not listed:"
                    f" the targets use a system or unindexed definition)")
-    if any(c.get(k, 0) > len(res.get(k) or []) for k in ("variants", "api_surface", "missing_callee")):
+    if any(c.get(k, 0) > len(res.get(k) or []) for k in ("variants", "api_surface", "missing_callee", "dead_branch")):
         out.append(f"\n(lists capped; totals: {', '.join(f'{k} {v}' for k, v in c.items())})")
     return "\n".join(out)
 

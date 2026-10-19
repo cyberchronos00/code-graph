@@ -31,6 +31,9 @@ Process protocols (one app, two processes; receivers carry attrs.process instead
   tauri              endpoint:tauri:<command> (plugin commands: endpoint:tauri:plugin:<name>|<command>, external
                      tauri-plugin-<name> unless the plugin crate is in the repo); invoke('cmd') from @tauri-apps/api ->
                      #[tauri::command] fn in the Rust core; check unregistered: not listed in generate_handler!
+  tauri-event        endpoint:tauri-event:<name>; emit / emit_to / emit_str / emit_filter with a literal name (Rust
+                     `app.emit("x", ..)`, webview `emit('x')`, `getCurrentWindow().emit('x')`, `emitTo(label, 'x')`)
+                     -> listen / listen_any / once (Rust closures, webview callbacks); `tauri://` names are Tauri's own
 no_receiver for these: the other side is in the repo (some channel / command is received) but not this one.
 """
 from __future__ import annotations
@@ -55,6 +58,8 @@ PROTOCOLS = {
                     "ipcRenderer.on)",
     "electron-preload": "Electron context bridge member (window.<key>.<member>() -> contextBridge.exposeInMainWorld)",
     "tauri": "Tauri command (invoke('cmd') -> #[tauri::command] fn cmd registered in generate_handler!)",
+    "tauri-event": "Tauri event (emit / emit_to('name') in Rust or the webview -> listen / once('name') on the other "
+                   "side; `tauri://` events are emitted by Tauri itself)",
     "react-native-event": "React Native event (native sendEvent / RCTDeviceEventEmitter.emit / sendEventWithName / Expo "
                           "sendEvent -> NativeEventEmitter / DeviceEventEmitter addListener in JS)",
     "capacitor-event": "Capacitor plugin event (native notifyListeners('evt') -> Plugin.addListener('evt') in JS)",
@@ -64,8 +69,8 @@ PROTOCOLS = {
 # native -> app events: the JS listener is the receiver; no_sender only where the repo sends some event natively
 EVENT_PROTOCOLS = ("react-native-event", "capacitor-event")
 # protocols between processes of one app (no per-platform receivers)
-PROCESS_PROTOCOLS = ("electron-ipc", "electron-preload", "tauri")
-TRANSPORT = {"electron-ipc": "ipc", "tauri": "ipc", "electron-preload": "local"}
+PROCESS_PROTOCOLS = ("electron-ipc", "electron-preload", "tauri", "tauri-event")
+TRANSPORT = {"electron-ipc": "ipc", "tauri": "ipc", "tauri-event": "ipc", "electron-preload": "local"}
 MOBILE = ("android", "ios", "macos")
 APP_LANGS = ("dart", "ts")          # the app side of a bridge (receivers there: a native -> app call)
 # Capacitor Plugin / CAPPlugin base-class methods: handled by the bridge on every platform unless a plugin overrides them
@@ -1162,11 +1167,134 @@ def tauri_receivers(project, builder) -> dict:
     return {"commands": n, "registered": len(registered)} if n else {}
 
 
+TAURI_EV_RS_SEND = re.compile(r"\.\s*(emit|emit_str|emit_all)\s*\(\s*\"([^\"]+)\"|"
+                              r"\.\s*(emit_to|emit_str_to|emit_filter|emit_str_filter)\s*\(\s*(?:[^,()]|\([^()]*\))+,\s*\"([^\"]+)\"")
+TAURI_EV_RS_RECV = re.compile(r"\.\s*(listen|listen_any|once|once_any)\s*\(\s*\"([^\"]+)\"\s*,\s*(?:move\s*)?(\|[^|]*\||[A-Za-z_][\w:]*)?")
+TAURI_EV_JS_SEND = re.compile(r"""(?<![\w$])(?:\.\s*)?(emit)\s*\(\s*(['"`])([^'"`$\n]+)\2|"""
+                              r"""(?<![\w$])(?:\.\s*)?(emitTo)\s*\(\s*[^,()]+,\s*(['"`])([^'"`$\n]+)\5""")
+TAURI_EV_JS_RECV = re.compile(r"""(?<![\w$])(?:\.\s*)?(listen|once)\s*(?:<[^>()]*>)?\s*\(\s*(['"`])([^'"`$\n]+)\2\s*,\s*([A-Za-z_$][\w$]*)?""")
+TAURI_EV_DYN_SEND = re.compile(r"""(?<![\w$])(?:\.\s*)?(?:emit|emit_str|emit_all)\s*\(\s*&?[A-Za-z_$][\w$.]*\s*[,)]""")
+TAURI_EV_DYN_RECV = re.compile(r"""(?<![\w$])(?:\.\s*)?(?:listen|listen_any|once)\s*(?:<[^>()]*>)?\s*\(\s*&?[A-Za-z_$][\w$.]*\s*,""")
+_JS_TOKEN = re.compile(r"""'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`|//[^\n]*|/\*.*?\*/""", re.S)
+JS_LIKE = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".vue", ".svelte")
+
+
+def _innermost(builder, by_file: dict, rel: str, line: int) -> str | None:
+    """The innermost function / method / component node of `rel` around `line`, else its module / file node."""
+    best, size = None, None
+    for n in by_file.get(rel, ()):
+        if n.line is None or n.line > line or (n.end_line or n.line) < line:
+            continue
+        sz = (n.end_line or n.line) - n.line
+        if size is None or sz < size:
+            best, size = n.id, sz
+    return best
+
+
+def _uses_tauri(root: Path, depth: int = 4) -> bool:
+    """A Cargo.toml depending on tauri or a package.json depending on @tauri-apps/* within `depth` directories."""
+    from . import presets
+    skip = presets.skip_dirs("common")
+    for dp, dn, fn in os.walk(root):
+        rel = Path(dp).relative_to(root)
+        dn[:] = [] if len(rel.parts) >= depth else [d for d in dn if d not in skip and not d.startswith(".")]
+        for name, rx in (("Cargo.toml", r"^\s*tauri\s*="), ("package.json", r'"@tauri-apps/')):
+            if name in fn:
+                try:
+                    if re.search(rx, (Path(dp) / name).read_text(encoding="utf-8", errors="replace"), re.M):
+                        return True
+                except OSError:
+                    pass
+    return False
+
+
+def tauri_events(project, builder) -> dict:
+    """Tauri events (#111): a literal event name emitted on one side (Rust core or webview) and listened to on the
+    other -> SENDS_TO / RECEIVED_BY over endpoint:tauri-event:<name>. The receiver is the named callback when the
+    listener passes a function by name, else the function that registers the listener. Names built at run time
+    (`window.emit(event_name, ..)`) are not followed."""
+    root = Path(project.root)
+    if not _uses_tauri(root):
+        return {}
+    by_file: dict[str, list] = defaultdict(list)
+    kinds = ("function", "method", "component", "page", "layout", "module", "file", "closure")
+    for n in builder.nodes.values():
+        if n.file and n.kind in kinds:
+            by_file[n.file].append(n)
+    named: dict[str, dict[str, str]] = defaultdict(dict)
+    for f, ns in by_file.items():
+        for n in ns:
+            if n.kind in ("function", "method"):
+                named[f].setdefault(n.name.rsplit("::", 1)[-1].rsplit(".", 1)[-1], n.id)
+    sent = recv = 0
+    dyn = {"send": 0, "recv": 0}           # names passed in a variable: a helper forwards them (`listen(eventName, ..)`)
+    eps = set()
+    for rel in sorted(by_file):
+        is_rs = rel.endswith(".rs")
+        if not (is_rs or rel.endswith(JS_LIKE)) or rel.endswith(".d.ts"):
+            continue
+        try:
+            raw = (root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if is_rs:
+            if "emit" not in raw and "listen" not in raw and "once" not in raw:
+                continue
+            src = strip_comments(raw)
+            if not re.search(r"\btauri\b", src):
+                continue
+        else:
+            if "@tauri-apps/api" not in raw and "__TAURI__" not in raw:
+                continue
+            src = _JS_TOKEN.sub(lambda m: m.group(0) if m.group(0)[0] in "'\"`" else re.sub(r"[^\n]", " ", m.group(0)), raw)
+        side = "core" if is_rs else "webview"
+        lines = lambda pos: src.count("\n", 0, pos) + 1          # noqa: E731
+        dyn["send"] += len(TAURI_EV_DYN_SEND.findall(src))
+        dyn["recv"] += len(TAURI_EV_DYN_RECV.findall(src))
+        for m in (TAURI_EV_RS_SEND if is_rs else TAURI_EV_JS_SEND).finditer(src):
+            name = (m.group(2) or m.group(4)) if is_rs else (m.group(3) or m.group(6))
+            ln = lines(m.start())
+            who = _innermost(builder, by_file, rel, ln)
+            if not who or not name:
+                continue
+            nid = protocol_send(builder, "tauri-event", name, None, who, rel, ln, "exact", process=side,
+                                via=(m.group(1) or m.group(3)) if is_rs else (m.group(1) or m.group(4)))
+            if name.startswith("tauri://"):
+                builder.nodes[nid].attrs["builtin"] = True
+            eps.add(nid)
+            sent += 1
+        for m in (TAURI_EV_RS_RECV if is_rs else TAURI_EV_JS_RECV).finditer(src):
+            name = m.group(2) if is_rs else m.group(3)
+            cb = (m.group(3) or "") if is_rs else (m.group(4) or "")
+            ln = lines(m.start())
+            h = named[rel].get(cb.rsplit("::", 1)[-1]) if cb and not cb.startswith("|") else None
+            h = h or _innermost(builder, by_file, rel, ln)
+            if not h:
+                continue
+            nid = protocol_receive(builder, "tauri-event", name, None, h, rel, ln, "exact", process=side,
+                                   via=m.group(1))
+            if name.startswith("tauri://"):
+                builder.nodes[nid].attrs["builtin"] = True
+            eps.add(nid)
+            recv += 1
+    if dyn["send"] or dyn["recv"]:
+        # the other side may be one of those: no no_receiver / no_sender claim for the literal names
+        for nid in eps:
+            builder.nodes[nid].attrs["dynamic_names"] = dict(dyn)
+    out = {"event_sends": sent, "event_listeners": recv}
+    if dyn["send"] or dyn["recv"]:
+        out["event_dynamic_names"] = dyn
+    return out if sent or recv else {}
+
+
 def apply(project, builder, scanned=None, sends_only: bool = False) -> dict:
     """Index pass: native receivers of every bridge protocol -> RECEIVED_BY edges (+ stub nodes for Java / ObjC) and
     platform marks on their files. Returns the bridges stats (empty when there is no bridge code)."""
     from .platforms import BIG, Cond, _plat_atom, mark
     tauri = tauri_receivers(project, builder)
+    ev = tauri_events(project, builder)
+    if ev:
+        tauri = {**(tauri or {}), **ev}
     st0 = {"tauri": tauri} if tauri else {}
     st = _apply(project, builder, scanned, sends_only, mark, BIG, Cond, _plat_atom)
     if st0 or st:
@@ -1406,9 +1534,31 @@ def project_targets(project, builder) -> list[str]:
         return []
 
 
-def _process_roles(builder, eps, recv, send) -> None:
+def _declared_role(declared: dict, f: str | None) -> str | None:
+    if not f or not declared:
+        return None
+    return next((r for g, r in declared.items() if fnmatch.fnmatch(f, g)), None)
+
+
+def _process_roles(builder, eps, recv, send, declared: dict | None = None) -> None:
     """Electron / Tauri: process role of each file taking part in IPC (attrs.process on its module node): main,
-    preload (exposes a context bridge), renderer (Electron), webview / core (Tauri)."""
+    preload (exposes a context bridge), renderer (Electron), webview / core (Tauri). `.cg.yaml`
+    platforms.processes (glob -> role) wins over the inferred role, for the module and for each send / receive edge
+    in its files (attrs.process_from: config)."""
+    declared = declared or {}
+    if declared:
+        for nid, n in eps.items():
+            if n.attrs.get("protocol") not in PROCESS_PROTOCOLS:
+                continue
+            for e in recv[nid]:
+                dn = builder.nodes.get(e.dst)
+                r = _declared_role(declared, dn.file if dn else None)
+                if r:
+                    e.attrs = {**(e.attrs or {}), "process": r, "process_from": "config"}
+            for e in send[nid]:
+                r = _declared_role(declared, e.file)
+                if r:
+                    e.attrs = {**(e.attrs or {}), "process": r, "process_from": "config"}
     roles = defaultdict(set)
     for nid, n in eps.items():
         if n.attrs.get("protocol") not in PROCESS_PROTOCOLS:
@@ -1421,10 +1571,16 @@ def _process_roles(builder, eps, recv, send) -> None:
             sn = builder.nodes.get(e.src)
             if sn and sn.file and e.attrs.get("process"):
                 roles[sn.file].add(e.attrs["process"])
-    if not roles:
+    if not roles and not declared:
         return
     for n in builder.nodes.values():
-        if n.kind in ("module", "file", "mod", "crate") and n.file in roles:
+        if n.kind not in ("module", "file", "mod", "crate", "component"):
+            continue
+        d = _declared_role(declared, n.file)
+        if d:
+            # declared: also files that take no part in IPC themselves (the renderer's components, the core's services)
+            n.attrs["process"], n.attrs["process_from"] = d, "config"
+        elif n.file in roles and n.kind != "component":
             r = roles[n.file]
             n.attrs["process"] = "preload" if "preload" in r else next(iter(r)) if len(r) == 1 else "+".join(sorted(r))
 
@@ -1457,7 +1613,7 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
     proto_recv = defaultdict(set)
     for nid in recv:
         proto_recv[eps[nid].attrs["protocol"]].add(None)
-    _process_roles(builder, eps, recv, send)
+    _process_roles(builder, eps, recv, send, ((project.options.get("config") or {}).get("platforms") or {}).get("processes"))
     # macOS counts only where some bridge module is implemented for it (a Flutter macos/ runner)
     used = {e.attrs.get("platform") for es in recv.values() for e in es}
     mobile = [p for p in (targets or []) if p in ("android", "ios") or (p == "macos" and p in used)]
@@ -1487,7 +1643,8 @@ def finalize(project, builder, st: dict, targets: list[str] | None) -> dict:
             # one app, two processes: a receiver-less channel is a miss when the other side is in the repo at all
             ext_pkg = any(e.attrs.get("external") for e in send[nid] + tsend[nid])
             impl = None if ext_pkg else (proto_recv.get(a["protocol"]) or None)
-        base = a.get("method") in BASE_METHODS.get(a["protocol"], ())
+        base = (a.get("method") in BASE_METHODS.get(a["protocol"], ()) or bool(a.get("builtin"))
+                or bool(a.get("dynamic_names")))
         if base:
             a["base_method"] = True        # the framework's base class implements it on every platform; a module may override
         if a["protocol"] in EVENT_PROTOCOLS and (send[nid] or tsend[nid]) and not recv[nid]:

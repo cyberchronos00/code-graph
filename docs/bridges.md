@@ -62,6 +62,7 @@ Process role replaces platform: Electron `main` / `preload` / `renderer`; Tauri 
 | `electron-ipc` | `endpoint:electron-ipc:settings:read` | `ipcRenderer.invoke` / `send`; `webContents.send` | `ipcMain.handle` / `on`; `ipcRenderer.on` |
 | `electron-preload` | `endpoint:electron-preload:api#readSettings` | `window.api.readSettings()` | `contextBridge.exposeInMainWorld('api', {readSettings})` |
 | `tauri` | `endpoint:tauri:greet`; plugins `endpoint:tauri:plugin:fs\|read_text_file` | `invoke('greet')` (`@tauri-apps/api` v1 or v2) | `#[tauri::command] fn greet` |
+| `tauri-event` | `endpoint:tauri-event:notes-changed` | `emit` / `emit_to` / `emit_str` / `emit_filter` with a literal name (Rust `app.emit("x", ..)`; webview `emit('x')`, `getCurrentWindow().emit('x')`, `emitTo(label, 'x')`) | `listen` / `listen_any` / `once` on the other side (a Rust closure or named fn, a webview callback) |
 
 Channels are string literals, `const`s or enum members (
 `ipcMain.handle(IpcEvents.GET_FILES, fn)`). A project wrapper named after the Electron object (
@@ -84,7 +85,31 @@ a root `Cargo.toml` has its Rust core indexed from `<app>/src-tauri/Cargo.toml`.
 here means some other channel or command is received in this repo, but not this one. There is no
 `missing_on`. The module nodes of the files taking part get `attrs.process` (main, preload,
 renderer, webview, core), and the edges carry `attrs.process` of their side. Endpoint
-`transport` is `ipc` for `electron-ipc` / `tauri` and `local` for `electron-preload`.
+`transport` is `ipc` for `electron-ipc` / `tauri` / `tauri-event` and `local` for `electron-preload`.
+
+A process role can be declared instead of inferred: `.cg.yaml` `platforms.processes` maps a
+glob to `main`, `preload`, `renderer`, `webview`, `core` or `worker`. In an app with IPC
+endpoints, every module or component in a matching file gets that role, also files that take
+no part in IPC themselves, and so do the send / receive edges made there
+(`attrs.process_from: config`).
+
+```yaml
+platforms:
+  processes:
+    "src/main/**": main
+    "src/preload/**": preload
+    "src/renderer/**": renderer
+```
+
+Tauri events go both ways (core → webview and webview → core). The receiver is the callback
+when the listener names a function (`app.listen_any("sync", on_sync)`, `listen('x', onX)`),
+else the function or component that registers the listener. `tauri://` events (`tauri://focus`,
+`tauri://resize`) are emitted by Tauri itself and get no `no_sender`. Event names passed in a
+variable (`window.emit(event_name, ..)`, a `listen(eventName, ..)` helper) are not followed; while
+the repo has any, its literal names get no `no_receiver` / `no_sender` (`attrs.dynamic_names`,
+`stats.bridges.tauri.event_dynamic_names`). Webview files are scanned when they import
+`@tauri-apps/api` or use `window.__TAURI__`. `.svelte` components are read like `.vue` ones:
+their `<script>` blocks and `on*={...}` handler attributes, with references on the component node.
 
 ```text
 $ cg bridges --protocol tauri --db out/app.db      # tests/bridge_fixtures/tauri_app
@@ -158,7 +183,7 @@ listed at the end as `unresolved` (`stats.bridges.dynamic`: a count and up to 20
   in another file (unless this file creates exactly one).
 - Java is indexed by the language plugin; bridge registration is still a separate scan. Objective-C is scanned for registrations only.
 - Electron `MessagePort`, `utilityProcess`, preload listeners mapped through a renderer lookup
-  table. Tauri `emit` / `listen`, and commands invoked from `.svelte` / `.vue` outside
-  `<script>`.
+  table. Tauri event names forwarded through helpers, `Channel<T>`, and Svelte template code
+  other than `on*` handler attributes (`{#each}`, `{expr}`, `bind:`). Plain-HTML frontends.
 
 Public-app results: [web / native bridges](validation-log.md#web--native-bridges).

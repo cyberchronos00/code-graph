@@ -57,7 +57,8 @@ SCHEMA: dict[str, set | None] = {     # top-level key -> allowed sub-keys (None:
     "version": None, "python": {"source_roots"}, "exclude": None, "skip_dirs": {"add", "keep"},
     "frameworks": {"add", "remove"}, "auth": {"extra_patterns"}, "secret": {"extra_patterns"}, "gates": None,
     "plans": {"dir", "text_mention_dirs"}, "viz": {"presets"}, "generated": {"paths", "vendored", "keep", "include"},
-    "platforms": {"targets", "paths", "file_suffixes", "path_conventions"}, "include": None, "apps": None,
+    "platforms": {"targets", "paths", "file_suffixes", "path_conventions", "xcode_membership", "cmake_membership",
+                  "processes", "compile_commands"}, "include": None, "apps": None,
     "rust": {"targets"}, "protocols": {"external"}, "lossy": None, "surface": {"ignore"},
 }
 APP_KEYS = ("name", "root", "role", "links")
@@ -189,10 +190,13 @@ def _platform_names(v: Any, where: str, extra: tuple = ()) -> list[str]:
     return list(dict.fromkeys(out))
 
 
+PROCESS_ROLES = ("main", "preload", "renderer", "webview", "core", "worker")
+
+
 def _platforms(pf: dict, fname: str) -> dict:
     """platforms: targets (the project's build targets), paths (glob -> targets: files built only there),
-    file_suffixes / path_conventions / xcode_membership (React Native .ios.ts files, C/C++ win/ unix/ directories,
-    Xcode target membership; default on)."""
+    file_suffixes / path_conventions / xcode_membership / cmake_membership (React Native .ios.ts files, C/C++ win/
+    unix/ directories, Xcode target membership, per-platform CMake source lists; default on)."""
     out: dict = {}
     if pf.get("targets") is not None:
         out["targets"] = _platform_names(pf["targets"], f"{fname}: platforms.targets")
@@ -211,7 +215,29 @@ def _platforms(pf: dict, fname: str) -> dict:
             if not names:
                 raise ConfigError(f"{fname}: platforms.paths[{g!r}]: expected at least one target")
             out["paths"][g] = names
-    for k in ("file_suffixes", "path_conventions", "xcode_membership"):
+    if pf.get("processes") is not None:
+        # glob -> process role of a desktop app (Electron main / preload / renderer, Tauri core / webview), #111
+        if not isinstance(pf["processes"], dict):
+            raise ConfigError(f"{fname}: platforms.processes: expected a mapping of glob -> role "
+                              f"(e.g. 'src/main/**': main)")
+        out["processes"] = {}
+        for g, role in pf["processes"].items():
+            g = str(g)
+            if ".." in PurePosixPath(g.strip("/")).parts:
+                raise ConfigError(f"{fname}: platforms.processes: {g!r} must stay inside the indexed root (no '..')")
+            if role not in PROCESS_ROLES:
+                raise ConfigError(f"{fname}: platforms.processes[{g!r}]: {role!r} is not a process role "
+                                  f"(known: {', '.join(PROCESS_ROLES)})")
+            out["processes"][g] = role
+    if pf.get("compile_commands") is not None:
+        # target -> compile_commands.json of that target's build (#111)
+        cc = pf["compile_commands"]
+        if not isinstance(cc, dict) or not cc:
+            raise ConfigError(f"{fname}: platforms.compile_commands: expected a mapping of target -> compile_commands.json "
+                              f"(e.g. linux: build-linux/compile_commands.json)")
+        out["compile_commands"] = {_platform_names([str(k)], f"{fname}: platforms.compile_commands")[0]: str(v)
+                                   for k, v in cc.items()}
+    for k in ("file_suffixes", "path_conventions", "xcode_membership", "cmake_membership"):
         if pf.get(k) is not None:
             if not isinstance(pf[k], bool):
                 raise ConfigError(f"{fname}: platforms.{k}: expected true or false, got {pf[k]!r}")
@@ -549,10 +575,16 @@ def effective(root: str | Path, python_roots: list[str] | None = None, gates: st
     else:
         row("platforms.targets", "detected at index time: Flutter platform folders, Expo app.json, React Native, "
             "Electron / Tauri, else the desktop targets plus those the conditions name (cg platforms)", "built-in")
+    if pc.get("compile_commands"):
+        row("platforms.compile_commands", [f"{t}: {p}" for t, p in pc["compile_commands"].items()],
+            f"{fname} platforms.compile_commands")
+    if pc.get("processes"):
+        row("platforms.processes", [f"{g}: {r}" for g, r in pc["processes"].items()], f"{fname} platforms.processes")
     if pc.get("paths"):
         row("platforms.paths", [f"{g}: {', '.join(ts)}" for g, ts in pc["paths"].items()], f"{fname} platforms.paths")
     for k, what in (("file_suffixes", "React Native .ios / .android / .native / .web files"),
-                    ("path_conventions", "C / C++ win/ unix/ posix/ darwin/ directories and _win / _unix file names")):
+                    ("path_conventions", "C / C++ win/ unix/ posix/ darwin/ directories and _win / _unix file names"),
+                    ("cmake_membership", "C / C++ files CMake lists only under platform conditions")):
         row(f"platforms.{k}", pc.get(k, True), f"{fname} platforms.{k}" if k in pc else f"built-in ({what})")
     row("auth.token_pattern", PR.values("common", "auth", "token_pattern"), "preset common")
     for section in ("auth", "secret"):

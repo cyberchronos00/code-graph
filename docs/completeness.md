@@ -73,7 +73,7 @@ names the file and its first error line.
 
 ## Unsupported source types
 
-A programming extension with no plugin (`.go`, `.qml`, `.sh`, `.lua`, `.svelte`,
+A programming extension with no plugin (`.go`, `.qml`, `.sh`, `.lua`,
 …), or a `#!` line naming such an interpreter. Data and markup (`.json`, `.yaml`, `.md`,
 `.svg`) never count. Extensionless launchers of indexed languages (`artisan`, `bin/console`)
 are not listed.

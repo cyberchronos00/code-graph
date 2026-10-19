@@ -1368,8 +1368,9 @@ def platform_divergence(target: str | None = None, kind: str | None = None, max_
     conditional imports or #[cfg] / #if alternatives, with the declared targets no variant covers), API SURFACE (a
     variant lacks a public symbol its siblings define) and REFERENCED WHERE THE CALLEE IS NOT BUILT (a call or
     import that is live on a target where the callee does not exist: a build or runtime failure there). Each finding
-    has file:line evidence. target: only findings that affect this target. kind: variants | api_surface |
-    missing_callee."""
+    has file:line evidence. DEAD BRANCHES: code under nested conditions no target meets together (`#elseif os(macOS)`
+    inside `#if os(iOS)`); its references are left out of the graph. target: only findings that affect this target.
+    kind: variants | api_surface | missing_callee | missing_callee_tests | dead_branch."""
     from .platforms import divergence, render_divergence, resolve_platform
     st = _st()
     _scope(whole=True, note=False)
@@ -1379,8 +1380,8 @@ def platform_divergence(target: str | None = None, kind: str | None = None, max_
             t = resolve_platform(target)
         except ValueError as e:
             raise PlatformError(str(e)) from None
-    if kind and kind not in ("variants", "api_surface", "missing_callee", "missing_callee_tests"):
-        return f"unknown kind {kind!r}: use variants, api_surface, missing_callee or missing_callee_tests"
+    if kind and kind not in ("variants", "api_surface", "missing_callee", "missing_callee_tests", "dead_branch"):
+        return f"unknown kind {kind!r}: use variants, api_surface, missing_callee, missing_callee_tests or dead_branch"
     return render_divergence(divergence(st, kind=kind, target=t), limit=max_items)
 
 

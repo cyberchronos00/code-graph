@@ -63,6 +63,25 @@ version (`attrs.available`, [Swift](swift.md)), not a target filter.
 | Swift | `#if os(iOS)`, `canImport`, `targetEnvironment(macCatalyst)`, `@available(*, unavailable)` | one type or method per `#if` branch (`class:Toolbar`, `class:Toolbar@7`) |
 | Kotlin | `iosMain`, `androidMain`, … | `expect` links to each `actual` ([Kotlin](kotlin.md)) |
 
+C / C++ files in CMake source lists: a file that `CMakeLists.txt` (or a `.cmake` include) adds only
+under platform conditions (`if(WIN32)`, `if(APPLE OR CMAKE_SYSTEM_NAME MATCHES "Android|Linux")`,
+`elseif` / `else`, `NOT` / `AND` / `OR`) is built only there, from `list(APPEND ...)`, `set(...)`,
+`target_sources(...)`, `add_library(...)` or `add_executable(...)`. That replaces the
+directory / file-name guess for the file (`platform_expr` names the CMake condition and line). An
+option or version check is unknown, a file also listed unconditionally is built everywhere, and
+`function()` / `macro()` bodies are not read. Without a CMake list, a Linux-named file
+(`linux.c`, `*-linux.c`, `linux/`) is built on Linux and unknown on Android, since some
+projects build it there too (`__linux__` is defined on Android). `__PASE__` (IBM i) and
+`__illumos__` count as other operating systems. `platforms.cmake_membership: false` turns the
+CMake reading off.
+
+One compile database per target build is the exact answer for C / C++ membership:
+`platforms.compile_commands` maps a target to the `compile_commands.json` of that target's build
+(`linux: build-linux/compile_commands.json`). A source file is built on the targets whose
+database compiles it, not on the other listed targets, and unknown on targets without a
+database (kept live). Headers are left out. It wins over the CMake lists and the path guess.
+Databases for Apple or Windows targets need a build on that system; cg only reads them.
+
 A guard (`if (Platform.OS !== 'ios') return`) tags the rest of the block with the negated
 condition. A JS branch without braces ends at its line. Electron and Tauri process roles are
 recorded by [bridges](bridges.md#electron-and-tauri). Bridge receiver files take the platform
@@ -105,6 +124,18 @@ exits 2 and lists the known targets.
 | VARIANTS | one symbol per platform, and which declared targets no variant covers |
 | API SURFACE DIFFERS | a variant lacks a symbol its siblings define and importers use |
 | REFERENCED WHERE THE CALLEE IS NOT BUILT | a live call or import on a target where the callee and every variant are absent |
+| DEAD BRANCHES | code under nested conditions that no target meets together (`#elseif os(macOS)` inside `#if os(iOS)`, `#ifdef __APPLE__` inside `#ifdef __linux__`, `#[cfg(windows)]` inside `#[cfg(unix)]`) |
+
+Dead branches are built for no target, so their references (calls, property reads and writes,
+type uses, overrides) are left out of the graph: `readers`, `writers`, `callers` and `impact`
+do not list them, with or without `--platform`. Symbols declared there keep their node with
+`attrs.dead_branch` and `platforms: []`. Each region lists its file and lines, the conditions
+that contradict (innermost first, with the targets each holds on), the symbols and the left-out
+references; `cg index` counts them as `dead_branch_regions` / `dead_branch_references`.
+Not dead branches: a condition no known target meets by itself (`#ifdef __NetBSD__`, an
+`aix.c` file, `targetEnvironment(macCatalyst)` without a Catalyst build), C conditions that also
+select Cygwin / MSYS / MinGW or another OS, and a `win/` / `unix/` directory guess against an
+`#ifdef` in the file.
 
 Not findings: an import that spells `./Cam.ios` (that file is used on every target the importer
 builds for); a test file named `release.web.test.ts`; a Swift call that uses an SDK initializer
@@ -116,7 +147,7 @@ listed under FROM TEST CODE WHOSE PLATFORMS ARE THE PROJECT DEFAULT. A test narr
 by its target's `SUPPORTED_PLATFORMS` stays in the main missing-callee list.
 
 `--target ios` keeps one target.
-`--kind variants|api_surface|missing_callee|missing_callee_tests` keeps one kind. MCP:
+`--kind variants|api_surface|missing_callee|missing_callee_tests|dead_branch` keeps one kind. MCP:
 `platforms`, `platform_divergence(target, kind)`.
 
 ```yaml
@@ -127,6 +158,11 @@ platforms:
     "src/posix/**": [unix]     # native = every non-web target
   file_suffixes: true          # .ios.ts / .android.ts
   path_conventions: true       # win/ and *_win.c
+  cmake_membership: true       # per-platform CMake source lists
+  compile_commands:            # one compile database per target build
+    linux: build-linux/compile_commands.json
+  processes:                   # Electron / Tauri process roles (bridges.md)
+    "src/main/**": main
   xcode_membership: true
 ```
 

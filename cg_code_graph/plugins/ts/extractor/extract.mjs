@@ -55,8 +55,8 @@ const EXCLUDE_FILES = new Set(cfg.exclude_files || [])
 const GENERATED_REL = cfg.generated_re ? new RegExp(cfg.generated_re) : null
 const excludedRel = r => !!(EXCLUDE_REL && EXCLUDE_REL.test(r)) || (!included(r.replace(/\/$/, '')) && (!!(GENERATED_REL && GENERATED_REL.test(r)) || EXCLUDE_FILES.has(r)))
 const SRC_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/
-const SFC_RE = /\.(vue|astro)$/
-const SFC_TS_RE = /\.(vue|astro)\.ts$/
+const SFC_RE = /\.(vue|astro|svelte)$/
+const SFC_TS_RE = /\.(vue|astro|svelte)\.ts$/
 // test code (Vitest / Jest / Playwright / Cypress): indexed as test nodes unless cfg.index_tests === false; kept out of
 // the application graph by the indexer (TEST_* edges)
 const INDEX_TESTS = cfg.index_tests !== false
@@ -351,14 +351,15 @@ if (INDEX_TESTS) {
 }
 const vueFiles = allFiles.filter(f => f.endsWith('.vue'))
 const astroFiles = allFiles.filter(f => f.endsWith('.astro'))
-const vueSet = new Set([...vueFiles, ...astroFiles])
+const svelteFiles = allFiles.filter(f => f.endsWith('.svelte'))
+const vueSet = new Set([...vueFiles, ...astroFiles, ...svelteFiles])
 
 // ---------- virtual sources for .vue ----------
 const virtual = new Map()       // virtual path -> text
 const lineMaps = new Map()      // virtual path -> {virtualLine(1-based): origLine}
 const sfcInfo = new Map()
 const sfcI18n = {}             // rel vue path -> keys defined in <i18n> blocks       // vue abs path -> {templateTags:[...], pageMeta}
-const stats = { vue_files: vueFiles.length, astro_files: astroFiles.length, ts_files: 0, template_stubs: 0, template_component_tags: 0,
+const stats = { vue_files: vueFiles.length, astro_files: astroFiles.length, svelte_files: svelteFiles.length, ts_files: 0, template_stubs: 0, template_component_tags: 0,
   sfc_errors: 0, components_global: 0, components_imported: 0, components_external: 0, components_unknown: 0, unknown_tags: {} }
 const sfcNav = []               // static <NuxtLink to> / <RouterLink to> / <a href>
 function internalHref(v) {
@@ -636,6 +637,60 @@ function buildVirtualAstro(file) {
   return out
 }
 for (const f of astroFiles) virtual.set(f + '.ts', buildVirtualAstro(f))
+
+// ---------- virtual sources for .svelte (#111) ----------
+// The <script> blocks (instance and `context="module"`) are kept at their own lines; event-handler attributes
+// (`onclick={save}`, `on:click={() => save(1)}`) become stubs after them, so their references stay on the component.
+// The rest of the template is not read yet.
+function buildVirtualSvelte(file) {
+  let src
+  try { src = fs.readFileSync(file, 'utf8') } catch (e) { process.stderr.write(`cg: skipping ${rel(file)}: ${e.code || e}\n`); return '' }
+  const keep = []
+  const scriptRe = /<script\b[^>]*>/gi
+  const tpl = []
+  let m, last = 0
+  while ((m = scriptRe.exec(src))) {
+    const close = src.indexOf('</script>', m.index + m[0].length)
+    const end = close < 0 ? src.length : close
+    keep.push([m.index + m[0].length, end])
+    tpl.push([last, m.index])
+    last = close < 0 ? src.length : close + 9
+    scriptRe.lastIndex = last
+  }
+  tpl.push([last, src.length])
+  const starts = [0]
+  for (let k = src.indexOf('\n'); k >= 0; k = src.indexOf('\n', k + 1)) starts.push(k + 1)
+  const lineAt = i => { let lo = 0, hi = starts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (starts[mid] <= i) lo = mid; else hi = mid - 1 } return lo + 1 }
+  const stubs = []
+  let n = 0
+  const handlerRe = /\s(on:?[a-zA-Z][\w-]*(?:\|[\w|]+)?)\s*=\s*\{/g
+  for (const [a, b] of tpl) {
+    const part = src.slice(a, b)
+    handlerRe.lastIndex = 0
+    let h
+    while ((h = handlerRe.exec(part))) {
+      const open = a + h.index + h[0].length - 1
+      const e = astroExprEnd(src, open)
+      if (e < 0 || e > b) continue
+      const body = src.slice(open + 1, e - 1).trim()
+      if (!body) continue
+      const code = `function __tpl_${n} () { return (${body}) }`
+      if (!astroStubOk(code)) continue
+      n++
+      stubs.push([code, lineAt(open)]); stats.template_stubs++
+      handlerRe.lastIndex = e - a
+    }
+  }
+  const text = blank(src, keep)
+  const vp = file + '.ts'
+  const lm = {}
+  let out = text, vl = text.split('\n').length
+  for (const [code, l] of stubs) { const parts = code.split('\n'); parts.forEach((_, k) => { lm[vl + 1 + k] = l + k }); vl += parts.length; out += '\n' + code }
+  out += '\nexport {}'
+  lineMaps.set(vp, lm)
+  return out
+}
+for (const f of svelteFiles) virtual.set(f + '.ts', buildVirtualSvelte(f))
 
 // ---------- compiler host ----------
 const host = ts.createCompilerHost(options, true)
