@@ -8,6 +8,27 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.12] - 2026-10-19
+
+### Added
+
+- Kotlin exact mode maps scip-java property terms (`Cart#label.`) and the synthetic `getLabel()` / `setItems()` /
+  `isReady()` at the property's spelling: a stored property is `READS_PROP` / `WRITES_PROP`, a custom accessor is
+  `CALLS` with `property: read`, `write` or `read_write` (from `=`, `+=`, `++`). Covered files drop the heuristic
+  accessor calls. A declared `fun getX()` stays a call where the source spells `getX` (#105).
+- Kotlin: an interface or abstract `val` / `var` with no accessor becomes a property node (`property: abstract`) when an
+  override has one, with `IMPLEMENTED_BY` from an interface property and `OVERRIDDEN_BY` from an abstract or open one
+  (#105).
+- Java `getX` / `setX` / `isX` on a Kotlin property uses the same property nodes in heuristic and exact mode (#105).
+- Swift `@AppStorage` / `@SceneStorage` fields that share a wrapper and key are linked with `SHARES_STORAGE` (#235).
+
+### Changed
+
+- Kotlin `$name` inside a string template and a field read through an extension receiver
+  (`fun Cart.total() = items.size`) record `READS_PROP` (#235).
+- A second branch on the same line keeps its own edge: the edge key includes `branch`, Kotlin / Swift construction
+  branches are queued in source order, and the TypeScript extractor does the same for `RENDERS` (#235).
+
 ## [0.23.11] - 2026-10-19
 
 ### Added
@@ -1829,7 +1850,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.11...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.12...HEAD
+[0.23.12]: https://github.com/cyberchronos00/code-graph/compare/v0.23.11...v0.23.12
 [0.23.11]: https://github.com/cyberchronos00/code-graph/compare/v0.23.10...v0.23.11
 [0.23.10]: https://github.com/cyberchronos00/code-graph/compare/v0.23.9...v0.23.10
 [0.23.9]: https://github.com/cyberchronos00/code-graph/compare/v0.23.8...v0.23.9
