@@ -38,6 +38,7 @@ from pathlib import Path
 
 from ...core.model import EXACT, HEURISTIC
 from ...core.env import get as cg_env
+from ..java.exact import _accessor_kind, kotlin_property_ref
 from ..native import runner, scipread
 
 BUILD_FILES = ("build.gradle.kts", "build.gradle", "settings.gradle.kts", "settings.gradle", "pom.xml")
@@ -443,10 +444,13 @@ class ExactLayer:
         owners.update(jowners)
         for rel, doc in list(kdocs.items()) + list(jdocs.items()):
             java = rel in jdocs
-            # a property access `x.pets` is reported as the term `C#pets.` plus the synthetic accessor `C#getPets().`,
-            # which collides with a declared `fun getPets()`: accessors at a property reference are not calls
+            # a property access `x.pets` is the term `C#pets.` plus synthetic `getPets().` / `setPets().` at the
+            # property's spelling. That accessor symbol collides with a declared `fun getPets()`. Map the spelling
+            # to the property node; a call that spells `getPets` stays a call (#105).
             prop_at = {(o.line, o.col) for o in doc.occs if not (o.roles & scipread.DEFINITION)
                        and o.symbol.endswith(".") and not o.symbol.endswith(").")}
+            handled = set() if java else self._map_kotlin_properties(rel, doc, owners, st)
+            prop_at |= handled
             for o in doc.occs:
                 if o.roles & scipread.DEFINITION:
                     continue
@@ -473,7 +477,10 @@ class ExactLayer:
                         if acc is not None:
                             src = self._owner(owners, rel, o.line + 1)
                             if src is not None and src != acc[0]:
-                                self._upgrade(src, acc[0], acc[1], rel, o.line + 1)
+                                extra = {"binding": "kotlin-accessor"}
+                                if acc[1] == "CALLS":
+                                    extra["property"] = "write" if _accessor_kind(o.symbol) == "set" else "read"
+                                self._mark_exact(src, acc[0], acc[1], rel, o.line + 1, **extra)
                                 st["java"]["references"] += 1
                             continue
                     kind = "CALLS"
@@ -508,6 +515,7 @@ class ExactLayer:
             "recall": round(agree / len(exact), 3) if exact else None,
             # candidate edges (receiver type unknown, one per same-name method, #83) are compared on their own
             "candidate_edges": len(self.candidates), "candidate_agree": len(self.candidates & exact)}
+        self._drop_heuristic_properties(covered)
         rep = getattr(self.p, "file_report", None) or {}
         seen = set(getattr(self.p, "_seen_files", None) or rep.get("seen") or covered)
         st["scip_files"] = len({f for f in covered & seen if f.endswith(".kt")})
@@ -517,15 +525,108 @@ class ExactLayer:
         from ..java.exact import kotlin_accessor_target
         return kotlin_accessor_target(symbol, self.b.nodes)
 
-    def _upgrade(self, src: str, dst: str, kind: str, file: str, line: int) -> None:
-        """Replace a heuristic property edge in a covered file with the exact accessor edge."""
+    def _mark_exact(self, src: str, dst: str, kind: str, file: str, line: int, **attrs) -> None:
+        """Upgrade a syntax-layer property edge, or add the exact one."""
         key = (src, dst, kind, file, line, None)
         e = self.b.edges.get(key)
         if e is not None:
             e.confidence = EXACT
             e.attrs["source"] = "scip"
+            e.attrs.update(attrs)
             return
-        self.b.add_edge(src, dst, kind, file, line, EXACT, source="scip", binding="kotlin-accessor")
+        self.b.add_edge(src, dst, kind, file, line, EXACT, source="scip", **attrs)
+
+    def _map_kotlin_properties(self, rel: str, doc, owners: dict, st: dict) -> set:
+        """Property term and synthetic accessor occurrences at one spelling become exact read / write edges."""
+        buckets = defaultdict(list)
+        for o in doc.occs:
+            if o.roles & scipread.DEFINITION:
+                continue
+            buckets[(o.line, o.col)].append(o)
+        handled = set()
+        for (line, col), occs in buckets.items():
+            spell = self._spelling(rel, line, col)
+            if not spell:
+                continue
+            ref = None
+            for o in occs:
+                ref = kotlin_property_ref(o.symbol, self.b.nodes, spelling=spell)
+                if ref is not None:
+                    break
+            if ref is None:
+                continue
+            src = self._owner(owners, rel, line + 1)
+            handled.add((line, col))
+            if src is None or src == ref[0]:
+                continue
+            self._emit_kotlin_property(src, ref[0], rel, line, col, spell)
+            st["scip_property_edges"] = st.get("scip_property_edges", 0) + 1
+        return handled
+
+    def _emit_kotlin_property(self, src: str, dst: str, rel: str, line: int, col: int, spell: str) -> None:
+        node = self.b.nodes.get(dst)
+        if node is None:
+            return
+        mode = self._mode_at(rel, line, col, spell)
+        if node.kind == "field":
+            kinds = {"read": ("READS_PROP",), "write": ("WRITES_PROP",),
+                     "read_write": ("READS_PROP", "WRITES_PROP")}[mode]
+            for kind in kinds:
+                self._mark_exact(src, dst, kind, rel, line + 1)
+            return
+        acc = set(node.attrs.get("accessors") or [])
+        if mode == "write" and not ({"set", "delegate"} & acc):
+            mode = "read"
+        elif mode == "read_write" and not ({"set", "delegate"} & acc):
+            mode = "read"
+        self._mark_exact(src, dst, "CALLS", rel, line + 1, property=mode)
+
+    def _spelling(self, rel: str, line: int, col: int) -> str | None:
+        kf = getattr(self.p, "_kf_by_rel", {}).get(rel)
+        if kf is None or line < 0:
+            return None
+        lines = kf.src.splitlines()
+        if line >= len(lines):
+            return None
+        raw = lines[line]
+        if isinstance(raw, str):
+            raw = raw.encode()
+        if col < 0 or col >= len(raw):
+            return None
+        m = re.match(rb"[A-Za-z_][A-Za-z0-9_]*", raw[col:])
+        return m.group(0).decode() if m else None
+
+    def _mode_at(self, rel: str, line: int, col: int, spell: str) -> str:
+        """`read`, `write` (`name =`), or `read_write` (`+=`, `++`, `--`). scip-java emits get and set together."""
+        kf = getattr(self.p, "_kf_by_rel", {}).get(rel)
+        if kf is None or line < 0:
+            return "read"
+        lines = kf.src.splitlines()
+        if line >= len(lines):
+            return "read"
+        raw = lines[line]
+        if isinstance(raw, str):
+            raw = raw.encode()
+        if col < 0 or col + len(spell) > len(raw):
+            return "read"
+        after = raw[col + len(spell):]
+        before = raw[:col]
+        if re.match(br"\s*(\+\+|--)", after) or re.search(br"(\+\+|--)\s*$", before):
+            return "read_write"
+        if re.match(br"\s*[-+*/%]=", after):
+            return "read_write"
+        if re.match(br"\s*=(?!=)", after):
+            return "write"
+        return "read"
+
+    def _drop_heuristic_properties(self, covered: set) -> None:
+        """Covered Kotlin files keep the exact property edges, not the heuristic accessor calls."""
+        for key, e in list(self.b.edges.items()):
+            if e.confidence != HEURISTIC or e.file not in covered or not e.attrs.get("property"):
+                continue
+            n = self.b.nodes.get(e.src)
+            if n is not None and n.lang == "kotlin":
+                del self.b.edges[key]
 
     def _jvm_name_facade(self, symbol: str, sym: dict) -> str | None:
         """`pkg/JvmName#fn().` → the top-level `pkg/fn().` when `JvmName` is a Kotlin file's JVM facade."""
@@ -626,7 +727,7 @@ class ExactLayer:
             if e.confidence != HEURISTIC or e.file not in covered:
                 continue
             if e.attrs.get("property"):
-                continue      # property reads / writes (#89): scip-java reports them as accessors, not mapped yet
+                continue      # compared on their own; exact property edges replace them after mapping (#105)
             if e.kind == "REFERENCES_FN" and e.attrs.get("how") == "callback":
                 n = self.b.nodes.get(e.src)
                 if n is not None and n.lang == "kotlin":
