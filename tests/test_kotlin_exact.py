@@ -87,8 +87,12 @@ def test_exact_mode_with_scip_flag(tmp_path, no_toolchain):
     # Report.render calls Store.load, not the same-named Cache.load
     assert ("method:demo.Report.render", "method:demo.Cache.load") not in calls
     # the property access `shapes.add(shape)` reports the synthetic getter getShapes(), which collides with the
-    # declared `fun getShapes()`: no call edge from it
+    # declared `fun getShapes()`: no call edge from it. The spelling `shapes` is a property read (#105).
     assert ("method:demo.Registry.add", "method:demo.Registry.getShapes") not in calls
+    reads = _edges(con, "READS_PROP")
+    assert reads.get(("method:demo.Registry.getShapes", "field:demo.Registry.shapes")) == "exact"
+    assert reads.get(("method:demo.Registry.add", "field:demo.Registry.shapes")) == "exact"
+    assert reads.get(("method:demo.Square.area", "field:demo.Square.side")) == "exact"
     # no heuristic call edges are left in the indexed Kotlin files
     assert set(calls.values()) == {"exact"}
     inst = _edges(con, "INSTANTIATES")

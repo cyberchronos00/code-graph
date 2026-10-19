@@ -322,6 +322,8 @@ class KotlinPlugin(LanguagePlugin):
         self.props_by_name: dict[str, list[Decl]] = defaultdict(list)
         self.prop_members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.prop_at: dict[tuple, Decl] = {}                               # (file, start byte) -> decl
+        # interface / abstract `val` with no accessor: a node only when an override has one (#105)
+        self.abstract_props: dict[str, dict[str, tuple]] = defaultdict(dict)
         self.locals: dict[tuple, list] = {}                                # (file, enclosing id) -> local functions
         self.stored_names: set[str] = set()                                # plain stored properties / ctor vals
         # stored properties of a class / enum are `field:<Type>.<name>` nodes with READS_PROP / WRITES_PROP (#88)
@@ -422,8 +424,8 @@ class KotlinPlugin(LanguagePlugin):
         mode = self._exact(project, files)
         st["mode"] = mode
         for k in ("exact_vs_heuristic", "scip_documents", "scip_files", "scip_defs_matched", "scip_defs_unmatched",
-                  "scip_defs_unmatched_samples", "scip_references", "scip_refs_external", "java", "scip",
-                  "interop_kotlin_to_java", "calls_resolved", "calls_unresolved"):
+                  "scip_defs_unmatched_samples", "scip_property_edges", "scip_references", "scip_refs_external", "java",
+                  "scip", "interop_kotlin_to_java", "calls_resolved", "calls_unresolved"):
             if k in self.st:
                 st[k] = self.st[k]
 
@@ -447,7 +449,7 @@ class KotlinPlugin(LanguagePlugin):
             except Exception as e:          # a corrupt / foreign index must not lose the heuristic graph
                 info["status"] = f"SCIP import failed ({type(e).__name__}: {e})"
             for k in ("exact_vs_heuristic", "scip_documents", "scip_files", "scip_defs_matched", "scip_defs_unmatched",
-                      "scip_defs_unmatched_samples",
+                      "scip_defs_unmatched_samples", "scip_property_edges",
                       "scip_references", "scip_refs_external", "java"):
                 if k in sst:
                     self.st[k] = sst[k]
@@ -595,6 +597,10 @@ class KotlinPlugin(LanguagePlugin):
                                                or self.t(x) in ("val", "var")), "val")
                                     if kk in ("class", "enum") and not self._is_constant(d, dc):
                                         self._field(dc, nm_, kw, kf, d)
+                                    _anns, pmods = self._annotations(d)
+                                    if kk == "interface" or "abstract" in pmods:
+                                        self.abstract_props[dc.fqn][nm_] = (
+                                            dc, nm_, kf.rel, d.start_point[0] + 1, d.end_point[0] + 1, pmods)
                     self._decls(body, kf, dc, None)
                 self.stored_names.update(types)
             elif ty == "function_declaration":
@@ -2371,6 +2377,62 @@ class KotlinPlugin(LanguagePlugin):
         own = [d for d in cands if "actual" in d.modifiers and kf.source_set and d.id.endswith(f"@{kf.source_set}")]
         return own or [d for d in cands if "actual" not in d.modifiers] or cands
 
+    def _link_property_overrides(self):
+        """`override val` with a property node implements or overrides the base property (#105).
+
+        An interface or abstract `val` with no accessor has no node until some override has one. The edge is
+        IMPLEMENTED_BY from an interface property and OVERRIDDEN_BY from an abstract or open property.
+        """
+        for d in list(self.decls.values()):
+            if d.id not in self.props or "override" not in d.modifiers or not d.cls:
+                continue
+            cls = self.classes.get(d.cls)
+            if cls is None:
+                continue
+            base = self._nearest_base_prop(cls, d.name)
+            if base is None or base.id == d.id:
+                continue
+            iface = self.b.nodes[f"class:{base.cls}"].attrs.get("kotlin_kind") == "interface" if base.cls else False
+            abstract = "abstract" in (base.modifiers or [])
+            ek = "IMPLEMENTED_BY" if iface else "OVERRIDDEN_BY"
+            if not iface and not abstract and "open" not in (base.modifiers or []) and base.id not in self.props:
+                continue
+            self.b.add_edge(base.id, d.id, ek, d.file, d.line, HEURISTIC)
+
+    def _nearest_base_prop(self, cls: Decl, name: str):
+        seen = set()
+        stack = list(cls.supers)
+        while stack:
+            s = stack.pop(0)
+            sc = self.classes.get(s) or (self.class_short.get(s) or [None])[0]
+            if sc is None or sc.fqn in seen or sc is cls:
+                continue
+            seen.add(sc.fqn)
+            hit = self.prop_members.get(sc.fqn, {}).get(name)
+            if hit:
+                return hit[0]
+            noted = self.abstract_props.get(sc.fqn, {}).get(name)
+            if noted:
+                return self._materialize_abstract_prop(*noted)
+            stack.extend(sc.supers)
+        return None
+
+    def _materialize_abstract_prop(self, cls: Decl, name: str, rel: str, line: int, end: int, mods) -> Decl:
+        existing = self.prop_members.get(cls.fqn, {}).get(name)
+        if existing:
+            return existing[0]
+        fq = f"{cls.fqn}.{name}"
+        dc = Decl(f"method:{fq}", "method", name, fq, rel, line, end, cls.fqn, [], [], set(mods), None, {},
+                  False, line)
+        self.props[dc.id] = {"property": "abstract", "accessors": [], "type": None}
+        self._add_decl(dc, "property", prop=True)
+        self.b.nodes[dc.id].attrs.update(property="abstract", accessors=[])
+        self.props_by_name[name].append(dc)
+        self.prop_members[cls.fqn][name].append(dc)
+        self.st["property_nodes"] += 1
+        self.st["abstract_property_nodes"] = self.st.get("abstract_property_nodes", 0) + 1
+        return dc
+
     def _field_type(self, cls: Decl, name: str, depth=0):
         if name in cls.types:
             return cls.types[name]
@@ -2395,6 +2457,7 @@ class KotlinPlugin(LanguagePlugin):
                         for m in ms:
                             ek = "IMPLEMENTED_BY" if kind == "IMPLEMENTS" or "abstract" in base.modifiers else "OVERRIDDEN_BY"
                             self.b.add_edge(base.id, m.id, ek, m.file, m.line, HEURISTIC)
+        self._link_property_overrides()
         # expect -> actual
         for d in list(self.decls.values()):
             if "actual" in d.modifiers:

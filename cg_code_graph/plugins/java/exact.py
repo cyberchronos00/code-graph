@@ -57,6 +57,14 @@ _ANON_SEG = re.compile(r"^\$?anon\d*$")
 _ACCESSOR = re.compile(r"^(get|set|is)([A-Z]\w*)$")
 
 
+def _accessor_kind(symbol: str) -> str | None:
+    dd = scipread.descriptors(symbol)
+    if not dd or not dd[1]:
+        return None
+    m = _ACCESSOR.fullmatch(dd[1][-1][0])
+    return m.group(1) if m else None
+
+
 def is_anon_id(nid: str) -> bool:
     """True when a mapped id still contains a scip-java anonymous type segment (`$anon`)."""
     return any(_ANON_SEG.match(part) for part in nid.split(":", 1)[-1].split("."))
@@ -105,6 +113,72 @@ def bind_java_symbol(symbol: str, nodes, file: str, line: int) -> tuple[str, str
     return nid, kind
 
 
+def _property_names(kind: str, raw: str) -> list[str]:
+    prop = raw[:1].lower() + raw[1:]
+    names = [prop]
+    if kind == "is":
+        names.append("is" + raw)
+    return names
+
+
+def _owner_of(names: list[tuple[str, str]]) -> str:
+    return ".".join([n for n, s in names if s == "/"] + [n for n, s in names if s == "#"])
+
+
+def _find_kotlin_property(nodes, owner: str, props: list[str]) -> tuple[str, str] | None:
+    """`(node id, READS_PROP | CALLS)` for a stored field or a custom property node."""
+    for p in props:
+        fid = f"field:{owner}.{p}"
+        node = nodes.get(fid)
+        if node is not None and node.lang == "kotlin" and node.kind == "field":
+            return fid, "READS_PROP"
+    for p in props:
+        for n in nodes.values():
+            if (n.lang == "kotlin" and n.attrs.get("property") and (n.fqn or "").rsplit(".", 1)[0] == owner
+                    and n.name == p):
+                return n.id, "CALLS"
+    return None
+
+
+def kotlin_property_ref(symbol: str, nodes, spelling: str | None = None) -> tuple[str, str] | None:
+    """`(node id, edge kind)` for a property term (`Cart#label.`) or accessor (`getLabel().` / `setItems().` / `isReady().`).
+
+    A stored property is `READS_PROP` (`WRITES_PROP` for `setX`). A custom accessor node is `CALLS`.
+    `spelling` is the identifier at the occurrence: when it is the property (`label`, `items`) the
+    reference is a property use. When it is the accessor name itself (`getShapes`) this returns None,
+    so a declared `fun getShapes()` stays a call. Java passes no spelling and matches `getLabel`.
+    """
+    dd = scipread.descriptors(symbol)
+    if not dd or not dd[1]:
+        return None
+    names = [n for n in dd[1] if n[1] != ")"]
+    if not names:
+        return None
+    last, suf = names[-1]
+    if suf == ".":
+        props, write = [last], False
+    elif suf == "(":
+        m = _ACCESSOR.fullmatch(last)
+        if not m:
+            return None
+        kind, raw = m.group(1), m.group(2)
+        props, write = _property_names(kind, raw), kind == "set"
+    else:
+        return None
+    if spelling is not None and spelling not in props:
+        return None
+    owner = _owner_of(names[:-1])
+    if not owner:
+        return None
+    found = _find_kotlin_property(nodes, owner, props)
+    if found is None:
+        return None
+    nid, edge = found
+    if edge == "READS_PROP" and write:
+        return nid, "WRITES_PROP"
+    return nid, edge
+
+
 def kotlin_accessor_target(symbol: str, nodes) -> tuple[str, str] | None:
     """`(kotlin node id, edge kind)` for a JVM accessor call (`getX` / `setX` / `isX`).
 
@@ -112,34 +186,9 @@ def kotlin_accessor_target(symbol: str, nodes) -> tuple[str, str] | None:
     A custom accessor that is already a Kotlin method node is `CALLS`.
     """
     dd = scipread.descriptors(symbol)
-    if not dd or not dd[1]:
+    if not dd or not dd[1] or dd[1][-1][1] != "(":
         return None
-    names = [n for n in dd[1] if n[1] != ")"]
-    if not names or names[-1][1] != "(":
-        return None
-    m = _ACCESSOR.fullmatch(names[-1][0])
-    if not m:
-        return None
-    kind, raw = m.group(1), m.group(2)
-    prop = raw[:1].lower() + raw[1:]
-    owner = ".".join([n for n, s in names if s == "/"] + [n for n, s in names[:-1] if s == "#"])
-    if not owner:
-        return None
-    props = [prop]
-    if kind == "is":
-        props.append("is" + raw)
-    edge = "WRITES_PROP" if kind == "set" else "READS_PROP"
-    for p in props:
-        fid = f"field:{owner}.{p}"
-        node = nodes.get(fid)
-        if node is not None and node.lang == "kotlin" and node.kind == "field":
-            return fid, edge
-    for p in props:
-        for n in nodes.values():
-            if (n.lang == "kotlin" and n.attrs.get("property") and (n.fqn or "").rsplit(".", 1)[0] == owner
-                    and n.name == p):
-                return n.id, "CALLS"
-    return None
+    return kotlin_property_ref(symbol, nodes)
 
 
 class ExactLayer:
@@ -222,7 +271,16 @@ class ExactLayer:
                         st["scip_refs_external"] = st.get("scip_refs_external", 0) + 1
                     continue
                 if dst is None:
-                    if kotlin_accessor_target(o.symbol, self.b.nodes):
+                    acc = kotlin_accessor_target(o.symbol, self.b.nodes)
+                    if acc is not None:
+                        src = self._owner(owners, rel, o.line + 1)
+                        if src is not None and src != acc[0]:
+                            extra = {"binding": "kotlin-accessor"}
+                            if acc[1] == "CALLS":
+                                extra["property"] = "write" if _accessor_kind(o.symbol) == "set" else "read"
+                            self.b.add_edge(src, acc[0], acc[1], rel, o.line + 1, EXACT, source="scip", **extra)
+                            if acc[1] == "CALLS":
+                                exact.add((src, acc[0], "CALLS"))
                         continue
                     st["scip_refs_external"] = st.get("scip_refs_external", 0) + 1
                     continue
