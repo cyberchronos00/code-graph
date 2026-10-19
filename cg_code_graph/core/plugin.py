@@ -88,7 +88,10 @@ class GraphBuilder:
         g = self.current_gate
         if g and g.get("src") != src:
             g = None  # only references made by the gated function itself carry the gate
-        key = (src, dst, kind, file, line, g["gate"] if g else None)
+        gate = g["gate"] if g else None
+        # a second branch of the same call on one line is its own edge (#235)
+        br = attrs.get("branch")
+        key = (src, dst, kind, file, line, gate, br) if br else (src, dst, kind, file, line, gate)
         if key in self.edges:
             return
         if g:

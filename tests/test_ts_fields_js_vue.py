@@ -57,10 +57,16 @@ def test_jsx_and_new_branches():
     app, p, em = "function:src/App.jsx#App", "function:src/App.jsx#Panel", "function:src/App.jsx#Empty"
     assert e[(app, p, "RENDERS", 9)]["branch"] == "case 'x'" and e[(app, p, "RENDERS", 9)]["branch_line"] == 8
     assert e[(app, p, "RENDERS", 11)]["branch"] == "user ?"
-    assert e[(app, em, "RENDERS", 11)]["branch"] == "else of user ?"
+    empty = [json.loads(a or "{}").get("branch") for (a,) in sqlite3.connect(db("js_fields_fixture")).execute(
+        "select attrs from edges where kind='RENDERS' and src=? and dst=? and line=11", (app, em))]
+    assert set(empty) == {"else of user ?", "user &&"}, empty
     mk, cmd = "function:src/cmd.js#make", "class:src/cmd.js#Command"
     assert e[(mk, cmd, "INSTANTIATES", 17)] == {"branch": "if (kind === 'a')", "branch_line": 16}
     assert e[(mk, cmd, "INSTANTIATES", 19)]["branch"] == "kind ?"
+    rows = [(json.loads(a or "{}").get("branch")) for a, in sqlite3.connect(db("js_fields_fixture")).execute(
+        "select attrs from edges where kind='RENDERS' and src=? and dst=? and line=15",
+        ("function:src/App.jsx#Again", p))]
+    assert rows == ["user ?", "else of user ?"] or set(rows) == {"user ?", "else of user ?"}, rows
 
 
 def test_pinia_options_store_and_vue_data():

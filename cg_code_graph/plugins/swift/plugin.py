@@ -528,8 +528,9 @@ class SwiftPlugin(LanguagePlugin):
         self._field_owner: dict[str, str | None] = {}     # field id -> the variant type declaring it (#219)
         self.field_names: set[str] = set()
         self.mutating_names: set[str] = set()
-        self.branch_of: dict[tuple, dict] = {}     # (owner, line, type name) -> enclosing branch of a construction
-        self.branch_at: dict[tuple, dict] = {}     # (file, line, type name) -> the same, for the exact layer
+        self.branch_of: dict[tuple, list] = defaultdict(list)  # (owner, line, name) -> branches in source order (#235)
+        self.branch_at: dict[tuple, list] = defaultdict(list)   # (file, line, name) -> [(col, branch)] for exact mode
+        self.storage_of: dict[tuple, list] = defaultdict(list)  # (wrapper, key) -> field ids sharing it (#235)
         self.values: dict[str, dict[str, str]] = defaultdict(dict)  # type fqn ("" file level) -> case/constant -> id
         self.globals_: dict[str, list] = {}      # file-level constant name -> [(id, file, test, private)]
         self.prop_refs: list[tuple] = []         # (owner, name, receiver | None, line, sf, decl, write)
@@ -604,6 +605,7 @@ class SwiftPlugin(LanguagePlugin):
             self._available(sf)
         self._resolve_calls()
         self._resolve_props()
+        self._link_storage()
         self._omitted_defaults()
         self._at = None
         self._hierarchy()
@@ -1007,11 +1009,15 @@ class SwiftPlugin(LanguagePlugin):
                 m = re.search(r'@(?:AppStorage|SceneStorage)\s*\(\s*"([^"]+)"', self.t(c))
                 if m:
                     a["key"] = m.group(1)
+                    a["_store"] = (wrappers[0], m.group(1))
         if sf.test:
             a["test"] = True
+        store = a.pop("_store", None)
         fid = self.b.add_node("field", key, name=nm, fqn=f"{cls.fqn}.{nm}", file=sf.rel,
                               line=line, end_line=c.end_point[0] + 1,
                               module=getattr(self.b.nodes.get(cls.id), "module", None), lang="swift", attrs=a)
+        if store:
+            self.storage_of[store].append(fid)
         self.b.add_edge(cls.id, fid, "CONTAINS", sf.rel, line, EXACT)
         self._field_owner[fid] = self._owner(cls)
         names = [nm] + (["_" + nm] if wrappers else [])   # `_value = State(initialValue: x)`: the wrapper's storage
@@ -1020,6 +1026,23 @@ class SwiftPlugin(LanguagePlugin):
             self._vfields[(cls.id, x)] = fid
             self.field_names.add(x)
         self.st["stored_property_nodes"] += 1
+
+    def _link_storage(self):
+        """Fields that persist under one `@AppStorage` / `@SceneStorage` key link to each other (#235).
+        AppStorage and SceneStorage of the same string stay apart: they are different stores."""
+        n = 0
+        for (wrapper, key), ids in self.storage_of.items():
+            ids = list(dict.fromkeys(ids))
+            if len(ids) < 2:
+                continue
+            for i, a in enumerate(ids):
+                for b in ids[i + 1:]:
+                    na, nb = self.b.nodes[a], self.b.nodes[b]
+                    self.b.add_edge(a, b, "SHARES_STORAGE", na.file, na.line, EXACT, wrapper=wrapper, key=key)
+                    self.b.add_edge(b, a, "SHARES_STORAGE", nb.file, nb.line, EXACT, wrapper=wrapper, key=key)
+                    n += 1
+            self.st["shared_storage_keys"] += 1
+        self.st["shared_storage_links"] = n
 
     def _prop_decl(self, c, nm: str, sf: SFile, cls: Decl):
         """A computed property, a stored property with `willSet` / `didSet`, or a `lazy var` with an initializer
@@ -1650,10 +1673,10 @@ class SwiftPlugin(LanguagePlugin):
                     self._refs(lam, sf, owner, decl, {**ctx, "routers": inner})
                     return True
         if name[:1].isupper() and recv is None:
-            br = self._branch(c)
+            br = self._branch(c) or {}
+            self.branch_of[(owner, line, name)].append(br)
             if br:
-                self.branch_of[(owner, line, name)] = br
-                self.branch_at[(sf.rel, line, name)] = br
+                self.branch_at[(sf.rel, line, name)].append((c.start_point[1], br))
         self.calls.append((owner, name, recv, line, sf, decl, tuple(lab or "_" for lab, _v in al), lam is not None,
                            self._default_param(c)))
         return False
@@ -2260,6 +2283,11 @@ class SwiftPlugin(LanguagePlugin):
                 how["recv"] = [self._recv.id]
             if self._how == "candidate":
                 how["candidates"] = len(targets)
+            br = {}
+            if name[:1].isupper() and recv is None:
+                q = self.branch_of.get((owner, line, name))
+                if q:
+                    br = q.pop(0)
             if not targets:
                 self.st["calls_unresolved"] += 1
                 continue
@@ -2273,8 +2301,7 @@ class SwiftPlugin(LanguagePlugin):
                         # the SDK's initializers, not a project one
                         self.st["calls_sdk_initializer"] += 1
                         continue
-                    self.b.add_edge(owner, t.id, "INSTANTIATES", sf.rel, line, HEURISTIC,
-                                    **self.branch_of.get((owner, line, name), {}))
+                    self.b.add_edge(owner, t.id, "INSTANTIATES", sf.rel, line, HEURISTIC, **br)
                     for m in hit:
                         self.b.add_edge(owner, m.id, "CALLS", sf.rel, line, HEURISTIC)
                         self._call_sites.append((owner, m.id, sf.rel, line, labels, trailing))

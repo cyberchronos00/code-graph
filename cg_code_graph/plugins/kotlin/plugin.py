@@ -312,7 +312,7 @@ class KotlinPlugin(LanguagePlugin):
         self.members: dict[str, dict[str, list[Decl]]] = defaultdict(lambda: defaultdict(list))
         self.calls: list[tuple] = []
         self.unresolved_calls: list[tuple] = []          # (owner_id, name, receiver, line, file obj, decl)
-        self.call_branch: dict = {}           # (owner_id, line, name) -> {branch, branch_line} (#88)
+        self.call_branch: dict = defaultdict(list)  # (owner, line, name) -> branches in source order (#88, #235)
         self.call_default: dict = {}          # (owner_id, line, name) -> parameter whose default holds the call (#212)
         self.call_args: dict = {}             # (owner_id, line, name) -> (positional count, named labels, trailing lambda)
         self.fn_params: dict = {}             # function id -> [(name, has default, function type)]
@@ -1022,6 +1022,8 @@ class KotlinPlugin(LanguagePlugin):
                 self._value_ref(c, kf, owner, decl)
             if (self.props_by_name or self.field_names) and ty in ("navigation_expression", "identifier"):
                 self._prop_ref(c, kf, owner, decl)
+            if (self.props_by_name or self.field_names) and ty == "string_literal":
+                self._template_idents(c, kf, owner, decl)
             if ty == "property_declaration" and (kf.rel, c.start_byte) in self.prop_at:
                 d = self.prop_at[(kf.rel, c.start_byte)]
                 self._refs(c, kf, d.id, d, {"prefix": "", "guards": [], "routing": False})
@@ -1215,10 +1217,8 @@ class KotlinPlugin(LanguagePlugin):
             self.call_args[(owner, line, name)] = (None if spread else len(vas) - len(named), named, lam is not None)
         elif lam is not None:
             self.call_args[(owner, line, name)] = (0, set(), True)
-        if name[:1].isupper():                      # a constructor or a composable: its branch (#88)
-            br = self._branch(c)
-            if br:
-                self.call_branch[(owner, line, name)] = br
+        if name[:1].isupper():                      # a constructor or a composable: its branch (#88, #235)
+            self.call_branch[(owner, line, name)].append(self._branch(c) or {})
         return False
 
     def _param_defaults(self, fvp) -> list:
@@ -1378,6 +1378,23 @@ class KotlinPlugin(LanguagePlugin):
                         and gp.type == "assignment" and gp.children and gp.children[0] == p):
                     w = "value"                      # `_state.value = x` on a MutableStateFlow / LiveData field
             self.frefs.append((owner, nm, rv, c.start_point[0] + 1, kf, decl, w))
+
+    def _template_idents(self, c, kf: KFile, owner: str, decl: Decl | None):
+        """`$count` inside a string (`"$count of $total"`) reads that name (#235). `${count}` is an identifier
+        node and is visited on its own; `\\$count` is not a template."""
+        raw = self.t(c)
+        if "$" not in raw:
+            return
+        base = c.start_point[0]
+        for m in re.finditer(r"(?<![\\$])\$([A-Za-z_][A-Za-z0-9_]*)(?!\{)", raw):
+            nm = m.group(1)
+            if nm not in self.props_by_name and nm not in self.field_names:
+                continue
+            line = base + raw.count("\n", 0, m.start()) + 1
+            if nm in self.props_by_name:
+                self.reads.append((owner, nm, None, line, kf, decl, "read"))
+            if nm in self.field_names:
+                self.frefs.append((owner, nm, None, line, kf, decl, False))
 
     def _helper_url(self, call_text: str, kf: KFile, builder: bool = False) -> str | None:
         """URL a project helper builds from a literal argument (#99), as a quoted string for `template`:
@@ -1636,6 +1653,8 @@ class KotlinPlugin(LanguagePlugin):
     def _resolve_calls(self):
         self._default_edges, self._default_sites = defaultdict(list), []
         for owner, name, recv, line, kf, decl, acc in self.calls:
+            q = self.call_branch.get((owner, line, name)) if name[:1].isupper() else None
+            br = q.pop(0) if q else {}
             self._data_access(owner, name, recv, line, kf, decl)
             self._how = self._recv = None
             targets = self._targets(name, recv, kf, decl)
@@ -1652,7 +1671,6 @@ class KotlinPlugin(LanguagePlugin):
             if self._how == "candidate":
                 how["candidates"] = len(targets)
                 self.st["call_candidate_edges"] += len(targets)
-            br = self.call_branch.get((owner, line, name), {})
             dp = self.call_default.get((owner, line, name))
             da = {"default_arg": dp} if dp else {}
             for t in targets[:MAX_CANDIDATES if self._how == "candidate" else 3]:
@@ -1997,6 +2015,12 @@ class KotlinPlugin(LanguagePlugin):
                 if recv is None and self._shadowed_local(decl, name, kf):
                     continue
                 fid = self._field_member(cls, name)
+                # `fun Cart.total() = items.size`: the name is the extension receiver's field (#235)
+                if fid is None and decl is not None and decl.receiver:
+                    rc = self._class_of(decl.receiver.split(".")[-1].strip(), kf)
+                    fid = self._field_member(rc, name)
+                    if fid is not None and recv is None:
+                        rt = decl.receiver.split(".")[-1].strip()
             elif recv[0] in ("identifier", "this_expression") or re.fullmatch(r"[\w.]+", rt or ""):
                 rname = rt.split(".")[-1].strip()
                 tyname = decl.types.get(rname) if decl is not None else None
@@ -2010,8 +2034,10 @@ class KotlinPlugin(LanguagePlugin):
             if fid is None or fid == owner:
                 self.st["stored_property_refs_unresolved"] += 1
                 continue
+            shown = rt if recv is None and rt not in (None, "this") else (
+                "this" if recv is None or rt == "this" else rt[:40])
             self.b.add_edge(owner, fid, "WRITES_PROP" if write else "READS_PROP", kf.rel, line, RESOLVED,
-                            receiver="this" if recv is None or rt == "this" else rt[:40],
+                            receiver=shown,
                             **({"via": write} if isinstance(write, str) else {}))
             self.st["stored_property_writes" if write else "stored_property_reads"] += 1
 
