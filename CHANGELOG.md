@@ -8,6 +8,27 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.7] - 2026-10-19
+
+### Added
+
+- Dead branches: code under nested conditional compilation whose combined condition holds on no known target (`#elseif os(macOS)` inside `#if os(iOS)`, `#[cfg(windows)]` inside `#[cfg(unix)]`, `#ifdef _WIN32` inside `#ifdef __linux__`) gets `attrs.dead_branch`, and its calls, reads and writes to other code are dropped, so `readers` / `writers` / `impact` no longer list it. `cg platforms divergence --kind dead_branch` (and the MCP `platform_divergence` tool) lists each region with its lines, the conditions that contradict and the references left out. Conditions that also cover other systems (Cygwin, MinGW, BSDs) and directory-name guesses never count. See [platforms.md](docs/platforms.md) (#222).
+- C / C++: per-platform CMake source lists (`if(WIN32)`, `if(APPLE)`, `if(CMAKE_SYSTEM_NAME STREQUAL "Linux")`, `elseif` / `else`, `list(APPEND ...)`, `target_sources`) decide which targets build a file, replacing the directory-name guess. Read without running CMake; `platforms.cmake_membership: false` turns it off (#111).
+- `platforms.compile_commands` in `.cg.yaml`: one `compile_commands.json` per target build gives exact C / C++ membership, winning over the CMake lists. Targets without a database stay unknown (#111).
+- Tauri events: `emit` / `emit_to` / `listen` in Rust and `emit` / `listen` / `once` in JS / TS are `tauri-event` bridge endpoints linked across the process boundary, with `no_receiver` / `no_sender` checks; `tauri://` built-ins and listeners with computed names are exempt. See [bridges.md](docs/bridges.md).
+- Svelte components (`.svelte`) are indexed through the TypeScript extractor like Vue: `<script>` blocks plus `on*={handler}` attributes, with references on the component node.
+- `platforms.processes` in `.cg.yaml` declares Electron / Tauri process roles by path glob (`main`, `preload`, `renderer`, `webview`, `core`, `worker`), overriding the inferred role.
+
+### Changed
+
+- A Linux-named file (`*_linux.c`, `linux/`) without a build list is unknown on Android instead of absent there.
+- `__PASE__` and `__illumos__` count as other systems in C conditions.
+- `.svelte` is no longer listed as unsupported by `cg completeness`.
+
+### Fixed
+
+- `.cg.yaml` validation rejected `platforms.xcode_membership`.
+
 ## [0.23.6] - 2026-10-17
 
 ### Added
@@ -1740,7 +1761,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.6...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.7...HEAD
+[0.23.7]: https://github.com/cyberchronos00/code-graph/compare/v0.23.6...v0.23.7
 [0.23.6]: https://github.com/cyberchronos00/code-graph/compare/v0.23.5...v0.23.6
 [0.23.5]: https://github.com/cyberchronos00/code-graph/compare/v0.23.4...v0.23.5
 [0.23.4]: https://github.com/cyberchronos00/code-graph/compare/v0.23.3...v0.23.4
