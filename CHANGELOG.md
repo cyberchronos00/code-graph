@@ -8,6 +8,8 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.13] - 2026-10-20
+
 ### Changed
 
 - `cg index` no longer exits 0 with a near-empty graph when a supported language could not be indexed (missing PHP,
@@ -1858,7 +1860,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.12...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.13...HEAD
+[0.23.13]: https://github.com/cyberchronos00/code-graph/compare/v0.23.12...v0.23.13
 [0.23.12]: https://github.com/cyberchronos00/code-graph/compare/v0.23.11...v0.23.12
 [0.23.11]: https://github.com/cyberchronos00/code-graph/compare/v0.23.10...v0.23.11
 [0.23.10]: https://github.com/cyberchronos00/code-graph/compare/v0.23.9...v0.23.10
