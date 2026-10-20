@@ -33,8 +33,15 @@ def test_missing_php_is_skipped_not_fatal(tmp_path):
     empty = tmp_path / "bin"
     empty.mkdir()
     r = cg("index", API, "--name", "bookstore-api", "--db", tmp_path / "api.db", path=str(empty))
-    assert r.returncode == 0, r.stderr[-800:]
+    # the graph is still written, but a mostly-unindexed project exits 3 (#239)
+    assert r.returncode == 3, r.stderr[-800:]
     st = json.loads(r.stdout)
+    inc = st["incomplete"]
+    assert inc["fatal"] and inc["skipped_files"] == 32 and inc["languages"][0]["language"] == "php"
+    assert "cg index: WARNING: php 32 files not indexed: php not installed" in r.stderr
+    assert "cg index: ERROR: incomplete graph: 32 of " in r.stderr
+    ok = cg("index", API, "--name", "bookstore-api", "--db", tmp_path / "api2.db", "--allow-incomplete", path=str(empty))
+    assert ok.returncode == 0 and "cg index: ERROR: incomplete graph" in ok.stderr and "--allow-incomplete: exit status kept at 0" in ok.stderr
     assert st["plugins"]["php"]["status"] == "skipped" and "php not installed" in st["plugins"]["php"]["reason"]
     php = lang(st["coverage"], "php")
     assert php["status"] == "skipped" and php["files"] == 32 and "cg setup php" in php["hint"]
@@ -50,7 +57,7 @@ def test_missing_node_skips_typescript(tmp_path):
     empty = tmp_path / "bin"
     empty.mkdir()
     r = cg("index", WEB, "--name", "bookstore-web", "--db", tmp_path / "web.db", path=str(empty))
-    assert r.returncode == 0, r.stderr[-800:]
+    assert r.returncode == 3, r.stderr[-800:]      # nothing indexed (#239)
     ts = lang(json.loads(r.stdout)["coverage"], "typescript")
     assert ts["status"] == "skipped" and "node not installed" in ts["reason"] and "cg setup typescript" in ts["hint"]
 

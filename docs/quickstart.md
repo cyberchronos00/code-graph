@@ -25,6 +25,8 @@ coverage: python 32 exact
   frameworks: django, django-ninja, djangorestframework | presets: common, python, django, django-ninja, djangorestframework | config: no .cg.yaml
 ```
 
+A supported language that could not be indexed (PHP without `php` / Composer / `cg setup php`, TypeScript without Node) prints `cg index: WARNING: php 1515 files not indexed: …; fix: …` and is listed under `incomplete` in the stats JSON. When those files are at least half of the supported source files, `cg index` also prints `cg index: ERROR: incomplete graph` and exits 3, so a script that checks the exit status does not accept a near-empty graph. The graph is still written. `--allow-incomplete` keeps exit status 0.
+
 ## Ask questions
 ### What reaches a table
 

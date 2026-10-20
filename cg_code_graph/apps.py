@@ -56,7 +56,8 @@ def index_apps(root: str | Path, db: str | Path, cfg: dict, scip=None, python_ro
                            include_generated=include_generated)
         out["apps"].append({"name": a["name"], "root": a["root"] or ".", "role": a["role"], "db": str(per_app[a["name"]]),
                             "nodes": st.get("nodes"), "edges": st.get("edges"), "index_seconds": st.get("index_seconds"),
-                            "frameworks": sorted(((st.get("presets") or {}).get("frameworks") or {}))})
+                            "frameworks": sorted(((st.get("presets") or {}).get("frameworks") or {})),
+                            **({"incomplete": st["incomplete"]} if st.get("incomplete") else {})})
     if len(apps) == 1:
         shutil.copyfile(per_app[apps[0]["name"]], db)
         out["db_is"] = f"graph of app {apps[0]['name']}"

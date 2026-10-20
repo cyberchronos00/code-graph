@@ -8,6 +8,14 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Changed
+
+- `cg index` no longer exits 0 with a near-empty graph when a supported language could not be indexed (missing PHP,
+  Composer / `cg setup php`, or Node). Each skipped language prints `cg index: WARNING: <lang> <n> files not indexed`
+  with the fix, the stats JSON lists them under `incomplete`, and when they are at least half of the supported source
+  files `cg index` prints `cg index: ERROR: incomplete graph` and exits 3. The graph is still written;
+  `--allow-incomplete` keeps exit status 0. Monorepo `apps` indexing applies the same rule per app (#239).
+
 ## [0.23.12] - 2026-10-19
 
 ### Added

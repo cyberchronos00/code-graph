@@ -472,6 +472,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     vc = value_counts(builder)
     if vc:       # enum cases / constants per language and the references resolved to them (#84)
         stats["coverage"]["values"] = vc
+    from .coverage import incomplete
+    inc = incomplete(stats["coverage"])
+    if inc:
+        stats["incomplete"] = inc       # a supported language was not indexed at all (#239)
     stats["completeness_seconds"] = round(t_tag - t_cov, 2)
     stats["scan_seconds"] = scan_seconds
     stats["nodes"] = len(builder.nodes)

@@ -120,7 +120,7 @@ def main(argv=None):
         return 0
     ap.add_argument("--version", action="version", version=f"cg {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("index", help="detect languages / frameworks under ROOT and build the graph DB (stats JSON on stdout, coverage on stderr)"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)")
+    p = sub.add_parser("index", help="detect languages / frameworks under ROOT and build the graph DB (stats JSON on stdout, coverage on stderr)"); p.add_argument("root"); p.add_argument("--db", required=True); p.add_argument("--name"); p.add_argument("--scip", action="append"); p.add_argument("--gates", help="gate scenarios JSON (e.g. examples/bookstore.gates.json)"); p.add_argument("--allow-incomplete", action="store_true", help="exit 0 even when most supported source files could not be indexed (missing PHP / Node / Dart toolchain); the WARNING / ERROR lines still print")
     p.add_argument("--python-root", action="append", metavar="DIR",
                    help="Python source root, relative to ROOT (repeatable); replaces detection and python.source_roots in .cg.yaml")
     p.add_argument("--no-apps", action="store_true",
@@ -413,7 +413,13 @@ def main(argv=None):
                                      include_generated=a.include_generated)
                 print(json.dumps({k: v for k, v in summary.items()}, indent=2, default=str))
                 print(render_apps(summary), file=sys.stderr)
-                return
+                from .coverage import incomplete_lines
+                fatal = False
+                for app in summary.get("apps") or ():
+                    for ln in incomplete_lines(app.get("incomplete"), allow=a.allow_incomplete, where=f"app {app['name']}"):
+                        print(ln, file=sys.stderr)
+                    fatal = fatal or bool((app.get("incomplete") or {}).get("fatal"))
+                return 3 if fatal and not a.allow_incomplete else None
             st = index_project(a.root, a.db, a.name, a.scip, gates=a.gates, python_roots=a.python_root,
                                include_generated=a.include_generated)
         except ConfigError as ex:
@@ -422,7 +428,12 @@ def main(argv=None):
         print(json.dumps(st, indent=2, default=str))
         from .coverage import render_summary
         print(render_summary({"": st.get("coverage")}, db=a.db), file=sys.stderr)  # stdout stays pure JSON
-        return
+        from .coverage import incomplete_lines
+        inc = st.get("incomplete")
+        for ln in incomplete_lines(inc, allow=a.allow_incomplete):
+            print(ln, file=sys.stderr)
+        # a mostly-unindexed project is an error, so `rc == 0 && nodes > 0` checks do not accept it (#239)
+        return 3 if inc and inc.get("fatal") and not a.allow_incomplete else None
     if a.cmd == "doctor":
         from .doctor import render, report
         r = report(a.root, scip=a.scip)

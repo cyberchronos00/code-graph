@@ -575,6 +575,40 @@ def syntax_error_lines(e: dict, all_files: bool = False, indent: str = "  ") -> 
     return out
 
 
+def incomplete(cov: dict | None) -> dict | None:
+    """Supported languages that were not indexed at all (missing toolchain, extractor error), or None (#239).
+
+    `fatal` is true when those files are at least half of the supported source files: the graph is mostly empty.
+    """
+    if not cov:
+        return None
+    langs = [e for e in cov.get("languages") or () if e.get("status") != "unsupported" and e.get("files")]
+    skipped = [e for e in langs if e.get("status") == "skipped"]
+    if not skipped:
+        return None
+    n = sum(e["files"] for e in skipped)
+    total = sum(e["files"] for e in langs)
+    return {"fatal": n * 2 >= total, "skipped_files": n, "supported_files": total,
+            "languages": [{"language": e.get("label") or e["language"], "files": e["files"], "reason": e.get("reason"),
+                           "hint": e.get("hint")} for e in skipped]}
+
+
+def incomplete_lines(inc: dict | None, prog: str = "cg index", allow: bool = False, where: str = "") -> list[str]:
+    """stderr lines for `incomplete`: one WARNING per skipped language, plus an ERROR line when it is fatal."""
+    if not inc:
+        return []
+    at = f" ({where})" if where else ""
+    out = []
+    for e in inc["languages"]:
+        fix = f"; fix: {e['hint']}" if e.get("hint") else ""
+        out.append(f"{prog}: WARNING{at}: {e['language']} {e['files']} file{'s' if e['files'] != 1 else ''} not indexed: {e.get('reason') or 'skipped'}{fix}")
+    if inc.get("fatal"):
+        tail = " (--allow-incomplete: exit status kept at 0)" if allow else "; exit status 3 (--allow-incomplete keeps 0)"
+        out.append(f"{prog}: ERROR{at}: incomplete graph: {inc['skipped_files']} of {inc['supported_files']} supported "
+                   f"source files were not indexed{tail}")
+    return out
+
+
 def summary_line(cov: dict | None, repo: str | None = None) -> str:
     """One line: 'coverage: php 18 exact; typescript 9 exact | not fully covered: go 3 unsupported (...)'."""
     if not cov:
