@@ -12,7 +12,7 @@
   python -m cg_code_graph.cli api-calls <all|unmatched|substring|glob*> --db out/combined.db
   python -m cg_code_graph.cli plan list|load|validate|check|baseline [<name>] --db out/combined.db [--verify] [--summary] [--json]
   python -m cg_code_graph.cli routes --db ... [--writes [TABLE]] [--reaches SPEC...] [--missing NAME] [--unguarded]
-  python -m cg_code_graph.cli search <name> --db ... [--kind route]
+  python -m cg_code_graph.cli search <name> --db ... [--kind route] [--compact]
   python -m cg_code_graph.cli channels [PATTERN] --db ...   (who can join, which events publish, which client code listens)
   python -m cg_code_graph.cli tests <spec> --db ...          (tests covering a symbol / route / table: direct + transitive)
   python -m cg_code_graph.cli bridges [PATTERN] --db ... [--protocol capacitor] [--unmatched]   (web / native bridge calls)
@@ -35,6 +35,16 @@ import sys
 from .core.store import GraphStore
 from . import query as Q
 from .bridges import PROTOCOLS as BRIDGE_PROTOCOLS
+from .cli_errors import explain_parse_error
+
+_COMPACT_SEARCH_LIMIT = 8
+_COMPACT_SNIPPET_LINES = 40
+_COMPACT_CALLERS = 8
+_COMPACT_ENTRIES = 5
+_COMPACT_HELP = ("short agent summary (also CG_OUTPUT=compact): fewer rows, short paths, and how to expand. "
+                 "Search shows 8 nodes unless --limit is set; snippet shows 40 lines unless --max-lines is set; "
+                 "impact omits evidence paths. The default output is unchanged. "
+                 "For a token cap, use cg explore --budget")
 
 
 def _parse_repo(spec: str) -> tuple[str, str, str]:
@@ -86,6 +96,68 @@ def _add_install_parser(sub, uninstall: bool):
         p.add_argument("--graphs", help="registry file for --migrate (default: ~/.config/cg/graphs.toml)")
 
 
+class _CgParser(argparse.ArgumentParser):
+    """Parent parser whose rejected flags and unknown commands stay on one screen."""
+
+    def parse_args(self, args=None, namespace=None):
+        argv = sys.argv[1:] if args is None else list(args)
+        self._cg_argv = argv
+        self._cg_root = self
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for sub in action.choices.values():
+                    sub._cg_argv = argv
+                    sub._cg_root = self
+        return super().parse_args(args, namespace)
+
+    def error(self, message):
+        text = explain_parse_error(self, message, getattr(self, "_cg_argv", None))
+        if text:
+            self.exit(2, text if text.endswith("\n") else text + "\n")
+        super().error(message)
+
+
+def _opt_given(args, flag: str) -> bool:
+    return any(arg == flag or arg.startswith(flag + "=") for arg in args)
+
+
+def _compact_output(parsed, args) -> bool:
+    """Text-only compact profile. `--json` keeps the document shape."""
+    if getattr(parsed, "json", False):
+        return False
+    if getattr(parsed, "compact", False):
+        return True
+    return os.environ.get("CG_OUTPUT", "").strip().lower() == "compact"
+
+
+def _print_impact_compact(st, parsed, res) -> None:
+    """First callers and entry points, no evidence paths, and how to expand."""
+    callers, entries = res["callers"], res["entry_points"]
+    shown_c = callers[:_COMPACT_CALLERS]
+    print(f"callers (transitive): {len(callers)}  showing {len(shown_c)}")
+    labels = _impact_labels(shown_c, lambda c: c.get("fqn") or c["id"], lambda c: c.get("module") or c.get("kind"))
+    for caller, label in zip(shown_c, labels):
+        loc = f"  @ {Q.short_path(caller.get('file'))}:{caller.get('line')}" if caller.get("file") else ""
+        print(f"  d={caller['depth']} [{caller['module'] or caller['kind']}] {label}{loc}{Q.caller_label(caller)}")
+    if len(callers) > len(shown_c):
+        print(f"{len(callers) - len(shown_c)} more callers, drop --compact for the full list")
+    shown_e = entries[:_COMPACT_ENTRIES]
+    print(f"entry points: {len(entries)}  showing {len(shown_e)}")
+    for entry in shown_e:
+        loc = f"  @ {Q.short_path(entry.get('file'))}:{entry.get('line')}" if entry.get("file") else ""
+        print(f"  {entry['entry_kind']:16} {entry.get('fqn') or entry['name']}{loc}  conf={entry['path_confidence']}")
+    if len(entries) > len(shown_e):
+        print(f"{len(entries) - len(shown_e)} more entry points, drop --compact for the full list")
+    if any(row.get("candidate") for row in shown_c + shown_e):
+        print(Q.CANDIDATE_NOTE)
+    if parsed.plans_dir:
+        from . import plans as P
+        hits = P.snapshot_clients(st, [e["id"] for e in entries if e["id"].startswith("route:")], parsed.plans_dir)
+        print(f"external clients (snapshot, not indexed): {len(hits)}")
+    print("expand: drop --compact or unset CG_OUTPUT. token cap: cg explore --budget")
+    _note(_completeness(st, list(res["targets"]) + [c["id"] for c in callers]), False)
+
+
 def _impact_labels(rows: list[dict], name_of, group_of) -> list[str]:
     """Display names for one impact listing. Same-name rows in one group gain a file suffix."""
     from collections import defaultdict
@@ -113,7 +185,7 @@ def _version_text(version: str) -> str:
 
 def main(argv=None):
     from . import __version__
-    ap = argparse.ArgumentParser(prog="cg")
+    ap = _CgParser(prog="cg")
     args_in = sys.argv[1:] if argv is None else list(argv)
     if args_in[:1] == ["--version"]:
         print(_version_text(__version__))   # printed here: argparse's version action re-wraps a second line
@@ -221,6 +293,7 @@ def main(argv=None):
     p = sub.add_parser("search", help="nodes by name / FQN substring, plus route middleware / guard / auth names")
     p.add_argument("name"); p.add_argument("--db", required=True); p.add_argument("--kind"); p.add_argument("--limit", type=int, default=30)
     p.add_argument("--json", action="store_true"); p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
+    p.add_argument("--compact", action="store_true", help=_COMPACT_HELP)
     p = sub.add_parser("channels", help="broadcast channels: who can join (auth callback + checks), which events publish on it, which client code / pages listen")
     p.add_argument("pattern", nargs="?", help="channel pattern or concrete name (orders.{id}, orders.42, orders.*); omit to list all")
     p.add_argument("--db", required=True); p.add_argument("--json", action="store_true"); p.add_argument("--no-source", action="store_true")
@@ -328,10 +401,13 @@ def main(argv=None):
     p.add_argument("--context", type=int, default=0, help="extra lines of context around the symbol (default 0)")
     p.add_argument("--max-lines", type=int, default=200, help="cap the printed body (default 200); extra lines are noted")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--compact", action="store_true", help=_COMPACT_HELP)
     p = sub.add_parser("explore", help="question or spec → source, entry points, call paths and blast radius")
     p.add_argument("query", help="a free-text question, a source file, or a symbol spec")
     p.add_argument("--db", required=True)
-    p.add_argument("--budget", type=int, default=3000, help="token budget (clamped to 500..20000, default 3000)")
+    p.add_argument("--budget", type=int, default=3000,
+                   help="token budget (clamped to 500..20000, default 3000). "
+                        "search, snippet and impact name this flag from --help and from --compact")
     p.add_argument("--max-symbols", type=int, default=4, help="how many symbols to expand (default 4)")
     p.add_argument("--json", action="store_true")
     p = sub.add_parser("agents", help="opt-in: add cg usage guidance (and the cg MCP entry) to AGENTS.md / CLAUDE.md / Cursor rules; previews and asks first")
@@ -394,6 +470,7 @@ def main(argv=None):
             p.add_argument("--platform", help="only code built for this target (windows, linux, macos, ios, android, web; see docs/platforms.md)")
         if name == "impact":
             p.add_argument("--plans-dir", help="also list external clients from the snapshot files in this directory (e.g. examples/plans)")
+            p.add_argument("--compact", action="store_true", help=_COMPACT_HELP)
     a = ap.parse_args(argv)
 
     if a.cmd == "index":
@@ -534,8 +611,17 @@ def main(argv=None):
         print(json.dumps(rows, indent=1) if a.json else render_starters(rows))
         return
     if a.cmd == "snippet":
-        res = Q.snippet(GraphStore(a.db), a.spec, context=a.context, max_lines=a.max_lines)
-        print(json.dumps(res, indent=1, default=str) if a.json else Q.render_snippet(res))
+        context, max_lines = a.context, a.max_lines
+        compact = _compact_output(a, args_in)
+        if compact and not _opt_given(args_in, "--max-lines"):
+            max_lines = min(max_lines, _COMPACT_SNIPPET_LINES)
+        res = Q.snippet(GraphStore(a.db), a.spec, context=context, max_lines=max_lines)
+        if a.json:
+            print(json.dumps(res, indent=1, default=str))
+        elif compact:
+            print(Q.render_snippet_compact(res))
+        else:
+            print(Q.render_snippet(res))
         return 0 if res.get("status") == "ok" else 1
     if a.cmd == "explore":
         from . import explore as EX
@@ -708,8 +794,25 @@ def main(argv=None):
             _note(_completeness(st, res.get("targets")), False)
         return
     if a.cmd == "search":
-        res = Q.search(st, a.name, kind=a.kind, limit=a.limit, platform=a.platform)
-        print(json.dumps(res, indent=1, default=str) if a.json else Q.render_search(res))
+        limit = a.limit
+        compact = _compact_output(a, args_in)
+        if compact and not _opt_given(args_in, "--limit"):
+            limit = min(limit, _COMPACT_SEARCH_LIMIT)
+        res = Q.search(st, a.name, kind=a.kind, limit=limit, platform=a.platform)
+        if a.json:
+            print(json.dumps(res, indent=1, default=str))
+        elif compact:
+            more, note = 0, None
+            if a.platform:
+                if len(res["nodes"]) == limit:
+                    probe = Q.search(st, a.name, kind=a.kind, limit=limit + 1, platform=a.platform)
+                    if len(probe["nodes"]) > limit:
+                        note = "1+ more, raise --limit"
+            else:
+                more = max(0, Q.search_node_total(st, a.name, a.kind) - len(res["nodes"]))
+            print(Q.render_search_compact(res, more=more, more_note=note))
+        else:
+            print(Q.render_search(res))
         return
     if a.cmd == "reaches":
         for spec in a.specs:
@@ -749,6 +852,9 @@ def main(argv=None):
             print(Q.connections_line(res["connections"]))
         if not res["callers"] and not res["entry_points"]:
             print(Q.explain_no_callers(st, a.spec, res["targets"], a.min_confidence)); return
+        if _compact_output(a, args_in):
+            _print_impact_compact(st, a, res)
+            return
         nc = res.get("callers_candidate") or 0
         print(f"callers (transitive): {len(res['callers']) - nc}" + (f" (+{nc} candidate)" if nc else ""))
         caller_names = _impact_labels(res["callers"], lambda c: c.get("fqn") or c["id"], lambda c: c.get("module") or c.get("kind"))

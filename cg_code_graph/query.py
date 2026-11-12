@@ -2754,6 +2754,26 @@ def search(st: GraphStore, name: str, kind: str | None = None, limit: int = 20, 
     return out
 
 
+def search_node_total(st: GraphStore, name: str, kind: str | None = None) -> int:
+    """How many node rows `search` would consider before its LIMIT (guards are separate)."""
+    q = "SELECT COUNT(*) c FROM nodes WHERE (name LIKE ? OR fqn LIKE ? OR id LIKE ?)"
+    params: list = [f"%{name}%"] * 3
+    if kind:
+        q += " AND kind=?"
+        params.append(kind)
+    return int(st.q(q, params)[0]["c"])
+
+
+def short_path(path: str | None, keep: int = 3) -> str:
+    """Last `keep` path parts, prefixed when the path is longer. Empty becomes '?'."""
+    if not path:
+        return "?"
+    parts = [part for part in str(path).replace("\\", "/").split("/") if part and part != "."]
+    if len(parts) <= keep:
+        return "/".join(parts)
+    return ".../" + "/".join(parts[-keep:])
+
+
 def _i18n_label(r: dict) -> str:
     """`  (2 locales, 1 use)` for an i18n key row of search (#182)."""
     a = r.get("i18n")
@@ -2789,6 +2809,44 @@ def render_search(res: dict, limit_routes: int = 8) -> str:
                    " in node names, FQNs, ids or route middleware / guard / auth names. Try a shorter substring, drop the "
                    "kind filter, or use `routes` to list every route with its guards.")
     return "\n".join(out)
+
+
+def render_search_compact(res: dict, more: int = 0, more_note: str | None = None) -> str:
+    """Short `cg search --compact` text. Empty matches keep `render_search` (the hint is already short)."""
+    if not res["nodes"] and not res["guards"]:
+        return render_search(res)
+    out = []
+    if res.get("platform"):
+        from .platforms import render_filter
+        out.append(render_filter(res["platform"]))
+        if res["platform"].get("matches_not_built"):
+            out.append(f"{res['platform']['matches_not_built']} matching symbols are not built for {res['platform']['platform']}")
+    kind = f"  kind={res['kind']}" if res.get("kind") else ""
+    out.append(f"{len(res['nodes'])} nodes{kind}")
+    for r in res["nodes"]:
+        out.append(f"{r['kind']}  {r['id']}  {short_path(r.get('file'))}:{r.get('line')}{platform_label(r)}{_i18n_label(r)}")
+    if more_note:
+        out.append(more_note)
+    elif more > 0:
+        out.append(f"{more} more, raise --limit")
+    if res["guards"]:
+        names = list(res["guards"])
+        shown = ", ".join(names[:3])
+        extra = f"  (+{len(names) - 3} more)" if len(names) > 3 else ""
+        out.append(f"guards: {len(names)} name(s): {shown}{extra}")
+    out.append("expand: drop --compact or unset CG_OUTPUT. token cap: cg explore --budget")
+    return "\n".join(out)
+
+
+def render_snippet_compact(res: dict) -> str:
+    """`render_snippet` with a short path on a hit, plus how to expand and where `--budget` lives."""
+    if res.get("status") == "ok":
+        shown = dict(res)
+        shown["file"] = short_path(res.get("file"))
+        text = render_snippet(shown)
+    else:
+        text = render_snippet(res)
+    return text + "\nexpand: raise --max-lines for the rest of the body. token cap: cg explore --budget"
 
 
 # ----------------------------------------------------------------------------------------------- empty-result help

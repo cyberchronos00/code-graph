@@ -16,12 +16,12 @@
 | `starters --db DB` | Starter queries, each with the matching command and MCP call. | [viz](viz.md) |
 | `link --backend DB --frontend DB --db OUT` | Merge graphs and match client HTTP calls to routes. Two repos: `--backend` / `--frontend`. N repos: repeat `--repo NAME=DB[:role]`. `--report PREFIX` writes `.json` and `.md`. | [workspace](#workspace) |
 | `reaches SPEC...` | Dependents, grouped by entry classification. On a base method, overrides are followed. A table target also follows its columns. `--connection NAME` keeps one database connection ([connections](#database-connections)). | [specs](#query-targets-specs) |
-| `impact SPEC` | Callers up to entry points. `--plans-dir` adds external snapshot clients. A `connections:` line lists the non-default database connections the function's own table / column edges go to ([connections](#database-connections)). | [answer shape](#answer-shape) |
+| `impact SPEC` | Callers up to entry points. `--plans-dir` adds external snapshot clients. `--compact` (or `CG_OUTPUT=compact`) lists the first callers and entry points without evidence paths. A `connections:` line lists the non-default database connections the function's own table / column edges go to ([connections](#database-connections)). | [answer shape](#answer-shape) |
 | `downstream SPEC` | Forward walk: page, composables, HTTP, routes, services, tables. | [specs](#query-targets-specs) |
 | `path SRC DST` | One shortest evidence chain. No path: reason on stdout, exit 1. | [answer shape](#answer-shape) |
 | `routes` | Guards, what the route reaches, and frontend callers on a linked graph. | [routes and guards](#routes-and-guards) |
-| `search NAME` | Nodes by name or FQN substring, plus middleware / guard / auth names. `--kind`, `--limit`. | `cg search -h` |
-| `snippet SPEC` | Source from the index: `path:start-end`, then numbered lines. `--context`, `--max-lines` (default 200). Ambiguous name lists candidates and exits nonzero; that reply and a miss end with a `cg search <name>` hint (the MCP `snippet` tool says the same). | [specs](#query-targets-specs) |
+| `search NAME` | Nodes by name or FQN substring, plus middleware / guard / auth names. `--kind`, `--limit`. `--compact` (or `CG_OUTPUT=compact`) prints at most 8 nodes with short paths unless `--limit` is set; the default listing is unchanged. | `cg search -h` |
+| `snippet SPEC` | Source from the index: `path:start-end`, then numbered lines. `--context`, `--max-lines` (default 200). `--compact` (or `CG_OUTPUT=compact`) caps the body at 40 lines unless `--max-lines` is set and shortens the path. Ambiguous name lists candidates and exits nonzero; that reply and a miss end with a `cg search <name>` hint (the MCP `snippet` tool says the same). | [specs](#query-targets-specs) |
 | `explore QUERY` | Question or spec → source, entry points, call paths, blast radius in one answer. `--budget`, `--json`. | [explore](#explore) |
 | `node SPEC` | Location, fqn, platforms, attrs, and edges (one site, with a count). | `cg node -h` |
 | `stats` | Project, languages, coverage line, node and edge counts. | `cg stats -h` |
@@ -66,6 +66,8 @@
 | `--connection NAME` | `reaches`, `writers`, `readers` | only table / column edges on that database connection (`attrs.connection`; a dynamic name by its pattern, `legacy_{store.id}`). [connections](#database-connections) |
 | `--platform TARGET` | `reaches`, `impact`, `downstream`, `path`, `routes`, `search` | one build: `windows`, `linux`, `macos`, `ios`, `android`, `web`. The first line names the filter and how many conditions could not be evaluated. [platforms](platforms.md#queries) |
 | `--max-items N` | list commands (`routes`, `protocols`, `tools`, `external`, `parity`, `platforms`, `plan`, …) | cap listed rows |
+| `--compact` | `search`, `snippet`, `impact` | short agent summary; also `CG_OUTPUT=compact`. Does not change the default text. `--json` stays the full document. A capped search says how many more rows `--limit` would show. The footer names `cg explore --budget` for a token cap |
+| `--budget N` | `explore` | token budget (default 3000, clamped to 500..20000). `search`, `snippet` and `impact` help, and their `--compact` footer, point here |
 
 `node --json` is a list of `{node, out, in}`. `stats --json` is `{project, root, indexed_at, nodes, edges, nodes_by_kind, edges_by_kind, stats}`.
 
@@ -266,7 +268,7 @@ Sections:
 - **source** — numbered lines, grouped by file, inside the token budget. A cut-off body ends with a `snippet(...)` hint; symbols that did not fit are listed the same way.
 - **next** — the fine-grained calls to run after this answer.
 
-The default budget is 3000 tokens (about 4 characters each), clamped to 500..20000. Header, entry points, call paths, blast radius and next steps come first; when they alone would not fit, the lowest-ranked symbols are dropped and listed under **next** as `explore(...)` calls. Source fills what remains. The last line is `budget: used/limit tokens`. Nothing matched exits 1.
+The default budget is 3000 tokens (about 4 characters each), clamped to 500..20000. Header, entry points, call paths, blast radius and next steps come first; when they alone would not fit, the lowest-ranked symbols are dropped and listed under **next** as `explore(...)` calls. Source fills what remains. The last line is `budget: used/limit tokens`. Nothing matched exits 1. `cg search --help`, `cg snippet --help` and `cg impact --help` name `--budget`, and so does the footer of those commands when `--compact` or `CG_OUTPUT=compact` is set. That profile affects only their text; the default listing is unchanged.
 
 | flag | |
 |---|---|
