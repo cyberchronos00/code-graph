@@ -486,4 +486,10 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     store.set_meta(project=project.name, root=str(project.root), stats=stats,
                    indexed_at=time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()), **extra)
     store.db.close()
+    if head:
+        try:
+            from .mcp_graphs import write_cg_head
+            write_cg_head(db_path, head)
+        except OSError:
+            pass
     return stats

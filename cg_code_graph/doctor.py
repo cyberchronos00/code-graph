@@ -21,6 +21,11 @@ from . import __version__
 from .core import cache, env, extractors
 
 INSTALL_DOC = "docs/install.md"
+DISTRIBUTION = (
+    "package: Python package cg-code-graph on PyPI "
+    "(pip install cg-code-graph, pipx install cg-code-graph, or uv tool install cg-code-graph). "
+    "Not a Rust crate; cargo install does not apply."
+)
 REPO = "https://github.com/cyberchronos00/code-graph"
 GRAMMARS = {"rust": "tree_sitter_rust", "c_cpp": "tree_sitter_c", "kotlin": "tree_sitter_kotlin", "swift": "tree_sitter_swift"}
 PIP_NAMES = {"tree_sitter": "tree-sitter", "tree_sitter_rust": "tree-sitter-rust", "tree_sitter_c": "tree-sitter-c",
@@ -33,6 +38,40 @@ PLUGIN_PACKAGES = {"python": ("python", "pyweb", "django"), "typescript": ("ts",
                    "php": ("php", "laravel"), "dart": ("dart", "flutter"), "rust": ("rust", "native", "scip"),
                    "c_cpp": ("cfamily", "native", "scip"), "kotlin": ("kotlin", "scip"), "java": ("java",),
                    "swift": ("swift",)}
+
+
+def _script_dirs() -> list[str]:
+    """Directories pip may have written the ``cg`` script into."""
+    from .mcp_install import _scripts_dirs
+    return _scripts_dirs()
+
+
+def _command_status() -> dict:
+    """Whether ``cg`` is on PATH, and the exact export when the script exists off PATH.
+
+    Does not edit shell startup files. ``module`` is the ``python -m`` form for this interpreter.
+    """
+    dirs = _script_dirs()
+    resolved = shutil.which("cg")
+    holding = None
+    script = "cg.exe" if os.name == "nt" else "cg"
+    for directory in dirs:
+        if os.path.isfile(os.path.join(directory, script)):
+            holding = directory
+            break
+    fix = None
+    if resolved is None and holding:
+        if os.name == "nt":
+            fix = f"set PATH={holding};%PATH%"
+        else:
+            fix = f'export PATH="{holding}:$PATH"'
+    return {
+        "on_path": resolved is not None,
+        "resolved": resolved,
+        "scripts_dir": holding,
+        "path_fix": fix,
+        "module": f"{sys.executable} -m cg_code_graph",
+    }
 
 
 def _run(tool: str | None, args=("--version",)) -> tuple[str | None, bool]:
@@ -407,6 +446,8 @@ def report(root: str | Path | None = None, scip: list | None = None) -> dict:
         "legacy_cache": cache.legacy_report(),
         **({"hooks_outdated": _outdated_hooks(rootp)} if rootp is not None else {}),
         "update": "uv tool upgrade cg-code-graph  |  pipx upgrade cg-code-graph  |  install.sh --update",
+        "distribution": DISTRIBUTION,
+        "command": _command_status(),
         "latest": _latest(),
         **({"scip": [scip_health(x) for x in scip]} if scip else {}),
     }
@@ -423,6 +464,18 @@ def _latest() -> dict:
 
 def render(r: dict) -> str:
     out = [f"cg {r['cg']}  (Python {r['python']}, {r['os']}; {r['package']}{', checkout' if r['checkout'] else ''})"]
+    if r.get("distribution"):
+        out.append(r["distribution"])
+    cmd = r.get("command") or {}
+    if cmd:
+        if cmd.get("on_path"):
+            out.append(f"command: cg on PATH ({cmd.get('resolved')})")
+        else:
+            out.append("command: cg not on PATH")
+            if cmd.get("path_fix"):
+                out.append(f"  fix: {cmd['path_fix']}")
+            if cmd.get("module"):
+                out.append(f"  or: {cmd['module']}")
     from .update_check import notice
     if (n := notice(r.get("latest") or {})):
         out.append(f"newer release: {n}")

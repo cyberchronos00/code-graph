@@ -1,8 +1,8 @@
 # Installing and updating cg
 
-cg is a Python package (Python 3.11+). The PyPI name is `cg-code-graph`; the commands are `cg` and `cg-mcp`. It installs as a user-level tool. No checkout and no sudo.
+cg is a Python package (Python 3.11+) published on PyPI as `cg-code-graph`. The commands are `cg` and `cg-mcp`. It is not a Rust crate: `cargo install cg-code-graph` does not apply. It installs as a user-level tool. No checkout and no sudo.
 
-New here? [Quick start](quickstart.md) indexes a sample app and runs the first queries in a few minutes.
+New here? [Quick start](quickstart.md) indexes a sample app and runs the first queries in a few minutes. A clean cloud or CI image (PATH, `.cg-head`, MCP without a prompt): [Cloud agent bootstrap](cloud-agents.md).
 
 ## Install
 
@@ -70,11 +70,28 @@ install.sh --version vX.Y.Z
 
 ### Virtual environment
 
-Inside a venv, pip works too.
+Inside a venv, pip works too. The script lands on that venv's PATH.
 
 ```console
 pip install cg-code-graph
 ```
+
+### pip install --user
+
+On a machine without pipx or uv:
+
+```console
+python -m pip install --user cg-code-graph
+```
+
+pip may place `cg`, `cg-mcp` and `cg-code-graph` in a user scripts directory that is not on PATH (`cg: command not found`). cg does not edit shell startup files. Run `cg doctor` with the same interpreter (after the PATH export below, or via `python -m`) and copy the `export PATH=...` line it prints. Until then:
+
+```console
+python -m cg_code_graph --version
+python -m cg_code_graph doctor
+```
+
+`python -m cg_code_graph` uses the interpreter that can import `cg_code_graph`. A different Python reports `ModuleNotFoundError`. `pipx install cg-code-graph` and `uv tool install cg-code-graph` put `cg` on PATH for you.
 
 ### cg doctor
 
@@ -82,11 +99,11 @@ pip install cg-code-graph
 cg doctor
 ```
 
-It lists the tools it found, whether extractor dependencies are installed, and for each language whether indexing is exact or heuristic. Pass a project path to check that project. The MCP `doctor` tool prints the same report.
+It lists the tools it found, whether extractor dependencies are installed, and for each language whether indexing is exact or heuristic. A `heuristic` row is the syntax layer, not a failed install. Pass a project path to check that project. When `cg` is not on PATH, the report includes the exact `export PATH=...` line and `python -m cg_code_graph`. The MCP `doctor` tool prints the same report.
 
 ### One MCP server for many graphs
 
-`cg install --host cursor` registers one project graph. In a project it also writes a short "use cg first" rule for agents: a marked section in `AGENTS.md` and `.cursor/rules/cg.mdc` (`--no-rules` skips both; see [Install into a host](mcp.md#install-into-a-host)). When several repos would each add their own `cg-*` server, register them once and run a single `cg-mcp`:
+`cg install --yes --project` registers the project graph without a prompt. When no host config exists, `--yes` writes the Cursor project file `.cursor/mcp.json`. `cg install --host cursor` is the same registration with an explicit host. In a project it also writes a short "use cg first" rule for agents: a marked section in `AGENTS.md` and `.cursor/rules/cg.mdc` (`--no-rules` skips both; see [Install into a host](mcp.md#install-into-a-host)). When several repos would each add their own `cg-*` server, register them once and run a single `cg-mcp`:
 
 ```console
 cg install --global --registry --host cursor
