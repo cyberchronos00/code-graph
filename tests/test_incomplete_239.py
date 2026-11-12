@@ -48,7 +48,8 @@ def _write(root: Path, rel: str, text: str):
 
 
 def _cg(*args, path):
-    env = {"PATH": path, "HOME": str(Path(path).parent / "home"), "CG_CACHE": str(Path(path).parent / "cache")}
+    env = {**os.environ, "PATH": path, "HOME": str(Path(path).parent / "home"),
+           "CG_CACHE": str(Path(path).parent / "cache"), "PYTHONNOUSERSITE": "1"}
     return subprocess.run([sys.executable, "-m", "cg_code_graph.cli", *map(str, args)], cwd=ROOT, env=env,
                           capture_output=True, text=True, timeout=300)
 

@@ -19,6 +19,10 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 - README, the install page and the PyPI description state that cg is a Python package (`pip install cg-code-graph`), not a Rust crate. `cargo install` does not apply (#249).
 
+### Fixed
+
+- The incomplete-graph CLI test inherits the interpreter environment and sets `PYTHONNOUSERSITE=1`, so emptying `HOME` does not drop packages installed for that interpreter.
+
 ## [0.23.13] - 2026-10-20
 
 ### Changed
