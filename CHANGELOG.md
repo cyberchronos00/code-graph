@@ -8,6 +8,17 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+### Added
+
+- `python -m cg_code_graph` runs the CLI with the interpreter that installed the package. `cg doctor` prints that command and, when the `cg` script is installed off PATH, the exact `export PATH=...` line. It does not edit shell startup files (#240).
+- `cg install --yes --project` writes without a prompt. When no MCP host config exists, `--yes` selects Cursor and writes `.cursor/mcp.json` (#246).
+- Indexing records the git commit in `<db dir>/.cg-head` (and `<db>.cg-head`) via a temp file renamed into place. The MCP `graphs` tool uses that stamp. Freshness is `missing` when nothing was recorded and `unknown` only when a read fails (#246).
+- Docs page [Cloud agent bootstrap](docs/cloud-agents.md): install, PATH, `.cg-head`, heuristic versus exact, compact flags, MCP (#247).
+
+### Changed
+
+- README, the install page and the PyPI description state that cg is a Python package (`pip install cg-code-graph`), not a Rust crate. `cargo install` does not apply (#249).
+
 ## [0.23.13] - 2026-10-20
 
 ### Changed

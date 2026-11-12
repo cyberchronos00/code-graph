@@ -15,6 +15,7 @@ export const docGroups: DocGroup[] = [
     items: [
       { slug: 'quickstart', title: 'Quick start' },
       { slug: 'install', title: 'Install' },
+      { slug: 'cloud-agents', title: 'Cloud agents' },
       { slug: 'cli', title: 'CLI' },
       { slug: 'configuration', title: 'Configuration' },
       { slug: 'mcp', title: 'MCP' }

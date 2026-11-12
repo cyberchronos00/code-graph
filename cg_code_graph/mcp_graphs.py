@@ -54,17 +54,129 @@ def default_graphs_path() -> Path:
 
 def git_head(root: Path) -> str | None:
     """HEAD of ``root``, or None when git is missing or ``root`` is not a work tree."""
+    sha, _status = _git_head_status(root)
+    return sha
+
+
+def _git_head_status(root: Path) -> tuple[str | None, str]:
+    """``(sha, status)`` where status is ``ok``, ``absent`` (not a work tree), or ``error`` (could not run git)."""
     try:
         proc = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=8,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        return None, "error"
     if proc.returncode != 0:
-        return None
+        return None, "absent"
     sha = (proc.stdout or "").strip()
-    return sha or None
+    return (sha, "ok") if sha else (None, "absent")
+
+
+def _atomic_write(dest: Path, text: str) -> None:
+    """Write ``dest`` by renaming a sibling temp file (same directory, so the replace stays atomic)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / (dest.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, dest)
+
+
+def _parse_stamp(text: str, db_name: str, *, keyed: bool) -> str | None:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    if not lines:
+        return None
+    if not keyed and len(lines) == 1 and " " not in lines[0]:
+        return lines[0]
+    for ln in lines:
+        parts = ln.split()
+        if len(parts) >= 2 and parts[0] == db_name:
+            return parts[1]
+        if not keyed and len(parts) >= 2 and parts[0] == "sha":
+            return parts[1]
+    return None
+
+
+def _read_stamp(path: Path, db_name: str, *, keyed: bool) -> tuple[str | None, bool]:
+    """``(sha, failed)``. ``failed`` is set only when the file exists and cannot be read."""
+    if not path.exists():
+        return None, False
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None, True
+    return _parse_stamp(text, db_name, keyed=keyed), False
+
+
+def read_cg_head(db: Path) -> tuple[str | None, bool]:
+    """Commit recorded beside ``db``: ``<db>.cg-head``, else ``<db dir>/.cg-head``.
+
+    The second value is True when a stamp file exists but could not be read.
+    """
+    db = Path(db)
+    side, side_failed = _read_stamp(Path(str(db) + ".cg-head"), db.name, keyed=False)
+    if side:
+        return side, False
+    directory, dir_failed = _read_stamp(db.parent / ".cg-head", db.name, keyed=True)
+    if directory:
+        return directory, False
+    return None, side_failed or dir_failed
+
+
+def _drop_dir_name(dest: Path, db_name: str) -> None:
+    if not dest.is_file():
+        return
+    try:
+        lines = dest.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+    kept = [ln.strip() for ln in lines if ln.strip() and ln.split()[0] != db_name]
+    if not kept:
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        return
+    _atomic_write(dest, "\n".join(kept) + "\n")
+
+
+def write_cg_head(db: Path | str, sha: str) -> None:
+    """Record ``sha`` for ``db`` in ``<db>.cg-head`` and in ``<db dir>/.cg-head`` (one line per database file)."""
+    db = Path(db)
+    sha = (sha or "").strip()
+    if not sha:
+        return
+    _atomic_write(Path(str(db) + ".cg-head"), sha + "\n")
+    dest = db.parent / ".cg-head"
+    lines: list[str] = []
+    if dest.is_file():
+        try:
+            lines = [ln.strip() for ln in dest.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        except OSError:
+            lines = []
+    kept = [ln for ln in lines if ln.split()[0] != db.name]
+    kept.append(f"{db.name} {sha}")
+    _atomic_write(dest, "\n".join(kept) + "\n")
+
+
+def adopt_cg_head(src: Path | str, dest: Path | str) -> None:
+    """Point the stamp at ``dest`` after the database file moves from ``src`` to ``dest``."""
+    src, dest = Path(src), Path(dest)
+    sha, _failed = read_cg_head(src)
+    discard_cg_head(src)
+    if sha:
+        write_cg_head(dest, sha)
+
+
+def discard_cg_head(db: Path | str) -> None:
+    """Remove a stamp left beside a database that was not published."""
+    db = Path(db)
+    side = Path(str(db) + ".cg-head")
+    if side.exists():
+        try:
+            side.unlink()
+        except OSError:
+            pass
+    _drop_dir_name(db.parent / ".cg-head", db.name)
 
 
 def _valid_name(name: str) -> bool:
@@ -433,23 +545,40 @@ def _commit_text(meta: dict) -> str:
     return ""
 
 
-def _freshness(meta: dict, roots: list[Path]) -> str:
+def _freshness(meta: dict, roots: list[Path], *, unreadable: bool = False) -> str:
+    """``fresh`` / ``stale`` against git HEAD. ``missing`` when no commit is recorded.
+
+    ``unknown`` is only a read failure: the stamp or the database could not be read, or git
+    itself could not be run. A directory that is not a work tree stays ``unknown`` when a
+    commit is recorded, because there is no HEAD to compare.
+    """
     commit = meta.get("commit")
-    heads = [git_head(r) for r in roots]
-    heads = [h for h in heads if h]
-    if not commit or not heads:
-        return "unknown"
     if isinstance(commit, dict):
         vals = [str(v) for v in commit.values() if v]
-        if not vals:
-            return "unknown"
-        return "fresh" if all(v in heads for v in vals) else "stale"
-    return "fresh" if str(commit) in heads else "stale"
+    elif isinstance(commit, str) and commit:
+        vals = [commit]
+    else:
+        vals = []
+    if not vals:
+        return "unknown" if unreadable else "missing"
+    heads: list[str] = []
+    for root in roots:
+        sha, _status = _git_head_status(root)
+        if sha:
+            heads.append(sha)
+    if not heads:
+        return "unknown"
+    return "fresh" if all(v in heads for v in vals) else "stale"
 
 
 def describe(entry: GraphEntry) -> dict:
-    """Name, roots, languages, indexed commit and freshness. Opens the DB briefly."""
+    """Name, roots, languages, indexed commit and freshness. Opens the DB briefly.
+
+    The commit prefers ``<db dir>/.cg-head`` (and ``<db>.cg-head``) when that stamp holds a
+    single sha, then the commit stored in the database.
+    """
     meta: dict = {}
+    db_error = False
     try:
         st = GraphStore(entry.db)
         try:
@@ -458,13 +587,18 @@ def describe(entry: GraphEntry) -> dict:
             st.db.close()
     except Exception:
         meta = {}
+        db_error = True
+    stamp, stamp_error = read_cg_head(entry.db)
+    if stamp and not isinstance(meta.get("commit"), dict):
+        meta = {**meta, "commit": stamp}
     roots = entry.roots or ([Path(meta["root"])] if meta.get("root") else [])
+    unreadable = bool(stamp_error and not meta.get("commit")) or (db_error and not stamp and not meta.get("commit"))
     return {
         "name": entry.name,
         "roots": [str(r) for r in roots],
         "languages": _languages(meta),
         "commit": _commit_text(meta),
-        "freshness": _freshness(meta, roots),
+        "freshness": _freshness(meta, roots, unreadable=unreadable),
     }
 
 
@@ -475,7 +609,7 @@ def render_graphs(registry: Registry) -> str:
         mark = " default" if registry.default == entry.name else ""
         langs = ", ".join(info["languages"]) or "none"
         roots = ", ".join(info["roots"]) or "(no roots)"
-        commit = info["commit"] or "unknown"
+        commit = info["commit"] or ("unknown" if info["freshness"] == "unknown" else "missing")
         lines.append(f"{info['name']}{mark} roots: {roots} languages: {langs} "
                      f"commit: {commit} freshness: {info['freshness']} db: {entry.db}")
     return "\n".join(lines)

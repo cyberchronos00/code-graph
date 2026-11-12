@@ -9,7 +9,9 @@ pipx install cg-code-graph
 cg doctor
 ```
 
-`cg doctor` shows which languages index exact or heuristic on this machine. Other options: [Install](install.md).
+`cg doctor` shows which languages index exact or heuristic on this machine. A heuristic row is not a broken install. Other options: [Install](install.md). On a clean cloud or CI image (PATH, `.cg-head` freshness, `cg install --yes --project`): [Cloud agent bootstrap](cloud-agents.md).
+
+cg is a Python package (`pip install cg-code-graph`). It is not a Rust crate; `cargo install` does not apply. If `cg` is not on PATH after `python -m pip install --user`, run `python -m cg_code_graph doctor` and use the `export PATH` line it prints. Do not edit shell startup files from an agent.
 
 ## Index a sample
 The Django sample needs nothing but Python.

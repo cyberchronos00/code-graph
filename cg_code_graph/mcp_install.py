@@ -1036,10 +1036,18 @@ def run(hosts: list[str] | None, *, scope: str, root: str = ".", db: str | None 
     if not hosts:
         hosts = detected_hosts(scope, rootp)
         if not hosts:
-            out("no MCP host detected; pass --host " + " | ".join((*HOSTS, "all")))
-            return 2
-        labels = ", ".join(f"{h} ({location_label(h, scope, rootp)})" for h in hosts)
-        out(f"detected: {labels}")
+            if assume_yes and scope == "project" and not remove and not registry:
+                out("no MCP host detected; --yes writes the Cursor project config (.cursor/mcp.json)")
+                hosts = ["cursor"]
+            else:
+                hint = ""
+                if scope == "project" and not remove and not registry:
+                    hint = "; or pass --yes to write the Cursor project config"
+                out("no MCP host detected; pass --host " + " | ".join((*HOSTS, "all")) + hint)
+                return 2
+        else:
+            labels = ", ".join(f"{h} ({location_label(h, scope, rootp)})" for h in hosts)
+            out(f"detected: {labels}")
     expanded: list[str] = []
     for h in hosts:
         if h == "all":

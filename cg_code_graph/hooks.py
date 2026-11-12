@@ -329,7 +329,12 @@ def _db_artifact(root: Path, rel: str, db: str | None) -> bool:
         abs_p = str((root / rel).resolve())
     except OSError:
         abs_p = str(root / rel)
-    return abs_p == skip or abs_p.startswith(skip + ".") or abs_p.startswith(skip + "-")
+    if abs_p == skip or abs_p.startswith(skip + ".") or abs_p.startswith(skip + "-"):
+        return True
+    # `<db dir>/.cg-head` sits beside a database that lives inside ROOT. Leaving it in the
+    # fingerprint would make every refresh look stale after the stamp is written.
+    stamp = str(Path(skip).parent / ".cg-head")
+    return abs_p == stamp or abs_p == stamp + ".tmp"
 
 
 def _fingerprint_of(root: Path, rels: list[str], db: str | None = None) -> str:
@@ -506,6 +511,7 @@ def _checkpoint(path: Path) -> None:
 
 
 def _publish(tmp: str, db: str, apps: list[dict] | None) -> None:
+    from .mcp_graphs import adopt_cg_head
     if apps:
         from .apps import app_dbs
         for name, src in app_dbs(tmp, apps).items():
@@ -514,9 +520,11 @@ def _publish(tmp: str, db: str, apps: list[dict] | None) -> None:
                 _checkpoint(Path(src))
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(src, dest)
+                adopt_cg_head(src, dest)
                 _rm_sidecars(dest)
     _checkpoint(Path(tmp))
     os.replace(tmp, db)
+    adopt_cg_head(tmp, db)
     _rm_sidecars(Path(db))
 
 

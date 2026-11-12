@@ -4,6 +4,8 @@
 
 **See everything a change affects before you make it: a local, deterministic dependency graph of routes, calls, tables and config, with `file:line` evidence for every hop.**
 
+cg is a Python package on PyPI: `pip install cg-code-graph` (or `pipx install cg-code-graph`, or `uv tool install cg-code-graph`). It is not a Rust crate. `cargo install cg-code-graph` does not apply.
+
 For you and your AI agent (CLI + MCP). No LLM in the graph.
 
 <!-- mcp-name: io.github.cyberchronos00/cg-code-graph -->
@@ -19,13 +21,13 @@ For you and your AI agent (CLI + MCP). No LLM in the graph.
 ## Quick start
 
 ```bash
-pipx install cg-code-graph          # or: uv tool install cg-code-graph
+pipx install cg-code-graph          # Python package. Not a Rust crate (cargo install does not apply).
 cg index . --db out/graph.db        # prints starter queries for your repo
-cg install --host cursor    # or claude, codex, vscode, …: registers the MCP server and a "use cg first" agent rule
+cg install --yes --project          # non-interactive MCP register; --host cursor|claude|codex|vscode|…
 cg reaches table:orders --db out/graph.db   # any table, connection or config key
 ```
 
-Try it on a bundled sample, link a frontend to a backend, or connect an agent over MCP: [Quick start guide](https://code-graph.cyberchronos00.workers.dev/docs/quickstart). Other install options (install.sh, Windows, exact-mode toolchains): [Install](https://code-graph.cyberchronos00.workers.dev/docs/install).
+Try it on a bundled sample, link a frontend to a backend, or connect an agent over MCP: [Quick start guide](https://code-graph.cyberchronos00.workers.dev/docs/quickstart). Other install options (install.sh, Windows, exact-mode toolchains): [Install](https://code-graph.cyberchronos00.workers.dev/docs/install). A clean cloud or CI image: [Cloud agent bootstrap](https://code-graph.cyberchronos00.workers.dev/docs/cloud-agents).
 
 `cg reaches table:store_books` on the bundled Django sample:
 

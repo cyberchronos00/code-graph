@@ -58,7 +58,8 @@ def _add_install_parser(sub, uninstall: bool):
     from .mcp_install import HOSTS
     name = "uninstall" if uninstall else "install"
     help_ = ("remove the cg MCP server entry from a host config" if uninstall else
-             "register the cg MCP server (key cg) in a host config; previews and asks first")
+             "register the cg MCP server (key cg) in a host config; previews and asks first "
+             "(--yes writes without asking; with no host detected it writes the Cursor project config)")
     p = sub.add_parser(name, help=help_)
     p.add_argument("--host", action="append", choices=[*HOSTS, "all"],
                    help="MCP host (repeatable). Default: hosts already present for this scope")

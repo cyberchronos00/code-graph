@@ -1615,11 +1615,15 @@ def _index(root: str | None = None, gates: str | None = None, repo: str | None =
                     st = index_project(r_root, tmp, r, gates=g, python_roots=_flag_roots(src_db),
                                        include_generated=_flag_generated(src_db))
                     if not st.get("nodes"):
+                        from .mcp_graphs import discard_cg_head
+                        discard_cg_head(tmp)
                         return (f"index refused: re-indexing {r} from {_display(r_root)} produced 0 nodes; "
                                 f"the graph is unchanged (is that the right directory?)")
                     done.append((r, r_root, src_db, tmp, st))
                 for r, r_root, src_db, tmp, st in done:
                     os.replace(tmp, src_db)
+                    from .mcp_graphs import adopt_cg_head
+                    adopt_cg_head(tmp, src_db)
                 ls = _relink()
             finally:
                 for tmp in tmps:
@@ -1640,8 +1644,12 @@ def _index(root: str | None = None, gates: str | None = None, repo: str | None =
         st = index_project(root, tmp, Path(root).name, gates=gates, python_roots=flag_roots, include_generated=flag_gen)
         if not st.get("nodes"):
             os.remove(tmp)
+            from .mcp_graphs import discard_cg_head
+            discard_cg_head(tmp)
             return f"index refused: {_display(root)} produced 0 nodes; the graph is unchanged (is that the right directory?)"
         os.replace(tmp, STATE["db"])
+        from .mcp_graphs import adopt_cg_head
+        adopt_cg_head(tmp, STATE["db"])
     return (f"indexed {_display(root)} -> {_display(STATE['db'])}: {st['nodes']} nodes, {st['edges']} edges in {st['index_seconds']}s; "
             f"gated edges {st.get('gated_edges')}")
 
