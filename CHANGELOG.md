@@ -8,16 +8,23 @@ commands, output and the graph schema; such changes are listed under **Changed**
 
 ## [Unreleased]
 
+## [0.23.14] - 2026-11-12
+
 ### Added
 
 - `python -m cg_code_graph` runs the CLI with the interpreter that installed the package. `cg doctor` prints that command and, when the `cg` script is installed off PATH, the exact `export PATH=...` line. It does not edit shell startup files (#240).
 - `cg install --yes --project` writes without a prompt. When no MCP host config exists, `--yes` selects Cursor and writes `.cursor/mcp.json` (#246).
 - Indexing records the git commit in `<db dir>/.cg-head` (and `<db>.cg-head`) via a temp file renamed into place. The MCP `graphs` tool uses that stamp. Freshness is `missing` when nothing was recorded and `unknown` only when a read fails (#246).
 - Docs page [Cloud agent bootstrap](docs/cloud-agents.md): install, PATH, `.cg-head`, heuristic versus exact, compact flags, MCP (#247).
+- `search`, `snippet` and `impact` accept `--compact` (also `CG_OUTPUT=compact`): fewer rows, short paths, and a footer that names `cg explore --budget`. Default text and `--json` are unchanged (#244).
+- `cg detect` lists Swift from a nested `Package.swift`, an `.xcodeproj` / `.xcworkspace`, and `.swift` sources (using the Swift plugin's skip list), and records `modes.swift` when exact mode is unavailable. Kotlin and Java are listed from `.kt` / `.java` the same way, so the languages detect reports include the ones index runs (#241).
+- Localization catalogs become `i18n` nodes and literal uses become `USES_I18N` edges: Apple `.xcstrings` and `.strings`, Android `res/values*/strings.xml` (`R.string` / `@string`), and locale JSON under `locales` / `i18n` / similar. Swift `String(localized:)`, `NSLocalizedString`, `LocalizedStringResource`, and `Text("key")` when that key is in an Apple catalog, are linked. A template or a variable is not a key. Existing Nuxt `i18n` nodes are kept (#245).
 
 ### Changed
 
 - README, the install page and the PyPI description state that cg is a Python package (`pip install cg-code-graph`), not a Rust crate. `cargo install` does not apply (#249).
+- A rejected short or grep-style flag (`-k`, `-A`, `-C`, `--depth`, `--name`) fails with a one-line hint that names the long option that already exists. The flag is not accepted as an alias (#243).
+- An unknown subcommand names the closest real commands (`cg callers` suggests `cg impact`, `cg node`, or `cg readers`) instead of printing the full command list (#248).
 
 ### Fixed
 
@@ -1875,7 +1882,8 @@ First open-source release.
 - Fictional bookstore sample apps, an example plan, `scripts/reproduce.sh`, docs, MIT license, contributing guide
   and security policy.
 
-[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.13...HEAD
+[Unreleased]: https://github.com/cyberchronos00/code-graph/compare/v0.23.14...HEAD
+[0.23.14]: https://github.com/cyberchronos00/code-graph/compare/v0.23.13...v0.23.14
 [0.23.13]: https://github.com/cyberchronos00/code-graph/compare/v0.23.12...v0.23.13
 [0.23.12]: https://github.com/cyberchronos00/code-graph/compare/v0.23.11...v0.23.12
 [0.23.11]: https://github.com/cyberchronos00/code-graph/compare/v0.23.10...v0.23.11
