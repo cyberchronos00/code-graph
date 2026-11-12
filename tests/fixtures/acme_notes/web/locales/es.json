@@ -1,0 +1,6 @@
+{
+  "acme_orders": {
+    "submit": "Enviar",
+    "cancel": "Cancelar"
+  }
+}

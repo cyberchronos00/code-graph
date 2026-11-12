@@ -1,0 +1,9 @@
+// !$*UTF8*$!
+{
+  archiveVersion = 1;
+  objectVersion = 56;
+  objects = {
+    AA0001 /* SwiftUI.framework */ = {isa = PBXFileReference; name = SwiftUI; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+    AA0002 /* UIKit.framework */ = {isa = PBXFileReference; name = UIKit; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+  };
+}

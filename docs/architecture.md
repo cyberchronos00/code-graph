@@ -39,7 +39,7 @@ GraphBuilder  →  SQLite (core/store.py)
 | contribute | `FrameworkPlugin.contribute` | framework nodes and edges |
 | finish | `indexer.py` | completeness, entry tags, the SQLite write |
 
-Marker files include `composer.json`, `package.json`, `Cargo.toml`, `pyproject.toml`, and `Package.swift`.
+Marker files include `composer.json`, `package.json`, `Cargo.toml`, `pyproject.toml`, and `Package.swift`. Swift is also detected from a nested `Package.swift`, an `.xcodeproj` or `.xcworkspace`, and `.swift` sources, using the Swift plugin's skip list. Kotlin and Java are detected from `.kt` and `.java` sources the same way, so `cg detect` lists a language `cg index` will index.
 Presets in `presets/` supply guard names and skip lists (common, then language, then framework) and are stored in graph meta. `routes` reads them back.
 
 `core/paths.py` is the one skip list and `.cg.yaml` exclude set.

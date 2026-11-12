@@ -58,7 +58,8 @@ def test_node_json_has_the_edges_and_text_has_no_json():
 
 def test_detected_languages_come_from_the_plugins_that_ran():
     det = GraphStore(xc_db()).meta()["stats"]["detected"]["languages"]
-    assert det == {"swift": ["source files (.swift 5)"]}             # no root Package.swift
+    # no root Package.swift: the Xcode project and the .swift sources are the evidence (#241)
+    assert det == {"swift": ["App.xcodeproj", "*.swift"]}
 
 
 def test_search_prints_root_relative_paths():

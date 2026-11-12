@@ -7,7 +7,7 @@
 | Command | One line | Detail |
 |---|---|---|
 | `index ROOT --db DB` | Build the graph. Stats JSON on stdout; coverage on stderr. `--name`, `--gates`, `--scip` (repeatable). Missing toolchain skips that language. Invalid `.cg.yaml` exits 2. | [configuration](configuration.md#project-file) |
-| `detect ROOT` | Languages and frameworks under ROOT, no index. | `cg detect -h` |
+| `detect ROOT` | Languages and frameworks under ROOT, no index. Swift includes Xcode projects and nested packages; `modes.swift` says when exact calls are unavailable. | [detect](#detect) |
 | `doctor [ROOT]` | Versions, extractors, and exact / heuristic / unavailable per language. ROOT limits this to the project. `--scip FILE` checks an index (repeatable). A module that fails to import exits 1. Says when a newer release is on PyPI (one request with a 2 s timeout, cached for a day; silent offline; off with `CG_NO_UPDATE_CHECK=1` and under CI). `cg --version` repeats that notice from the cache and never connects. | [install](install.md) |
 | `setup [LANG]...` | Install TypeScript / PHP / Dart extractors now (`--quiet`). Default: every language whose toolchain is present. | [install](install.md) |
 | `setup --prune` | Remove extractor installs this cg does not use. `--dry-run` lists them. A held lock is kept. | [clean](#clean) |
@@ -52,6 +52,10 @@
 | `refresh ROOT --db DB` | Re-index when sources changed. `--name`, `--quiet`. Hooks run this in the background. | [hooks](#hooks) |
 | `watch ROOT --db DB` | Re-index on save, debounced (`watchfiles` if installed, else polling). Ctrl-C stops. | [watch](#watch) |
 | `clean [ROOT]` | Cache entries for one project, `--stale` ones, or `--all`. | [clean](#clean) |
+
+## detect
+
+`cg detect ROOT` prints JSON `{languages, frameworks}` and, when Swift sources or a Swift manifest are present, `modes.swift`. `languages.swift` lists the `Package.swift` paths, any `.xcodeproj` / `.xcworkspace`, and `*.swift` when a source file is outside the Swift plugin's skip list (`Pods`, `DerivedData`, `.build`, and the rest of that preset). `frameworks` includes `swiftui`, `uikit`, and `vapor` when an `import` or a package / Xcode framework reference says so. `modes.swift.exact` is `unavailable` when the tree has Swift but the index would stay on the heuristic layer (no `swift` on `PATH`, no root `Package.swift`, or `CG_SWIFT_INDEX` is not set). An empty `languages` object means no supported sources were found.
 
 ## Common flags
 

@@ -58,6 +58,7 @@ A failed build keeps a `partial` store; the coverage reason includes the first `
 | area | what you can query |
 |---|---|
 | SwiftUI / UIKit | pages above; `pushViewController` / `present` the same way. An untyped `.case` matches when one destination type has that case; `default:` covers the rest |
+| Strings | `i18n:<key>` from `.xcstrings` and `.strings` (one node per key, `attrs.definitions` per locale). `String(localized:)`, `NSLocalizedString`, `LocalizedStringResource`, and `Text("key")` when the key is in an Apple catalog, are `USES_I18N`. A key built at run time is not a node. `cg detect` reports `swiftui` / `uikit` / `vapor` and `modes.swift` when exact calls are unavailable |
 | HTTP | URLSession and Alamofire `AF.request` when the URL is built in the same function. `"\(base)/x"` keeps `{base}` so `cg link` can match. A base-like constant, or an `Info.plist` key filled from `.xcconfig`, sets the origin (`attrs.base`, or `attrs.base_candidates` per configuration) |
 | Moya | `TargetType` → one `http:` node per `case` (`how: "moya target"`). `provider.request(.case)` calls it |
 | Fluent | `schema = "todos"` → `table:todos`. `query` / `find` read; `save` / `create` / `update` / `delete` and `database.schema(…).create()` write |

@@ -1,0 +1,7 @@
+{
+  "acme_orders": {
+    "submit": "Submit order",
+    "cancel": "Cancel",
+    "only_json": "Only"
+  }
+}
