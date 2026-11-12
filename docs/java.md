@@ -41,6 +41,8 @@ Calls (`CALLS`) bind in this order:
 
 `new Foo()` is `INSTANTIATES` plus `CALLS` on `constructor:….Foo.<init>`. A method reference `Foo::bar`, `this::bar`, `expr::bar` (from `expr`'s type), or `Foo::new` is `REFERENCES_FN` when the target is in the project. A lambda's calls stay on the enclosing method. An explicitly typed lambda parameter (`(Pricing x) -> x.line()`) is a receiver type; an inferred one is not.
 
+`R.string.name` in Java is `USES_I18N` to the `i18n:<name>` node of `res/values*/strings.xml`, the same edge Kotlin emits.
+
 ## Exact mode
 
 Opt-in, because it runs the build. scip-java runs Gradle `clean compileTestJava compileTestKotlin compileTestKotlinJvm` or Maven `clean verify -DskipTests`, and its own docs warn that this cleans build caches. The JDK that runs the build must be 17, 21, or 25. Java 8 and 11 are unsupported build JDKs. A JDK older than 17 cannot start scip-java.

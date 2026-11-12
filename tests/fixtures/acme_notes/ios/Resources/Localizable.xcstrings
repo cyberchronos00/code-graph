@@ -1,0 +1,17 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "acme_orders.submit" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Submit order" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Enviar" } }
+      }
+    },
+    "acme_orders.cancel" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

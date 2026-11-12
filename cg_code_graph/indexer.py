@@ -376,6 +376,12 @@ def index_project(root: str | Path, db_path: str | Path, name: str | None = None
     from .process_runs import process_endpoints
     if (pe := process_endpoints(builder)):
         stats["process_endpoints"] = pe
+    # localization catalogs and literal key uses (#245): i18n nodes + USES_I18N, before test edges are retagged
+    from .l10n import apply as apply_l10n
+    t_l10n = time.time()
+    if (l10n := apply_l10n(project, builder)):
+        l10n["seconds"] = round(time.time() - t_l10n, 2)
+        stats["l10n"] = l10n
     # test code (tests/, *.spec.ts ...) never feeds the application graph: its edges become TEST_* kinds
     from .tests_index import isolate_tests
     stats["tests"] = isolate_tests(builder)

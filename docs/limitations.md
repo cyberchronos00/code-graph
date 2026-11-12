@@ -35,7 +35,8 @@ cg describes the indexed code. It does not model what a process does at run time
 
 ## Index and answers
 
-- A missing toolchain degrades that language: `skipped`, or `heuristic` when the exact indexer is absent. The rest of the index still runs.
+- A missing toolchain degrades that language: `skipped`, or `heuristic` when the exact indexer is absent. The rest of the index still runs. `cg detect` lists Swift from sources and Xcode / SwiftPM manifests even then; `modes.swift.exact` is `unavailable` when the index would stay heuristic.
+- Localization keys are literals only. `String(localized:)`, `NSLocalizedString`, `R.string.name`, `@string/name`, and `t("key")` / `$t("key")` become `USES_I18N`. A template, a concatenated string, or a variable is not a key. `Text("key")` links only when that key is defined in an Apple catalog. Locale JSON is read under `locales`, `locale`, `i18n`, `lang`, `langs`, `translations`, or `messages`, and only when the file or its parent is a locale code.
 - `cg coverage` and the MCP `coverage` tool print the mode, the reason, and an install hint ([Completeness](completeness.md)).
 - Route lists, caller lists, `reaches`, `tests`, and plan checks add a `coverage note:` when a blind spot or an unindexed file in the answer's languages and directories could affect them.
 - Empty replies and unknown symbols end with a coverage line. MCP replies carry a `completeness` object.
